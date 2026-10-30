@@ -53,6 +53,10 @@ def only_languages(model, langs):
 def watch_parent(ppid):
     """Si el servidor muere (se cierra la ventana negra), este proceso se cierra aunque este a mitad
     de una transcripcion: si no, se queda huerfano gastando CPU y RAM para nadie."""
+    if sys.platform != "win32":  # desarrollo en macOS/Linux: basta con vigilar al padre cada 2 s
+        while os.getppid() == ppid:
+            time.sleep(2)
+        os._exit(0)
     import ctypes
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(0x00100000, False, ppid)  # SYNCHRONIZE

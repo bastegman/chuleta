@@ -20,7 +20,6 @@ Por stdout sale una linea JSON de estado cada 0,25 s; por stdin se le manda "sto
 import argparse
 import json
 import math
-import os
 import struct
 import sys
 import threading
@@ -82,6 +81,7 @@ def soft_limit(x, knee=0.8):
     if over.any():
         x[over] = np.sign(x[over]) * (knee + (1 - knee) * np.tanh((a[over] - knee) / (1 - knee)))
     return x
+
 
 warnings.filterwarnings("ignore")  # soundcard avisa de "discontinuidades" cada vez que hay silencio
 

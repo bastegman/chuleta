@@ -9,6 +9,7 @@ Motores de transcripcion.
 
 Ambos devuelven una lista de segmentos (inicio, fin, texto).
 """
+import itertools
 import os
 import re
 import shutil
@@ -36,10 +37,12 @@ class EngineError(Exception):
 PRESETS = [
     {"id": "rapido", "icon": "⚡", "label": "Rápido", "engine": "local",
      "model": "small", "batched": True, "beam": 1, "speed": 7.7, "live_label": "Rápido · small", "live_speed": 7.7,
-     "hint": "Lo mejor en un portátil reciente: ~8 min por hora de audio y bien puntuado. Puede fallar en nombres propios."},
+     "hint": "Lo mejor en un portátil reciente: ~8 min por hora de audio y bien puntuado. "
+             "Puede fallar en nombres propios."},
     {"id": "turbo", "icon": "⚖", "label": "Preciso", "engine": "local",
      "model": "large-v3-turbo", "batched": True, "beam": 1, "speed": 2.3, "live_label": "Preciso · turbo",
-     "live_speed": 2.3, "live_note": "En directo a veces se salta el arranque de una frase; para el directo, mejor Normal.",
+     "live_speed": 2.3,
+     "live_note": "En directo a veces se salta el arranque de una frase; para el directo, mejor Normal.",
      "hint": "Más fino con nombres, siglas y acentos. ~3 veces más lento que Rápido (~25 min por hora)."},
     {"id": "medium", "icon": "•", "label": "Clásico", "engine": "local",
      "model": "medium", "batched": False, "beam": 5, "speed": 0.9, "live_label": "Normal · medium",
@@ -48,7 +51,8 @@ PRESETS = [
     {"id": "calidad", "icon": "🎯", "label": "Máxima", "engine": "local",
      "model": "large-v3", "batched": True, "beam": 5, "speed": 0.5, "live_label": "Máxima · large-v3",
      "live_speed": 0.8,
-     "hint": "large-v3 completo. Muy lento en un portátil normal (~2 h por hora de audio); solo para audios difíciles."},
+     "hint": "large-v3 completo. Muy lento en un portátil normal (~2 h por hora de audio); "
+             "solo para audios difíciles."},
     {"id": "nube", "icon": "☁", "label": "Nube", "engine": "cloud", "speed": 60.0, "live_label": "Nube",
      "live_speed": 30.0,
      "hint": "Whisper large-v3 en servidores con GPU: una reunión de 1 h en ~1 minuto."},
@@ -74,6 +78,7 @@ def base_url(cfg):
         if u.endswith(tail):
             u = u[:-len(tail)]
     return u
+
 
 # Frases que Whisper "se inventa" en silencios (vienen de subtitulos de YouTube en su entrenamiento)
 HALLUCINATION = re.compile(
@@ -268,7 +273,7 @@ def decode_16k(path, start=0.0, cancelled=lambda: False):
                 raise EngineError("El archivo no tiene pista de audio.")
             rs = av.AudioResampler(format="s16", layout="mono", rate=16000)
             frames = c.decode(s)
-            for fr in [*frames, None]:
+            for fr in itertools.chain(frames, [None]):  # perezoso: no carga el archivo entero antes
                 if cancelled():
                     raise Cancelled()
                 for o in rs.resample(fr):
@@ -681,10 +686,18 @@ def api_error(r):
 
 # ----------------------------------------------------------------------------- resumen con IA
 
-SUMMARY_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+SUMMARY_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b",
+                  "qwen/qwen3.8-27b"]  # TODO verificar en console.groq.com/docs/models que este id existe
 CHAT_URLS = {"groq": "https://api.groq.com/openai/v1/chat/completions",
              "openai": "https://api.openai.com/v1/chat/completions"}
 SUMMARY_LANGS = {"es": "español", "en": "inglés", "same": "el mismo idioma en que se habla en la reunión"}
+# cabeceras del resumen (en el idioma elegido; con "same" van en español y se pide traducirlas)
+SUMMARY_HEADINGS = {
+    "es": {"summary": "Resumen", "points": "Puntos clave", "decisions": "Decisiones", "next": "Próximos pasos",
+           "people": "Participantes", "none_clear": "Ninguna clara", "none": "Ninguno"},
+    "en": {"summary": "Summary", "points": "Key points", "decisions": "Decisions", "next": "Next steps",
+           "people": "Participants", "none_clear": "None clear", "none": "None"},
+}
 
 
 def chat_url(cfg):
@@ -790,6 +803,10 @@ class Summarizer:
             if r.status_code in (500, 502, 503):
                 self._sleep(5, cancelled)
                 continue
+            if r.status_code == 400 and "max_completion_tokens" in body and "max_completion_tokens" in (r.text or ""):
+                body["max_tokens"] = body.pop("max_completion_tokens")  # pasarela antigua: nombre anterior
+                report(stage="La API no admite max_completion_tokens: reintentando con max_tokens…")
+                continue
             raise EngineError(api_error(r))
         raise EngineError("El servicio de resumen no respondió tras varios intentos.")
 
@@ -803,7 +820,9 @@ class Summarizer:
 
     def summarize(self, segments, meta, cfg, report, cancelled):
         """meta: title, date, duration, participants, notes, lang, extra. Devuelve (markdown, modelo)."""
-        lang = SUMMARY_LANGS.get(cfg.get("summary_lang") or "es", SUMMARY_LANGS["es"])
+        code = cfg.get("summary_lang") or "es"
+        lang = SUMMARY_LANGS.get(code, SUMMARY_LANGS["es"])
+        h = SUMMARY_HEADINGS.get(code, SUMMARY_HEADINGS["es"])
         system = ("Eres un asistente que resume reuniones de trabajo. Usa solo lo que aparece "
                   "en el texto, sin inventar nombres, cifras ni acuerdos. Escribe en " + lang + ". Cuando cites "
                   "un momento usa exactamente el formato [mm:ss] o [h:mm:ss] de la transcripción.")
@@ -814,20 +833,23 @@ class Summarizer:
         if notes:
             head += f"\n\nNotas que tomó el usuario (orden del día, contexto; tenlas en cuenta):\n{notes[:3000]}"
         final_format = (
-            "Escribe el resumen en Markdown con exactamente estas secciones:\n"
-            "## Resumen\n(3 a 5 frases: de qué trató y a qué se llegó)\n"
-            "## Puntos clave\n- punto concreto [mm:ss]  (máximo 8, agrupa los parecidos)\n"
-            "## Decisiones\n- decisión [mm:ss]  (si no hubo, escribe «Ninguna clara»)\n"
-            "## Próximos pasos\n- [ ] Responsable: tarea — fecha si se dijo [mm:ss]  (si no hay, «Ninguno»)\n"
-            "## Participantes\n- Nombre (rol o empresa si se deduce)\n"
-            "Nada de saludos, problemas de audio ni relleno." + (f"\nInstrucciones extra: {meta['extra']}" if meta.get("extra") else ""))
+            "Escribe el resumen en Markdown con exactamente estas secciones"
+            + (" (traduce también los títulos de sección a ese idioma)" if code == "same" else "") + ":\n"
+            f"## {h['summary']}\n(3 a 5 frases: de qué trató y a qué se llegó)\n"
+            f"## {h['points']}\n- punto concreto [mm:ss]  (máximo 8, agrupa los parecidos)\n"
+            f"## {h['decisions']}\n- decisión [mm:ss]  (si no hubo, escribe «{h['none_clear']}»)\n"
+            f"## {h['next']}\n- [ ] Responsable: tarea — fecha si se dijo [mm:ss]  (si no hay, «{h['none']}»)\n"
+            f"## {h['people']}\n- Nombre (rol o empresa si se deduce)\n"
+            "Nada de saludos, problemas de audio ni relleno."
+            + (f"\nInstrucciones extra: {meta['extra']}" if meta.get("extra") else ""))
         lines = self.lines(segments)
         text = "\n".join(lines)
         if not text.strip():
             raise EngineError("No hay transcripción que resumir.")
         if len(text) <= self.SINGLE_CHARS:  # reunion corta: de una vez
             report(stage="Resumiendo…", frac=0.2)
-            out, model = self._chat(cfg, system, f"{head}\n\n{final_format}\n\nTRANSCRIPCIÓN:\n{text}", 2500, report, cancelled)
+            out, model = self._chat(cfg, system, f"{head}\n\n{final_format}\n\nTRANSCRIPCIÓN:\n{text}", 2500,
+                                    report, cancelled)
             return out, model
         chunks, cur = [], []
         for l in lines:  # trozos por lineas completas
@@ -839,10 +861,12 @@ class Summarizer:
             chunks.append(cur)
         notes_parts, model = [], None
         for i, ch in enumerate(chunks, 1):
-            report(stage=f"Leyendo la reunión por partes ({i}/{len(chunks)})…", frac=0.05 + 0.75 * (i - 1) / len(chunks))
+            report(stage=f"Leyendo la reunión por partes ({i}/{len(chunks)})…",
+                   frac=0.05 + 0.75 * (i - 1) / len(chunks))
             span = f"{ch[0][1:ch[0].find(']')]} – {ch[-1][1:ch[-1].find(']')]}" if ch[0].startswith("[") else ""
-            prompt = (f"{head}\n\nFragmento {i} de {len(chunks)} de la transcripción ({span}). Extrae en viñetas cortas, "
-                      "cada una con su minuto [mm:ss]:\nPUNTOS: temas e ideas importantes\nDECISIONES: lo que se decidió\n"
+            prompt = (f"{head}\n\nFragmento {i} de {len(chunks)} de la transcripción ({span}). "
+                      "Extrae en viñetas cortas, cada una con su minuto [mm:ss]:\nPUNTOS: temas e ideas importantes\n"
+                      "DECISIONES: lo que se decidió\n"
                       "ACCIONES: tareas, con responsable y fecha si se dicen\nPERSONAS: quién habla o se menciona "
                       "(personas y empresas)\nSi una sección no tiene nada, escribe «—». Ignora saludos y relleno."
                       f"\n\nTRANSCRIPCIÓN:\n" + "\n".join(ch))

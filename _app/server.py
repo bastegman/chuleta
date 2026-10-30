@@ -12,6 +12,7 @@ Arranque: acceso directo Notas del escritorio (lanza _app/Notas.bat).
 import copy
 import hashlib
 import json
+import logging
 import os
 import queue
 import re
@@ -37,6 +38,7 @@ STATIC_DIR = os.path.join(APP_DIR, "static")
 ROOT = os.path.dirname(APP_DIR)
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
 HOST, PORT = "127.0.0.1", 8765
+WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y Explorador son solo de Windows
 URL = f"http://{HOST}:{PORT}/"
 
 AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm"}
@@ -232,14 +234,20 @@ def wav_duration(path, size):
 # ----------------------------------------------------------------------------- paquete para otra persona
 
 EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR NOTAS.bat y LEEME.txt (van a la raiz)
-EXPORT_CODE = ("server.py", "engines.py", "worker.py", "live.py", "recorder.py", "Notas.bat", "instalar.ps1")
+
+
+def export_code():
+    """Todo el codigo de _app (.py, .bat y .ps1; sin subcarpetas ni python.txt): un modulo nuevo entra solo."""
+    return sorted(n for n in os.listdir(APP_DIR)
+                  if n.endswith((".py", ".bat", ".ps1")) and os.path.isfile(os.path.join(APP_DIR, n)))
 
 
 def desktop_dir():
-    import ctypes
-    buf = ctypes.create_unicode_buffer(260)
-    if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf) == 0 and os.path.isdir(buf.value):
-        return buf.value  # CSIDL_DESKTOPDIRECTORY (puede estar dentro de OneDrive)
+    if WINDOWS:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf) == 0 and os.path.isdir(buf.value):
+            return buf.value  # CSIDL_DESKTOPDIRECTORY (puede estar dentro de OneDrive)
     return os.path.join(os.path.expanduser("~"), "Desktop")
 
 
@@ -249,19 +257,24 @@ def build_package(dest, extra=()):
     extra: [(archivo, ruta en el zip)] opcional, p. ej. las listas de vocabulario por workstream."""
     import zipfile
 
-    def text(path):  # .bat/.ps1 con CRLF; BOM en .ps1 (PowerShell 5 lo leeria como ANSI) y en .txt (Bloc de notas)
-        t = read_text(path).replace("\r\n", "\n").replace("\n", "\r\n").replace("{FECHA}", time.strftime("%d/%m/%Y"))
-        return (("﻿" if path.endswith((".ps1", ".txt")) else "") + t).encode("utf-8")
+    def text(path, keep_marker=False):  # .bat/.ps1 con CRLF; BOM en .ps1 (PowerShell 5 lo leeria como ANSI) y .txt
+        t = read_text(path).replace("\r\n", "\n").replace("\n", "\r\n")
+        if not keep_marker:
+            t = t.replace("{FECHA}", time.strftime("%d/%m/%Y"))
+        return (("\ufeff" if path.endswith((".ps1", ".txt")) else "") + t).encode("utf-8")
 
-    files = [(os.path.join(APP_DIR, n), "Notas/_app/" + n) for n in EXPORT_CODE]
+    files = [(os.path.join(APP_DIR, n), "Notas/_app/" + n) for n in export_code()]
     files += [(e.path, "Notas/_app/static/" + e.name) for e in os.scandir(STATIC_DIR) if e.is_file()]
-    files += [(e.path, "Notas/" + e.name) for e in os.scandir(EXPORT_DIR) if e.is_file()]
+    templates = [e for e in os.scandir(EXPORT_DIR) if e.is_file()]
+    files += [(e.path, "Notas/" + e.name) for e in templates]
+    # las plantillas van tambien dentro de _app/export (con su {FECHA}): la copia instalada podra volver a exportar
+    files += [(e.path, "Notas/_app/export/" + e.name) for e in templates]
     files += list(extra)
     tmp = dest + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for src, arc in sorted(files, key=lambda f: f[1]):
             if src.endswith((".bat", ".ps1", ".txt")):
-                z.writestr(arc, text(src))
+                z.writestr(arc, text(src, keep_marker=arc.startswith("Notas/_app/export/")))
             else:
                 z.write(src, arc)
     os.replace(tmp, dest)
@@ -312,7 +325,6 @@ DEFAULT_SETTINGS = {
     # salidas a la vez, asi da igual por donde saque Teams el audio. "none" = sin esa fuente
     "rec_mic": "default",
     "rec_sys": "all",
-    "rec_live": True,
     "rec_vocab": "",          # ultimo workstream elegido al grabar (<proyecto>/Vocabulario/<workstream>.txt)
     "links": [],              # carpetas vinculadas: [{"name", "path"}] (fuera de Audios, p. ej. la del proyecto)
     "rec_folder": "",         # ultima carpeta donde se grabo (sin workstream)
@@ -324,7 +336,8 @@ DEFAULT_SETTINGS = {
     "summary_model": "openai/gpt-oss-120b",
     "summary_lang": "es",     # es / en / same (el de la reunion)
     "summary_extra": "",     # instrucciones extra para el resumen
-    "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3-turbo", "base_url": "",
+    # nube: whisper-large-v3 (el mas preciso; -turbo es mas rapido y algo menos fino)
+    "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3", "base_url": "",
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
               "chunk_minutes": 10, "parallel": 3},
     "speed": {},
@@ -401,7 +414,8 @@ def scan():
                 continue
             try:
                 if e.is_dir(follow_symlinks=False):
-                    if not in_app_dir(e.path) and depth < max_depth:
+                    # las carpetas Vocabulario no son reuniones ni documentos: las lee list_vocab
+                    if not in_app_dir(e.path) and depth < max_depth and fold(e.name) != VOCAB_FOLDER:
                         node["folders"].append(walk(e.path, f"{rel}/{e.name}" if rel else e.name, depth + 1, max_depth))
                 elif e.is_file():
                     files[e.name.lower()] = e
@@ -744,6 +758,11 @@ def read_vocab(path):
 def list_vocab():
     out = []
 
+    def norm(p):
+        return os.path.normcase(os.path.normpath(p))
+
+    top_names = {norm(ROOT): "Notas", **{norm(l["path"]): l["name"] for l in LINKS.values()}}
+
     def walk(d, depth):
         try:
             entries = sorted(os.scandir(d), key=lambda e: natural_key(e.name))
@@ -756,13 +775,15 @@ def list_vocab():
                 if depth < 3:
                     walk(e.path, depth + 1)
                 continue
-            project = unicodedata.normalize("NFC", os.path.basename(d)) if d != ROOT else "Notas"
+            project = unicodedata.normalize("NFC", top_names.get(norm(d)) or os.path.basename(d))
             files = [f for f in os.scandir(e.path) if f.is_file() and f.name.lower().endswith(".txt")]
             for f in sorted(files, key=lambda f: (fold(f.name) != "general.txt", natural_key(f.name))):
                 out.append({"id": rel_of(f.path), "project": project, "folder": rel_of(d),
                             "name": unicodedata.normalize("NFC", f.name[:-4]), "_abs": f.path})
 
     walk(ROOT, 0)
+    for l in LINKS.values():  # tambien las carpetas vinculadas (p. ej. la del proyecto en OneDrive)
+        walk(l["path"], 0)
     return out
 
 
@@ -810,7 +831,14 @@ def vocab_for(abs_audio, st):
 
 
 def to_recycle_bin(paths):
-    """A la papelera de Windows (se puede restaurar), no un borrado definitivo."""
+    """A la papelera de Windows (se puede restaurar), no un borrado definitivo.
+    Fuera de Windows (solo desarrollo) se mueven a DATA_DIR/papelera/<fecha>/."""
+    if not WINDOWS:
+        dest = os.path.join(DATA_DIR, "papelera", time.strftime("%Y%m%d-%H%M%S"))
+        os.makedirs(dest, exist_ok=True)
+        for p in paths:
+            shutil.move(p, os.path.join(dest, os.path.basename(p)))
+        return
     import ctypes
     from ctypes import wintypes
 
@@ -960,9 +988,12 @@ class Jobs:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
 
-    def active_for(self, path):
+    def active_for(self, path, kinds=("transcribe",)):
+        """Trabajo en cola o en marcha sobre ese audio. Por defecto solo transcripciones (directo incluido):
+        un resumen en marcha no impide editar, restaurar ni volver a transcribir la reunion."""
         with self.lock:
-            return next((j for j in self.list if j.path == path and j.status in ("queued", "running")), None)
+            return next((j for j in self.list if j.path == path and j.kind in kinds
+                         and j.status in ("queued", "running")), None)
 
     # --- en directo
     def _watch_recordings(self):
@@ -981,7 +1012,7 @@ class Jobs:
                     if not seen and not self.active_for(a["path"]):
                         self.start_live(a["path"], auto=True)
             except Exception:
-                traceback.print_exc()
+                log_exc()
 
     def start_live(self, rel, preset=None, auto=False):
         st = self.settings.get()
@@ -1109,7 +1140,7 @@ class Jobs:
         except Exception as e:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  {job.error}")
-            traceback.print_exc()
+            log_exc()
         finally:
             job.recording = False
             job.finished = time.time()
@@ -1197,7 +1228,8 @@ class Jobs:
             meta = {"title": props.get("titulo") or os.path.splitext(job.name)[0],
                     "date": (a.get("date") or "").replace("T", " ")[:16] or "fecha desconocida",
                     "duration": f"{round(d / 60)} min" if d else "duración desconocida",
-                    "participants": props.get("participantes", ""), "notes": notes, "extra": st.get("summary_extra", "")}
+                    "participants": props.get("participantes", ""), "notes": notes,
+                    "extra": st.get("summary_extra", "")}
             cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"))
 
             def report(frac=None, stage=None, **k):
@@ -1217,7 +1249,7 @@ class Jobs:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  resumen: {job.error}")
             if not isinstance(e, (engines.EngineError, ApiError)):
-                traceback.print_exc()
+                log_exc()
         finally:
             job.finished = time.time()
             self.library.at = 0
@@ -1258,7 +1290,7 @@ class Jobs:
             try:
                 self._run_summary(job) if job.kind == "summary" else self._run(job)
             except Exception as e:
-                traceback.print_exc()
+                log_exc()
                 job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
                 job.finished = job.finished or time.time()
 
@@ -1335,7 +1367,7 @@ class Jobs:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  {job.error}")
             if not isinstance(e, (engines.EngineError, ApiError)):
-                traceback.print_exc()
+                log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
                 log("   se mantiene el texto del directo")
                 self.auto_summary(job.path)
@@ -1346,11 +1378,44 @@ class Jobs:
 
 # ----------------------------------------------------------------------------- API
 
+LOGGER = logging.getLogger("notas")
+
+
+def setup_logging(data_dir):
+    """La consola de siempre y, ademas, %LOCALAPPDATA%\\AudiosApp\\server.log con rotacion (3 x 1 MB)."""
+    import logging.handlers
+    for h in list(LOGGER.handlers):
+        LOGGER.removeHandler(h)
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+    LOGGER.addHandler(console)
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        fh = logging.handlers.RotatingFileHandler(os.path.join(data_dir, "server.log"), maxBytes=1_000_000,
+                                                  backupCount=3, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname).1s %(message)s", "%Y-%m-%d %H:%M:%S"))
+        LOGGER.addHandler(fh)
+    except OSError as e:
+        LOGGER.warning("sin server.log (%s)", e)
+
+
 def log(msg):
     try:
-        print(time.strftime("%H:%M:%S"), msg, flush=True)
+        if not LOGGER.handlers:
+            setup_logging(DATA_DIR)
+        LOGGER.info(msg)
     except Exception:
         pass
+
+
+def log_exc():
+    """La traza de la excepcion en curso, a la consola y a server.log (antes: traceback.print_exc())."""
+    try:
+        LOGGER.error(traceback.format_exc().rstrip())
+    except Exception:
+        traceback.print_exc()
 
 
 def masked(key):
@@ -1368,6 +1433,9 @@ class GlobalHotkey(threading.Thread):
         self.callback, self.ok, self.error, self.last = callback, False, None, 0.0
 
     def run(self):
+        if not WINDOWS:
+            self.error = "el atajo global solo existe en Windows"
+            return
         import ctypes
         import ctypes.wintypes as wt
         user32 = ctypes.windll.user32
@@ -1385,6 +1453,9 @@ class GlobalHotkey(threading.Thread):
 
 def cue(kind):
     """Pitido corto y bajito: sube al empezar, baja al parar (se oye sin mirar la pantalla)."""
+    if not WINDOWS:
+        return
+
     def play():
         try:
             import io
@@ -1412,9 +1483,15 @@ def cue(kind):
 
 def notify(title, body):
     """Notificacion de Windows (por si la ventana de Notas no esta a la vista)."""
+    if not WINDOWS:
+        log(f"   aviso: {title} — {body}")
+        return
     import base64
-    q = lambda s: s.replace("'", "''")
-    ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;"
+
+    def q(s):
+        return s.replace("'", "''")
+    ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+          "ContentType = WindowsRuntime] > $null;"
           "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
           "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
           "$x = $t.GetElementsByTagName('text');"
@@ -1455,7 +1532,8 @@ class RecorderProcess:
                                    "--mic", mic or "default", "--sys", sys_dev or "default"],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
                                   # prioridad alta: gasta muy poco, pero si se retrasa se pierde audio
-                                  creationflags=engines.NO_WINDOW | getattr(subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0))
+                                  creationflags=engines.NO_WINDOW
+                                  | getattr(subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0))
         err.close()
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -1527,7 +1605,8 @@ class App:
                 if self.rec and self.rec.alive():
                     r = self.rec_stop({})
                     cue("stop")
-                    notify("■ Grabación guardada", f"{max(1, round(r['seconds'] / 60))} min · la transcripción termina sola")
+                    notify("■ Grabación guardada",
+                           f"{max(1, round(r['seconds'] / 60))} min · la transcripción termina sola")
                     return dict(r, recording=False)
                 st = self.settings.get()
                 # el ultimo workstream elegido (y se graba en la carpeta de su proyecto)
@@ -1572,7 +1651,7 @@ class App:
             mic = "default"
         if sys_dev not in ("all", "default", "none") and not any(o["id"] == sys_dev for o in cached["outputs"]):
             sys_dev = "all"
-        return dict(cached, mic=mic, sys=sys_dev, live=bool(st.get("rec_live", True)))
+        return dict(cached, mic=mic, sys=sys_dev)
 
     def rec_status(self, q):
         r, m = self.rec, self.monitor
@@ -1632,6 +1711,7 @@ class App:
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
                 if v:  # antes de arrancar el directo, para que ya use ese vocabulario
                     self.notes_save({"path": rel, "props": {"proyecto": v["project"], "workstream": v["name"]}})
+
                 def upd(d):
                     if "vocab" in b:
                         d["rec_vocab"] = v["id"] if v else ""
@@ -1815,7 +1895,8 @@ class App:
         if _inside(path, ROOT):
             raise ApiError("Esa carpeta ya está dentro de Notas: no hace falta vincularla.")
         if _inside(ROOT, path) or _inside(os.path.expanduser("~"), path):
-            raise ApiError("Esa carpeta es demasiado grande (contiene la de Notas o tu usuario): elige una más concreta.")
+            raise ApiError("Esa carpeta es demasiado grande (contiene la de Notas o tu usuario): "
+                           "elige una más concreta.")
         lid = link_id(path)
         for other, l in LINKS.items():
             if other != lid and (_inside(path, l["path"]) or _inside(l["path"], path)):
@@ -1832,15 +1913,17 @@ class App:
         lid = rel[len(LINK):].split("/")[0] if rel.startswith(LINK) else ""
         if lid not in LINKS:
             raise ApiError("Esa carpeta no está vinculada.")
-        if any(j["path"].startswith(LINK + lid) and j["status"] in ("queued", "running") for j in self.jobs.snapshot()) \
-                or (self.rec and self.rec.alive() and rel_of(self.rec.path).startswith(LINK + lid)):
+        busy = any(j["path"].startswith(LINK + lid) and j["status"] in ("queued", "running")
+                   for j in self.jobs.snapshot())
+        if busy or (self.rec and self.rec.alive() and rel_of(self.rec.path).startswith(LINK + lid)):
             raise ApiError("Se está grabando o transcribiendo algo de esa carpeta; espera a que termine.")
         l = LINKS.pop(lid)
         self._save_links()
         self.settings.update(lambda d: d.update(
             favorites=[f for f in d.get("favorites", []) if not f["path"].startswith(LINK + lid)],
             rec_folder="" if (d.get("rec_folder") or "").startswith(LINK + lid) else d.get("rec_folder", ""),
-            project_folders={k: v for k, v in (d.get("project_folders") or {}).items() if not v.startswith(LINK + lid)}))
+            project_folders={k: v for k, v in (d.get("project_folders") or {}).items()
+                             if not v.startswith(LINK + lid)}))
         log(f"🔗 carpeta desvinculada (no se ha tocado nada): {l['path']}")
         return {"ok": True}
 
@@ -1899,7 +1982,8 @@ class App:
         if not v:
             raise ApiError("Ese tema ya no existe.")
         to_recycle_bin([v["_abs"]])  # a la papelera: se puede recuperar
-        self.settings.update(lambda d: d.update(rec_vocab="" if d.get("rec_vocab") == v["id"] else d.get("rec_vocab", "")))
+        self.settings.update(lambda d: d.update(rec_vocab="" if d.get("rec_vocab") == v["id"]
+                                                else d.get("rec_vocab", "")))
         self.library.at = 0
         log(f"🗑 vocabulario a la papelera: {v['project']} · {v['name']}")
         return {"ok": True}
@@ -1951,9 +2035,11 @@ class App:
         p = safe(b.get("path"), "file")
         rel = rel_of(p)
         a = self.library.find(rel)
-        if self.jobs.active_for(rel) or (a and a.get("recording")) or (self.rec and self.rec.alive()
-                                                                        and os.path.normcase(self.rec.path) == os.path.normcase(p)):
+        mine = self.rec and self.rec.alive() and os.path.normcase(self.rec.path) == os.path.normcase(p)
+        if self.jobs.active_for(rel) or (a and a.get("recording")) or mine:
             raise ApiError("Se está grabando o transcribiendo; espera a que termine.")
+        if self.jobs.active_for(rel, kinds=("summary",)):
+            raise ApiError("Se está resumiendo esta reunión; espera a que termine (o cancela el resumen en la cola).")
         group = [p]
         stem, ext = os.path.splitext(p)
         if ext.lower() in AUDIO_EXT:
@@ -2010,6 +2096,8 @@ class App:
     @classmethod
     def mic_meeting_app(cls):
         """App de reuniones que tiene ahora mismo el micro abierto (segun el registro de privacidad)."""
+        if not WINDOWS:
+            return None
         import winreg
         base = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
         for sub in (base, base + r"\NonPackaged"):
@@ -2070,7 +2158,8 @@ class App:
         if job and job.live:
             return self._save_live_edits(job, segs, base)
         if job:
-            raise ApiError("Se está haciendo el repaso final (1–2 min por hora de reunión); podrás editar en cuanto termine."
+            raise ApiError("Se está haciendo el repaso final (1–2 min por hora de reunión); "
+                           "podrás editar en cuanto termine."
                            if job.final_pass else "Se está transcribiendo; podrás editar cuando termine.")
         if not segs:
             raise ApiError("La transcripción no puede quedar vacía.")
@@ -2224,6 +2313,8 @@ class App:
             raise ApiError("OBS sigue grabando ese audio; muévelo cuando pare la grabación.")
         if self.jobs.active_for(b.get("path")):
             raise ApiError("Ese audio se está transcribiendo; espera a que termine.")
+        if self.jobs.active_for(b.get("path"), kinds=("summary",)):  # el .resumen.md se escribiria en la ruta vieja
+            raise ApiError("Se está resumiendo esta reunión; muévela cuando termine (o cancela el resumen en la cola).")
         stem, ext = os.path.splitext(os.path.basename(src))
         new_stem = clean_name(b["name"]) if b.get("name") else stem
         group = [src]
@@ -2283,6 +2374,8 @@ class App:
         rel = rel_of(src)
         if any(j["path"].startswith(rel + "/") and j["status"] in ("queued", "running") for j in self.jobs.snapshot()):
             raise ApiError("Hay audios de esta carpeta transcribiéndose; espera a que terminen.")
+        if self.rec and self.rec.alive() and rel_of(self.rec.path).startswith(rel + "/"):
+            raise ApiError("Se está grabando dentro de esta carpeta; para la grabación antes de renombrarla.")
         dst = os.path.join(os.path.dirname(src), clean_name(b.get("name")))
         if os.path.normcase(dst) != os.path.normcase(src) and os.path.exists(dst):
             raise ApiError("Ya existe una carpeta con ese nombre")
@@ -2293,10 +2386,15 @@ class App:
 
     def reveal(self, b):
         p = safe(b.get("path", ""))
-        if os.path.isdir(p):
-            subprocess.Popen(["explorer", p])
+        if WINDOWS:
+            if os.path.isdir(p):
+                subprocess.Popen(["explorer", p])
+            else:
+                subprocess.Popen(f'explorer /select,"{p}"')
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", p] if os.path.isfile(p) else ["open", p])
         else:
-            subprocess.Popen(f'explorer /select,"{p}"')
+            subprocess.Popen(["xdg-open", p if os.path.isdir(p) else os.path.dirname(p)])
         return {"ok": True}
 
     def open_file(self, b):
@@ -2306,7 +2404,10 @@ class App:
         ext = os.path.splitext(p)[1].lower()
         if not os.path.isfile(p) or ext not in TEXT_EXT | AUDIO_EXT:
             raise ApiError("No se puede abrir ese archivo")
-        os.startfile(p)
+        if WINDOWS:
+            os.startfile(p)
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", p])
         return {"ok": True}
 
     def save_settings(self, b):
@@ -2359,12 +2460,16 @@ class App:
 
     def export_package(self, b):
         dest = os.path.join(desktop_dir(), "Notas - instalador.zip")
-        vocab = [(v["_abs"], "Notas/" + v["id"]) for v in list_vocab()] if b.get("vocab") else []
+        vocab = []
+        if b.get("vocab"):  # las de carpetas vinculadas (":id/…") van como Notas/<proyecto>/Vocabulario/<tema>.txt
+            vocab = [(v["_abs"], "Notas/" + (v["id"] if not v["id"].startswith(LINK)
+                                             else f"{v['project']}/Vocabulario/{v['name']}.txt")) for v in list_vocab()]
         try:
             n = build_package(dest, vocab)
         except OSError as e:
             raise ApiError(f"No se pudo crear el paquete: {e}")
-        subprocess.Popen(f'explorer /select,"{dest}"')
+        if WINDOWS:
+            subprocess.Popen(f'explorer /select,"{dest}"')
         return {"ok": True, "path": dest, "files": n, "size": os.path.getsize(dest), "vocab": len(vocab)}
 
 
@@ -2417,7 +2522,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ConnectionError, BrokenPipeError):
             pass
         except Exception as e:
-            traceback.print_exc()
+            log_exc()
             self._json({"error": str(e)}, 500)
 
     do_HEAD = do_GET
@@ -2451,7 +2556,7 @@ class Handler(BaseHTTPRequestHandler):
         except ApiError as e:
             self._json({"error": e.msg}, e.code)
         except Exception as e:
-            traceback.print_exc()
+            log_exc()
             self._json({"error": str(e)}, 500)
 
     def _static(self, path):
@@ -2562,6 +2667,7 @@ def main():
     PORT = int(arg("--port", PORT))
     URL = f"http://{HOST}:{PORT}/"
     DATA_DIR = os.path.abspath(arg("--data", DATA_DIR))
+    setup_logging(DATA_DIR)
     no_browser = "--no-browser" in sys.argv
     if already_running():
         print("La app ya estaba abierta; abriendo ventana…")
@@ -2582,6 +2688,7 @@ def main():
     print("  Carpeta: " + ROOT)
     print("  Deja esta ventana abierta mientras uses la app (ciérrala para apagarla).")
     print("=" * 64, flush=True)
+    log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]}")
     if not no_browser:
         threading.Timer(0.3, open_ui).start()
     try:

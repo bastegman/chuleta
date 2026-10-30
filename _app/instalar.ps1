@@ -1,5 +1,5 @@
 ﻿# Instalador de Notas (lo lanza INSTALAR.bat). No necesita permisos de administrador:
-#   1. Python 3.10+ (si no hay, lo instala con winget solo para este usuario)
+#   1. Python de 3.10 a 3.13 (si no hay, instala 3.13 con winget solo para este usuario)
 #   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests
 #   3. Accesos directos "Notas" en el escritorio y en el menu Inicio
 # Se puede repetir sin problema. Para probarlo sin tocar nada: -NoShortcut / -NoLaunch, y -Port / -Desktop
@@ -10,6 +10,7 @@ $ErrorActionPreference = "Continue"
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $app
 $packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore")
+$MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
 
 function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color }
 function Step($text) { Write-Host ""; Write-Host "  > $text" -ForegroundColor Cyan }
@@ -20,20 +21,28 @@ function Fail($text) {
 }
 
 function Find-Python {
-    # devuelve la ruta de un python.exe 3.10+ que funcione (o $null)
+    # devuelve la ruta de un python.exe que funcione, de 3.10 a 3.13 y probando primero el mas nuevo;
+    # si solo hay uno mas nuevo (3.14+) lo devuelve con aviso: pip dira si aun no hay librerias para el
     $probe = "import sys; print(sys.executable); print(sys.version_info[0] * 100 + sys.version_info[1])"
-    $tries = @(@("py", "-3"), @("python"), @("python3"))
+    $tries = @(@("py", "-3.13"), @("py", "-3.12"), @("py", "-3.11"), @("py", "-3.10"), @("py", "-3"), @("python"), @("python3"))
     foreach ($dir in @("$env:LOCALAPPDATA\Programs\Python", "$env:ProgramFiles\Python*", "${env:ProgramFiles(x86)}\Python*")) {
         Get-ChildItem -Path $dir -Filter python.exe -Recurse -Depth 1 -ErrorAction SilentlyContinue |
             Sort-Object FullName -Descending | ForEach-Object { $tries += , @($_.FullName) }
     }
+    $newer = $null
     foreach ($t in $tries) {
         $exe = $t[0]
         $rest = @($t | Select-Object -Skip 1)
         if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
         try { $out = & $exe @rest -c $probe 2>$null } catch { continue }
-        if ($LASTEXITCODE -ne 0 -or $out.Count -lt 2) { continue }
-        if ([int]$out[1] -ge 310 -and $out[0] -notlike "*WindowsApps*") { return $out[0].Trim() }
+        if ($LASTEXITCODE -ne 0 -or $out.Count -lt 2 -or $out[0] -like "*WindowsApps*") { continue }
+        $v = [int]$out[1]
+        if ($v -ge 310 -and $v -le $MaxPy) { return $out[0].Trim() }
+        if ($v -gt $MaxPy -and -not $newer) { $newer = $out[0].Trim() }
+    }
+    if ($newer) {
+        Say "    Solo hay un Python mas nuevo que 3.$($MaxPy - 300) ($newer): si fallan las librerias, instala Python 3.13." Yellow
+        return $newer
     }
     return $null
 }
@@ -92,9 +101,17 @@ if (-not $NoShortcut -or $Desktop) {
         Step "Ya tenías Notas en $oldRoot : actualizo esa (con tus grabaciones)..."
         Get-ChildItem -LiteralPath $app -File | Where-Object { $_.Extension -in ".py", ".bat", ".ps1" } |
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $old -Force }
-        New-Item -ItemType Directory -Force (Join-Path $old "static") | Out-Null
-        Get-ChildItem -LiteralPath (Join-Path $app "static") -File |
-            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $old "static") -Force }
+        foreach ($sub in @("static", "export")) {  # export: plantillas del instalador (para "Compartir Notas")
+            New-Item -ItemType Directory -Force (Join-Path $old $sub) | Out-Null
+            Get-ChildItem -LiteralPath (Join-Path $app $sub) -File -ErrorAction SilentlyContinue |
+                ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $old $sub) -Force }
+        }
+        # el manual y los .bat de la raiz tambien se renuevan en la carpeta de siempre
+        foreach ($n in @("LEEME.txt", "INSTALAR.bat", "ABRIR NOTAS.bat")) {
+            if (Test-Path -LiteralPath (Join-Path $root $n)) {
+                Copy-Item -LiteralPath (Join-Path $root $n) -Destination (Join-Path $oldRoot $n) -Force
+            }
+        }
         # listas de vocabulario que traiga el paquete, sin pisar las que ya tengas
         Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq "Vocabulario" -and $_.FullName -notlike "$app*" } | ForEach-Object {
@@ -111,7 +128,7 @@ if (-not $NoShortcut -or $Desktop) {
     }
 }
 
-Step "Buscando Python 3.10 o superior..."
+Step "Buscando Python (de 3.10 a 3.13)..."
 $py = Find-Python
 if (-not $py) {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -130,15 +147,33 @@ Say "    $py" Green
 Step "Instalando librerias (la primera vez tarda unos minutos)..."
 & $py -m pip --version *> $null
 if ($LASTEXITCODE -ne 0) { & $py -m ensurepip --upgrade }
-& $py -m pip install --disable-pip-version-check --no-warn-script-location @packages
-if ($LASTEXITCODE -ne 0) {
+function Pip-Install($extra) {
+    # pip escribe los errores por stderr: se ensenan y se guardan para distinguir despues que ha fallado
+    $script:pipOut = @()
+    & $py -m pip install @extra --disable-pip-version-check --no-warn-script-location @packages 2>&1 |
+        ForEach-Object { $s = "$_"; Write-Host "    $s"; $script:pipOut += $s }
+    return $LASTEXITCODE
+}
+$rc = Pip-Install @()
+if ($rc -ne 0) {
     Say "    Reintentando en la carpeta de tu usuario (--user)..." Yellow
-    & $py -m pip install --user --disable-pip-version-check --no-warn-script-location @packages
+    $rc = Pip-Install @("--user")
 }
 & $py -c "import faster_whisper, soundcard, requests, av, numpy; print('    faster-whisper', faster_whisper.__version__, '| PyAV', av.__version__)"
 if ($LASTEXITCODE -ne 0) {
-    Fail ("No se han podido instalar las librerias. Si estas en la red de la empresa puede ser el proxy: " +
-          "prueba con otra red (p. ej. el movil) o pide a IT acceso a pypi.org, y vuelve a abrir INSTALAR.bat.")
+    $log = ($script:pipOut -join "`n")
+    $pyVer = & $py -c "import sys; print('%d.%d' % sys.version_info[:2])"
+    if ($log -match "No matching distribution|Could not find a version that satisfies|is not a supported wheel") {
+        Fail ("Alguna libreria (faster-whisper / ctranslate2) todavia no esta publicada para Python $pyVer. " +
+              "Instala Python 3.13 (winget install -e --id Python.Python.3.13 --scope user, o desde python.org) " +
+              "y vuelve a abrir INSTALAR.bat.")
+    }
+    if ($log -match "ProxyError|SSLError|CERTIFICATE_VERIFY|Could not fetch URL|Temporary failure|timed out|Max retries exceeded|Network is unreachable|Connection (refused|reset|aborted)") {
+        Fail ("No se han podido descargar las librerias: parece la red o el proxy de la empresa. Prueba con otra red " +
+              "(p. ej. compartiendo datos del movil) o pide a IT acceso a pypi.org, y vuelve a abrir INSTALAR.bat.")
+    }
+    Fail ("No se han podido instalar las librerias (Python $pyVer). Revisa los mensajes de arriba: en la red de la " +
+          "empresa puede ser el proxy; con un Python muy nuevo, instala Python 3.13 y vuelve a abrir INSTALAR.bat.")
 }
 # el lanzador usa este Python (si hay varios instalados, el de las librerias)
 [IO.File]::WriteAllText((Join-Path $app "python.txt"), $py, (New-Object Text.UTF8Encoding $false))

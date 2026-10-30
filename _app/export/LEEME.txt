@@ -19,8 +19,8 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
        - Si Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas formas".
 
   3. Se abre Notas. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
-       - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y elige el modelo
-         whisper-large-v3 (el más preciso).
+       - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y deja el modelo
+         whisper-large-v3 (el más preciso; whisper-large-v3-turbo es más rápido y algo menos fino).
        - Pasarela o API interna de la empresa: elige "Otra (compatible con OpenAI)" y pon su URL
          base (la que termina en /v1), la key y el nombre del modelo de Whisper.
        - Pulsa "Probar conexión" y Guardar. Desde ese momento transcribe en la nube por defecto.
@@ -78,4 +78,4 @@ SI ALGO FALLA
   - INSTALAR.bat se puede volver a ejecutar sin problema.
   - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
     (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.
-  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (worker-*.log, recorder.log).
+  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log, recorder.log).
