@@ -1,6 +1,7 @@
 ﻿# Instalador de Notas (lo lanza INSTALAR.bat). No necesita permisos de administrador:
 #   1. Python de 3.10 a 3.13 (si no hay, instala 3.13 con winget solo para este usuario)
-#   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests
+#   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests,
+#      sherpa-onnx (quien habla, opcional: si no carga, la app funciona igual sin esa opcion)
 #   3. Accesos directos "Notas" en el escritorio y en el menu Inicio
 # Se puede repetir sin problema. Para probarlo sin tocar nada: -NoShortcut / -NoLaunch, y -Port / -Desktop
 # (otro puerto y otra carpeta de escritorio, como si fuera otro PC).
@@ -9,7 +10,7 @@ param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Deskto
 $ErrorActionPreference = "Continue"
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $app
-$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore")
+$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore", "sherpa-onnx==2.0.1")
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
 
 function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color }
@@ -161,7 +162,11 @@ if ($rc -ne 0) {
     $rc = Pip-Install "--user"
 }
 & $py -c "import faster_whisper, soundcard, requests, av, numpy; print('    faster-whisper', faster_whisper.__version__, '| PyAV', av.__version__)"
-if ($LASTEXITCODE -ne 0) {
+$coreOk = ($LASTEXITCODE -eq 0)
+# sherpa-onnx es opcional (quien habla): si no importa, solo se avisa y la app sigue funcionando sin esa opcion
+& $py -c "import sherpa_onnx; print('    sherpa-onnx', sherpa_onnx.__version__, '(quien habla: disponible)')" 2>$null
+if ($LASTEXITCODE -ne 0) { Say "    sherpa-onnx no esta disponible: la opcion Voces (quien habla) no se podra activar en este PC" Yellow }
+if (-not $coreOk) {
     $log = ($script:pipOut -join "`n")
     $pyVer = & $py -c "import sys; print('%d.%d' % sys.version_info[:2])"
     if ($log -match "No matching distribution|Could not find a version that satisfies|is not a supported wheel") {

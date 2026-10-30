@@ -3,3 +3,5 @@ faster-whisper==1.2.1
 soundcard>=0.4.3
 requests
 truststore
+# quien habla (opcional en la app; importacion perezosa): diarizacion y huellas de voz en local
+sherpa-onnx==2.0.1

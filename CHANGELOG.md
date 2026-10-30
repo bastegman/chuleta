@@ -49,7 +49,22 @@ nada de ningún proyecto concreto.
   y habrá que borrarlo a mano).
 
 ### Añadido
-- `_app/export/` (plantillas del instalador con la fecha como `{FECHA}`), que faltaba en el zip exportado.
+- **Quién habla** (opcional, apagado por defecto): diarización en local con `sherpa-onnx` 2.0.1 (segmentación
+  pyannote 3.0 + huellas TitaNet small, ≈47 MB de modelos que se descargan al activar la opción, sha256 anclado)
+  en un subproceso de prioridad baja al terminar cada transcripción (`_app/voices.py`). Sidecar
+  `<grabación>.hablantes.json` junto al audio (se mueve y borra con él; sin datos de voz) y `voces.json` en
+  `%LOCALAPPDATA%\AudiosApp` cifrado con DPAPI con las personas y hasta 5 huellas cada una, solo con «Recordar» y
+  consentimiento. En la transcripción, párrafo y etiqueta por hablante («Persona 2», «Javier», «Tú» por la actividad
+  del micro, «varios»); clic → nombre, «Soy yo», «Recordar», «Fusionar con…», «No es esta persona», «Olvidar».
+  El resumen con IA recibe los nombres («[12:34] Javier: …») y «Participantes» se sugiere con los reconocidos.
+  «Exportar con hablantes» → `<grabación>.hablantes.txt`. Ajustes → «🗣️ Voces (opcional)» con el interruptor,
+  la descarga de modelos y la lista de personas. API: `GET /api/voces`, `GET /api/hablantes`,
+  `POST /api/voces/activar|identificar|persona|fusionar|olvidar|reasignar|exportar`.
+- La API key de la nube se guarda cifrada con DPAPI en `settings.json` (migración transparente al primer
+  guardado; si no se puede descifrar queda vacía, se anota en `server.log` y hay que volver a pegarla).
+- `sherpa-onnx==2.0.1` en `requirements.txt` y en el instalador; si no importa, el instalador solo avisa y la app
+  funciona sin la opción de voces.
+- `_app/export/ (plantillas del instalador con la fecha como `{FECHA}`), que faltaba en el zip exportado.
 - `server.log` con rotación (3 × 1 MB) en `%LOCALAPPDATA%\AudiosApp`, además de la consola; las trazas de error
   también van ahí.
 - El servidor arranca en macOS/Linux para desarrollar (`python3 _app/server.py --port 8766 --data /tmp/x

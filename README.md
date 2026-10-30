@@ -13,6 +13,9 @@ notas) se queda en la carpeta donde descomprimas la app.
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
 - **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas.
+- **Quién habla** (opcional): separa las voces de cada reunión en tu PC (sherpa-onnx), etiqueta «Persona 1»,
+  «Persona 2», «Tú»… en la transcripción, deja ponerles nombre y, con consentimiento, recordarlas en las
+  próximas reuniones. El resumen usa esos nombres.
 - **Compartir**: desde Ajustes se genera un zip instalable para otra persona.
 
 ## Instalar (Windows, sin permisos de administrador)
@@ -29,8 +32,15 @@ El manual completo está en `LEEME.txt`.
 ## Privacidad
 
 - Grabaciones, transcripciones y notas viven en la carpeta de Notas, en tu PC.
-- Ajustes y API key, en `%LOCALAPPDATA%\AudiosApp` (fuera de OneDrive). Ahí quedan también los registros
-  (`server.log`, `worker-*.log`, `recorder.log`).
+- Ajustes y API key, en `%LOCALAPPDATA%\AudiosApp` (fuera de OneDrive). La API key se guarda cifrada con DPAPI
+  (solo tu cuenta de Windows en ese PC la descifra). Ahí quedan también los registros (`server.log`,
+  `worker-*.log`, `recorder.log`, `voces.log`).
+- «Quién habla» es opcional y funciona en local: por reunión se escribe `<grabación>.hablantes.json` junto al
+  audio (tramos y «Persona N», sin datos de voz); las huellas de voz que decidas recordar van a
+  `%LOCALAPPDATA%\AudiosApp\voces.json`, cifrado con DPAPI, máximo 5 por persona, y se pueden olvidar una a una o
+  todas. Una huella de voz es un dato biométrico: la app solo la guarda si marcas que tienes el consentimiento de
+  esa persona. Los modelos (segmentación pyannote 3.0, MIT; TitaNet small de NeMo, Apache-2.0; ≈47 MB) se
+  descargan de los releases de sherpa-onnx al activar la opción, con su sha256 comprobado.
 - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que configures.
   Antes de grabar o enviar reuniones de trabajo, confirma que lo permiten la política de tu empresa y el acuerdo
   con tu cliente, si lo hay.
@@ -39,8 +49,8 @@ El manual completo está en `LEEME.txt`.
 
 ## Desarrollo
 
-El servidor es Python 3.10–3.13 con la librería estándar más `faster-whisper`, `soundcard`, `requests` y
-`truststore`; la interfaz es HTML/JS sin compilar (`_app/static`). No hay paso de build: `_app/Notas.bat`
+El servidor es Python 3.10–3.13 con la librería estándar más `faster-whisper`, `soundcard`, `requests`,
+`truststore` y `sherpa-onnx` (opcional, importación perezosa); la interfaz es HTML/JS sin compilar (`_app/static`). No hay paso de build: `_app/Notas.bat`
 lanza `python server.py`.
 
 En macOS/Linux el servidor arranca para desarrollar la interfaz y la lógica (la grabadora, el atajo global,
@@ -59,7 +69,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 ```
 
 Los tests no necesitan Windows ni `faster-whisper`: cubren la lógica pura (SRT, notas, árbol de carpetas,
-cola, paquete instalable, prompts, grabadora) con dobles y ficheros temporales.
+cola, paquete instalable, prompts, grabadora, voces) con dobles y ficheros temporales. La prueba de integración de
+voces (`tests/test_voices_integration.py`) solo corre si hay `sherpa-onnx`, `say` (macOS) y `NOTAS_VOCES_DATA`
+apunta a una carpeta de datos con los modelos en `models/voces/`.
 
 ### Generar el zip instalable
 

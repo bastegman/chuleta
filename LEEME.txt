@@ -56,10 +56,31 @@ USO DIARIO
     Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan fuera.
 
 
+QUIÉN HABLA (opcional)
+----------------------------------------------------------------------------------
+  - Ajustes ⚙ → «Voces (opcional)» → activar. Se descargan dos modelos (unos 47 MB, una sola vez)
+    y, al terminar cada transcripción, la app separa las voces en segundo plano (unos 2 s por
+    minuto de reunión, sin molestar). En la transcripción cada cambio de voz empieza párrafo con
+    una etiqueta: «Persona 1», «Persona 2», «Tú» (tu micro), «varios» (hablan a la vez).
+  - Clic en la etiqueta: ponle nombre. Marca «Recordar en próximas reuniones» para que la app
+    reconozca esa voz la próxima vez (sale ya con su nombre; si no está segura pregunta «¿Nombre?»).
+    También «Soy yo», «Fusionar con…» (dos etiquetas eran la misma persona), «No es esta persona»
+    y «Olvidar persona».
+  - El resumen con IA usa esos nombres (responsables y participantes) y «Exportar con hablantes»
+    guarda <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
+  - Privacidad: todo ocurre en tu PC, nada se envía fuera. Por reunión se guarda
+    <grabación>.hablantes.json junto al audio (tramos y «Persona N», sin datos de voz). Las huellas
+    de voz que decidas recordar van a %LOCALAPPDATA%\AudiosApp\voces.json, cifrado con tu cuenta
+    de Windows, fuera de OneDrive, máximo 5 por persona, y se borran con «Olvidar». Una huella de
+    voz es un dato biométrico: guárdala solo con el consentimiento de esa persona (la casilla te lo
+    recuerda; el consentimiento es responsabilidad tuya). Si no activas la opción no se descarga
+    ni se guarda nada.
+
 PRIVACIDAD
 ----------------------------------------------------------------------------------
   - Grabaciones, transcripciones y notas: en la carpeta Notas, en tu PC.
   - Ajustes y API key: en %LOCALAPPDATA%\AudiosApp (fuera de OneDrive; no viajan con la carpeta).
+    La API key se guarda cifrada con tu cuenta de Windows (DPAPI): otro usuario u otro PC no la lee.
   - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que
     configures. Si son reuniones de trabajo, confirma que lo permiten la política de tu empresa y
     el acuerdo con tu cliente, si lo hay.
