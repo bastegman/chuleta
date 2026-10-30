@@ -87,6 +87,16 @@ interfaz de voces aún no se han ejecutado a mano en Windows. Si algo no cuadra,
 python3 scripts/build_zip.py            # deja dist/Notas - instalador.zip (sin vocabulario)
 ```
 
+### Regenerar los iconos
+
+```
+.venv/bin/pip install pillow && .venv/bin/python make_icons.py
+```
+
+Rasteriza `_app/static/logo.svg` (y `design/logo-small.svg` para 16 y 20 px) con Chrome o Edge headless y escribe
+`_app/static/notas.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
+`_app/static/notas.png`. Solo hace falta si cambia el logo.
+
 ## Licencia
 
 MIT. Ver `LICENSE`.

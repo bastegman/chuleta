@@ -17,6 +17,10 @@ nada de ningún proyecto concreto.
 - `requirements.txt`, `LICENSE` (MIT), `README.md` y este fichero.
 
 ### Corregido
+- El icono de la app (acceso directo, barra de tareas, pestaña): `notas.ico` se genera ahora con `make_icons.py`
+  desde el SVG, con los tamaños de 16 y 20 px dibujados aparte (sin anillas, renglones de 1 px) en vez de ser una
+  reducción borrosa del de 256, y todas las entradas en BMP (el anterior las llevaba en PNG, que Windows no siempre
+  pinta bien en tamaños pequeños). La página usa el `.ico` y el PNG de 256 como favicon en vez del SVG.
 - `fullTitle` (app.js) perdía el título de la reunión en la barra del reproductor, los avisos, el directo, la
   búsqueda, la cola y el calendario (salía « · 30 oct · 15:03»).
 - La cola trataba el resumen con IA como una transcripción: mientras se resumía no se podía editar, restaurar,
