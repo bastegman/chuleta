@@ -529,6 +529,7 @@ function refreshView() {
     else { renderAudioHead(a); renderAudioJob(a); }
     if ($('#aTabs') && !$('#aTabs').contains(document.activeElement)) $('#aTabs').innerHTML = tabsHtml(a);
     if (!S.tx || S.tx.path !== a.path || S.tx.mtime !== a.tx_mtime) loadTranscript(a);
+    if (!S.spk || S.spk.path !== a.path || S.spk.mtime !== a.spk_mtime) loadSpeakers(a); else renderVoicesBar(a);
   }
 }
 
@@ -751,6 +752,7 @@ async function submitTx(paths, preset, language, resume = false) {
 }
 
 function jobSub(j) {
+  if (j.kind === 'voces') return `🗣 Quién habla (en este PC)${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
   if (j.kind === 'summary') return `✨ Resumen con IA (${provName()})${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
   const p = S.presetsById[j.preset] || { icon: '', label: j.preset };
   const parts = [`${p.icon} ${esc(j.live ? (p.live_label || p.label) : p.label)}`];
@@ -775,6 +777,7 @@ function jobSub(j) {
   return parts.join(' · ');
 }
 function jobStage(j) {
+  if (j.kind === 'voces') return j.status === 'error' ? 'No se pudieron identificar las voces' : j.status === 'queued' ? 'En cola para identificar voces' : j.status === 'cancelled' ? 'Cancelado' : j.stage;
   if (j.kind === 'summary') return j.status === 'done' ? 'Resumen listo' : j.status === 'error' ? 'No se pudo resumir' : j.status === 'queued' ? 'En cola para resumir' : j.stage;
   if (j.status === 'queued') return 'En cola';
   if (j.status === 'done') return j.live ? 'Grabación transcrita' : 'Transcripción lista';
@@ -842,7 +845,7 @@ function viewFolder(f) {
 
 function viewLive(a) {
   S.viewMode = 'live';
-  main.innerHTML = `<div class="page live-page"><div id="lHero"></div>
+  main.innerHTML = `<div class="page live-page"><div id="lHero"></div><div id="aVoz"></div>
     <div id="aTabs"></div><section class="sum hidden" id="aSum"></section><section class="tx live-feed" id="aTx"></section><section class="notes hidden" id="aNotes"></section></div>
     <button class="to-live hidden" id="toLive" data-act="to-live">↓ Ir al directo</button>`;
   S.tx = null; S.curIdx = -1; S.curEl = null; S.liveRev = undefined; S.seenSegs = 0;
@@ -850,18 +853,20 @@ function viewLive(a) {
   renderLiveHero(a);
   applyTab(a);  // en directo tambien se pueden ir tomando notas (como en Notion)
   loadTranscript(a);
+  loadSpeakers(a);
 }
 
 function viewAudio(a) {
   S.viewMode = 'normal';
   main.innerHTML = `<div class="page">
-    <div id="aHead"></div><div id="aJob"></div><div id="aBox"></div>
+    <div id="aHead"></div><div id="aJob"></div><div id="aVoz"></div><div id="aBox"></div>
     <div id="aTabs"></div><section class="sum hidden" id="aSum"></section><section class="tx" id="aTx"></section><section class="notes hidden" id="aNotes"></section></div>`;
   S.tx = null; S.curIdx = -1; S.curEl = null; S.liveRev = undefined;
   S.tq = S.route.params.get('q') || '';
   renderAudioHead(a); renderAudioJob(a);
   applyTab(a);
   loadTranscript(a);
+  loadSpeakers(a);
 }
 
 function renderAudioHead(a, force) {
@@ -1104,14 +1109,15 @@ async function restoreOriginal() {
   } catch (err) { toast(esc(err.message), 'err'); }
 }
 
-function paragraphs(segs) {
+function paragraphs(segs, who) {
   const paras = [];
   let cur = null, len = 0;
   segs.forEach((s, i) => {
     const prev = segs[i - 1];
     const gap = prev && s.start != null ? s.start - prev.end : 0;
     const endsSentence = prev ? /[.?!…]["»”)]?$/.test(prev.text) : true;
-    if (!cur || gap > 3 || (len > 420 && endsSentence) || len > 1100 || (s.start == null && cur.length >= 5)) { cur = []; paras.push(cur); len = 0; }
+    const turn = who && i > 0 && who[i] !== who[i - 1];  // cambia quien habla: parrafo nuevo
+    if (!cur || turn || gap > 3 || (len > 420 && endsSentence) || len > 1100 || (s.start == null && cur.length >= 5)) { cur = []; paras.push(cur); len = 0; }
     cur.push(i); len += s.text.length;
   });
   return paras;
@@ -1126,12 +1132,15 @@ function renderTxBody(fromModel) {
   const fresh = live && S.seenSegs ? S.seenSegs : Infinity;  // lo recien llegado se resalta un momento
   const edit = S.editing ? ' contenteditable="plaintext-only" spellcheck="true"' : '';
   const span = i => `<span class="s${i >= fresh ? ' fresh' : ''}" data-i="${i}"${edit}>${hlTerms(tx.segs[i].text, terms)}</span>`;
+  // quien habla (voces.js): etiqueta al cambiar de hablante, parrafo nuevo por turno
+  const who = S.spk && S.spk.path === tx.path && S.spk.exists && tx.kind === 'srt' && S.spk.who && S.spk.who.length === tx.segs.length ? S.spk.who : null;
+  const chip = i => who && (i === 0 || who[i] !== who[i - 1]) ? spkChip(who[i]) : '';
   if (S.mode === 'lines' && tx.kind === 'srt') {
-    body.innerHTML = tx.segs.map((s, i) => `<div class="ln"><span class="ts" data-i="${i}">${fmtClock(s.start)}</span>${span(i)}</div>`).join('');
+    body.innerHTML = tx.segs.map((s, i) => `<div class="ln"><span class="ts" data-i="${i}">${fmtClock(s.start)}</span><span>${chip(i)}${span(i)}</span></div>`).join('');
   } else {
-    body.innerHTML = paragraphs(tx.segs).map(p => {
+    body.innerHTML = paragraphs(tx.segs, who).map(p => {
       const s0 = tx.segs[p[0]];
-      return `<p>${s0.start != null ? `<span class="ts" data-i="${p[0]}">${fmtClock(s0.start)}</span>` : ''}${p.map(span).join(' ')}</p>`;
+      return `<p>${chip(p[0])}${s0.start != null ? `<span class="ts" data-i="${p[0]}">${fmtClock(s0.start)}</span>` : ''}${p.map(span).join(' ')}</p>`;
     }).join('');
   }
   if (live) {
@@ -1552,6 +1561,7 @@ function onJobs(jobs) {
   document.title = running ? `(${Math.round(running.progress * 100)} %) Notas` : 'Notas';
   if (!$('#jobsPanel').classList.contains('hidden')) renderJobsPanel();
   onSummaryJobs(prev);
+  onVoicesJobs(prev);
   if (finished) { refreshTree(true); api('/api/config').then(setConfig).catch(() => { }); }
   if (statusChanged) { renderTree(); refreshView(); renderLiveChip(); }
   else applyProgress();
@@ -1579,6 +1589,12 @@ function applyProgress() {
   renderLiveChip();
 }
 function notifyJob(j) {
+  if (j.kind === 'voces') {
+    const a = S.audios.get(j.path), title = a ? fullTitle(a) : j.name;
+    if (j.status === 'done') toast(`🗣 ${esc(j.stage)}: ${esc(title)}`, 'ok', () => go('a', j.path));
+    else toast(`No se pudieron identificar las voces de ${esc(title)}: ${esc(j.error)}`, 'err', () => go('a', j.path));
+    return;
+  }
   if (j.kind === 'summary') { if (j.status === 'error') toast(`No se pudo resumir: ${esc(j.error)}`, 'err'); return; }  // el aviso de listo lo da notas.js
   const a = S.audios.get(j.path), title = a ? fullTitle(a) : j.name;
   if (j.status === 'done') toast(`<b>✓</b> ${j.live ? 'Grabación transcrita' : 'Transcrito'}: ${esc(title)}`, 'ok', () => go('a', j.path));
@@ -1786,6 +1802,7 @@ function openSettings() {
       <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
       <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
     </fieldset>
+    ${vocesFieldsetHtml()}
     <fieldset><legend>📦 Compartir Notas</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario por tema <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="xExport" type="button">Crear instalador para otra persona</button><span id="xRes" class="muted" style="font-size:12.5px"></span></div>
@@ -1816,6 +1833,7 @@ function openSettings() {
     };
     fields();
     $('#cProv', d).onchange = fields;
+    bindVocesSettings(d);
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };

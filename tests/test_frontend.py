@@ -73,3 +73,29 @@ class AtajosTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("node"), "node no instalado")
+class VocesFrontendTests(unittest.TestCase):
+    def test_parrafo_nuevo_al_cambiar_de_hablante(self):
+        defs = js_defs(read("app.js"), ["paragraphs"])
+        code = defs + """
+const segs = [{start: 0, end: 1, text: 'a'}, {start: 1, end: 2, text: 'b'},
+  {start: 2, end: 3, text: 'c'}, {start: 3, end: 4, text: 'd'}];
+const J = JSON.stringify;
+console.log(J(paragraphs(segs)), J(paragraphs(segs, ['h1', 'h1', 'h2', 'h2'])),
+  J(paragraphs(segs, [null, null, 'varios', 'h1'])));
+"""
+        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.split(), ["[[0,1,2,3]]", "[[0,1],[2,3]]", "[[0,1],[2],[3]]"])
+
+    def test_voces_js_cargado_y_textos(self):
+        html, js, app = read("index.html"), read("voces.js"), read("app.js")
+        self.assertIn('<script src="/voces.js"></script>', html)
+        self.assertIn("Tengo el consentimiento de esta persona para guardar su huella de voz en este PC", js)
+        for s in ("Soy yo", "Recordar en próximas reuniones", "Fusionar con…", "No es esta persona", "Olvidar persona",
+                  "Identificar voces", "Olvidar todas", "/api/voces/activar", "/api/hablantes"):
+            self.assertIn(s, js, s)
+        for s in ("vocesFieldsetHtml()", "bindVocesSettings(d)", "onVoicesJobs(prev)", "loadSpeakers(a)", 'id="aVoz"'):
+            self.assertIn(s, app, s)
