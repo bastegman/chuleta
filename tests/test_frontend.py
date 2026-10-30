@@ -37,7 +37,8 @@ class TitulosTests(unittest.TestCase):
     def run_js(self, code):
         defs = js_defs(read("app.js"), ["nfc", "pad", "MES", "DIA", "aDate", "shortTitle", "longTitle", "fullTitle"])
         defs += "\n" + js_defs(read("notas.js"), ["titleOf"])
-        r = subprocess.run(["node", "-e", defs + "\n" + code], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["node", "-e", defs + "\n" + code], capture_output=True, text=True, encoding="utf-8",
+                           timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.strip()
 
@@ -86,7 +87,7 @@ const J = JSON.stringify;
 console.log(J(paragraphs(segs)), J(paragraphs(segs, ['h1', 'h1', 'h2', 'h2'])),
   J(paragraphs(segs, [null, null, 'varios', 'h1'])));
 """
-        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.split(), ["[[0,1,2,3]]", "[[0,1],[2,3]]", "[[0,1],[2],[3]]"])
 

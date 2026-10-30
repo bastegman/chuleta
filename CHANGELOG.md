@@ -79,8 +79,9 @@ nada de ningún proyecto concreto.
   estado compartido (ROOT, LINKS, COMPLETE, DATA_DIR cambian en tiempo de ejecución) y se deja para otra entrega.
 
 ### Conocido, sin cambiar
-- «Quién habla» y el cifrado con DPAPI se han probado en macOS (sherpa-onnx real; DPAPI con un doble) y todavía no a
-  mano en Windows: la primera ejecución real de DPAPI es el job `windows-latest` de GitHub Actions.
+- «Quién habla» y el cifrado con DPAPI se han probado en macOS (sherpa-onnx real; DPAPI con un doble); DPAPI real,
+  en el job `windows-latest` de GitHub Actions. El instalador, la grabadora y la interfaz de voces aún no se han
+  ejecutado a mano en Windows.
 - Si DPAPI falla en Windows, los secretos se guardan en claro (`plain:`) para no dejar la app sin ajustes; solo se
   avisa en `server.log`.
 - El aviso de Windows (toast) sale firmado por «Windows PowerShell»: cambiarlo exige registrar un

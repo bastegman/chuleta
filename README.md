@@ -76,9 +76,10 @@ voces (`tests/test_voices_integration.py`) solo corre si hay `sherpa-onnx`, `say
 apunta a una carpeta de datos con los modelos en `models/voces/`.
 
 «Quién habla» y el cifrado con DPAPI se han desarrollado y probado en macOS (la diarización con sherpa-onnx real;
-DPAPI con un doble, porque `crypt32` solo existe en Windows). En Windows aún no se han ejecutado a mano: la primera
-prueba real de DPAPI es el job `windows-latest` de GitHub Actions (`tests/test_voices.py::test_dpapi_real`). Si usas
-estas dos funciones en Windows y algo no cuadra, abre un issue con el texto de `server.log` o `voces.log`.
+DPAPI con un doble, porque `crypt32` solo existe en Windows). En Windows, DPAPI real se prueba en el job
+`windows-latest` de GitHub Actions (`tests/test_voices.py::test_dpapi_real`); el instalador, la grabadora y la
+interfaz de voces aún no se han ejecutado a mano en Windows. Si algo no cuadra, abre un issue con el texto de
+`server.log` o `voces.log`.
 
 ### Generar el zip instalable
 

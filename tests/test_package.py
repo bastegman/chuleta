@@ -111,7 +111,7 @@ class BuildZipScriptTests(unittest.TestCase):
         import sys
         dest = os.path.join(tempfile.mkdtemp(prefix="notas-dist-"), "Notas - instalador.zip")
         r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_zip.py"), dest],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         with zipfile.ZipFile(dest) as z:
             names = set(z.namelist())

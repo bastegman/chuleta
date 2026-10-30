@@ -135,7 +135,12 @@ def setup_logging(data_dir):
         LOGGER.removeHandler(h)
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
-    console = logging.StreamHandler(sys.stdout)
+    stream = sys.stdout
+    try:  # consola cp1252/cp850 (Windows): los emojis del log no deben tumbar el logging («--- Logging error ---»)
+        stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+    console = logging.StreamHandler(stream)
     console.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
     LOGGER.addHandler(console)
     if not data_dir:
