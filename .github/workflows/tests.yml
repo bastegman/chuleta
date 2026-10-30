@@ -17,9 +17,18 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
         with:
           python-version: ${{ matrix.python }}
-      - name: Dependencias de desarrollo (numpy, flake8; faster-whisper no hace falta)
-        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: flake8
-        run: python -m flake8
+      - name: numpy (faster-whisper no hace falta para los tests)
+        run: python -m pip install --disable-pip-version-check numpy
       - name: Tests (falla si se ejecutan 0)
         run: python tests/run.py
+
+  lint:
+    # aparte de la matriz: las versiones recientes de flake8 exigen Python >= 3.11
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - run: python -m flake8
