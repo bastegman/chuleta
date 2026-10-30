@@ -30,9 +30,10 @@ from urllib.parse import parse_qs, urlparse
 
 import engines
 import live
+import voices
 from common import (ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS, clean_name,  # noqa: F401 (re-exportados)
-                    default_threads, fmt_srt, fold, log, log_exc, natural_key, parse_srt, read_text,
-                    save_text, setup_logging, wav_duration, write_bytes)
+                    default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key, parse_srt, protect,
+                    read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +45,8 @@ URL = f"http://{HOST}:{PORT}/"
 
 AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm"}
 TEXT_EXT = {".txt", ".md", ".srt"}
-SIDE_EXTS = (".txt", ".srt", ".md", ".resumen.md")  # lo que acompana a cada audio (se mueve y borra con el)
+# lo que acompana a cada audio (se mueve y borra con el): texto, subtitulos, notas, resumen, hablantes y su exportacion
+SIDE_EXTS = (".txt", ".srt", ".md", ".resumen.md", voices.SIDECAR_EXT, ".hablantes.txt")
 MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "video/mp4",
         ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aac": "audio/aac",
         ".webm": "audio/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".wma": "audio/x-ms-wma",
@@ -175,7 +177,12 @@ def build_package(dest, extra=()):
 # ----------------------------------------------------------------------------- estado persistente
 
 class Store:
-    """JSON en %LOCALAPPDATA%\\AudiosApp (fuera de OneDrive: la API key no se sincroniza)."""
+    """JSON en %LOCALAPPDATA%\\AudiosApp (fuera de OneDrive: la API key no se sincroniza).
+    Los SECRETS se guardan cifrados con DPAPI (common.protect); en memoria y en get() van en claro. Un fichero
+    antiguo con la clave en claro se lee igual y queda cifrado en el primer guardado (migracion transparente).
+    Si no se puede descifrar (otro usuario de Windows, otro PC), la clave queda vacia y se avisa en el log."""
+
+    SECRETS = (("cloud", "api_key"),)
 
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
@@ -190,6 +197,19 @@ class Store:
                     self.data[k] = v
         except (OSError, ValueError):
             pass
+        self.lost = []  # secretos que no se pudieron descifrar (la interfaz pide pegarlos otra vez)
+        for keys in self.SECRETS:
+            d = self.data
+            for k in keys[:-1]:
+                d = d.get(k) if isinstance(d, dict) else None
+            if not isinstance(d, dict) or not is_protected(d.get(keys[-1])):
+                continue
+            try:
+                d[keys[-1]] = unprotect(d[keys[-1]]).decode("utf-8")
+            except (OSError, ValueError) as e:
+                d[keys[-1]] = ""
+                self.lost.append(".".join(keys))
+                log(f"   no se pudo descifrar {'.'.join(keys)} de settings.json ({e}): vuelve a pegarla en Ajustes")
 
     def get(self):
         with self.lock:
@@ -198,9 +218,16 @@ class Store:
     def update(self, fn):
         with self.lock:
             fn(self.data)
+            out = copy.deepcopy(self.data)
+            for keys in self.SECRETS:
+                d = out
+                for k in keys[:-1]:
+                    d = d.get(k) if isinstance(d, dict) else None
+                if isinstance(d, dict) and isinstance(d.get(keys[-1]), str) and d[keys[-1]]:
+                    d[keys[-1]] = protect(d[keys[-1]])
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=1)
+                json.dump(out, f, ensure_ascii=False, indent=1)
             os.replace(tmp, self.path)
 
 
@@ -227,6 +254,7 @@ DEFAULT_SETTINGS = {
     "summary_model": "openai/gpt-oss-120b",
     "summary_lang": "es",     # es / en / same (el de la reunion)
     "summary_extra": "",     # instrucciones extra para el resumen
+    "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
     # nube: whisper-large-v3 (el mas preciso; -turbo es mas rapido y algo menos fino)
     "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3", "base_url": "",
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
@@ -338,20 +366,23 @@ def scan():
                         pass
                 summ = files.get(stem_low + ".resumen.md")  # resumen con IA
                 md = files.get(stem_low + ".md")  # notas y propiedades de la reunion
+                spk = files.get(stem_low + voices.SIDECAR_EXT)  # quien habla
                 try:
                     md_mtime = md.stat().st_mtime if md else 0
+                    spk_mtime = spk.stat().st_mtime if spk else 0
                 except OSError:
-                    md_mtime = 0
+                    md_mtime, spk_mtime = 0, 0
                 a = {"name": e.name, "path": frel, "stem": stem, "ext": ext, "size": st.st_size,
                      "mtime": st.st_mtime, "cloud": cloud, "txt": bool(txt), "srt": bool(srt), "tx_mtime": tx_mtime,
                      "date": "{}-{}-{}T{}:{}:{}".format(*m.groups()) if m else None,
                      "label": label, "folder": rel, "notes_mtime": md_mtime, "has_summary": bool(summ),
+                     "spk_mtime": spk_mtime,
                      "_abs": e.path, "_srt": srt.path if srt else None, "_md": md.path if md else None,
-                     "_sum": summ.path if summ else None}
+                     "_sum": summ.path if summ else None, "_spk": spk.path if spk else None}
                 node["audios"].append(a)
                 flat.append(a)
-            elif ext in TEXT_EXT and stem_low not in audio_stems and not (
-                    low.endswith(".resumen.md") and low[:-len(".resumen.md")] in audio_stems):
+            elif ext in TEXT_EXT and stem_low not in audio_stems and not any(
+                    low.endswith(x) and low[:-len(x)] in audio_stems for x in (".resumen.md", ".hablantes.txt")):
                 node["docs"].append({"name": e.name, "path": frel, "ext": ext, "size": st.st_size,
                                      "mtime": st.st_mtime, "cloud": cloud})
         node["folders"].sort(key=lambda n: natural_key(n["name"]))
@@ -381,6 +412,7 @@ class Library:
         self.growth = {}  # ruta -> (tamano, cuando cambio): OBS no actualiza la fecha mientras graba
         self.ends = {}    # .srt -> (fecha, segundo en que acaba): para detectar transcripciones a medias
         self.notes = {}   # .md -> (fecha, propiedades, tiene texto)
+        self.speakers = {}  # .hablantes.json -> (fecha, resumen {n, known, doubt, tu} o None si solo lleva el micro)
 
     def _props(self, a):
         p = a["_md"]
@@ -395,6 +427,28 @@ class Library:
             props, body = {}, ""
         self.notes[p] = (a["notes_mtime"], props, bool(body.strip()))
         return props, bool(body.strip())
+
+    def _speakers(self, a):
+        """Resumen del sidecar de voces (con cache): None si no hay diarizacion (p. ej. solo la serie del micro)."""
+        p = a.get("_spk")
+        if not p:
+            return None
+        hit = self.speakers.get(p)
+        if hit and hit[0] == a["spk_mtime"]:
+            return hit[1]
+        info = None
+        try:
+            d = json.loads(read_text(p))
+            hs = d.get("hablantes") or {}
+            if d.get("tramos") and hs:
+                real = [i for i in hs.values() if not i.get("breve")]
+                info = {"n": len(real), "known": sum(1 for i in real if i.get("persona") and not i.get("provisional")),
+                        "doubt": sum(1 for i in real if i.get("persona") and i.get("provisional")),
+                        "tu": bool(d.get("tu"))}
+        except (OSError, ValueError, AttributeError):
+            info = None
+        self.speakers[p] = (a["spk_mtime"], info)
+        return info
 
     def _tx_end(self, a):
         """Hasta que segundo llega la transcripcion (lee solo el final del .srt, con cache)."""
@@ -440,6 +494,8 @@ class Library:
                 a["recording"] = False
                 a["tx_end"] = self._tx_end(a)
                 a["props"], a["has_notes"] = self._props(a)
+                a["speakers"] = self._speakers(a)
+                a["has_speakers"] = bool(a["speakers"])
                 open_dur = self._recording(a)
                 if open_dur is not None:  # sin cachear: cambia cada pocos segundos
                     a["duration"] = open_dur
@@ -833,7 +889,8 @@ class Job:
         self.id = uuid.uuid4().hex[:10]
         self.path, self.name, self.preset, self.language = path, name, preset, language
         self.engine = engines.PRESETS_BY_ID[preset]["engine"] if preset in engines.PRESETS_BY_ID else preset
-        self.kind = "summary" if preset == "resumen" else "transcribe"
+        self.kind = "summary" if preset == "resumen" else "voces" if preset == "voces" else "transcribe"
+        self.then_summary = False  # voces: al terminar, lanzar el resumen automatico (asi lleva los nombres)
         self.status, self.progress, self.stage = "queued", 0.0, "En cola"
         self.created, self.started, self.finished = time.time(), None, None
         self.t_transcribe = None
@@ -875,9 +932,17 @@ class Jobs:
         self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"))
         self.summarizer = engines.Summarizer()  # en la nube (Groq): no carga el portatil
         self.queues["resumen"] = queue.Queue()
+        self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
+        self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
+
+    @property
+    def voices(self):
+        if self._voices is None:
+            self._voices = voices.Voices(os.path.join(DATA_DIR, "voces.json"))
+        return self._voices
 
     def active_for(self, path, kinds=("transcribe",)):
         """Trabajo en cola o en marcha sobre ese audio. Por defecto solo transcripciones (directo incluido):
@@ -1020,7 +1085,7 @@ class Jobs:
                     save_original(job.path, segs)
                 COMPLETE.set(job.path)  # llego hasta el final (si se corta antes, queda "a medias")
                 if not self._final_pass(job):  # si hay repaso final, el resumen se hace al acabar este
-                    self.auto_summary(job.path)
+                    self._after_transcribe(job.path)
                 job.status, job.stage, job.progress = "done", "Hecho", 1.0
                 log(f"✔ {job.name}  directo terminado ({job.recorded / 60:.0f} min grabados)")
             else:
@@ -1121,6 +1186,7 @@ class Jobs:
                     "duration": f"{round(d / 60)} min" if d else "duración desconocida",
                     "participants": props.get("participantes", ""), "notes": notes,
                     "extra": st.get("summary_extra", "")}
+            segments = self._with_speakers(abs_path, data["segments"], meta)
             cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"))
 
             def report(frac=None, stage=None, **k):
@@ -1129,7 +1195,7 @@ class Jobs:
                 if frac is not None:
                     job.progress = max(job.progress, frac)
 
-            text, model = self.summarizer.summarize(data["segments"], meta, cfg, report, lambda: job.cancel)
+            text, model = self.summarizer.summarize(segments, meta, cfg, report, lambda: job.cancel)
             head = f"---\nmodelo: {model}\ngenerado: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n"
             save_text(base + ".resumen.md", head + text.strip() + "\n", "utf-8")
             job.status, job.progress, job.stage = "done", 1.0, "Resumen listo"
@@ -1151,6 +1217,217 @@ class Jobs:
             return True
         except engines.EngineError as e:
             raise ApiError(str(e))
+
+    # --- quien habla (voces): subproceso de prioridad baja al terminar cada transcripcion
+    def voices_on(self):
+        return voices.enabled(self.settings.get())
+
+    def _after_transcribe(self, rel):
+        """Transcripcion terminada: primero las voces (si estan activas) y el resumen al acabar estas, para que
+        lleve los nombres; si no, el resumen directamente."""
+        if not self.auto_voices(rel):
+            self.auto_summary(rel)
+
+    def auto_voices(self, rel):
+        if not self.voices_on():
+            return False
+        with self.lock:
+            cur = next((j for j in self.list if j.path == rel and j.kind == "voces"
+                        and j.status in ("queued", "running")), None)
+        if cur:
+            cur.then_summary = True
+            return True
+        try:
+            self.submit_voices(rel, auto=True, then_summary=True)
+            return True
+        except ApiError as e:
+            log(f"   voces: {e.msg}")
+            return False
+
+    def submit_voices(self, rel, auto=False, then_summary=False):
+        safe(rel, "file")
+        if not self.voices_on():
+            raise ApiError("Activa «Voces» en Ajustes ⚙ para identificar quién habla.")
+        ok, why = voices.available()
+        if not ok:
+            raise ApiError("La librería de voces (sherpa-onnx) no está instalada o no carga: vuelve a ejecutar "
+                           f"INSTALAR.bat ({why[:160]})")
+        a = self.library.find(rel)
+        if a and a.get("recording"):
+            raise ApiError("Se está grabando todavía: las voces se identifican al terminar.")
+        with self.lock:
+            if any(j.path == rel and j.kind == "voces" and j.status in ("queued", "running") for j in self.list):
+                raise ApiError("Ya se están identificando las voces de esta reunión.")
+            job = Job(rel, os.path.basename(rel), "voces", None)
+            job.stage, job.then_summary = "En cola para identificar voces", then_summary
+            self.list.append(job)
+        self.queues["voces"].put(job)
+        log(f"🗣 {job.name}  voces{' (automático)' if auto else ''} en cola")
+        return job.id
+
+    def _voices_subprocess(self, job, args, idle_timeout=1800):
+        """python voices.py … con prioridad baja; lee su progreso; cancelar = matar el proceso."""
+        err = open(os.path.join(DATA_DIR, "voces.log"), "ab")
+        p = subprocess.Popen([sys.executable, "-u", os.path.join(APP_DIR, "voices.py"), *args, "--data", DATA_DIR,
+                              "--threads", "2"], stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
+                             creationflags=engines.NO_WINDOW | (voices.IDLE_PRIORITY or engines.BELOW_NORMAL))
+        err.close()
+        q = queue.Queue()
+
+        def reader():
+            for line in p.stdout:
+                try:
+                    q.put(json.loads(line))
+                except ValueError:
+                    pass
+            q.put(None)
+        threading.Thread(target=reader, daemon=True).start()
+        last = time.time()
+        try:
+            while True:
+                if job and job.cancel:
+                    raise engines.Cancelled()
+                try:
+                    m = q.get(timeout=0.25)
+                except queue.Empty:
+                    if time.time() - last > idle_timeout:
+                        raise engines.EngineError("La identificación de voces no dio señales de vida en "
+                                                  f"{idle_timeout // 60} min; se ha cortado.")
+                    continue
+                last = time.time()
+                if m is None:
+                    raise engines.EngineError("El proceso de voces se cerró de golpe "
+                                              "(detalles en %LOCALAPPDATA%\\AudiosApp\\voces.log).")
+                if m.get("type") == "progress":
+                    if job:
+                        if m.get("stage"):
+                            job.stage = m["stage"]
+                        if m.get("frac") is not None:
+                            job.progress = max(job.progress, min(float(m["frac"]), 0.99))
+                elif m.get("type") == "error":
+                    raise engines.EngineError(m.get("error") or "error al identificar voces")
+                elif m.get("type") == "result":
+                    return m
+        finally:
+            if p.poll() is None:
+                p.kill()
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
+
+    def speaker_vector(self, rel, h):
+        """Huella de un hablante de una reunion: de la memoria del servidor o recalculada en un subproceso."""
+        vec = (self.voice_vectors.get(rel) or {}).get(h)
+        if vec:
+            return vec, None
+        abs_path = safe(rel, "file")
+        args = ["--fingerprint", h, "--diarize", abs_path, "--out", voices.sidecar_path(abs_path)]
+        m = self._voices_subprocess(None, args, idle_timeout=600)
+        vec = (m.get("huellas") or {}).get(h)
+        if not vec:
+            raise ApiError("No se pudo calcular la huella de ese hablante.")
+        self.voice_vectors.setdefault(rel, {})[h] = vec
+        return vec, m.get("segundos")
+
+    def speakers_for(self, abs_path, data=None):
+        """Sidecar con las frases casadas con el .srt ACTUAL (barato) y los nombres resueltos; None si no hay."""
+        data = data or voices.read_sidecar(voices.sidecar_path(abs_path))
+        if not data or not data.get("tramos"):
+            return None
+        segs = Transcripts().load(os.path.splitext(abs_path)[0])
+        who = voices.refresh_frases(data, segs["segments"]) if segs and segs["kind"] == "srt" else []
+        names = self.voices.names()
+        for h, info in data.get("hablantes", {}).items():
+            info["nombre"] = names.get(info.get("persona")) if info.get("persona") else None
+            info["label"] = voices.label(h, data, names)
+            info["usuario"] = data.get("tu") == h
+            if info.get("persona") and info["persona"] not in names:  # persona olvidada
+                info["persona"], info["nombre"], info["provisional"] = None, None, False
+                info["label"] = voices.label(h, data, names)
+        data["_who"] = who
+        return data
+
+    def _with_speakers(self, abs_path, segments, meta):
+        """Para el resumen: cada frase con quien la dice (nombre, «Yo» o «Persona N») si hay diarizacion."""
+        data = self.speakers_for(abs_path)
+        if not data or not data.get("_who"):
+            return segments
+        names = self.voices.names()
+        out = [dict(s, who=voices.label(w, data, names, for_llm=True)) for s, w in zip(segments, data["_who"])]
+        meta["speakers"] = True
+        known = [i["nombre"] for i in data["hablantes"].values()
+                 if i.get("nombre") and not i.get("provisional") and not i.get("breve")]
+        if known and not meta.get("participants"):
+            meta["participants"] = ", ".join(dict.fromkeys(known))
+        return out
+
+    def _suggest_participants(self, abs_path, data):
+        """Propiedad «Participantes» con los nombres reconocidos, solo si esta vacia (no se pisa lo escrito a mano)."""
+        names = self.voices.names()
+        known = [names[i["persona"]] for i in data.get("hablantes", {}).values()
+                 if i.get("persona") in names and not i.get("provisional") and not i.get("breve")]
+        if not known:
+            return
+        md = os.path.splitext(abs_path)[0] + ".md"
+        props, body = parse_notes(read_text(md)) if os.path.isfile(md) else ({}, "")
+        if props.get("participantes"):
+            return
+        props["participantes"] = ", ".join(dict.fromkeys(known))
+        save_text(md, dump_notes(props, body), "utf-8")
+
+    def _run_voices(self, job):
+        job.status, job.started, job.stage = "running", time.time(), "Preparando…"
+        try:
+            abs_path = safe(job.path, "file")
+
+            def report(stage=None, frac=None):
+                if stage:
+                    job.stage = stage
+                if frac is not None:
+                    job.progress = max(job.progress, min(float(frac), 0.99))
+            if not voices.models_ready(DATA_DIR):
+                try:
+                    voices.ensure_models(DATA_DIR, report, lambda: job.cancel)
+                except voices.VoicesError as e:
+                    if job.cancel:
+                        raise engines.Cancelled()
+                    raise engines.EngineError(str(e))
+            side = voices.sidecar_path(abs_path)
+            res = self._voices_subprocess(job, ["--diarize", abs_path, "--out", side])
+            huellas = res.get("huellas") or {}
+            data = voices.read_sidecar(side)
+            if not data or not data.get("tramos"):
+                raise engines.EngineError("No se ha detectado voz en la grabación.")
+            voices.identify(data, huellas, self.voices)
+            srt = Transcripts().load(os.path.splitext(abs_path)[0])
+            if srt and srt["kind"] == "srt":
+                voices.refresh_frases(data, srt["segments"])
+            voices.write_sidecar(side, data)
+            self.voice_vectors[job.path] = huellas
+            try:
+                self._suggest_participants(abs_path, data)
+            except OSError:
+                log_exc()
+            real = [i for i in data["hablantes"].values() if not i.get("breve")]
+            known = sum(1 for i in real if i.get("persona") and not i.get("provisional"))
+            job.status, job.progress = "done", 1.0
+            job.stage = (f"Voces: {len(real)} {'persona' if len(real) == 1 else 'personas'} · {known} "
+                         f"reconocida{'s' if known != 1 else ''}")
+            log(f"✔ {job.name}  {job.stage.lower()} ({time.time() - job.started:.0f} s)")
+        except engines.Cancelled:
+            job.status, job.stage = "cancelled", "Cancelado"
+            log(f"■ {job.name}  voces canceladas")
+        except Exception as e:
+            job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
+            log(f"✖ {job.name}  voces: {job.error}")
+            if not isinstance(e, (engines.EngineError, ApiError, voices.VoicesError)):
+                log_exc()
+        finally:
+            job.finished = time.time()
+            self.library.at = 0
+            if job.then_summary:
+                self.auto_summary(job.path)
 
     def cancel(self, job_id):
         with self.lock:
@@ -1179,7 +1456,12 @@ class Jobs:
             if job.status != "queued":
                 continue
             try:
-                self._run_summary(job) if job.kind == "summary" else self._run(job)
+                if job.kind == "summary":
+                    self._run_summary(job)
+                elif job.kind == "voces":
+                    self._run_voices(job)
+                else:
+                    self._run(job)
             except Exception as e:
                 log_exc()
                 job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
@@ -1238,7 +1520,7 @@ class Jobs:
                 write_outputs(abs_path, segs)
                 shutil.rmtree(backup_dir(job.path), ignore_errors=True)  # el "original" es ahora este
             COMPLETE.set(job.path)  # aunque el texto acabe antes que el audio, esta completa
-            self.auto_summary(job.path)
+            self._after_transcribe(job.path)
             job.duration, job.detected = dur or job.duration, lang
             job.status, job.progress, job.stage, job.eta = "done", 1.0, "Hecho", 0
             el = time.time() - (job.t_transcribe or job.started)
@@ -1289,6 +1571,7 @@ class App:
         self.rec_lock, self.devices_cache = threading.Lock(), (0.0, None)
         self.toggle_lock = threading.Lock()
         self.notes_lock, self.meeting = threading.Lock(), None
+        self.voices_dl = None  # descarga de los modelos de voces en curso (progreso para la interfaz)
         threading.Thread(target=self._meeting_watch, daemon=True, name="meeting-watch").start()
         threading.Thread(target=self._monitor_watchdog, daemon=True).start()
         self.hotkey = GlobalHotkey(lambda: self.rec_toggle({"source": "hotkey"}))
@@ -1454,6 +1737,12 @@ class App:
             secs = r.stop()
             self.rec = None
             self.jobs.claimed.discard(rel_of(r.path))
+        try:  # cuando hablo yo (micro por encima del audio del PC): sirve para etiquetar «Tu» sin biometria
+            tl = r.timeline()
+            if tl and os.path.isfile(r.path):
+                voices.write_micro(voices.sidecar_path(r.path), tl)
+        except Exception:
+            log_exc()
         self.library.at = 0
         log(f"■ Grabación parada: {rel_of(r.path)} ({secs / 60:.1f} min)")
         return {"path": rel_of(r.path), "seconds": secs}
@@ -1482,7 +1771,9 @@ class App:
                 "meeting_detect": bool(st.get("meeting_detect", True)),
                 "summary": {"auto": bool(st.get("summary_auto", True)), "model": st.get("summary_model"),
                             "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
-                            "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()}}
+                            "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()},
+                "voices": {"enabled": bool(st.get("voices_enabled")), "models_ready": voices.models_ready(DATA_DIR)},
+                "lost_secrets": list(getattr(self.settings, "lost", []))}
 
     def tree(self, q):
         tree, version = self.library.refresh(max_age=1.0)
@@ -1750,6 +2041,7 @@ class App:
                 time.sleep(0.3)
         COMPLETE.set(rel, False)
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
+        self.jobs.voice_vectors.pop(rel, None)
         self.settings.update(lambda d: d.update(favorites=[f for f in d.get("favorites", []) if f["path"] != rel]))
         self.library.at = 0
         log(f"🗑 {rel} → papelera ({len(group)} archivos)")
@@ -2001,6 +2293,8 @@ class App:
                     time.sleep(0.25)
         self.library.at = 0
         COMPLETE.moved(rel_of(src), rel_of(moves[0][1]))
+        if rel_of(src) in self.jobs.voice_vectors:
+            self.jobs.voice_vectors[rel_of(moves[0][1])] = self.jobs.voice_vectors.pop(rel_of(src))
         self._rename_refs(rel_of(src), rel_of(moves[0][1]))
         old_b, new_b = backup_dir(rel_of(src)), backup_dir(rel_of(moves[0][1]))
         if os.path.isdir(old_b) and not os.path.exists(new_b):  # la copia del original viaja con el audio
@@ -2115,6 +2409,171 @@ class App:
             raise ApiError(str(e))
         return {"ok": True, "seconds": round(secs, 2)}
 
+    # --- quien habla (voces)
+    def voices_state(self, q=None):
+        st = self.settings.get()
+        on = bool(st.get("voices_enabled"))
+        ok, why = voices.available() if on else (None, None)
+        dl = dict(self.voices_dl) if self.voices_dl else None
+        return {"enabled": on, "available": ok, "why": why,
+                "models": {"ready": voices.models_ready(DATA_DIR), "downloading": bool(dl and dl.get("running")),
+                           "frac": (dl or {}).get("frac"), "stage": (dl or {}).get("stage"),
+                           "error": (dl or {}).get("error")},
+                "personas": self.jobs.voices.public() if on else [],
+                "usuario": (self.jobs.voices.user() or {}).get("id") if on else None,
+                "store_error": self.jobs.voices.error if on else None, "umbral": voices.UMBRAL}
+
+    def _download_models(self):
+        def run():
+            def report(stage=None, frac=None):
+                if stage:
+                    self.voices_dl["stage"] = stage
+                if frac is not None:
+                    self.voices_dl["frac"] = round(float(frac), 3)
+            try:
+                voices.ensure_models(DATA_DIR, report)
+                log("   modelos de voces descargados")
+            except Exception as e:
+                self.voices_dl["error"] = str(e) or e.__class__.__name__
+                log(f"✖ modelos de voces: {self.voices_dl['error']}")
+            finally:
+                self.voices_dl["running"] = False
+        if self.voices_dl and self.voices_dl.get("running"):
+            return
+        self.voices_dl = {"running": True, "frac": 0.0, "stage": "Descargando modelos de voces…", "error": None}
+        threading.Thread(target=run, daemon=True, name="voices-models").start()
+
+    def voices_toggle(self, b):
+        on = bool(b.get("on"))
+        self.settings.update(lambda d: d.update(voices_enabled=on))
+        if on:
+            ok, why = voices.available()
+            if not ok:
+                raise ApiError("La librería de voces (sherpa-onnx) no está instalada o no carga en este PC: vuelve a "
+                               f"ejecutar INSTALAR.bat. Detalle: {why[:200]}")
+            if not voices.models_ready(DATA_DIR):
+                self._download_models()
+        log(f"🗣 voces {'activadas' if on else 'desactivadas'}")
+        return self.voices_state()
+
+    def voices_identify(self, b):
+        return {"id": self.jobs.submit_voices(b.get("path"))}
+
+    def speakers_get(self, q):
+        abs_path = safe(q.get("path"), "file")
+        data = self.jobs.speakers_for(abs_path)
+        job = self.jobs.active_for(rel_of(abs_path), kinds=("voces",))
+        if not data:
+            return {"exists": False, "job": job.public() if job else None, "enabled": self.jobs.voices_on()}
+        real = [i for i in data["hablantes"].values() if not i.get("breve")]
+        return {"exists": True, "enabled": self.jobs.voices_on(), "job": job.public() if job else None,
+                "hablantes": data["hablantes"], "tu": data.get("tu"), "creado": data.get("creado"),
+                "frases": data.get("frases", []), "who": data.get("_who", []),
+                "n": len(real), "known": sum(1 for i in real if i.get("persona") and not i.get("provisional")),
+                "personas": self.jobs.voices.public(), "usuario": (self.jobs.voices.user() or {}).get("id")}
+
+    def _speaker_update(self, abs_path, h, fn):
+        side = voices.sidecar_path(abs_path)
+        data = voices.read_sidecar(side)
+        if not data or h not in (data.get("hablantes") or {}):
+            raise ApiError("Ese hablante ya no está en esta reunión (¿se volvió a identificar?).")
+        fn(data["hablantes"][h], data)
+        voices.write_sidecar(side, data)
+        self.library.at = 0
+        return data
+
+    def voices_person(self, b):
+        """Nombre, «Soy yo» y «Recordar» de un hablante (de una reunion) o de una persona ya guardada."""
+        v = self.jobs.voices
+        pid, path, h = b.get("id"), b.get("path"), b.get("h")
+        consent = b.get("consentimiento")
+        abs_path = safe(path, "file") if path else None
+        nombre = " ".join(str(b.get("nombre") or "").split())[:80]
+        if pid and not v.find(pid):
+            raise ApiError("Esa persona ya no existe.")
+        if not pid:
+            if not nombre and not b.get("es_usuario"):
+                raise ApiError("Escribe un nombre.")
+            when = time.strftime("%Y-%m-%dT%H:%M:%S") if consent else None
+            pid = v.create(nombre or "Yo", bool(b.get("es_usuario")), when)["id"]
+        else:
+            if nombre and nombre != v.find(pid)["nombre"]:
+                v.rename(pid, nombre)
+            if b.get("es_usuario") is not None:
+                v.set_user(pid, bool(b.get("es_usuario")))
+        if abs_path and h:
+            self._speaker_update(abs_path, h, lambda info, d: info.update(persona=pid, provisional=False))
+        remembered = None
+        if b.get("recordar"):
+            if not consent:
+                raise ApiError("Para guardar la huella hace falta marcar la casilla de consentimiento.")
+            if not (abs_path and h):
+                raise ApiError("Falta de qué reunión y hablante tomar la huella.")
+            vec, secs = self.jobs.speaker_vector(rel_of(abs_path), h)
+            data = voices.read_sidecar(voices.sidecar_path(abs_path)) or {}
+            secs = secs or (data.get("hablantes", {}).get(h) or {}).get("segundos") or 0
+            remembered = v.remember(pid, vec, secs, os.path.basename(abs_path), time.strftime("%Y-%m-%dT%H:%M:%S"))
+            log(f"🗣 huella guardada: {v.find(pid)['nombre']} ({remembered} huellas)")
+        return {"id": pid, "huellas": remembered, "personas": v.public()}
+
+    def voices_merge(self, b):
+        v = self.jobs.voices
+        keep, other = b.get("id_a"), b.get("id_b")
+        try:
+            removed = v.merge(keep, other)
+        except KeyError:
+            raise ApiError("Alguna de las dos personas ya no existe.")
+        n = 0
+        if removed:
+            self.library.refresh(max_age=5)
+            for a in list(self.library.flat):
+                if not a.get("_spk"):
+                    continue
+                data = voices.read_sidecar(a["_spk"])
+                if not data or not any(i.get("persona") == removed for i in (data.get("hablantes") or {}).values()):
+                    continue
+                for i in data["hablantes"].values():
+                    if i.get("persona") == removed:
+                        i["persona"] = keep
+                voices.write_sidecar(a["_spk"], data)
+                n += 1
+        self.library.at = 0
+        log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
+        return {"id": keep, "reuniones": n, "personas": v.public()}
+
+    def voices_forget(self, b):
+        v = self.jobs.voices
+        if b.get("all"):
+            v.forget_all()
+            log("🗣 todas las huellas olvidadas")
+        else:
+            try:
+                v.forget(b.get("id"))
+            except KeyError:
+                raise ApiError("Esa persona ya no existe.")
+            log("🗣 persona olvidada")
+        self.library.at = 0
+        return {"personas": v.public()}
+
+    def voices_reassign(self, b):
+        abs_path = safe(b.get("path"), "file")
+        pid = b.get("persona") or None
+        if pid and not self.jobs.voices.find(pid):
+            raise ApiError("Esa persona ya no existe.")
+        self._speaker_update(abs_path, b.get("h"), lambda info, d: info.update(persona=pid, provisional=False))
+        return self.speakers_get({"path": b.get("path")})
+
+    def voices_export(self, b):
+        abs_path = safe(b.get("path"), "file")
+        data = self.jobs.speakers_for(abs_path)
+        if not data or not data.get("_who"):
+            raise ApiError("Esta reunión no tiene hablantes identificados (o no tiene .srt).")
+        segs = Transcripts().load(os.path.splitext(abs_path)[0])["segments"]
+        out = os.path.splitext(abs_path)[0] + ".hablantes.txt"
+        save_text(out, voices.export_text(segs, data["_who"], data, self.jobs.voices.names()), "utf-8-sig")
+        self.library.at = 0
+        return {"path": rel_of(out), "ext": ".hablantes.txt"}
+
     def export_package(self, b):
         dest = os.path.join(desktop_dir(), "Notas - instalador.zip")
         vocab = []
@@ -2167,7 +2626,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
-                  "/api/vocab": a.vocab}
+                  "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get}
         try:
             if u.path in routes:
                 return self._json(routes[u.path](q))
@@ -2199,7 +2658,11 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/transcript/save": a.save_transcript, "/api/transcript/restore": a.restore_transcript,
                   "/api/export": a.export_package, "/api/link/pick": a.link_pick, "/api/link/add": a.link_add,
                   "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
-                  "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check}
+                  "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check,
+                  "/api/voces/activar": a.voices_toggle, "/api/voces/identificar": a.voices_identify,
+                  "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
+                  "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
+                  "/api/voces/exportar": a.voices_export}
         try:
             u = urlparse(self.path)
             if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos

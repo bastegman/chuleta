@@ -740,17 +740,25 @@ class Summarizer:
 
     @staticmethod
     def lines(segments, width=260):
-        """Transcripcion compacta: frases juntadas en lineas de ~260 caracteres con su minuto."""
-        out, cur, t0 = [], "", None
+        """Transcripcion compacta: frases juntadas en lineas de ~260 caracteres con su minuto. Si las frases traen
+        quien habla ("who"), cada cambio de hablante abre linea y esta lleva su nombre: "[12:34] Javier: …"."""
+        out, cur, t0, who = [], "", None, None
+
+        def flush():
+            out.append((f"[{_stamp(t0)}] " if t0 is not None else "") + (f"{who}: " if who else "") + cur)
         for s in segments:
+            w = s.get("who")
+            if cur and w != who:
+                flush()
+                cur, t0 = "", None
             if t0 is None:
-                t0 = s.get("start")
+                t0, who = s.get("start"), w
             cur = (cur + " " + s["text"]).strip()
             if len(cur) >= width:
-                out.append((f"[{_stamp(t0)}] " if t0 is not None else "") + cur)
+                flush()
                 cur, t0 = "", None
         if cur:
-            out.append((f"[{_stamp(t0)}] " if t0 is not None else "") + cur)
+            flush()
         return out
 
     def _chat(self, cfg, system, user, max_tokens, report, cancelled):
@@ -841,6 +849,9 @@ class Summarizer:
             f"## {h['next']}\n- [ ] Responsable: tarea — fecha si se dijo [mm:ss]  (si no hay, «{h['none']}»)\n"
             f"## {h['people']}\n- Nombre (rol o empresa si se deduce)\n"
             "Nada de saludos, problemas de audio ni relleno."
+            + ("\nLas frases llevan delante quién habla («Nombre:»; «Persona 2» es alguien sin identificar y «Yo» es "
+               "el usuario que toma las notas): usa esos nombres como responsables en los próximos pasos y en la lista "
+               "de participantes, sin inventar otros." if meta.get("speakers") else "")
             + (f"\nInstrucciones extra: {meta['extra']}" if meta.get("extra") else ""))
         lines = self.lines(segments)
         text = "\n".join(lines)

@@ -13,6 +13,7 @@ import time
 
 import engines
 import live
+import voices
 from common import WINDOWS, log
 
 
@@ -120,6 +121,7 @@ class RecorderProcess:
 
     def __init__(self, path, mic, sys_dev, app_dir, data_dir):
         self.path, self.started, self.status, self.ended = path, time.time(), {}, False
+        self.levels = []  # (t, mic dB, sys dB) cada 0,25 s: cuando hablo yo (para etiquetar «Tu», sin biometria)
         args = [path] if path else ["--monitor"]
         err = open(os.path.join(data_dir, "recorder.log"), "ab")
         self.p = subprocess.Popen([sys.executable, "-u", os.path.join(app_dir, "recorder.py"), *args,
@@ -136,13 +138,27 @@ class RecorderProcess:
             try:
                 self.status = json.loads(line.decode("utf-8", "replace"))
             except ValueError:
-                pass
+                continue
+            self.note_levels(self.status)
         self.ended = True
         if self.path and os.path.isfile(self.path):
             try:
                 close_wav(self.path)  # por si murio sin cerrar la cabecera
             except OSError:
                 pass
+
+    def note_levels(self, st):
+        if not self.path or not isinstance(st, dict) or st.get("t") is None:
+            return
+        mic = (st.get("mic") or {}).get("db") if isinstance(st.get("mic"), dict) else None
+        if mic is None or st.get("mic_muted"):
+            return
+        sysdb = (st.get("sys") or {}).get("db") if isinstance(st.get("sys"), dict) else None
+        self.levels.append((st["t"], mic, sysdb))
+
+    def timeline(self):
+        """{"paso", "activo"} de la grabacion (None si no se grabo el micro)."""
+        return voices.mic_timeline(self.levels) if self.levels else None
 
     def alive(self):
         return not self.ended and self.p.poll() is None
