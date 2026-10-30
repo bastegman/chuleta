@@ -2,6 +2,7 @@
 """Utilidades puras compartidas por los modulos de la app: errores de la API, texto, SRT, cabecera WAV y el log
 (consola + %LOCALAPPDATA%\\AudiosApp\\server.log). No dependen de ROOT ni de los ajustes.
 """
+import base64
 import logging
 import os
 import re
@@ -164,3 +165,76 @@ def log_exc():
         LOGGER.error(traceback.format_exc().rstrip())
     except Exception:
         traceback.print_exc()
+
+
+# ----------------------------------------------------------------------------- secretos (DPAPI)
+# API key de la nube y voces.json: cifrados con la Data Protection API de Windows (ambito usuario: solo esta cuenta
+# de Windows en este PC los descifra). Formato en disco: "dpapi:<base64>". Fuera de Windows no hay DPAPI: se guarda
+# "plain:<base64>" y se avisa en el log (solo desarrollo).
+_PLAIN_WARNED = []
+
+
+def _blob():
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.c_void_p)]
+    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
+    for fn in (crypt32.CryptProtectData, crypt32.CryptUnprotectData):
+        fn.restype = wt.BOOL
+    crypt32.CryptProtectData.argtypes = [ctypes.POINTER(DATA_BLOB), wt.LPCWSTR, ctypes.POINTER(DATA_BLOB),
+                                         ctypes.c_void_p, ctypes.c_void_p, wt.DWORD, ctypes.POINTER(DATA_BLOB)]
+    crypt32.CryptUnprotectData.argtypes = [ctypes.POINTER(DATA_BLOB), ctypes.c_void_p, ctypes.POINTER(DATA_BLOB),
+                                           ctypes.c_void_p, ctypes.c_void_p, wt.DWORD, ctypes.POINTER(DATA_BLOB)]
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    return ctypes, DATA_BLOB, crypt32, kernel32
+
+
+def _dpapi(data, encrypt):
+    ctypes, DATA_BLOB, crypt32, kernel32 = _blob()
+    buf = ctypes.create_string_buffer(data, len(data))
+    inp = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.c_void_p))
+    out = DATA_BLOB()
+    flags = 0x1  # CRYPTPROTECT_UI_FORBIDDEN: nunca un dialogo (es un servidor sin ventana); ambito usuario
+    if encrypt:
+        ok = crypt32.CryptProtectData(ctypes.byref(inp), "Notas", None, None, None, flags, ctypes.byref(out))
+    else:
+        ok = crypt32.CryptUnprotectData(ctypes.byref(inp), None, None, None, None, flags, ctypes.byref(out))
+    if not ok:
+        fn = "CryptProtectData" if encrypt else "CryptUnprotectData"
+        raise OSError(f"DPAPI: {fn} fallo ({ctypes.GetLastError()})")
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        kernel32.LocalFree(out.pbData)
+
+
+def is_protected(text):
+    return isinstance(text, str) and text.startswith(("dpapi:", "plain:"))
+
+
+def protect(data):
+    """bytes -> "dpapi:<base64>" (Windows, ambito usuario) o "plain:<base64>" (otros sistemas, con aviso)."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if WINDOWS:
+        return "dpapi:" + base64.b64encode(_dpapi(data, True)).decode("ascii")
+    if not _PLAIN_WARNED:
+        _PLAIN_WARNED.append(True)
+        log("   sin DPAPI fuera de Windows: los secretos se guardan en claro (plain:base64)")
+    return "plain:" + base64.b64encode(data).decode("ascii")
+
+
+def unprotect(text):
+    """Inverso de protect. ValueError si el formato no es el nuestro; OSError si Windows no puede descifrarlo
+    (otro usuario, otro PC o fichero danado)."""
+    if not is_protected(text):
+        raise ValueError("no es un secreto protegido")
+    kind, _, b64 = text.partition(":")
+    raw = base64.b64decode(b64.strip())
+    if kind == "dpapi":
+        if not WINDOWS:
+            raise OSError("este secreto se cifro con DPAPI en Windows y aqui no se puede descifrar")
+        return _dpapi(raw, False)
+    return raw
