@@ -150,14 +150,15 @@ if ($LASTEXITCODE -ne 0) { & $py -m ensurepip --upgrade }
 function Pip-Install($extra) {
     # pip escribe los errores por stderr: se ensenan y se guardan para distinguir despues que ha fallado
     $script:pipOut = @()
+    if (-not $extra) { $extra = @() }
     & $py -m pip install @extra --disable-pip-version-check --no-warn-script-location @packages 2>&1 |
         ForEach-Object { $s = "$_"; Write-Host "    $s"; $script:pipOut += $s }
     return $LASTEXITCODE
 }
-$rc = Pip-Install @()
+$rc = Pip-Install
 if ($rc -ne 0) {
     Say "    Reintentando en la carpeta de tu usuario (--user)..." Yellow
-    $rc = Pip-Install @("--user")
+    $rc = Pip-Install "--user"
 }
 & $py -c "import faster_whisper, soundcard, requests, av, numpy; print('    faster-whisper', faster_whisper.__version__, '| PyAV', av.__version__)"
 if ($LASTEXITCODE -ne 0) {
