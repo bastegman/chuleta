@@ -12,7 +12,6 @@ Arranque: acceso directo Notas del escritorio (lanza _app/Notas.bat).
 import copy
 import hashlib
 import json
-import logging
 import os
 import queue
 import re
@@ -22,7 +21,6 @@ import subprocess
 import sys
 import threading
 import time
-import traceback
 import unicodedata
 import urllib.request
 import uuid
@@ -32,13 +30,16 @@ from urllib.parse import parse_qs, urlparse
 
 import engines
 import live
+from common import (ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS, clean_name,  # noqa: F401 (re-exportados)
+                    default_threads, fmt_srt, fold, log, log_exc, natural_key, parse_srt, read_text,
+                    save_text, setup_logging, wav_duration, write_bytes)
+from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 ROOT = os.path.dirname(APP_DIR)
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
 HOST, PORT = "127.0.0.1", 8765
-WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y Explorador son solo de Windows
 URL = f"http://{HOST}:{PORT}/"
 
 AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm"}
@@ -51,7 +52,6 @@ MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": 
         ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 # Atributos de OneDrive "solo en linea": leer el archivo dispararia la descarga
 CLOUD_ONLY = 0x400000 | 0x1000
-BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 LIVE_PRESETS = tuple(p["id"] for p in engines.PRESETS)  # en directo: por lotes y beam 1, cambia el modelo
 DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _-](\d{2})-(\d{2})-(\d{2})")
 
@@ -67,27 +67,7 @@ BUILD = format(int(code_mtime()), "x")
 VERSION = time.strftime("%d/%m/%Y %H:%M", time.localtime(code_mtime()))  # se ve en Ajustes
 
 
-class ApiError(Exception):
-    def __init__(self, msg, code=400):
-        super().__init__(msg)
-        self.msg, self.code = msg, code
-
-
 # ----------------------------------------------------------------------------- utilidades
-
-def default_threads():
-    return max(4, min(os.cpu_count() or 8, 12))
-
-
-def fold(s):
-    """minusculas y sin acentos, para buscar."""
-    s = unicodedata.normalize("NFD", s or "")
-    return "".join(c for c in s if not unicodedata.combining(c)).casefold()
-
-
-def natural_key(name):
-    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", fold(name))]
-
 
 # Carpetas vinculadas: cualquier carpeta del PC (p. ej. la del proyecto en OneDrive) que se usa como
 # si estuviera dentro de Notas. Sus rutas internas empiezan por ":<id>" (":" no puede ir en un nombre
@@ -140,95 +120,6 @@ def safe(rel, must=None):
 def in_app_dir(p):
     a = os.path.normcase(APP_DIR)
     return os.path.normcase(p) == a or os.path.normcase(p).startswith(a + os.sep)
-
-
-def clean_name(name):
-    name = unicodedata.normalize("NFC", (name or "").strip()).rstrip(". ")
-    if not name or BAD_NAME.search(name) or name in (".", ".."):
-        raise ApiError('Nombre no válido (no puede llevar \\ / : * ? " < > |)')
-    return name
-
-
-def read_text(path):
-    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-        return f.read()
-
-
-def write_bytes(path, data, append=False):
-    """Escribe SIN borrar el archivo: si ya existe, se sustituye (o amplia) su contenido en el sitio.
-    Antes se escribia un .tmp y se renombraba encima, y el Explorador y OneDrive veian el .txt y el
-    .srt desaparecer y volver a aparecer cada vez (en directo, cada 20-40 s)."""
-    for attempt in range(20):  # OneDrive puede tener el archivo abierto un instante mientras lo sube
-        try:
-            mode = "ab" if append else ("r+b" if os.path.exists(path) else "wb")
-            with open(path, mode) as f:
-                f.write(data)
-                if not append:
-                    f.truncate()
-            return
-        except PermissionError:
-            if attempt == 19:
-                raise
-            time.sleep(0.25)
-
-
-def save_text(path, text, encoding):
-    write_bytes(path, text.encode(encoding))
-
-
-def fmt_srt(seconds):
-    ms = int(round(seconds * 1000))
-    h, ms = divmod(ms, 3600000)
-    m, ms = divmod(ms, 60000)
-    s, ms = divmod(ms, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
-SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
-
-
-def parse_srt(text):
-    segs = []
-    for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()):
-        lines = block.split("\n")
-        for i, line in enumerate(lines):
-            m = SRT_TIME.search(line)
-            if m:
-                g = [int(x) for x in m.groups()]
-                start = g[0] * 3600 + g[1] * 60 + g[2] + int(m.group(4).ljust(3, "0")) / 1000
-                end = g[4] * 3600 + g[5] * 60 + g[6] + int(m.group(8).ljust(3, "0")) / 1000
-                txt = " ".join(l.strip() for l in lines[i + 1:] if l.strip())
-                if txt:
-                    segs.append({"start": round(start, 2), "end": round(end, 2), "text": txt})
-                break
-    return segs
-
-
-def wav_duration(path, size):
-    try:
-        with open(path, "rb") as f:
-            head = f.read(12)
-            if head[:4] not in (b"RIFF", b"RF64") or head[8:12] != b"WAVE":
-                return None
-            byte_rate = None
-            while True:
-                ch = f.read(8)
-                if len(ch) < 8:
-                    return None
-                cid, n = ch[:4], struct.unpack("<I", ch[4:])[0]
-                if cid == b"fmt ":
-                    fmt = f.read(n)
-                    byte_rate = struct.unpack("<I", fmt[8:12])[0]
-                    if n % 2:
-                        f.read(1)
-                elif cid == b"data":
-                    if n in (0, 0xFFFFFFFF) or f.tell() + n > size:
-                        n = size - f.tell()  # grabacion sin cerrar o RF64
-                    return n / byte_rate if byte_rate else None
-                else:
-                    f.seek(n + (n & 1), 1)
-    except (OSError, struct.error):
-        return None
 
 
 # ----------------------------------------------------------------------------- paquete para otra persona
@@ -1378,204 +1269,9 @@ class Jobs:
 
 # ----------------------------------------------------------------------------- API
 
-LOGGER = logging.getLogger("notas")
-
-
-def setup_logging(data_dir):
-    """La consola de siempre y, ademas, %LOCALAPPDATA%\\AudiosApp\\server.log con rotacion (3 x 1 MB)."""
-    import logging.handlers
-    for h in list(LOGGER.handlers):
-        LOGGER.removeHandler(h)
-    LOGGER.setLevel(logging.INFO)
-    LOGGER.propagate = False
-    console = logging.StreamHandler(sys.stdout)
-    console.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
-    LOGGER.addHandler(console)
-    try:
-        os.makedirs(data_dir, exist_ok=True)
-        fh = logging.handlers.RotatingFileHandler(os.path.join(data_dir, "server.log"), maxBytes=1_000_000,
-                                                  backupCount=3, encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname).1s %(message)s", "%Y-%m-%d %H:%M:%S"))
-        LOGGER.addHandler(fh)
-    except OSError as e:
-        LOGGER.warning("sin server.log (%s)", e)
-
-
-def log(msg):
-    try:
-        if not LOGGER.handlers:
-            setup_logging(DATA_DIR)
-        LOGGER.info(msg)
-    except Exception:
-        pass
-
-
-def log_exc():
-    """La traza de la excepcion en curso, a la consola y a server.log (antes: traceback.print_exc())."""
-    try:
-        LOGGER.error(traceback.format_exc().rstrip())
-    except Exception:
-        traceback.print_exc()
-
 
 def masked(key):
     return (key[:4] + "…" + key[-4:]) if key and len(key) > 12 else ("••••" if key else "")
-
-
-class GlobalHotkey(threading.Thread):
-    """Ctrl+Alt+R en todo Windows (aunque Notas este en segundo plano o estes en Teams).
-    RegisterHotKey exige que el registro y el bucle de mensajes vayan en el mismo hilo."""
-
-    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_R, WM_HOTKEY = 0x1, 0x2, 0x4000, 0x52, 0x0312
-
-    def __init__(self, callback):
-        super().__init__(daemon=True, name="hotkey")
-        self.callback, self.ok, self.error, self.last = callback, False, None, 0.0
-
-    def run(self):
-        if not WINDOWS:
-            self.error = "el atajo global solo existe en Windows"
-            return
-        import ctypes
-        import ctypes.wintypes as wt
-        user32 = ctypes.windll.user32
-        if not user32.RegisterHotKey(None, 1, self.MOD_CONTROL | self.MOD_ALT | self.MOD_NOREPEAT, self.VK_R):
-            self.error = "Ctrl+Alt+R ya lo usa otro programa"
-            log(f"   atajo no disponible: {self.error}")
-            return
-        self.ok = True
-        msg = wt.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            if msg.message == self.WM_HOTKEY and time.time() - self.last > 1.5:  # evita dobles pulsaciones
-                self.last = time.time()
-                threading.Thread(target=self.callback, daemon=True).start()
-
-
-def cue(kind):
-    """Pitido corto y bajito: sube al empezar, baja al parar (se oye sin mirar la pantalla)."""
-    if not WINDOWS:
-        return
-
-    def play():
-        try:
-            import io
-            import wave
-            import winsound
-            import numpy as np
-            notes = {"start": (660, 880), "stop": (880, 660), "error": (300, 220)}[kind]
-            sr, parts = 44100, []
-            for f in notes:
-                t = np.arange(int(sr * 0.09)) / sr
-                parts.append(np.sin(2 * np.pi * f * t) * np.minimum(1, np.minimum(t, t[::-1]) * 200))
-                parts.append(np.zeros(int(sr * 0.04)))
-            pcm = (np.concatenate(parts) * 0.18 * 32767).astype("<i2")
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(sr)
-                w.writeframes(pcm.tobytes())
-            winsound.PlaySound(buf.getvalue(), winsound.SND_MEMORY)
-        except Exception:
-            pass
-    play()
-
-
-def notify(title, body):
-    """Notificacion de Windows (por si la ventana de Notas no esta a la vista)."""
-    if not WINDOWS:
-        log(f"   aviso: {title} — {body}")
-        return
-    import base64
-
-    def q(s):
-        return s.replace("'", "''")
-    ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
-          "ContentType = WindowsRuntime] > $null;"
-          "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-          "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
-          "$x = $t.GetElementsByTagName('text');"
-          f"$x.Item(0).AppendChild($t.CreateTextNode('{q(title)}')) > $null;"
-          f"$x.Item(1).AppendChild($t.CreateTextNode('{q(body)}')) > $null;"
-          "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-          "'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe')"
-          ".Show([Windows.UI.Notifications.ToastNotification]::new($t))")
-    try:
-        subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                          "-EncodedCommand", base64.b64encode(ps.encode("utf-16-le")).decode()],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=engines.NO_WINDOW)
-    except OSError:
-        pass
-
-
-def close_wav(path):
-    """Corrige la cabecera de un WAV que se quedo abierto (grabadora que murio sin cerrar)."""
-    info = live.wav_info(path)
-    if not info or info["data_size"] is not None:
-        return
-    size = os.path.getsize(path)
-    with open(path, "r+b") as f:
-        f.seek(4)
-        f.write(struct.pack("<I", size - 8))
-        f.seek(info["data_off"] - 4)
-        f.write(struct.pack("<I", size - info["data_off"]))
-
-
-class RecorderProcess:
-    """recorder.py en un proceso aparte: graba (o solo mide niveles) y manda su estado por stdout."""
-
-    def __init__(self, path, mic, sys_dev):
-        self.path, self.started, self.status, self.ended = path, time.time(), {}, False
-        args = [path] if path else ["--monitor"]
-        err = open(os.path.join(DATA_DIR, "recorder.log"), "ab")
-        self.p = subprocess.Popen([sys.executable, "-u", os.path.join(APP_DIR, "recorder.py"), *args,
-                                   "--mic", mic or "default", "--sys", sys_dev or "default"],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
-                                  # prioridad alta: gasta muy poco, pero si se retrasa se pierde audio
-                                  creationflags=engines.NO_WINDOW
-                                  | getattr(subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0))
-        err.close()
-        threading.Thread(target=self._read, daemon=True).start()
-
-    def _read(self):
-        for line in self.p.stdout:
-            try:
-                self.status = json.loads(line.decode("utf-8", "replace"))
-            except ValueError:
-                pass
-        self.ended = True
-        if self.path and os.path.isfile(self.path):
-            try:
-                close_wav(self.path)  # por si murio sin cerrar la cabecera
-            except OSError:
-                pass
-
-    def alive(self):
-        return not self.ended and self.p.poll() is None
-
-    def send(self, cmd):
-        try:
-            self.p.stdin.write((cmd + "\n").encode())
-            self.p.stdin.flush()
-            return True
-        except OSError:
-            return False
-
-    def stop(self, timeout=10):
-        try:
-            self.p.stdin.write(b"stop\n")
-            self.p.stdin.flush()
-        except OSError:
-            pass
-        end = time.time() + timeout
-        while time.time() < end and not self.ended:
-            time.sleep(0.05)
-        if not self.ended:
-            self.p.kill()
-            time.sleep(0.3)
-            if self.path:
-                close_wav(self.path)
-        return self.status.get("t", 0)
 
 
 class App:
@@ -1674,7 +1370,7 @@ class App:
             if b.get("stop") or (self.rec and self.rec.alive()):
                 return {"ok": True}
             self.monitor_seen = time.time()
-            self.monitor = RecorderProcess(None, b.get("mic"), b.get("sys"))
+            self.monitor = RecorderProcess(None, b.get("mic"), b.get("sys"), APP_DIR, DATA_DIR)
         return {"ok": True}
 
     def rec_start(self, b):
@@ -1700,7 +1396,7 @@ class App:
             self.jobs.claimed.add(rel)
             started = False
             try:
-                self.rec = RecorderProcess(path, mic, sys_dev)
+                self.rec = RecorderProcess(path, mic, sys_dev, APP_DIR, DATA_DIR)
                 for _ in range(60):  # espera a que exista el archivo con su cabecera
                     if os.path.isfile(path) and os.path.getsize(path) >= 44 or not self.rec.alive():
                         break
@@ -2088,51 +1784,12 @@ class App:
         log(f"⤓ importado: {rel_of(target)}")
         return {"path": rel_of(target)}
 
-    # --- deteccion de reunion (como Notion): Teams/Zoom/… usando el micro y sin grabar
-    MEETING_APPS = (("msteams", "Teams"), ("teams.exe", "Teams"), ("zoom", "Zoom"), ("webex", "Webex"),
-                    ("slack", "Slack"), ("skype", "Skype"), ("chrome.exe", "el navegador"),
-                    ("msedge.exe", "el navegador"), ("firefox.exe", "el navegador"))
-
-    @classmethod
-    def mic_meeting_app(cls):
-        """App de reuniones que tiene ahora mismo el micro abierto (segun el registro de privacidad)."""
-        if not WINDOWS:
-            return None
-        import winreg
-        base = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
-        for sub in (base, base + r"\NonPackaged"):
-            try:
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub)
-            except OSError:
-                continue
-            with key:
-                i = 0
-                while True:
-                    try:
-                        name = winreg.EnumKey(key, i)
-                    except OSError:
-                        break
-                    i += 1
-                    low = name.lower()
-                    app = next((label for k, label in cls.MEETING_APPS if k in low), None)
-                    if not app:
-                        continue
-                    try:
-                        with winreg.OpenKey(key, name) as sk:
-                            start = winreg.QueryValueEx(sk, "LastUsedTimeStart")[0]
-                            stop = winreg.QueryValueEx(sk, "LastUsedTimeStop")[0]
-                    except OSError:
-                        continue
-                    if start and not stop:  # en uso ahora mismo
-                        return app
-        return None
-
     def _meeting_watch(self):
         notified = None
         while True:
             time.sleep(8)
             try:
-                app = self.mic_meeting_app()
+                app = mic_meeting_app()
                 self.meeting = app
                 recording = bool(self.rec and self.rec.alive())
                 if app and not recording and notified != app and self.settings.get().get("meeting_detect", True):

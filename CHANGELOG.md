@@ -58,6 +58,10 @@ nada de ningún proyecto concreto.
 - Tests (`tests/`, `python tests/run.py`), `flake8` (`setup.cfg`) y CI en GitHub Actions (Windows y Ubuntu ×
   Python 3.10–3.13).
 - `scripts/build_zip.py` genera `dist/Notas - instalador.zip` sin vocabulario.
+- `server.py` se reparte en módulos planos (el instalador solo copia ficheros sueltos de `_app`): `common.py`
+  (utilidades puras y log) y `recording.py` (atajo global, pitidos, avisos, proceso de la grabadora y detección
+  de reunión). El árbol, la cola y la API siguen en `server.py` (2.358 líneas): separarlos exige un módulo de
+  estado compartido (ROOT, LINKS, COMPLETE, DATA_DIR cambian en tiempo de ejecución) y se deja para otra entrega.
 
 ### Conocido, sin cambiar
 - El aviso de Windows (toast) sale firmado por «Windows PowerShell»: cambiarlo exige registrar un
