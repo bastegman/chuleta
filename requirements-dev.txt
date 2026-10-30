@@ -1,0 +1,3 @@
+# Para los tests y el linter (faster-whisper no hace falta: los tests usan dobles)
+numpy
+flake8

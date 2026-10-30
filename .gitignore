@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# lo escribe el instalador (ruta del Python de cada PC)
+_app/python.txt
+# grabaciones y sidecars de reuniones (nunca al repo); los tests generan sus ficheros en carpetas temporales
+*.wav
+*.m4a
+*.mp3
+*.mp4
+*.flac
+*.ogg
+*.opus
+*.aac
+*.wma
+*.webm
+*.mkv
+*.mov
+*.srt
+*.resumen.md
+# listas de vocabulario: llevan nombres de personas y empresas de cada usuario
+Vocabulario/
+*/Vocabulario/
+**/Vocabulario/
+# paquetes generados
+*.zip
+dist/
+# sistema
+.DS_Store
+Thumbs.db

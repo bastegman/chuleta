@@ -1,0 +1,7 @@
+* text=auto eol=lf
+# lo que ejecuta Windows va con CRLF (cmd.exe y PowerShell 5); el BOM de .ps1/LEEME.txt es parte del contenido
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+LEEME.txt text eol=crlf
+*.ico binary
+*.png binary

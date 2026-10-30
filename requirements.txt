@@ -1,0 +1,5 @@
+# Lo mismo que instala _app/instalar.ps1 (mantener las dos listas iguales; tests/test_package.py lo comprueba)
+faster-whisper==1.2.1
+soundcard>=0.4.3
+requests
+truststore

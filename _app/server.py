@@ -1,0 +1,2594 @@
+# -*- coding: utf-8 -*-
+"""
+Notas: app local para ordenar, escuchar, leer y transcribir las grabaciones de reuniones.
+
+  - Servidor HTTP de la libreria estandar en http://127.0.0.1:8765 (solo accesible desde este PC)
+  - Interfaz en _app/static (HTML + JS sin compilar)
+  - Transcripcion local (faster-whisper) o en la nube (engines.py)
+  - Las transcripciones se guardan como siempre: <audio>.txt y <audio>.srt junto al audio
+
+Arranque: acceso directo Notas del escritorio (lanza _app/Notas.bat).
+"""
+import copy
+import hashlib
+import json
+import os
+import queue
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import unicodedata
+import urllib.request
+import uuid
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+import engines
+import live
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(APP_DIR, "static")
+ROOT = os.path.dirname(APP_DIR)
+DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
+HOST, PORT = "127.0.0.1", 8765
+URL = f"http://{HOST}:{PORT}/"
+
+AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm"}
+TEXT_EXT = {".txt", ".md", ".srt"}
+SIDE_EXTS = (".txt", ".srt", ".md", ".resumen.md")  # lo que acompana a cada audio (se mueve y borra con el)
+MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "video/mp4",
+        ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aac": "audio/aac",
+        ".webm": "audio/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".wma": "audio/x-ms-wma",
+        ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
+# Atributos de OneDrive "solo en linea": leer el archivo dispararia la descarga
+CLOUD_ONLY = 0x400000 | 0x1000
+BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+LIVE_PRESETS = tuple(p["id"] for p in engines.PRESETS)  # en directo: por lotes y beam 1, cambia el modelo
+DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _-](\d{2})-(\d{2})-(\d{2})")
+
+
+def code_mtime():
+    """Fecha del codigo: cambia si se actualiza la app (la ventana abierta lo ve y se recarga sola)."""
+    files = [os.path.join(APP_DIR, n) for n in os.listdir(APP_DIR) if n.endswith(".py")]
+    files += [os.path.join(STATIC_DIR, n) for n in os.listdir(STATIC_DIR)]
+    return max(os.path.getmtime(f) for f in files)
+
+
+BUILD = format(int(code_mtime()), "x")
+VERSION = time.strftime("%d/%m/%Y %H:%M", time.localtime(code_mtime()))  # se ve en Ajustes
+
+
+class ApiError(Exception):
+    def __init__(self, msg, code=400):
+        super().__init__(msg)
+        self.msg, self.code = msg, code
+
+
+# ----------------------------------------------------------------------------- utilidades
+
+def default_threads():
+    return max(4, min(os.cpu_count() or 8, 12))
+
+
+def fold(s):
+    """minusculas y sin acentos, para buscar."""
+    s = unicodedata.normalize("NFD", s or "")
+    return "".join(c for c in s if not unicodedata.combining(c)).casefold()
+
+
+def natural_key(name):
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", fold(name))]
+
+
+# Carpetas vinculadas: cualquier carpeta del PC (p. ej. la del proyecto en OneDrive) que se usa como
+# si estuviera dentro de Notas. Sus rutas internas empiezan por ":<id>" (":" no puede ir en un nombre
+# de archivo de Windows, asi que nunca choca con una carpeta de verdad).
+LINK = ":"
+LINKS = {}  # id -> {"name", "path"} (se cargan de los ajustes al arrancar)
+
+
+def link_id(path):
+    return hashlib.md5(os.path.normcase(os.path.normpath(path)).encode("utf-8")).hexdigest()[:6]
+
+
+def _inside(p, base):
+    p, base = os.path.normcase(os.path.normpath(p)), os.path.normcase(os.path.normpath(base))
+    return p == base or p.startswith(base.rstrip(os.sep) + os.sep)
+
+
+def rel_of(abs_path):
+    for lid, l in LINKS.items():
+        if _inside(abs_path, l["path"]):
+            rel = os.path.relpath(abs_path, l["path"])
+            return LINK + lid + ("" if rel == "." else "/" + rel.replace(os.sep, "/"))
+    rel = os.path.relpath(abs_path, ROOT)
+    return "" if rel == "." else rel.replace(os.sep, "/")
+
+
+def is_link_root(rel):
+    return (rel or "").startswith(LINK) and "/" not in rel.strip("/")
+
+
+def safe(rel, must=None):
+    """Ruta absoluta dentro de la carpeta de Notas o de una carpeta vinculada (no deja salir de ahi)."""
+    rel = (rel or "").replace("\\", "/").strip("/")
+    base = ROOT
+    if rel.startswith(LINK):
+        lid, _, rel = rel[len(LINK):].partition("/")
+        if lid not in LINKS:
+            raise ApiError("Esa carpeta ya no está vinculada a Notas", 404)
+        base = LINKS[lid]["path"]
+    p = os.path.normpath(os.path.join(base, rel))
+    if not _inside(p, base):
+        raise ApiError("Ruta fuera de las carpetas de Notas", 403)
+    if must == "file" and not os.path.isfile(p):
+        raise ApiError("No existe el archivo: " + rel, 404)
+    if must == "dir" and not os.path.isdir(p):
+        raise ApiError("No existe la carpeta: " + rel, 404)
+    return p
+
+
+def in_app_dir(p):
+    a = os.path.normcase(APP_DIR)
+    return os.path.normcase(p) == a or os.path.normcase(p).startswith(a + os.sep)
+
+
+def clean_name(name):
+    name = unicodedata.normalize("NFC", (name or "").strip()).rstrip(". ")
+    if not name or BAD_NAME.search(name) or name in (".", ".."):
+        raise ApiError('Nombre no válido (no puede llevar \\ / : * ? " < > |)')
+    return name
+
+
+def read_text(path):
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        return f.read()
+
+
+def write_bytes(path, data, append=False):
+    """Escribe SIN borrar el archivo: si ya existe, se sustituye (o amplia) su contenido en el sitio.
+    Antes se escribia un .tmp y se renombraba encima, y el Explorador y OneDrive veian el .txt y el
+    .srt desaparecer y volver a aparecer cada vez (en directo, cada 20-40 s)."""
+    for attempt in range(20):  # OneDrive puede tener el archivo abierto un instante mientras lo sube
+        try:
+            mode = "ab" if append else ("r+b" if os.path.exists(path) else "wb")
+            with open(path, mode) as f:
+                f.write(data)
+                if not append:
+                    f.truncate()
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.25)
+
+
+def save_text(path, text, encoding):
+    write_bytes(path, text.encode(encoding))
+
+
+def fmt_srt(seconds):
+    ms = int(round(seconds * 1000))
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
+
+
+def parse_srt(text):
+    segs = []
+    for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()):
+        lines = block.split("\n")
+        for i, line in enumerate(lines):
+            m = SRT_TIME.search(line)
+            if m:
+                g = [int(x) for x in m.groups()]
+                start = g[0] * 3600 + g[1] * 60 + g[2] + int(m.group(4).ljust(3, "0")) / 1000
+                end = g[4] * 3600 + g[5] * 60 + g[6] + int(m.group(8).ljust(3, "0")) / 1000
+                txt = " ".join(l.strip() for l in lines[i + 1:] if l.strip())
+                if txt:
+                    segs.append({"start": round(start, 2), "end": round(end, 2), "text": txt})
+                break
+    return segs
+
+
+def wav_duration(path, size):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+            if head[:4] not in (b"RIFF", b"RF64") or head[8:12] != b"WAVE":
+                return None
+            byte_rate = None
+            while True:
+                ch = f.read(8)
+                if len(ch) < 8:
+                    return None
+                cid, n = ch[:4], struct.unpack("<I", ch[4:])[0]
+                if cid == b"fmt ":
+                    fmt = f.read(n)
+                    byte_rate = struct.unpack("<I", fmt[8:12])[0]
+                    if n % 2:
+                        f.read(1)
+                elif cid == b"data":
+                    if n in (0, 0xFFFFFFFF) or f.tell() + n > size:
+                        n = size - f.tell()  # grabacion sin cerrar o RF64
+                    return n / byte_rate if byte_rate else None
+                else:
+                    f.seek(n + (n & 1), 1)
+    except (OSError, struct.error):
+        return None
+
+
+# ----------------------------------------------------------------------------- paquete para otra persona
+
+EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR NOTAS.bat y LEEME.txt (van a la raiz)
+EXPORT_CODE = ("server.py", "engines.py", "worker.py", "live.py", "recorder.py", "Notas.bat", "instalar.ps1")
+
+
+def desktop_dir():
+    import ctypes
+    buf = ctypes.create_unicode_buffer(260)
+    if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf) == 0 and os.path.isdir(buf.value):
+        return buf.value  # CSIDL_DESKTOPDIRECTORY (puede estar dentro de OneDrive)
+    return os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+def build_package(dest, extra=()):
+    """Zip con la app lista para instalar en otro PC. Lleva solo el codigo, el instalador y el LEEME:
+    ni grabaciones, ni notas, ni ajustes, ni la API key (eso vive en DATA_DIR, que no se toca).
+    extra: [(archivo, ruta en el zip)] opcional, p. ej. las listas de vocabulario por workstream."""
+    import zipfile
+
+    def text(path):  # .bat/.ps1 con CRLF; BOM en .ps1 (PowerShell 5 lo leeria como ANSI) y en .txt (Bloc de notas)
+        t = read_text(path).replace("\r\n", "\n").replace("\n", "\r\n").replace("{FECHA}", time.strftime("%d/%m/%Y"))
+        return (("﻿" if path.endswith((".ps1", ".txt")) else "") + t).encode("utf-8")
+
+    files = [(os.path.join(APP_DIR, n), "Notas/_app/" + n) for n in EXPORT_CODE]
+    files += [(e.path, "Notas/_app/static/" + e.name) for e in os.scandir(STATIC_DIR) if e.is_file()]
+    files += [(e.path, "Notas/" + e.name) for e in os.scandir(EXPORT_DIR) if e.is_file()]
+    files += list(extra)
+    tmp = dest + ".tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for src, arc in sorted(files, key=lambda f: f[1]):
+            if src.endswith((".bat", ".ps1", ".txt")):
+                z.writestr(arc, text(src))
+            else:
+                z.write(src, arc)
+    os.replace(tmp, dest)
+    return len(files)
+
+
+# ----------------------------------------------------------------------------- estado persistente
+
+class Store:
+    """JSON en %LOCALAPPDATA%\\AudiosApp (fuera de OneDrive: la API key no se sincroniza)."""
+
+    def __init__(self, path, defaults):
+        self.path, self.lock = path, threading.Lock()
+        self.data = copy.deepcopy(defaults)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            for k, v in saved.items():
+                if isinstance(v, dict) and isinstance(self.data.get(k), dict):
+                    self.data[k].update(v)
+                else:
+                    self.data[k] = v
+        except (OSError, ValueError):
+            pass
+
+    def get(self):
+        with self.lock:
+            return copy.deepcopy(self.data)
+
+    def update(self, fn):
+        with self.lock:
+            fn(self.data)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self.path)
+
+
+DEFAULT_SETTINGS = {
+    "preset": "rapido",
+    "language": "",  # "" = detectar; "es-en" = espanol + ingles (spanglish): idioma por bloque, solo entre esos dos
+    "threads": default_threads(),
+    "prompt": "",
+    "live_auto": True,       # transcribir solo en cuanto OBS empieza a grabar
+    "live_preset": "medium",  # "medium" (preciso), "rapido" (small) o "nube"
+    "live_final_pass": True,  # directo en la nube: al terminar, repasar la grabacion entera (mejor texto)
+    # grabadora propia: "default" sigue al micro de Windows (cascos incluidos); "all" graba todas las
+    # salidas a la vez, asi da igual por donde saque Teams el audio. "none" = sin esa fuente
+    "rec_mic": "default",
+    "rec_sys": "all",
+    "rec_live": True,
+    "rec_vocab": "",          # ultimo workstream elegido al grabar (<proyecto>/Vocabulario/<workstream>.txt)
+    "links": [],              # carpetas vinculadas: [{"name", "path"}] (fuera de Audios, p. ej. la del proyecto)
+    "rec_folder": "",         # ultima carpeta donde se grabo (sin workstream)
+    "project_folders": {},    # proyecto -> carpeta donde se graban sus reuniones (la ultima elegida)
+    "favorites": [],          # [{"kind": "a"|"f", "path": ...}] (estilo Notion)
+    "folder_icons": {},       # carpeta -> emoji
+    "meeting_detect": True,   # avisar si Teams/Zoom/… usa el micro y no se esta grabando
+    "summary_auto": True,     # resumen con IA al terminar de transcribir una reunion reciente
+    "summary_model": "openai/gpt-oss-120b",
+    "summary_lang": "es",     # es / en / same (el de la reunion)
+    "summary_extra": "",     # instrucciones extra para el resumen
+    "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3-turbo", "base_url": "",
+              "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
+              "chunk_minutes": 10, "parallel": 3},
+    "speed": {},
+}
+
+
+class Durations:
+    def __init__(self, path):
+        self.path, self.lock, self.dirty = path, threading.Lock(), False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.cache = json.load(f)
+        except (OSError, ValueError):
+            self.cache = {}
+
+    def has(self, rel, size, mtime):
+        with self.lock:
+            return f"{rel}|{size}|{int(mtime)}" in self.cache
+
+    def get(self, abs_path, rel, size, mtime, cloud, srt_abs=None, compute=True):
+        key = f"{rel}|{size}|{int(mtime)}"
+        with self.lock:
+            if key in self.cache:
+                return self.cache[key]
+        if not compute:
+            return None
+        d = None
+        if cloud:
+            # no tocamos el audio (OneDrive lo descargaria); usamos el final del .srt si lo hay
+            if srt_abs:
+                try:
+                    segs = parse_srt(read_text(srt_abs))
+                    d = segs[-1]["end"] if segs else None
+                except OSError:
+                    d = None
+        elif abs_path.lower().endswith(".wav"):
+            d = wav_duration(abs_path, size)
+        else:
+            d = engines.media_duration(abs_path)
+        if d:
+            d = round(d, 1)
+            with self.lock:
+                self.cache[key] = d
+                self.dirty = True
+        return d
+
+    def flush(self):
+        with self.lock:
+            if not self.dirty:
+                return
+            data, self.dirty = dict(self.cache), False
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, self.path)
+
+
+# ----------------------------------------------------------------------------- arbol de carpetas
+
+def scan():
+    """Arbol de carpetas con audios (+ estado de transcripcion) y documentos sueltos."""
+    flat = []
+
+    def walk(abs_dir, rel, depth=0, max_depth=99):
+        node = {"name": os.path.basename(abs_dir) if rel else "Notas", "path": rel,
+                "folders": [], "audios": [], "docs": []}
+        try:
+            entries = list(os.scandir(abs_dir))
+        except OSError:
+            return node
+        files = {}
+        for e in entries:
+            if e.name.startswith((".", "~$")):
+                continue
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if not in_app_dir(e.path) and depth < max_depth:
+                        node["folders"].append(walk(e.path, f"{rel}/{e.name}" if rel else e.name, depth + 1, max_depth))
+                elif e.is_file():
+                    files[e.name.lower()] = e
+            except OSError:
+                continue
+        audio_stems = {os.path.splitext(k)[0] for k in files if os.path.splitext(k)[1] in AUDIO_EXT}
+        for low, e in files.items():
+            stem_low, ext = os.path.splitext(low)
+            frel = f"{rel}/{e.name}" if rel else e.name
+            try:
+                st = e.stat()
+            except OSError:
+                continue
+            cloud = bool(getattr(st, "st_file_attributes", 0) & CLOUD_ONLY)
+            if ext in AUDIO_EXT:
+                stem = os.path.splitext(e.name)[0]
+                txt, srt = files.get(stem_low + ".txt"), files.get(stem_low + ".srt")
+                m = DATE_RE.search(stem)
+                label = ""
+                if m:
+                    label = (stem[:m.start()] + " " + stem[m.end():]).strip(" -_·")
+                    label = re.sub(r"^(AUDIO|VID|REC)[-_ ]*", "", label, flags=re.I)
+                    label = re.sub(r"^_?\d{2,6}$", "", label)
+                tx_mtime = 0
+                for t in (txt, srt):
+                    try:
+                        tx_mtime = max(tx_mtime, t.stat().st_mtime) if t else tx_mtime
+                    except OSError:
+                        pass
+                summ = files.get(stem_low + ".resumen.md")  # resumen con IA
+                md = files.get(stem_low + ".md")  # notas y propiedades de la reunion
+                try:
+                    md_mtime = md.stat().st_mtime if md else 0
+                except OSError:
+                    md_mtime = 0
+                a = {"name": e.name, "path": frel, "stem": stem, "ext": ext, "size": st.st_size,
+                     "mtime": st.st_mtime, "cloud": cloud, "txt": bool(txt), "srt": bool(srt), "tx_mtime": tx_mtime,
+                     "date": "{}-{}-{}T{}:{}:{}".format(*m.groups()) if m else None,
+                     "label": label, "folder": rel, "notes_mtime": md_mtime, "has_summary": bool(summ),
+                     "_abs": e.path, "_srt": srt.path if srt else None, "_md": md.path if md else None,
+                     "_sum": summ.path if summ else None}
+                node["audios"].append(a)
+                flat.append(a)
+            elif ext in TEXT_EXT and stem_low not in audio_stems and not (
+                    low.endswith(".resumen.md") and low[:-len(".resumen.md")] in audio_stems):
+                node["docs"].append({"name": e.name, "path": frel, "ext": ext, "size": st.st_size,
+                                     "mtime": st.st_mtime, "cloud": cloud})
+        node["folders"].sort(key=lambda n: natural_key(n["name"]))
+        node["audios"].sort(key=lambda a: (a["date"] or "", natural_key(a["name"])))
+        node["docs"].sort(key=lambda d: natural_key(d["name"]))
+        return node
+
+    tree = walk(ROOT, "")
+    linked = []
+    for lid, l in LINKS.items():  # arriba del todo, antes que las carpetas de dentro de Audios
+        node = walk(l["path"], LINK + lid, max_depth=LINK_DEPTH)
+        node.update(name=l["name"], linked=l["path"], missing=not os.path.isdir(l["path"]))
+        linked.append(node)
+    tree["folders"][:0] = sorted(linked, key=lambda n: natural_key(n["name"]))
+    return tree, flat
+
+
+LINK_DEPTH = 4  # en una carpeta de proyecto grande no se baja mas (el arbol se repasa cada pocos segundos)
+
+
+class Library:
+    def __init__(self, durations):
+        self.durations = durations
+        self.lock = threading.Lock()
+        self.tree, self.flat, self.version, self.at = None, [], "", 0
+        self.pending_durations = False
+        self.growth = {}  # ruta -> (tamano, cuando cambio): OBS no actualiza la fecha mientras graba
+        self.ends = {}    # .srt -> (fecha, segundo en que acaba): para detectar transcripciones a medias
+        self.notes = {}   # .md -> (fecha, propiedades, tiene texto)
+
+    def _props(self, a):
+        p = a["_md"]
+        if not p:
+            return {}, False
+        hit = self.notes.get(p)
+        if hit and hit[0] == a["notes_mtime"]:
+            return hit[1], hit[2]
+        try:
+            props, body = parse_notes(read_text(p))
+        except OSError:
+            props, body = {}, ""
+        self.notes[p] = (a["notes_mtime"], props, bool(body.strip()))
+        return props, bool(body.strip())
+
+    def _tx_end(self, a):
+        """Hasta que segundo llega la transcripcion (lee solo el final del .srt, con cache)."""
+        p = a["_srt"]
+        if not p:
+            return None
+        hit = self.ends.get(p)
+        if hit and hit[0] == a["tx_mtime"]:
+            return hit[1]
+        end = None
+        try:
+            with open(p, "rb") as f:
+                f.seek(max(0, os.path.getsize(p) - 4096))
+                times = SRT_TIME.findall(f.read().decode("utf-8", "ignore"))
+            if times:
+                g = times[-1]
+                end = round(int(g[4]) * 3600 + int(g[5]) * 60 + int(g[6]) + int(g[7].ljust(3, "0")) / 1000, 1)
+        except OSError:
+            pass
+        self.ends[p] = (a["tx_mtime"], end)
+        return end
+
+    def _recording(self, a):
+        """True/duracion si es un WAV de OBS aun abierto (cabecera a 0xFFFFFFFF) y creciendo."""
+        if a["ext"] != ".wav" or a["cloud"] or self.durations.has(a["path"], a["size"], a["mtime"]):
+            return None
+        info = live.wav_info(a["_abs"])
+        if not info or info["data_size"] is not None:
+            return None
+        prev = self.growth.get(a["path"])
+        if not prev or prev[0] != a["size"]:
+            self.growth[a["path"]] = (a["size"], time.time())
+        a["recording"] = time.time() - self.growth[a["path"]][1] < live.STALLED_S
+        return round(max(0, a["size"] - info["data_off"]) / info["byte_rate"], 1)
+
+    def refresh(self, max_age=0.0):
+        with self.lock:
+            if self.tree is not None and time.time() - self.at < max_age:
+                return self.tree, self.version
+            tree, flat = scan()
+            missing = False
+            for a in flat:
+                a["recording"] = False
+                a["tx_end"] = self._tx_end(a)
+                a["props"], a["has_notes"] = self._props(a)
+                open_dur = self._recording(a)
+                if open_dur is not None:  # sin cachear: cambia cada pocos segundos
+                    a["duration"] = open_dur
+                    a["partial"] = False
+                    continue
+                # duraciones: las rapidas (cabecera WAV) ya; las demas (PyAV) en segundo plano
+                quick = a["ext"] == ".wav" or a["cloud"]
+                a["duration"] = self.durations.get(a["_abs"], a["path"], a["size"], a["mtime"], a["cloud"],
+                                                   a["_srt"], compute=quick)
+                missing |= a["duration"] is None and not quick
+                a["partial"] = is_partial(a)
+            self.durations.flush()
+            payload = json.dumps(strip_private(tree), ensure_ascii=False, sort_keys=True)
+            self.tree, self.flat, self.at = tree, flat, time.time()
+            self.version = hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
+        if missing and not self.pending_durations:
+            self.pending_durations = True
+            threading.Thread(target=self._fill_durations, daemon=True).start()
+        return tree, self.version
+
+    def _fill_durations(self):
+        try:
+            for a in list(self.flat):
+                if a.get("duration") is None and not a["cloud"]:
+                    self.durations.get(a["_abs"], a["path"], a["size"], a["mtime"], False, a["_srt"])
+            self.durations.flush()
+        finally:
+            self.pending_durations = False
+        with self.lock:
+            self.at = 0  # fuerza re-escaneo en la proxima peticion
+
+    def find(self, rel):
+        self.refresh(max_age=5)
+        for a in self.flat:
+            if a["path"] == rel:
+                return a
+        return None
+
+
+class Complete:
+    """Audios cuya transcripcion se sabe completa aunque el texto acabe antes que el audio
+    (p. ej. se siguio grabando en silencio al final). Asi no se marcan "a medias"."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.data = set(json.load(f))
+        except (OSError, ValueError):
+            self.data = set()
+
+    def __contains__(self, rel):
+        return rel in self.data
+
+    def _save(self):
+        with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(sorted(self.data), f, ensure_ascii=False)
+        os.replace(self.path + ".tmp", self.path)
+
+    def set(self, rel, done=True):
+        with self.lock:
+            if done == (rel in self.data):
+                return
+            (self.data.add if done else self.data.discard)(rel)
+            self._save()
+
+    def moved(self, old, new):
+        if old in self:
+            self.set(old, False)
+            self.set(new, True)
+
+
+COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
+
+
+def is_partial(a):
+    """Transcripcion que se quedo a medias: el .srt acaba bastante antes que el audio."""
+    d, end = a.get("duration"), a.get("tx_end")
+    return bool(a.get("srt") and d and end is not None and not a.get("recording") and d - end > max(60, 0.05 * d)
+                and not (COMPLETE and a["path"] in COMPLETE))
+
+
+def strip_private(node):
+    extra = {k: node[k] for k in ("linked", "missing") if k in node}  # carpetas vinculadas (fuera de Audios)
+    return {"name": node["name"], "path": node["path"], **extra,
+            "folders": [strip_private(f) for f in node["folders"]],
+            "audios": [{k: v for k, v in a.items() if not k.startswith("_")} for a in node["audios"]],
+            "docs": node["docs"]}
+
+
+# ----------------------------------------------------------------------------- transcripciones
+
+class Transcripts:
+    """Lee .srt / .txt con cache por fecha de modificacion (para la busqueda global)."""
+
+    def __init__(self):
+        self.cache, self.lock = {}, threading.Lock()
+
+    def load(self, base_abs):
+        for ext in (".srt", ".txt"):
+            p = base_abs + ext
+            try:
+                mtime = os.path.getmtime(p)
+            except OSError:
+                continue
+            with self.lock:
+                hit = self.cache.get(p)
+            if hit and hit[0] == mtime:
+                return hit[1]
+            text = read_text(p)
+            if ext == ".srt":
+                data = {"kind": "srt", "segments": parse_srt(text), "file": os.path.basename(p)}
+            else:
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                data = {"kind": "txt", "segments": [{"start": None, "end": None, "text": l} for l in lines],
+                        "file": os.path.basename(p)}
+            for s in data["segments"]:
+                s["_f"] = fold(s["text"])
+            with self.lock:
+                self.cache[p] = (mtime, data)
+            return data
+        return None
+
+    def doc_lines(self, abs_path):
+        try:
+            mtime = os.path.getmtime(abs_path)
+        except OSError:
+            return []
+        with self.lock:
+            hit = self.cache.get(abs_path)
+        if hit and hit[0] == mtime:
+            return hit[1]
+        lines = [l.strip() for l in read_text(abs_path).splitlines() if l.strip()]
+        data = [(l, fold(l)) for l in lines]
+        with self.lock:
+            self.cache[abs_path] = (mtime, data)
+        return data
+
+    def warm(self, library):
+        """Precarga todas las transcripciones para que la primera busqueda sea instantanea."""
+        for a in list(library.flat):
+            if a["txt"] or a["srt"]:
+                try:
+                    self.load(os.path.splitext(a["_abs"])[0])
+                except OSError:
+                    pass
+
+
+def public_transcript(data):
+    if not data:
+        return {"kind": None, "segments": []}
+    return {"kind": data["kind"], "file": data["file"],
+            "segments": [{k: v for k, v in s.items() if k != "_f"} for s in data["segments"]]}
+
+
+# ----------------------------------------------------------------------------- notas (estilo Notion)
+# <audio>.md junto al audio: cabecera con propiedades (como una pagina de base de datos de Notion)
+# y debajo las notas en Markdown. Se mueve con el audio igual que el .txt y el .srt.
+NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream")
+
+
+def parse_notes(text):
+    lines = text.replace("\r\n", "\n").split("\n")
+    props, body = {}, text
+    if lines and lines[0].strip() == "---":
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        # solo es cabecera si todo lo de dentro es "clave: valor" conocido (si no, era un separador)
+        if end and all(not l.strip() or l.partition(":")[0].strip().lower() in NOTE_KEYS for l in lines[1:end]):
+            for line in lines[1:end]:
+                k, _, v = line.partition(":")
+                k, v = k.strip().lower(), v.strip()
+                if k in NOTE_KEYS and v:
+                    props[k] = [t.strip() for t in v.strip("[]").split(",") if t.strip()] if k == "etiquetas" else v
+            body = "\n".join(lines[end + 1:]).lstrip("\n")
+    return props, body
+
+
+def dump_notes(props, body):
+    head = []
+    for k in NOTE_KEYS:
+        v = props.get(k)
+        if v:
+            v = "[" + ", ".join(v) + "]" if k == "etiquetas" else " ".join(str(v).split())
+            head.append(f"{k}: {v}")
+    out = ("---\n" + "\n".join(head) + "\n---\n\n" if head else "") + (body or "").strip("\n")
+    return out + "\n" if out.strip() else ""
+
+
+# ----------------------------------------------------------------------------- vocabulario por workstream
+# <proyecto>/Vocabulario/<workstream>.txt: terminos separados por comas (las lineas que empiezan por #
+# son la descripcion). Al grabar se elige el workstream: queda en la cabecera del .md de la reunion
+# (proyecto + workstream) y Whisper recibe ese vocabulario en vez del general de Ajustes.
+VOCAB_FOLDER = "vocabulario"
+
+
+def read_vocab(path):
+    desc, terms = [], []
+    for line in read_text(path).splitlines():
+        s = line.strip()
+        if s.startswith("#"):
+            desc.append(s.lstrip("#").strip())
+        elif s:
+            terms += engines.split_terms(s)
+    return " ".join(d for d in desc if d), terms
+
+
+def list_vocab():
+    out = []
+
+    def walk(d, depth):
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: natural_key(e.name))
+        except OSError:
+            return
+        for e in entries:
+            if not e.is_dir() or e.name.startswith((".", "_")) or in_app_dir(e.path):
+                continue
+            if fold(e.name) != VOCAB_FOLDER:
+                if depth < 3:
+                    walk(e.path, depth + 1)
+                continue
+            project = unicodedata.normalize("NFC", os.path.basename(d)) if d != ROOT else "Notas"
+            files = [f for f in os.scandir(e.path) if f.is_file() and f.name.lower().endswith(".txt")]
+            for f in sorted(files, key=lambda f: (fold(f.name) != "general.txt", natural_key(f.name))):
+                out.append({"id": rel_of(f.path), "project": project, "folder": rel_of(d),
+                            "name": unicodedata.normalize("NFC", f.name[:-4]), "_abs": f.path})
+
+    walk(ROOT, 0)
+    return out
+
+
+def find_vocab(project, name, id_=None):
+    vs = list_vocab()
+    if id_:
+        return next((v for v in vs if v["id"] == id_), None)
+    if not name:
+        return None
+    same = [v for v in vs if fold(v["name"]) == fold(name)]
+    return next((v for v in same if fold(v["project"]) == fold(project or "")), same[0] if len(same) == 1 else None)
+
+
+def vocab_info(v, language):
+    """Para la interfaz: cuantos terminos hay y cuales no le caben a Whisper junto a la frase de estilo."""
+    desc, terms = read_vocab(v["_abs"])
+    style = engines.STYLE_PROMPT["mix"] if language == "es-en" else engines.STYLE_PROMPT.get(language or "", "")
+    text = ", ".join(terms)
+    _, dropped = engines.build_prompt(style, text)
+    return dict({k: x for k, x in v.items() if not k.startswith("_")}, desc=desc, terms=len(terms), text=text,
+                tokens=engines.count_tokens(text), style_tokens=engines.count_tokens(style),
+                limit=engines.PROMPT_TOKENS, dropped=dropped)
+
+
+def vocab_fit(text, language):
+    """Lo mismo que vocab_info pero para una lista que se esta escribiendo (aun sin guardar)."""
+    style = engines.STYLE_PROMPT["mix"] if language == "es-en" else engines.STYLE_PROMPT.get(language or "", "")
+    terms = engines.split_terms(text)
+    joined = ", ".join(terms)
+    return {"terms": len(terms), "tokens": engines.count_tokens(joined), "style_tokens": engines.count_tokens(style),
+            "limit": engines.PROMPT_TOKENS, "dropped": engines.build_prompt(style, joined)[1]}
+
+
+def vocab_for(abs_audio, st):
+    """Vocabulario para Whisper: el del workstream de la reunion o, si no tiene, el general de Ajustes."""
+    md = os.path.splitext(abs_audio)[0] + ".md"
+    try:
+        props = parse_notes(read_text(md))[0] if os.path.isfile(md) else {}
+        v = find_vocab(props.get("proyecto"), props.get("workstream"))
+        if v:
+            return ", ".join(read_vocab(v["_abs"])[1])
+    except OSError:
+        pass
+    return st.get("prompt") or ""
+
+
+def to_recycle_bin(paths):
+    """A la papelera de Windows (se puede restaurar), no un borrado definitivo."""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", ctypes.c_void_p),
+                    ("pTo", ctypes.c_void_p), ("fFlags", ctypes.c_uint16), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", ctypes.c_void_p)]
+
+    buf = ctypes.create_unicode_buffer("\0".join(paths) + "\0\0")
+    op = SHFILEOPSTRUCTW(None, 3, ctypes.cast(buf, ctypes.c_void_p), None,
+                         0x40 | 0x10 | 0x4 | 0x400, False, None, None)  # ALLOWUNDO|NOCONFIRMATION|SILENT|NOERRORUI
+    if ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) != 0 or op.fAnyOperationsAborted:
+        raise ApiError("No se pudo mandar a la papelera (¿archivo en uso?).")
+
+
+def backup_dir(rel):
+    """Copia de lo que transcribio Whisper antes de editarlo a mano (fuera de OneDrive)."""
+    return os.path.join(DATA_DIR, "originales", hashlib.md5(rel.encode("utf-8")).hexdigest())
+
+
+def save_original(rel, segs):
+    """Guarda lo que transcribio Whisper (si aun no hay copia), para poder restaurarlo."""
+    bdir = backup_dir(rel)
+    if os.path.isdir(bdir):
+        return
+    os.makedirs(bdir)
+    write_outputs(os.path.join(bdir, "original.wav"), segs)
+    with open(os.path.join(bdir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"path": rel, "at": time.time()}, f, ensure_ascii=False)
+
+
+def srt_block(i, a, b, t):
+    return f"{i}\n{fmt_srt(a)} --> {fmt_srt(b)}\n{t}\n"
+
+
+def write_outputs(audio_abs, segs):
+    base = os.path.splitext(audio_abs)[0]
+    txt = "\n".join(t for _, _, t in segs) + "\n"
+    srt = "\n".join(srt_block(i, a, b, t) for i, (a, b, t) in enumerate(segs, 1))
+    # utf-8-sig (con BOM) para que Bloc de notas / Excel muestren bien los acentos
+    save_text(base + ".txt", txt, "utf-8-sig")
+    save_text(base + ".srt", srt, "utf-8")
+
+
+def seg_key(start):
+    """Identifica una frase por su inicio tal como queda en el .srt (milisegundos, 2 decimales al leerlo)."""
+    return round(int(round(float(start) * 1000)) / 1000, 2)
+
+
+def apply_edits(segs, edits):
+    """Correcciones hechas a mano durante el directo ("" = frase borrada) sobre lo que da Whisper."""
+    if not edits:
+        return segs
+    out = []
+    for a, b, t in segs:
+        t = edits.get(seg_key(a), t)
+        if t:
+            out.append((a, b, t))
+    return out
+
+
+class LiveOutputs:
+    """El .txt y el .srt del directo: lo nuevo se ANADE al final; solo si cambia algo de antes
+    (una correccion, "rehacer desde el principio") se reescribe el archivo, y siempre en el sitio."""
+
+    def __init__(self, audio_abs):
+        self.base = os.path.splitext(audio_abs)[0]
+        self.done, self.sizes = None, {}  # lo que ya esta en disco y el tamano que deberia tener
+        self.lock = threading.Lock()
+
+    def _same_on_disk(self):
+        try:
+            return all(os.path.getsize(self.base + e) == n for e, n in self.sizes.items())
+        except OSError:
+            return False  # lo han borrado o movido: se escribe entero
+
+    def write(self, segs):
+        segs = list(segs)
+        with self.lock:
+            d = self.done
+            if d is not None and segs[:len(d)] == d and self._same_on_disk():
+                new = segs[len(d):]
+                if not new:
+                    return
+                txt = "".join(t + "\n" for _, _, t in new).encode("utf-8")
+                # en el .srt cada bloque va separado del anterior por una linea en blanco
+                srt = "".join(("\n" if d or k else "") + srt_block(len(d) + k + 1, a, b, t)
+                              for k, (a, b, t) in enumerate(new)).encode("utf-8")
+                write_bytes(self.base + ".txt", txt, append=True)
+                write_bytes(self.base + ".srt", srt, append=True)
+            else:
+                write_outputs(self.base + ".wav", segs)  # (solo se usa para sacar la ruta base)
+            self.done = segs
+            self.sizes = {e: os.path.getsize(self.base + e) for e in (".txt", ".srt")}
+
+
+# ----------------------------------------------------------------------------- cola de trabajos
+
+class Job:
+    def __init__(self, path, name, preset, language):
+        self.id = uuid.uuid4().hex[:10]
+        self.path, self.name, self.preset, self.language = path, name, preset, language
+        self.engine = engines.PRESETS_BY_ID[preset]["engine"] if preset in engines.PRESETS_BY_ID else preset
+        self.kind = "summary" if preset == "resumen" else "transcribe"
+        self.status, self.progress, self.stage = "queued", 0.0, "En cola"
+        self.created, self.started, self.finished = time.time(), None, None
+        self.t_transcribe = None
+        self.error, self.duration, self.detected, self.eta = None, None, None, None
+        self.cancel = False
+        # solo en directo: segundos grabados / ya transcritos, y contador de reescrituras del .srt
+        self.live, self.recording, self.recorded, self.transcribed, self.rev = False, False, 0.0, 0.0, 0
+        self.restart = False
+        self.resume_from = None  # continuar una transcripcion a medias desde este segundo
+        self.final_pass = False  # repaso del archivo entero al terminar un directo en la nube
+        self.opts = None  # solo en directo: opciones que live.run va leyendo (vocabulario incluido)
+        # correcciones a mano durante el directo: {inicio de la frase: texto}, sobre lo que da Whisper (raw)
+        self.edits, self.raw, self.out, self.edit_lock = {}, [], None, threading.Lock()
+
+    def public(self):
+        now = time.time()
+        d = {"id": self.id, "path": self.path, "name": self.name, "preset": self.preset,
+             "engine": self.engine, "status": self.status, "progress": round(self.progress, 4),
+             "stage": self.stage, "error": self.error, "duration": self.duration,
+             "language": self.detected, "eta": self.eta, "created": self.created,
+             "elapsed": ((self.finished or now) - self.started) if self.started else None,
+             "resume_from": self.resume_from, "kind": self.kind, "final_pass": self.final_pass}
+        if self.live:
+            d.update(live=True, recording=self.recording, recorded=round(self.recorded, 1),
+                     transcribed=round(self.transcribed, 1), rev=self.rev)
+        return d
+
+
+class Jobs:
+    def __init__(self, settings, library):
+        self.settings, self.library = settings, library
+        self.list, self.lock = [], threading.Lock()
+        self.claimed = set()  # grabaciones de la propia app: el directo lo arranca quien graba, no el vigilante
+        self.queues = {"local": queue.Queue(), "cloud": queue.Queue()}
+        # Whisper corre en procesos aparte (worker.py): uno para la cola y otro para el directo,
+        # cada uno con su modelo en memoria
+        self.local = engines.LocalEngine(DATA_DIR, "batch")
+        self.live_worker = engines.WorkerClient("live", DATA_DIR)
+        self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"))
+        self.summarizer = engines.Summarizer()  # en la nube (Groq): no carga el portatil
+        self.queues["resumen"] = queue.Queue()
+        for kind in self.queues:
+            threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
+        threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
+
+    def active_for(self, path):
+        with self.lock:
+            return next((j for j in self.list if j.path == path and j.status in ("queued", "running")), None)
+
+    # --- en directo
+    def _watch_recordings(self):
+        """Arranca la transcripcion en directo en cuanto aparece una grabacion de OBS en curso."""
+        while True:
+            time.sleep(3)
+            try:
+                if not self.settings.get().get("live_auto"):
+                    continue
+                self.library.refresh(max_age=2.5)
+                for a in list(self.library.flat):
+                    if not a.get("recording"):
+                        continue
+                    with self.lock:  # una vez por grabacion (si el usuario la para, no se relanza)
+                        seen = a["path"] in self.claimed or any(j.path == a["path"] and j.live for j in self.list)
+                    if not seen and not self.active_for(a["path"]):
+                        self.start_live(a["path"], auto=True)
+            except Exception:
+                traceback.print_exc()
+
+    def start_live(self, rel, preset=None, auto=False):
+        st = self.settings.get()
+        preset = preset or st.get("live_preset") or "medium"
+        if preset not in LIVE_PRESETS:
+            preset = "medium"
+        if preset == "nube":
+            try:
+                engines.CloudEngine.endpoint(st["cloud"])
+            except engines.EngineError:
+                preset = "medium"  # sin API key: en local
+        abs_path = safe(rel, "file")
+        if self.active_for(rel):
+            raise ApiError("Ese audio ya se está transcribiendo.")
+        job = Job(rel, os.path.basename(rel), preset, st.get("language") or None)
+        job.engine, job.live, job.recording = "live", True, True
+        job.status, job.started, job.stage = "running", time.time(), "Empezando en directo…"
+        COMPLETE.set(rel, False)  # hasta que termine bien, no se da por completa
+        with self.lock:
+            self.list.append(job)
+        threading.Thread(target=self._run_live, args=(job, abs_path, st), daemon=True, name="live").start()
+        log(f"● {job.name}  transcripción en directo{' (automática)' if auto else ''}")
+        return job.id
+
+    def _final_pass(self, job):
+        """Al terminar un directo en la nube se repasa la grabacion entera de una vez: Whisper ve
+        mucho mas contexto que en trozos de 8-15 s y el texto queda mejor (1 h ~ 2 min en Groq).
+        Mientras tanto se sigue viendo el del directo. No se hace si lo corregiste a mano."""
+        st = self.settings.get()
+        if not st.get("live_final_pass", True) or job.preset != "nube" or job.recorded < 30:
+            return False
+        if job.edits or os.path.isdir(backup_dir(job.path)):
+            log(f"   {job.name}: sin repaso final (tiene correcciones a mano)")
+            return False
+        try:
+            self._cloud_ready()
+        except ApiError:
+            return False
+        j = Job(job.path, job.name, "nube", job.language)
+        j.final_pass, j.stage = True, "En cola: repaso final en la nube"
+        with self.lock:
+            self.list.append(j)
+        self.queues[j.engine].put(j)
+        log(f"↻ {job.name}  repaso final de la grabación entera en la nube")
+        return True
+
+    def refresh_prompt(self, rel):
+        """Cambio el workstream de una reunion: si se esta transcribiendo en directo, nuevo vocabulario ya."""
+        with self.lock:
+            jobs = [j for j in self.list if j.path == rel and j.live and j.status == "running" and j.opts]
+        for j in jobs:
+            j.opts["prompt"] = vocab_for(safe(rel), self.settings.get())
+            log(f"   directo {j.name}: vocabulario actualizado")
+
+    def _live_job(self, job_id):
+        with self.lock:
+            job = next((j for j in self.list if j.id == job_id and j.live), None)
+        if not job or job.status != "running":
+            raise ApiError("Esa transcripción en directo ya no está en marcha.")
+        return job
+
+    def _check_live_preset(self, preset):
+        if preset not in LIVE_PRESETS:
+            raise ApiError("Modelo desconocido: " + str(preset))
+        if engines.PRESETS_BY_ID[preset]["engine"] == "cloud":
+            self._cloud_ready()
+
+    def set_live_preset(self, job_id, preset, restart=False):
+        """Cambia el modelo del directo: desde el siguiente trozo, o rehaciendo todo desde el principio."""
+        job = self._live_job(job_id)
+        if preset:
+            self._check_live_preset(preset)
+            job.preset = preset
+            self.settings.update(lambda d: d.update(live_preset=preset))
+        if restart:
+            job.restart = True
+            job.stage = "Rehaciendo desde el principio…"
+        log(f"   directo {job.name}: {'rehacer con' if restart else 'modelo'} {job.preset}")
+        return job.public()
+
+    def _run_live(self, job, abs_path, st):
+        resume = []
+        srt = os.path.splitext(abs_path)[0] + ".srt"
+        if os.path.isfile(srt):  # la app se reinicio a mitad de grabacion: se retoma, no se repite
+            try:
+                resume = [(s["start"], s["end"], s["text"]) for s in parse_srt(read_text(srt))]
+            except OSError:
+                resume = []
+        opts = {"preset": job.preset, "language": job.language, "prompt": vocab_for(abs_path, st),
+                "threads": int(st.get("threads") or default_threads()),
+                "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": st["cloud"],
+                "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume}
+        job.opts = opts  # live.run lee el prompt en cada trozo: si cambias el workstream, vale desde el siguiente
+        job.out = LiveOutputs(abs_path)
+        if resume:  # lo que ya estaba escrito no se reescribe: lo nuevo se anade detras
+            job.out.done, job.raw = list(resume), list(resume)
+            job.out.sizes = {e: os.path.getsize(os.path.splitext(abs_path)[0] + e) for e in (".txt", ".srt")
+                             if os.path.isfile(os.path.splitext(abs_path)[0] + e)}
+
+        def writer(segs):
+            with job.edit_lock:
+                job.raw = list(segs)
+                try:
+                    job.out.write(apply_edits(job.raw, job.edits))
+                except OSError as e:  # se reintenta con el siguiente trozo
+                    log(f"   no se pudo escribir la transcripción todavía ({e.__class__.__name__})")
+
+        try:
+            segs, lang = live.run(job, abs_path, opts, writer, log)
+            job.detected = lang
+            if segs:
+                writer(segs)
+                if job.edits:  # lo que transcribio Whisper, para poder "Restaurar original" despues
+                    save_original(job.path, segs)
+                COMPLETE.set(job.path)  # llego hasta el final (si se corta antes, queda "a medias")
+                if not self._final_pass(job):  # si hay repaso final, el resumen se hace al acabar este
+                    self.auto_summary(job.path)
+                job.status, job.stage, job.progress = "done", "Hecho", 1.0
+                log(f"✔ {job.name}  directo terminado ({job.recorded / 60:.0f} min grabados)")
+            else:
+                job.status, job.stage, job.error = "error", "Error", "No se ha detectado voz en la grabación."
+        except engines.Cancelled:
+            job.status, job.stage = "cancelled", "Directo detenido"
+            log(f"■ {job.name}  directo detenido")
+        except Exception as e:
+            job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
+            log(f"✖ {job.name}  {job.error}")
+            traceback.print_exc()
+        finally:
+            job.recording = False
+            job.finished = time.time()
+            self.library.at = 0
+
+    def submit(self, paths, preset, language, resume=False):
+        """resume: las que se quedaron a medias se continuan desde donde acaba el texto (el resto, enteras)."""
+        if preset not in engines.PRESETS_BY_ID:
+            raise ApiError("Velocidad desconocida: " + str(preset))
+        if engines.PRESETS_BY_ID[preset]["engine"] == "cloud":
+            self._cloud_ready()
+        added = []
+        for rel in paths:
+            safe(rel, "file")
+            if self.active_for(rel):
+                continue
+            a = self.library.find(rel)
+            if a and a.get("recording"):
+                raise ApiError("Se está grabando todavía: usa «Transcribir en directo».")
+            job = Job(rel, os.path.basename(rel), preset, language or None)
+            if resume and a and a.get("partial"):
+                job.resume_from = a["tx_end"]
+            with self.lock:
+                self.list.append(job)
+            self.queues[job.engine].put(job)
+            added.append(job.id)
+        return added
+
+    # --- resumen con IA (Groq)
+    def summary_ready(self):
+        c = self.settings.get()["cloud"]
+        return bool(engines.chat_url(c)) and bool((c.get("api_key") or "").strip())
+
+    def submit_summary(self, rel, auto=False):
+        abs_path = safe(rel, "file")
+        if not self.summary_ready():
+            raise ApiError("El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+        if not any(os.path.isfile(os.path.splitext(abs_path)[0] + e) for e in (".srt", ".txt")):
+            raise ApiError("Primero hay que transcribir la reunión.")
+        with self.lock:
+            if any(j.path == rel and j.kind == "summary" and j.status in ("queued", "running") for j in self.list):
+                raise ApiError("Ya se está resumiendo.")
+            job = Job(rel, os.path.basename(rel), "resumen", None)
+            job.stage = "En cola para resumir"
+            self.list.append(job)
+        self.queues["resumen"].put(job)
+        log(f"✨ {job.name}  resumen{' (automático)' if auto else ''} en cola")
+        return job.id
+
+    def auto_summary(self, rel):
+        """Al terminar de transcribir: resumen automatico si es una reunion reciente (las antiguas se
+        resumen a mano, para no gastar de golpe el cupo diario de Groq)."""
+        st = self.settings.get()
+        if not st.get("summary_auto", True) or not self.summary_ready():
+            return
+        a = self.library.find(rel)
+        when = None
+        if a and a.get("date"):
+            try:
+                when = time.mktime(time.strptime(a["date"], "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                when = None
+        when = when or (a or {}).get("mtime") or 0
+        if time.time() - when > 3 * 86400:
+            return
+        try:
+            self.submit_summary(rel, auto=True)
+        except ApiError:
+            pass
+
+    def _run_summary(self, job):
+        job.status, job.started, job.stage = "running", time.time(), "Preparando el resumen…"
+        try:
+            abs_path = safe(job.path, "file")
+            base = os.path.splitext(abs_path)[0]
+            data = Transcripts().load(base)
+            if not data or not data["segments"]:
+                raise engines.EngineError("No hay transcripción que resumir.")
+            a = self.library.find(job.path) or {}
+            props, notes = ({}, "")
+            if os.path.isfile(base + ".md"):
+                props, notes = parse_notes(read_text(base + ".md"))
+            st = self.settings.get()
+            d = a.get("duration") or 0
+            meta = {"title": props.get("titulo") or os.path.splitext(job.name)[0],
+                    "date": (a.get("date") or "").replace("T", " ")[:16] or "fecha desconocida",
+                    "duration": f"{round(d / 60)} min" if d else "duración desconocida",
+                    "participants": props.get("participantes", ""), "notes": notes, "extra": st.get("summary_extra", "")}
+            cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"))
+
+            def report(frac=None, stage=None, **k):
+                if stage:
+                    job.stage = stage
+                if frac is not None:
+                    job.progress = max(job.progress, frac)
+
+            text, model = self.summarizer.summarize(data["segments"], meta, cfg, report, lambda: job.cancel)
+            head = f"---\nmodelo: {model}\ngenerado: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n"
+            save_text(base + ".resumen.md", head + text.strip() + "\n", "utf-8")
+            job.status, job.progress, job.stage = "done", 1.0, "Resumen listo"
+            log(f"✔ {job.name}  resumen listo ({(time.time() - job.started):.0f} s, {model})")
+        except engines.Cancelled:
+            job.status, job.stage = "cancelled", "Cancelado"
+        except Exception as e:
+            job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
+            log(f"✖ {job.name}  resumen: {job.error}")
+            if not isinstance(e, (engines.EngineError, ApiError)):
+                traceback.print_exc()
+        finally:
+            job.finished = time.time()
+            self.library.at = 0
+
+    def _cloud_ready(self):
+        try:
+            engines.CloudEngine.endpoint(self.settings.get()["cloud"])
+            return True
+        except engines.EngineError as e:
+            raise ApiError(str(e))
+
+    def cancel(self, job_id):
+        with self.lock:
+            for j in self.list:
+                if j.id == job_id and j.status in ("queued", "running"):
+                    j.cancel = True
+                    if j.status == "queued":
+                        j.status, j.stage, j.finished = "cancelled", "Cancelado", time.time()
+                    else:
+                        j.stage = "Cancelando…"
+                    return True
+        return False
+
+    def clear(self):
+        with self.lock:
+            self.list = [j for j in self.list if j.status in ("queued", "running")]
+
+    def snapshot(self):
+        with self.lock:
+            return [j.public() for j in self.list[-60:]]
+
+    def _worker(self, kind):
+        q = self.queues[kind]
+        while True:
+            job = q.get()
+            if job.status != "queued":
+                continue
+            try:
+                self._run_summary(job) if job.kind == "summary" else self._run(job)
+            except Exception as e:
+                traceback.print_exc()
+                job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
+                job.finished = job.finished or time.time()
+
+    def _run(self, job):
+        job.status, job.started, job.stage = "running", time.time(), "Empezando…"
+        preset = engines.PRESETS_BY_ID[job.preset]
+        st = self.settings.get()
+        log(f"▶ {job.name}  [{preset['label']}]")
+
+        def report(frac=None, stage=None, transcribing=False):
+            if transcribing and job.t_transcribe is None:
+                job.t_transcribe = time.time()
+            if stage is not None:
+                job.stage = ("Repaso final · " if job.final_pass else "") + stage
+            if frac is not None:
+                job.progress = max(job.progress, frac)
+                if job.t_transcribe and job.progress > 0.03:
+                    el = time.time() - job.t_transcribe
+                    base = 0.12 if job.engine == "cloud" else 0.0
+                    done = (job.progress - base) / (1 - base)
+                    if done > 0.02:
+                        job.eta = round(el * (1 - done) / done)
+
+        try:
+            abs_path = safe(job.path, "file")
+            a = self.library.find(job.path)
+            start = float(job.resume_from or 0)
+            total = (a or {}).get("duration") or engines.media_duration(abs_path)
+            job.duration = max(1.0, total - start) if total else None  # lo que queda por transcribir
+            if start:
+                log(f"   continuando desde {start / 60:.1f} min")
+            vocab = vocab_for(abs_path, st)  # el del workstream de la reunion, o el general
+            if preset["engine"] == "local":
+                segs, lang, dur = self.local.transcribe(abs_path, preset, job.language, vocab,
+                                                        int(st.get("threads") or default_threads()),
+                                                        report, lambda: job.cancel, start=start)
+            else:
+                segs, lang, dur = self.cloud.transcribe(abs_path, job.duration, st["cloud"], job.language,
+                                                        vocab, job.id, report, lambda: job.cancel,
+                                                        start=start)
+            if job.cancel:
+                raise engines.Cancelled()
+            if start:
+                # se anade detras de lo que ya habia (incluidas las correcciones a mano, que se respetan)
+                base = os.path.splitext(abs_path)[0]
+                old = [(s["start"], s["end"], s["text"]) for s in parse_srt(read_text(base + ".srt"))]
+                new = [s for s in segs if s[1] > start + 0.3]
+                write_outputs(abs_path, old + new)
+                if not new:
+                    log("   en lo que faltaba no hay voz: se da por completa")
+            else:
+                if not segs:
+                    raise engines.EngineError("No se ha detectado voz en el audio.")
+                write_outputs(abs_path, segs)
+                shutil.rmtree(backup_dir(job.path), ignore_errors=True)  # el "original" es ahora este
+            COMPLETE.set(job.path)  # aunque el texto acabe antes que el audio, esta completa
+            self.auto_summary(job.path)
+            job.duration, job.detected = dur or job.duration, lang
+            job.status, job.progress, job.stage, job.eta = "done", 1.0, "Hecho", 0
+            el = time.time() - (job.t_transcribe or job.started)
+            if job.duration and el > 1:
+                speed = job.duration / el
+
+                def upd(d):
+                    old = d.setdefault("speed", {}).get(job.preset)
+                    d["speed"][job.preset] = round(speed if not old else 0.5 * old + 0.5 * speed, 2)
+                self.settings.update(upd)
+            log(f"✔ {job.name}  {(time.time() - job.started) / 60:.1f} min"
+                + (f"  ({job.duration / max(el, 1):.1f}x tiempo real)" if job.duration else ""))
+        except engines.Cancelled:
+            job.status, job.stage = "cancelled", "Cancelado"
+            log(f"■ {job.name}  cancelado")
+        except Exception as e:
+            job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
+            log(f"✖ {job.name}  {job.error}")
+            if not isinstance(e, (engines.EngineError, ApiError)):
+                traceback.print_exc()
+            if job.final_pass:  # se queda el texto del directo, y con el se resume
+                log("   se mantiene el texto del directo")
+                self.auto_summary(job.path)
+        finally:
+            job.finished = time.time()
+            self.library.at = 0
+
+
+# ----------------------------------------------------------------------------- API
+
+def log(msg):
+    try:
+        print(time.strftime("%H:%M:%S"), msg, flush=True)
+    except Exception:
+        pass
+
+
+def masked(key):
+    return (key[:4] + "…" + key[-4:]) if key and len(key) > 12 else ("••••" if key else "")
+
+
+class GlobalHotkey(threading.Thread):
+    """Ctrl+Alt+R en todo Windows (aunque Notas este en segundo plano o estes en Teams).
+    RegisterHotKey exige que el registro y el bucle de mensajes vayan en el mismo hilo."""
+
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_R, WM_HOTKEY = 0x1, 0x2, 0x4000, 0x52, 0x0312
+
+    def __init__(self, callback):
+        super().__init__(daemon=True, name="hotkey")
+        self.callback, self.ok, self.error, self.last = callback, False, None, 0.0
+
+    def run(self):
+        import ctypes
+        import ctypes.wintypes as wt
+        user32 = ctypes.windll.user32
+        if not user32.RegisterHotKey(None, 1, self.MOD_CONTROL | self.MOD_ALT | self.MOD_NOREPEAT, self.VK_R):
+            self.error = "Ctrl+Alt+R ya lo usa otro programa"
+            log(f"   atajo no disponible: {self.error}")
+            return
+        self.ok = True
+        msg = wt.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == self.WM_HOTKEY and time.time() - self.last > 1.5:  # evita dobles pulsaciones
+                self.last = time.time()
+                threading.Thread(target=self.callback, daemon=True).start()
+
+
+def cue(kind):
+    """Pitido corto y bajito: sube al empezar, baja al parar (se oye sin mirar la pantalla)."""
+    def play():
+        try:
+            import io
+            import wave
+            import winsound
+            import numpy as np
+            notes = {"start": (660, 880), "stop": (880, 660), "error": (300, 220)}[kind]
+            sr, parts = 44100, []
+            for f in notes:
+                t = np.arange(int(sr * 0.09)) / sr
+                parts.append(np.sin(2 * np.pi * f * t) * np.minimum(1, np.minimum(t, t[::-1]) * 200))
+                parts.append(np.zeros(int(sr * 0.04)))
+            pcm = (np.concatenate(parts) * 0.18 * 32767).astype("<i2")
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(sr)
+                w.writeframes(pcm.tobytes())
+            winsound.PlaySound(buf.getvalue(), winsound.SND_MEMORY)
+        except Exception:
+            pass
+    play()
+
+
+def notify(title, body):
+    """Notificacion de Windows (por si la ventana de Notas no esta a la vista)."""
+    import base64
+    q = lambda s: s.replace("'", "''")
+    ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;"
+          "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+          "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+          "$x = $t.GetElementsByTagName('text');"
+          f"$x.Item(0).AppendChild($t.CreateTextNode('{q(title)}')) > $null;"
+          f"$x.Item(1).AppendChild($t.CreateTextNode('{q(body)}')) > $null;"
+          "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+          "'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe')"
+          ".Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+    try:
+        subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                          "-EncodedCommand", base64.b64encode(ps.encode("utf-16-le")).decode()],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=engines.NO_WINDOW)
+    except OSError:
+        pass
+
+
+def close_wav(path):
+    """Corrige la cabecera de un WAV que se quedo abierto (grabadora que murio sin cerrar)."""
+    info = live.wav_info(path)
+    if not info or info["data_size"] is not None:
+        return
+    size = os.path.getsize(path)
+    with open(path, "r+b") as f:
+        f.seek(4)
+        f.write(struct.pack("<I", size - 8))
+        f.seek(info["data_off"] - 4)
+        f.write(struct.pack("<I", size - info["data_off"]))
+
+
+class RecorderProcess:
+    """recorder.py en un proceso aparte: graba (o solo mide niveles) y manda su estado por stdout."""
+
+    def __init__(self, path, mic, sys_dev):
+        self.path, self.started, self.status, self.ended = path, time.time(), {}, False
+        args = [path] if path else ["--monitor"]
+        err = open(os.path.join(DATA_DIR, "recorder.log"), "ab")
+        self.p = subprocess.Popen([sys.executable, "-u", os.path.join(APP_DIR, "recorder.py"), *args,
+                                   "--mic", mic or "default", "--sys", sys_dev or "default"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
+                                  # prioridad alta: gasta muy poco, pero si se retrasa se pierde audio
+                                  creationflags=engines.NO_WINDOW | getattr(subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0))
+        err.close()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.p.stdout:
+            try:
+                self.status = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                pass
+        self.ended = True
+        if self.path and os.path.isfile(self.path):
+            try:
+                close_wav(self.path)  # por si murio sin cerrar la cabecera
+            except OSError:
+                pass
+
+    def alive(self):
+        return not self.ended and self.p.poll() is None
+
+    def send(self, cmd):
+        try:
+            self.p.stdin.write((cmd + "\n").encode())
+            self.p.stdin.flush()
+            return True
+        except OSError:
+            return False
+
+    def stop(self, timeout=10):
+        try:
+            self.p.stdin.write(b"stop\n")
+            self.p.stdin.flush()
+        except OSError:
+            pass
+        end = time.time() + timeout
+        while time.time() < end and not self.ended:
+            time.sleep(0.05)
+        if not self.ended:
+            self.p.kill()
+            time.sleep(0.3)
+            if self.path:
+                close_wav(self.path)
+        return self.status.get("t", 0)
+
+
+class App:
+    def __init__(self):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        global COMPLETE
+        COMPLETE = Complete(os.path.join(DATA_DIR, "completas.json"))
+        self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
+        self._load_links()
+        self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
+        self.transcripts = Transcripts()
+        self.jobs = Jobs(self.settings, self.library)
+        # grabadora propia: una grabacion y, mientras la ventana de "Grabar" esta abierta, un medidor
+        self.rec, self.monitor, self.monitor_seen = None, None, 0.0
+        self.rec_lock, self.devices_cache = threading.Lock(), (0.0, None)
+        self.toggle_lock = threading.Lock()
+        self.notes_lock, self.meeting = threading.Lock(), None
+        threading.Thread(target=self._meeting_watch, daemon=True, name="meeting-watch").start()
+        threading.Thread(target=self._monitor_watchdog, daemon=True).start()
+        self.hotkey = GlobalHotkey(lambda: self.rec_toggle({"source": "hotkey"}))
+        self.hotkey.start()
+
+    def rec_toggle(self, b):
+        """Ctrl+Alt+R (o el mismo atajo dentro de la app): empieza con la ultima configuracion o para."""
+        with self.toggle_lock:
+            try:
+                if self.rec and self.rec.alive():
+                    r = self.rec_stop({})
+                    cue("stop")
+                    notify("■ Grabación guardada", f"{max(1, round(r['seconds'] / 60))} min · la transcripción termina sola")
+                    return dict(r, recording=False)
+                st = self.settings.get()
+                # el ultimo workstream elegido (y se graba en la carpeta de su proyecto)
+                v = find_vocab(None, None, st.get("rec_vocab")) if st.get("rec_vocab") else None
+                cue("start")  # antes de empezar: asi el pitido no queda grabado
+                r = self.rec_start({"mic": st.get("rec_mic") or "default", "sys": st.get("rec_sys") or "all",
+                                    "live": True, "preset": st.get("live_preset") or "medium",
+                                    "language": st.get("language") or "", "folder": self.rec_folder_for(v, st),
+                                    "vocab": v["id"] if v else ""})
+                notify("● Grabando en Notas", (f"{r['workstream']} · " if r.get("workstream") else "")
+                       + "Pulsa Ctrl+Alt+R otra vez para parar")
+                return dict(r, recording=True)
+            except ApiError as e:
+                cue("error")
+                notify("No se pudo grabar", e.msg)
+                raise
+
+    # --- grabadora
+    def _monitor_watchdog(self):
+        while True:  # si la ventana de "Grabar" se cierra sin avisar, el medidor se apaga solo
+            time.sleep(2)
+            m = self.monitor
+            if m and time.time() - self.monitor_seen > 8:
+                self.monitor = None
+                m.stop(timeout=2)
+
+    def rec_devices(self, q):
+        at, cached = self.devices_cache
+        if not cached or time.time() - at > 30 or q.get("refresh"):
+            r = subprocess.run([sys.executable, os.path.join(APP_DIR, "recorder.py"), "--list"], cwd=APP_DIR,
+                               capture_output=True, timeout=30, creationflags=engines.NO_WINDOW)
+            try:
+                cached = json.loads(r.stdout.decode("utf-8", "replace"))
+            except ValueError:
+                raise ApiError("No se pudieron leer los dispositivos de audio: "
+                               + r.stderr.decode("utf-8", "replace")[-300:])
+            self.devices_cache = (time.time(), cached)
+        st = self.settings.get()
+        mic, sys_dev = st.get("rec_mic") or "default", st.get("rec_sys") or "all"
+        # si lo guardado ya no esta conectado, se propone el predeterminado (no un dispositivo fantasma)
+        if mic not in ("default", "none") and not any(m["id"] == mic for m in cached["mics"]):
+            mic = "default"
+        if sys_dev not in ("all", "default", "none") and not any(o["id"] == sys_dev for o in cached["outputs"]):
+            sys_dev = "all"
+        return dict(cached, mic=mic, sys=sys_dev, live=bool(st.get("rec_live", True)))
+
+    def rec_status(self, q):
+        r, m = self.rec, self.monitor
+        if q.get("monitor"):
+            self.monitor_seen = time.time()
+        out = {"recording": bool(r and r.alive()), "monitor": bool(m and m.alive()), "meeting": self.meeting,
+               "build": BUILD}
+        if r and r.alive():
+            out.update(path=rel_of(r.path), started=r.started, **r.status)
+        elif m and m.alive():
+            out.update(m.status)
+        return out
+
+    def rec_monitor(self, b):
+        """Medidores de nivel para probar micro y audio del ordenador antes de grabar."""
+        with self.rec_lock:
+            old, self.monitor = self.monitor, None
+            if old:
+                old.stop(timeout=2)
+            if b.get("stop") or (self.rec and self.rec.alive()):
+                return {"ok": True}
+            self.monitor_seen = time.time()
+            self.monitor = RecorderProcess(None, b.get("mic"), b.get("sys"))
+        return {"ok": True}
+
+    def rec_start(self, b):
+        with self.rec_lock:
+            if self.rec and self.rec.alive():
+                raise ApiError("Ya hay una grabación en marcha.")
+            mic, sys_dev = b.get("mic") or "default", b.get("sys") or "default"
+            if mic == "none" and sys_dev == "none":
+                raise ApiError("Elige al menos el micrófono o el audio del ordenador.")
+            folder = safe(b.get("folder", ""), "dir")
+            if in_app_dir(folder):
+                raise ApiError("No se puede grabar ahí")
+            name = time.strftime("%Y-%m-%d %H-%M-%S") + (f" - {clean_name(b['name'])}" if b.get("name") else "")
+            path = os.path.join(folder, name + ".wav")
+            if os.path.exists(path):
+                raise ApiError("Ya existe un archivo con ese nombre.")
+            if self.monitor:
+                self.monitor.stop(timeout=2)
+                self.monitor = None
+            rel = rel_of(path)
+            # la grabacion es de la app: mientras dure, el vigilante no arranca el directo por su cuenta
+            # (si se eligio "solo grabar", no se transcribe hasta que tu lo pidas)
+            self.jobs.claimed.add(rel)
+            started = False
+            try:
+                self.rec = RecorderProcess(path, mic, sys_dev)
+                for _ in range(60):  # espera a que exista el archivo con su cabecera
+                    if os.path.isfile(path) and os.path.getsize(path) >= 44 or not self.rec.alive():
+                        break
+                    time.sleep(0.05)
+                if not self.rec.alive():
+                    raise ApiError("La grabadora no ha podido arrancar (ver %LOCALAPPDATA%\\AudiosApp\\recorder.log).")
+                preset = b.get("preset") or self.settings.get().get("live_preset") or "medium"
+                v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
+                if v:  # antes de arrancar el directo, para que ya use ese vocabulario
+                    self.notes_save({"path": rel, "props": {"proyecto": v["project"], "workstream": v["name"]}})
+                def upd(d):
+                    if "vocab" in b:
+                        d["rec_vocab"] = v["id"] if v else ""
+                    # la proxima vez (y con Ctrl+Alt+R) se graba en la misma carpeta
+                    d["rec_folder"] = rel_of(folder)
+                    if v:
+                        d["project_folders"] = dict(d.get("project_folders") or {}, **{v["project"]: rel_of(folder)})
+                    # "solo grabar" y "sin micro" son para una grabacion concreta: no se quedan como
+                    # predeterminado (la siguiente, y Ctrl+Alt+R, vuelven a transcribir y a grabar el micro)
+                    if mic != "none":
+                        d["rec_mic"] = mic
+                    d.update(rec_sys=sys_dev, live_preset=preset if preset in LIVE_PRESETS else "medium")
+                    if "language" in b:  # el directo usa el idioma guardado
+                        d["language"] = b.get("language") or ""
+                self.settings.update(upd)
+                self.library.at = 0
+                if b.get("live"):
+                    self.jobs.start_live(rel, preset)
+                started = True
+            finally:
+                if not started:
+                    self.jobs.claimed.discard(rel)
+        log(f"● Grabando: {rel}" + (f" [{v['project']} · {v['name']}]" if v else "")
+            + ("" if b.get("live") else " (solo grabar, sin transcribir)"))
+        return {"path": rel, "workstream": f"{v['project']} · {v['name']}" if v else None}
+
+    def rec_mic(self, b):
+        """Silenciar / reactivar mi micro a mitad de grabacion (se graba silencio en su lugar)."""
+        r = self.rec
+        if not r or not r.alive():
+            raise ApiError("No hay ninguna grabación en marcha.")
+        mute = bool(b.get("mute"))
+        if not r.send("mute" if mute else "unmute"):
+            raise ApiError("No se pudo hablar con la grabadora.")
+        r.status["mic_muted"] = mute  # para que la interfaz lo vea al momento
+        log(f"   micro {'silenciado' if mute else 'reactivado'}")
+        return {"mic_muted": mute}
+
+    def rec_stop(self, b):
+        with self.rec_lock:
+            r = self.rec
+            if not r or not r.alive():
+                raise ApiError("No hay ninguna grabación en marcha.")
+            secs = r.stop()
+            self.rec = None
+            self.jobs.claimed.discard(rel_of(r.path))
+        self.library.at = 0
+        log(f"■ Grabación parada: {rel_of(r.path)} ({secs / 60:.1f} min)")
+        return {"path": rel_of(r.path), "seconds": secs}
+
+    # --- GET
+    def config(self, q):
+        st = self.settings.get()
+        presets = []
+        for p in engines.PRESETS:
+            d = {k: v for k, v in p.items()}
+            d["speed"] = st["speed"].get(p["id"], p["speed"])
+            d["cached"] = p["engine"] == "cloud" or engines.model_cached(p["model"])
+            presets.append(d)
+        cloud = dict(st["cloud"])
+        cloud["has_key"] = bool(cloud.get("api_key"))
+        cloud["api_key"] = masked(cloud.get("api_key"))
+        return {"root": ROOT, "version": VERSION, "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
+                "preset": st["preset"], "language": st["language"], "threads": st["threads"],
+                "prompt": st["prompt"], "cpu_count": os.cpu_count(),
+                "live_auto": bool(st.get("live_auto")), "live_preset": st.get("live_preset") or "medium",
+                "live_final_pass": bool(st.get("live_final_pass", True)),
+                "hotkey": {"ok": self.hotkey.ok, "error": self.hotkey.error, "keys": "Ctrl+Alt+R"},
+                "favorites": st.get("favorites") or [], "folder_icons": st.get("folder_icons") or {},
+                "links": [{"rel": LINK + k, "name": l["name"], "path": l["path"]} for k, l in LINKS.items()],
+                "rec_folder": st.get("rec_folder") or "", "project_folders": st.get("project_folders") or {},
+                "meeting_detect": bool(st.get("meeting_detect", True)),
+                "summary": {"auto": bool(st.get("summary_auto", True)), "model": st.get("summary_model"),
+                            "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
+                            "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()}}
+
+    def tree(self, q):
+        tree, version = self.library.refresh(max_age=1.0)
+        if q.get("v") == version:
+            return {"version": version, "same": True}
+        return {"version": version, "tree": strip_private(tree)}
+
+    def transcript(self, q):
+        abs_path = safe(q.get("path"), "file")
+        out = public_transcript(self.transcripts.load(os.path.splitext(abs_path)[0]))
+        out["has_backup"] = os.path.isdir(backup_dir(rel_of(abs_path)))
+        return out
+
+    # --- resumen con IA
+    def summary_get(self, q):
+        abs_path = safe(q.get("path"), "file")
+        p = os.path.splitext(abs_path)[0] + ".resumen.md"
+        if not os.path.isfile(p):
+            return {"exists": False, "ready": self.jobs.summary_ready()}
+        text, meta = read_text(p), {}
+        lines = text.split("\n")
+        if lines and lines[0].strip() == "---":
+            end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
+            for l in lines[1:end]:
+                k, _, v = l.partition(":")
+                meta[k.strip()] = v.strip()
+            text = "\n".join(lines[end + 1:]).strip()
+        return {"exists": True, "text": text, "meta": meta, "ready": self.jobs.summary_ready()}
+
+    def summarize(self, b):
+        return {"id": self.jobs.submit_summary(b.get("path"))}
+
+    # --- notas y propiedades (estilo Notion)
+    def notes_get(self, q):
+        abs_path = safe(q.get("path"), "file")
+        md = os.path.splitext(abs_path)[0] + ".md"
+        if not os.path.isfile(md):
+            return {"props": {}, "body": "", "mtime": 0}
+        props, body = parse_notes(read_text(md))
+        return {"props": props, "body": body, "mtime": os.path.getmtime(md)}
+
+    def notes_save(self, b):
+        """Guarda las notas y/o propiedades (solo lo que venga en la peticion)."""
+        abs_path = safe(b.get("path"), "file")
+        md = os.path.splitext(abs_path)[0] + ".md"
+        with self.notes_lock:
+            props, body = parse_notes(read_text(md)) if os.path.isfile(md) else ({}, "")
+            for k, v in (b.get("props") or {}).items():
+                if k in NOTE_KEYS:
+                    if k == "etiquetas":
+                        v = [" ".join(str(t).split()) for t in (v or []) if str(t).strip()]
+                    props[k] = v
+            if "body" in b:
+                body = b.get("body") or ""
+            text = dump_notes(props, body)
+            if text:
+                save_text(md, text, "utf-8")
+            elif os.path.isfile(md):
+                os.remove(md)  # sin notas ni propiedades: no se deja un archivo vacio
+        if {"proyecto", "workstream"} & set(b.get("props") or {}):
+            self.jobs.refresh_prompt(rel_of(abs_path))
+        self.library.at = 0
+        return {"props": props, "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
+
+    def tags(self, q):
+        self.library.refresh(max_age=5)
+        seen = {}
+        for a in self.library.flat:
+            for t in (a.get("props") or {}).get("etiquetas") or []:
+                seen[t] = seen.get(t, 0) + 1
+        return {"tags": sorted(seen, key=lambda t: (-seen[t], fold(t)))}
+
+    # --- carpetas vinculadas (fuera de Audios)
+    def _load_links(self):
+        LINKS.clear()
+        for l in self.settings.get().get("links") or []:
+            LINKS[link_id(l["path"])] = {"name": l.get("name") or os.path.basename(l["path"]), "path": l["path"]}
+
+    def _save_links(self):
+        self.settings.update(lambda d: d.update(links=[dict(l) for l in LINKS.values()]))
+        self.library.at = 0
+
+    def link_pick(self, b):
+        """Abre el selector de carpetas de Windows (en este PC) y devuelve la que elijas."""
+        script = ("import sys, tkinter as tk\nfrom tkinter import filedialog\n"
+                  "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
+                  "p = filedialog.askdirectory(parent=r, title=sys.argv[1], mustexist=True,"
+                  " initialdir=sys.argv[2] or None)\nsys.stdout.write(p or '')\n")
+        start = os.path.dirname(ROOT) if not LINKS else os.path.dirname(next(iter(LINKS.values()))["path"])
+        try:
+            r = subprocess.run([sys.executable, "-c", script, "Carpeta donde guardar las grabaciones", start],
+                               capture_output=True, timeout=900, creationflags=engines.NO_WINDOW)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise ApiError(f"No se pudo abrir el selector de carpetas ({e.__class__.__name__}); pega la ruta a mano.")
+        path = r.stdout.decode("utf-8", "replace").strip()
+        if r.returncode != 0 and not path:
+            raise ApiError("No se pudo abrir el selector de carpetas; pega la ruta a mano.")
+        return {"path": os.path.normpath(path) if path else ""}
+
+    def link_add(self, b):
+        path = os.path.normpath(os.path.expandvars((b.get("path") or "").strip().strip('"')))
+        if not os.path.isabs(path) or not os.path.isdir(path):
+            raise ApiError("Esa carpeta no existe: " + path)
+        if os.path.splitdrive(path)[1] in ("", os.sep):
+            raise ApiError("Elige una carpeta, no una unidad entera.")
+        if _inside(path, ROOT):
+            raise ApiError("Esa carpeta ya está dentro de Notas: no hace falta vincularla.")
+        if _inside(ROOT, path) or _inside(os.path.expanduser("~"), path):
+            raise ApiError("Esa carpeta es demasiado grande (contiene la de Notas o tu usuario): elige una más concreta.")
+        lid = link_id(path)
+        for other, l in LINKS.items():
+            if other != lid and (_inside(path, l["path"]) or _inside(l["path"], path)):
+                raise ApiError(f"Se solapa con la carpeta ya vinculada «{l['name']}».")
+        if lid not in LINKS:
+            LINKS[lid] = {"name": clean_name(b.get("name") or os.path.basename(path)), "path": path}
+            self._save_links()
+            log(f"🔗 carpeta vinculada: {path}")
+        return {"rel": LINK + lid, "name": LINKS[lid]["name"]}
+
+    def link_remove(self, b):
+        """Deja de mostrarla en Notas. No borra ni mueve nada de la carpeta."""
+        rel = b.get("path") or ""
+        lid = rel[len(LINK):].split("/")[0] if rel.startswith(LINK) else ""
+        if lid not in LINKS:
+            raise ApiError("Esa carpeta no está vinculada.")
+        if any(j["path"].startswith(LINK + lid) and j["status"] in ("queued", "running") for j in self.jobs.snapshot()) \
+                or (self.rec and self.rec.alive() and rel_of(self.rec.path).startswith(LINK + lid)):
+            raise ApiError("Se está grabando o transcribiendo algo de esa carpeta; espera a que termine.")
+        l = LINKS.pop(lid)
+        self._save_links()
+        self.settings.update(lambda d: d.update(
+            favorites=[f for f in d.get("favorites", []) if not f["path"].startswith(LINK + lid)],
+            rec_folder="" if (d.get("rec_folder") or "").startswith(LINK + lid) else d.get("rec_folder", ""),
+            project_folders={k: v for k, v in (d.get("project_folders") or {}).items() if not v.startswith(LINK + lid)}))
+        log(f"🔗 carpeta desvinculada (no se ha tocado nada): {l['path']}")
+        return {"ok": True}
+
+    def rec_folder_for(self, v, st):
+        """Donde se graba: la ultima carpeta usada para ese proyecto o, si no hay, la ultima usada."""
+        for rel in ((st.get("project_folders") or {}).get(v["project"]) if v else None, st.get("rec_folder")):
+            if rel is None:
+                continue
+            try:
+                safe(rel, "dir")
+                return rel
+            except ApiError:
+                continue
+        return ""
+
+    # --- vocabulario por workstream
+    def vocab(self, q):
+        st = self.settings.get()
+        lang = q.get("language", st.get("language") or "")
+        items = []
+        for v in list_vocab():
+            try:
+                items.append(vocab_info(v, lang))
+            except OSError:
+                pass  # archivo a medio guardar o solo en OneDrive sin conexion
+        return {"items": items, "last": st.get("rec_vocab") or "", "general": bool(st.get("prompt"))}
+
+    def vocab_check(self, b):
+        return vocab_fit(b.get("terms") or "", b.get("language", self.settings.get().get("language") or ""))
+
+    def vocab_save(self, b):
+        """Crear o editar un tema (y con el, un proyecto nuevo): <proyecto>/Vocabulario/<workstream>.txt."""
+        project, name = clean_name(b.get("project")), clean_name(b.get("name"))
+        terms = engines.split_terms(b.get("terms") or "")
+        if not terms:
+            raise ApiError("Escribe al menos un término (separados por comas).")
+        desc = " ".join((b.get("desc") or "").split())
+        old = find_vocab(None, None, b["id"]) if b.get("id") else None
+        same = next((v for v in list_vocab() if fold(v["project"]) == fold(project)), None)
+        # proyecto que ya existe: en su carpeta de vocabulario; si es nuevo, Notas/<proyecto>/Vocabulario
+        vdir = os.path.dirname(same["_abs"]) if same else os.path.join(ROOT, project, "Vocabulario")
+        path = os.path.join(vdir, name + ".txt")
+        moved = old and os.path.normcase(old["_abs"]) != os.path.normcase(path)
+        if (not old or moved) and os.path.exists(path):
+            raise ApiError(f"Ya hay un tema «{name}» en {project}.")
+        os.makedirs(vdir, exist_ok=True)
+        save_text(path, (f"# {desc}\n" if desc else "") + ", ".join(terms) + "\n", "utf-8")
+        if moved:  # se ha renombrado (o cambiado de proyecto): fuera el archivo anterior
+            os.remove(old["_abs"])
+        self.library.at = 0
+        log(f"🔤 vocabulario guardado: {project} · {name} ({len(terms)} términos)")
+        return {"id": rel_of(path)}
+
+    def vocab_delete(self, b):
+        v = find_vocab(None, None, b.get("id"))
+        if not v:
+            raise ApiError("Ese tema ya no existe.")
+        to_recycle_bin([v["_abs"]])  # a la papelera: se puede recuperar
+        self.settings.update(lambda d: d.update(rec_vocab="" if d.get("rec_vocab") == v["id"] else d.get("rec_vocab", "")))
+        self.library.at = 0
+        log(f"🗑 vocabulario a la papelera: {v['project']} · {v['name']}")
+        return {"ok": True}
+
+    # --- favoritos e iconos de carpeta
+    def favorite(self, b):
+        item = {"kind": b.get("kind"), "path": b.get("path")}
+        if item["kind"] not in ("a", "f", "d"):
+            raise ApiError("Tipo no válido")
+
+        def upd(d):
+            favs = [f for f in d.get("favorites", []) if f != item]
+            if b.get("on"):
+                favs.append(item)
+            d["favorites"] = favs
+        self.settings.update(upd)
+        return {"favorites": self.settings.get()["favorites"]}
+
+    def folder_icon(self, b):
+        safe(b.get("path"), "dir")
+        icon = (b.get("icon") or "").strip()[:4]
+
+        def upd(d):
+            icons = dict(d.get("folder_icons", {}))
+            if icon:
+                icons[b["path"]] = icon
+            else:
+                icons.pop(b["path"], None)
+            d["folder_icons"] = icons
+        self.settings.update(upd)
+        return {"ok": True}
+
+    def _rename_refs(self, old, new, folder=False):
+        """Favoritos e iconos siguen al audio/carpeta cuando se mueve o renombra."""
+        def moved(p):
+            if p == old:
+                return new
+            if folder and p.startswith(old + "/"):
+                return new + p[len(old):]
+            return p
+
+        def upd(d):
+            d["favorites"] = [dict(f, path=moved(f["path"])) for f in d.get("favorites", [])]
+            d["folder_icons"] = {moved(k): v for k, v in d.get("folder_icons", {}).items()}
+        self.settings.update(upd)
+
+    # --- eliminar (a la papelera) e importar
+    def delete(self, b):
+        p = safe(b.get("path"), "file")
+        rel = rel_of(p)
+        a = self.library.find(rel)
+        if self.jobs.active_for(rel) or (a and a.get("recording")) or (self.rec and self.rec.alive()
+                                                                        and os.path.normcase(self.rec.path) == os.path.normcase(p)):
+            raise ApiError("Se está grabando o transcribiendo; espera a que termine.")
+        group = [p]
+        stem, ext = os.path.splitext(p)
+        if ext.lower() in AUDIO_EXT:
+            group += [stem + e for e in SIDE_EXTS if os.path.isfile(stem + e)]
+        for attempt in range(8):  # el reproductor puede tener el audio abierto un instante
+            try:
+                to_recycle_bin(group)
+                break
+            except ApiError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.3)
+        COMPLETE.set(rel, False)
+        shutil.rmtree(backup_dir(rel), ignore_errors=True)
+        self.settings.update(lambda d: d.update(favorites=[f for f in d.get("favorites", []) if f["path"] != rel]))
+        self.library.at = 0
+        log(f"🗑 {rel} → papelera ({len(group)} archivos)")
+        return {"ok": True, "count": len(group)}
+
+    def import_file(self, handler, q):
+        """Subir un audio (o .txt/.md) arrastrandolo a la ventana: se copia a la carpeta indicada."""
+        folder = safe(q.get("folder", ""), "dir")
+        if in_app_dir(folder):
+            raise ApiError("No se puede guardar ahí")
+        name = clean_name(os.path.basename(q.get("name") or ""))
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in AUDIO_EXT | TEXT_EXT:
+            raise ApiError("Solo audios (wav, mp3, m4a…) o textos (.txt, .md, .srt)")
+        target, n = os.path.join(folder, name), 2
+        while os.path.exists(target):
+            target, n = os.path.join(folder, f"{stem} ({n}){ext}"), n + 1
+        remaining = int(handler.headers.get("Content-Length") or 0)
+        tmp = target + ".subiendo"
+        with open(tmp, "wb") as f:
+            while remaining > 0:
+                chunk = handler.rfile.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                f.write(chunk)
+                remaining -= len(chunk)
+        if remaining > 0:
+            os.remove(tmp)
+            raise ApiError("La subida se cortó.")
+        os.replace(tmp, target)
+        self.library.at = 0
+        log(f"⤓ importado: {rel_of(target)}")
+        return {"path": rel_of(target)}
+
+    # --- deteccion de reunion (como Notion): Teams/Zoom/… usando el micro y sin grabar
+    MEETING_APPS = (("msteams", "Teams"), ("teams.exe", "Teams"), ("zoom", "Zoom"), ("webex", "Webex"),
+                    ("slack", "Slack"), ("skype", "Skype"), ("chrome.exe", "el navegador"),
+                    ("msedge.exe", "el navegador"), ("firefox.exe", "el navegador"))
+
+    @classmethod
+    def mic_meeting_app(cls):
+        """App de reuniones que tiene ahora mismo el micro abierto (segun el registro de privacidad)."""
+        import winreg
+        base = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+        for sub in (base, base + r"\NonPackaged"):
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub)
+            except OSError:
+                continue
+            with key:
+                i = 0
+                while True:
+                    try:
+                        name = winreg.EnumKey(key, i)
+                    except OSError:
+                        break
+                    i += 1
+                    low = name.lower()
+                    app = next((label for k, label in cls.MEETING_APPS if k in low), None)
+                    if not app:
+                        continue
+                    try:
+                        with winreg.OpenKey(key, name) as sk:
+                            start = winreg.QueryValueEx(sk, "LastUsedTimeStart")[0]
+                            stop = winreg.QueryValueEx(sk, "LastUsedTimeStop")[0]
+                    except OSError:
+                        continue
+                    if start and not stop:  # en uso ahora mismo
+                        return app
+        return None
+
+    def _meeting_watch(self):
+        notified = None
+        while True:
+            time.sleep(8)
+            try:
+                app = self.mic_meeting_app()
+                self.meeting = app
+                recording = bool(self.rec and self.rec.alive())
+                if app and not recording and notified != app and self.settings.get().get("meeting_detect", True):
+                    notified = app
+                    notify("¿Quieres tomar notas de la sesión?", "Pulsa Ctrl+Alt+R para empezar a tomar notas.")
+                    log(f"   reunión detectada ({app}): aviso enviado")
+                if not app:
+                    notified = None
+            except Exception:
+                pass
+
+    # --- edicion de transcripciones
+    def save_transcript(self, b):
+        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver)."""
+        abs_path = safe(b.get("path"), "file")
+        rel, base = rel_of(abs_path), os.path.splitext(abs_path)[0]
+        segs = []
+        for s in b.get("segments") or []:
+            text = " ".join(str(s.get("text") or "").split())
+            if text:
+                segs.append((s.get("start"), s.get("end"), text))
+        job = self.jobs.active_for(rel)
+        if job and job.live:
+            return self._save_live_edits(job, segs, base)
+        if job:
+            raise ApiError("Se está haciendo el repaso final (1–2 min por hora de reunión); podrás editar en cuanto termine."
+                           if job.final_pass else "Se está transcribiendo; podrás editar cuando termine.")
+        if not segs:
+            raise ApiError("La transcripción no puede quedar vacía.")
+        bdir = backup_dir(rel)
+        if not os.path.isdir(bdir):
+            os.makedirs(bdir)
+            for ext in (".srt", ".txt"):
+                if os.path.isfile(base + ext):
+                    shutil.copyfile(base + ext, os.path.join(bdir, "original" + ext))
+            with open(os.path.join(bdir, "meta.json"), "w", encoding="utf-8") as f:
+                json.dump({"path": rel, "at": time.time()}, f, ensure_ascii=False)
+        if os.path.isfile(base + ".srt") and all(a is not None and e is not None for a, e, _ in segs):
+            write_outputs(abs_path, [(float(a), float(e), t) for a, e, t in segs])
+        else:  # transcripcion solo en .txt (sin tiempos)
+            save_text(base + ".txt", "\n".join(t for _, _, t in segs) + "\n", "utf-8-sig")
+        self.library.at = 0
+        mt = max((os.path.getmtime(base + e) for e in (".txt", ".srt") if os.path.isfile(base + e)), default=0)
+        return {"ok": True, "tx_mtime": mt, "count": len(segs)}
+
+    def _save_live_edits(self, job, segs, base):
+        """Corregir mientras se transcribe en directo: se guardan las diferencias con lo que dio Whisper
+        y se aplican al escribir cada trozo nuevo, asi el directo no pisa lo corregido."""
+        if not job.out:
+            raise ApiError("El directo aún está empezando; prueba en unos segundos.")
+        sent = {seg_key(a): t for a, _, t in segs if a is not None}
+        last = max(sent) if sent else -1.0  # lo que llego despues aun no lo veias: no se toca
+        with job.edit_lock:
+            for a, _, t in job.raw:
+                k = seg_key(a)
+                if k in sent:
+                    if sent[k] != " ".join(t.split()):
+                        job.edits[k] = sent[k]
+                    else:
+                        job.edits.pop(k, None)
+                elif k <= last:
+                    job.edits[k] = ""  # la dejaste vacia: frase borrada
+            job.out.write(apply_edits(job.raw, job.edits))
+        self.library.at = 0
+        mt = max((os.path.getmtime(base + e) for e in (".txt", ".srt") if os.path.isfile(base + e)), default=0)
+        return {"ok": True, "tx_mtime": mt, "count": len(segs), "live": True}
+
+    def restore_transcript(self, b):
+        abs_path = safe(b.get("path"), "file")
+        rel, base = rel_of(abs_path), os.path.splitext(abs_path)[0]
+        bdir = backup_dir(rel)
+        if not os.path.isdir(bdir):
+            raise ApiError("No hay copia del original de esta transcripción.")
+        if self.jobs.active_for(rel):
+            raise ApiError("Se está transcribiendo; espera a que termine.")
+        for ext in (".srt", ".txt"):
+            src = os.path.join(bdir, "original" + ext)
+            if os.path.isfile(src):
+                with open(src, "rb") as f:
+                    write_bytes(base + ext, f.read())
+        shutil.rmtree(bdir, ignore_errors=True)
+        self.library.at = 0
+        log(f"↺ {rel}: transcripción original restaurada")
+        return {"ok": True}
+
+    def doc(self, q):
+        abs_path = safe(q.get("path"), "file")
+        ext = os.path.splitext(abs_path)[1].lower()
+        if ext not in TEXT_EXT:
+            raise ApiError("Tipo de archivo no soportado")
+        text = read_text(abs_path)
+        out = {"name": os.path.basename(abs_path), "ext": ext, "text": text}
+        if ext == ".srt":
+            out["segments"] = parse_srt(text)
+        return out
+
+    def search(self, q):
+        query = fold(q.get("q", "")).strip()
+        terms = [t for t in query.split() if t]
+        if not terms or len(query) < 2:
+            return {"results": []}
+        self.library.refresh(max_age=5)
+        results = []
+        for a in self.library.flat:
+            data = self.transcripts.load(os.path.splitext(a["_abs"])[0]) if (a["txt"] or a["srt"]) else None
+            hits = [s for s in data["segments"] if all(t in s["_f"] for t in terms)] if data else []
+            if a.get("_sum"):  # y en el resumen con IA
+                try:
+                    hits = [{"start": None, "text": "✨ " + l} for l, f in self.transcripts.doc_lines(a["_sum"])
+                            if all(t in f for t in terms) and not l.startswith(("---", "modelo:", "generado:"))] + hits
+                except OSError:
+                    pass
+            if a.get("_md"):  # tambien en las notas y propiedades (titulo, etiquetas, participantes)
+                try:
+                    hits = [{"start": None, "text": "📝 " + l} for l, f in self.transcripts.doc_lines(a["_md"])
+                            if all(t in f for t in terms) and l.strip() != "---"] + hits
+                except OSError:
+                    pass
+            in_name = all(t in fold(a["path"]) for t in terms)
+            if hits or in_name:
+                results.append({"kind": "audio", "path": a["path"], "name": a["name"], "folder": a["folder"],
+                                "date": a["date"], "label": a["label"], "count": len(hits),
+                                "hits": [{"start": s["start"], "text": s["text"]} for s in hits[:6]]})
+        tree, _ = self.library.refresh(max_age=5)
+        stack = [tree]
+        while stack:
+            node = stack.pop()
+            stack.extend(node["folders"])
+            for d in node["docs"]:
+                if d["size"] > 3_000_000:
+                    continue
+                try:
+                    lines = self.transcripts.doc_lines(safe(d["path"]))
+                except OSError:
+                    continue
+                hits = [l for l, f in lines if all(t in f for t in terms)]
+                if hits:
+                    results.append({"kind": "doc", "path": d["path"], "name": d["name"], "folder": node["path"],
+                                    "count": len(hits), "hits": [{"start": None, "text": l[:300]} for l in hits[:6]]})
+        results.sort(key=lambda r: -r["count"])
+        return {"results": results[:100], "total": sum(r["count"] for r in results)}
+
+    def jobs_list(self, q):
+        return {"jobs": self.jobs.snapshot()}
+
+    # --- POST
+    def transcribe(self, b):
+        paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
+        preset = b.get("preset") or self.settings.get()["preset"]
+        ids = self.jobs.submit(paths, preset, b.get("language"), resume=bool(b.get("resume")))
+        self.settings.update(lambda d: d.update(preset=preset, language=b.get("language") or ""))
+        return {"added": ids}
+
+    def cancel(self, b):
+        return {"ok": self.jobs.cancel(b.get("id"))}
+
+    def start_live(self, b):
+        if b.get("preset"):
+            self.jobs._check_live_preset(b["preset"])
+            self.settings.update(lambda d: d.update(live_preset=b["preset"]))
+        return {"id": self.jobs.start_live(b.get("path"), b.get("preset"))}
+
+    def live_model(self, b):
+        return self.jobs.set_live_preset(b.get("id"), b.get("preset"), bool(b.get("restart")))
+
+    def clear_jobs(self, b):
+        self.jobs.clear()
+        return {"ok": True}
+
+    def move(self, b):
+        src = safe(b.get("path"), "file")
+        dest_dir = safe(b.get("folder", ""), "dir")
+        if in_app_dir(dest_dir):
+            raise ApiError("No se puede mover ahí")
+        a = self.library.find(b.get("path"))
+        if a and a.get("recording"):
+            raise ApiError("OBS sigue grabando ese audio; muévelo cuando pare la grabación.")
+        if self.jobs.active_for(b.get("path")):
+            raise ApiError("Ese audio se está transcribiendo; espera a que termine.")
+        stem, ext = os.path.splitext(os.path.basename(src))
+        new_stem = clean_name(b["name"]) if b.get("name") else stem
+        group = [src]
+        if ext.lower() in AUDIO_EXT:
+            for e in SIDE_EXTS:
+                sib = os.path.join(os.path.dirname(src), stem + e)
+                if os.path.isfile(sib):
+                    group.append(sib)
+        moves = []
+        for f in group:
+            # lo que va detras del nombre (.txt, .srt, .md, .resumen.md): asi .resumen.md no acaba en .md
+            target = os.path.join(dest_dir, new_stem + os.path.basename(f)[len(stem):])
+            if os.path.normcase(target) != os.path.normcase(f) and os.path.exists(target):
+                raise ApiError("Ya existe un archivo con ese nombre en el destino: " + os.path.basename(target))
+            moves.append((f, target))
+        for f, target in moves:
+            if f == target:
+                continue
+            for attempt in range(12):  # el reproductor u OneDrive pueden tenerlo abierto un instante
+                try:
+                    shutil.move(f, target)
+                    break
+                except PermissionError:
+                    if attempt == 11:
+                        raise ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). "
+                                       "Prueba otra vez en unos segundos.")
+                    time.sleep(0.25)
+        self.library.at = 0
+        COMPLETE.moved(rel_of(src), rel_of(moves[0][1]))
+        self._rename_refs(rel_of(src), rel_of(moves[0][1]))
+        old_b, new_b = backup_dir(rel_of(src)), backup_dir(rel_of(moves[0][1]))
+        if os.path.isdir(old_b) and not os.path.exists(new_b):  # la copia del original viaja con el audio
+            os.replace(old_b, new_b)
+        log(f"↪ {rel_of(src)}  →  {rel_of(moves[0][1])}")
+        return {"path": rel_of(moves[0][1])}
+
+    def mkdir(self, b):
+        parent = safe(b.get("parent", ""), "dir")
+        p = os.path.join(parent, clean_name(b.get("name")))
+        if os.path.exists(p):
+            raise ApiError("Ya existe esa carpeta")
+        os.makedirs(p)
+        self.library.at = 0
+        return {"path": rel_of(p)}
+
+    def rename_folder(self, b):
+        if is_link_root(b.get("path")):  # carpeta vinculada: solo cambia el nombre que se ve en Notas
+            lid = b["path"].strip("/")[len(LINK):]
+            if lid not in LINKS:
+                raise ApiError("Esa carpeta ya no está vinculada.")
+            LINKS[lid]["name"] = clean_name(b.get("name"))
+            self._save_links()
+            return {"path": b["path"].strip("/")}
+        src = safe(b.get("path"), "dir")
+        if os.path.normcase(src) == os.path.normcase(ROOT) or in_app_dir(src):
+            raise ApiError("Esa carpeta no se puede renombrar")
+        rel = rel_of(src)
+        if any(j["path"].startswith(rel + "/") and j["status"] in ("queued", "running") for j in self.jobs.snapshot()):
+            raise ApiError("Hay audios de esta carpeta transcribiéndose; espera a que terminen.")
+        dst = os.path.join(os.path.dirname(src), clean_name(b.get("name")))
+        if os.path.normcase(dst) != os.path.normcase(src) and os.path.exists(dst):
+            raise ApiError("Ya existe una carpeta con ese nombre")
+        os.rename(src, dst)
+        self._rename_refs(rel_of(src), rel_of(dst), folder=True)
+        self.library.at = 0
+        return {"path": rel_of(dst)}
+
+    def reveal(self, b):
+        p = safe(b.get("path", ""))
+        if os.path.isdir(p):
+            subprocess.Popen(["explorer", p])
+        else:
+            subprocess.Popen(f'explorer /select,"{p}"')
+        return {"ok": True}
+
+    def open_file(self, b):
+        p = safe(b.get("path"))
+        if b.get("ext"):
+            p = os.path.splitext(p)[0] + b["ext"]
+        ext = os.path.splitext(p)[1].lower()
+        if not os.path.isfile(p) or ext not in TEXT_EXT | AUDIO_EXT:
+            raise ApiError("No se puede abrir ese archivo")
+        os.startfile(p)
+        return {"ok": True}
+
+    def save_settings(self, b):
+        def upd(d):
+            for k in ("preset", "language", "prompt"):
+                if k in b:
+                    d[k] = b[k] or ""
+            s = b.get("summary") or {}
+            if "auto" in s:
+                d["summary_auto"] = bool(s["auto"])
+            if s.get("model"):
+                d["summary_model"] = s["model"].strip()
+            if s.get("lang") in engines.SUMMARY_LANGS:
+                d["summary_lang"] = s["lang"]
+            if "extra" in s:
+                d["summary_extra"] = (s["extra"] or "").strip()[:500]
+            if "meeting_detect" in b:
+                d["meeting_detect"] = bool(b["meeting_detect"])
+            if "live_auto" in b:
+                d["live_auto"] = bool(b["live_auto"])
+            if "live_final_pass" in b:
+                d["live_final_pass"] = bool(b["live_final_pass"])
+            if b.get("live_preset") in LIVE_PRESETS:
+                d["live_preset"] = b["live_preset"]
+            if "threads" in b:
+                d["threads"] = max(1, min(int(b["threads"] or default_threads()), os.cpu_count() or 16))
+            c = b.get("cloud") or {}
+            for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
+                if k in c:
+                    d["cloud"][k] = (c[k] or "").strip()
+            # 20 min de FLAC 16 kHz ~ 22 MB: por debajo del limite de 25 MB por archivo de las APIs
+            for k, lo, hi in (("chunk_minutes", 2, 20), ("parallel", 1, 8)):
+                if k in c:
+                    d["cloud"][k] = max(lo, min(int(c[k] or lo), hi))
+            if c.get("api_key") and "…" not in c["api_key"] and "•" not in c["api_key"]:
+                if not d["cloud"].get("api_key"):  # primera key: la nube pasa a ser lo predeterminado
+                    d["preset"] = d["live_preset"] = "nube"
+                d["cloud"]["api_key"] = c["api_key"].strip()
+            if c.get("clear_key"):
+                d["cloud"]["api_key"] = ""
+        self.settings.update(upd)
+        return self.config({})
+
+    def test_cloud(self, b):
+        try:
+            secs = self.jobs.cloud.test(self.settings.get()["cloud"])
+        except engines.EngineError as e:
+            raise ApiError(str(e))
+        return {"ok": True, "seconds": round(secs, 2)}
+
+    def export_package(self, b):
+        dest = os.path.join(desktop_dir(), "Notas - instalador.zip")
+        vocab = [(v["_abs"], "Notas/" + v["id"]) for v in list_vocab()] if b.get("vocab") else []
+        try:
+            n = build_package(dest, vocab)
+        except OSError as e:
+            raise ApiError(f"No se pudo crear el paquete: {e}")
+        subprocess.Popen(f'explorer /select,"{dest}"')
+        return {"ok": True, "path": dest, "files": n, "size": os.path.getsize(dest), "vocab": len(vocab)}
+
+
+# ----------------------------------------------------------------------------- HTTP
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "Notas/1.0"
+    app = None
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def _host_ok(self):
+        return self.headers.get("Host", "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
+
+    def _send(self, code, body, ctype, extra=None):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+
+    def do_GET(self):
+        if not self._host_ok():
+            return self._send(403, b"forbidden", "text/plain")
+        u = urlparse(self.path)
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        a = self.app
+        routes = {"/api/ping": lambda q: {"app": "audios"}, "/api/config": a.config, "/api/tree": a.tree,
+                  "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
+                  "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
+                  "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
+                  "/api/vocab": a.vocab}
+        try:
+            if u.path in routes:
+                return self._json(routes[u.path](q))
+            if u.path == "/media":
+                return self._media(safe(q.get("path"), "file"))
+            return self._static(u.path)
+        except ApiError as e:
+            self._json({"error": e.msg}, e.code)
+        except (ConnectionError, BrokenPipeError):
+            pass
+        except Exception as e:
+            traceback.print_exc()
+            self._json({"error": str(e)}, 500)
+
+    do_HEAD = do_GET
+
+    def do_POST(self):
+        if not self._host_ok() or self.headers.get("X-Audios") != "1":
+            return self._send(403, b"forbidden", "text/plain")
+        a = self.app
+        routes = {"/api/transcribe": a.transcribe, "/api/cancel": a.cancel, "/api/jobs/clear": a.clear_jobs,
+                  "/api/move": a.move, "/api/mkdir": a.mkdir, "/api/rename-folder": a.rename_folder,
+                  "/api/reveal": a.reveal, "/api/open": a.open_file, "/api/settings": a.save_settings,
+                  "/api/cloud/test": a.test_cloud, "/api/live": a.start_live, "/api/live/model": a.live_model,
+                  "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
+                  "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,
+                  "/api/summarize": a.summarize,
+                  "/api/favorite": a.favorite, "/api/folder-icon": a.folder_icon, "/api/delete": a.delete,
+                  "/api/transcript/save": a.save_transcript, "/api/transcript/restore": a.restore_transcript,
+                  "/api/export": a.export_package, "/api/link/pick": a.link_pick, "/api/link/add": a.link_add,
+                  "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
+                  "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check}
+        try:
+            u = urlparse(self.path)
+            if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos
+                return self._json(a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()}))
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            route = routes.get(u.path)
+            if not route:
+                raise ApiError("No encontrado", 404)
+            self._json(route(body))
+        except ApiError as e:
+            self._json({"error": e.msg}, e.code)
+        except Exception as e:
+            traceback.print_exc()
+            self._json({"error": str(e)}, 500)
+
+    def _static(self, path):
+        name = "index.html" if path in ("", "/") else path.lstrip("/")
+        p = os.path.normpath(os.path.join(STATIC_DIR, name))
+        if not p.startswith(STATIC_DIR + os.sep) or not os.path.isfile(p):
+            return self._send(404, b"not found", "text/plain")
+        with open(p, "rb") as f:
+            body = f.read()
+        self._send(200, body, MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
+
+    def _media(self, p):
+        """Audio con soporte de Range: permite saltar a cualquier minuto al instante."""
+        size = os.path.getsize(p)
+        start, end, code = 0, size - 1, 200
+        m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
+        if m and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            else:
+                start = max(0, size - int(m.group(2)))
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            code = 206
+        self.send_response(code)
+        self.send_header("Content-Type", MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        # Grabacion de OBS en curso: la cabecera dice 0xFFFFFFFF; se sirve con el tamano de ahora
+        # para que el navegador sepa cuanto dura lo grabado y se pueda escuchar
+        patch = b""
+        info = live.wav_info(p) if p.lower().endswith(".wav") else None
+        if info and info["data_size"] is None and start < info["data_off"]:
+            with open(p, "rb") as f:
+                patch = bytearray(f.read(info["data_off"]))
+            struct.pack_into("<I", patch, 4, size - 8)
+            struct.pack_into("<I", patch, info["data_off"] - 4, size - info["data_off"])
+        remaining = end - start + 1
+        try:
+            with open(p, "rb") as f:
+                f.seek(start)
+                pos = start
+                while remaining > 0:
+                    chunk = f.read(min(512 * 1024, remaining))
+                    if not chunk:
+                        break
+                    if pos < len(patch):
+                        k = min(len(patch) - pos, len(chunk))
+                        chunk = patch[pos:pos + k] + chunk[k:]
+                    self.wfile.write(chunk)
+                    pos += len(chunk)
+                    remaining -= len(chunk)
+        except (ConnectionError, OSError):
+            pass  # el navegador corta la conexion al saltar a otro punto: normal
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = False  # en Windows SO_REUSEADDR permitiria dos servidores en el mismo puerto
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], ConnectionError):  # el navegador cierra conexiones: normal
+            super().handle_error(request, client_address)
+
+
+def open_ui():
+    for exe in (r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"):
+        exe = os.path.expandvars(exe)
+        if os.path.exists(exe):
+            subprocess.Popen([exe, f"--app={URL}", "--window-size=1500,920"])
+            return
+    webbrowser.open(URL)
+
+
+def already_running():
+    try:
+        with urllib.request.urlopen(URL + "api/ping", timeout=1.5) as r:
+            return json.load(r).get("app") == "audios"
+    except Exception:
+        return False
+
+
+def arg(name, default=None):
+    """--port 8766 / --data C:\\ruta (para probar una segunda copia sin tocar la principal)."""
+    if name in sys.argv[:-1]:
+        return sys.argv[sys.argv.index(name) + 1]
+    return default
+
+
+def main():
+    global PORT, URL, DATA_DIR
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    PORT = int(arg("--port", PORT))
+    URL = f"http://{HOST}:{PORT}/"
+    DATA_DIR = os.path.abspath(arg("--data", DATA_DIR))
+    no_browser = "--no-browser" in sys.argv
+    if already_running():
+        print("La app ya estaba abierta; abriendo ventana…")
+        if not no_browser:
+            open_ui()
+        return
+    try:
+        import truststore  # usa los certificados de Windows (proxies corporativos), si esta instalado
+        truststore.inject_into_ssl()
+    except Exception:
+        pass
+    Handler.app = App()
+    Handler.app.library.refresh()
+    threading.Thread(target=Handler.app.transcripts.warm, args=(Handler.app.library,), daemon=True).start()
+    srv = Server((HOST, PORT), Handler)
+    print("=" * 64)
+    print("  NOTAS  ·  " + URL)
+    print("  Carpeta: " + ROOT)
+    print("  Deja esta ventana abierta mientras uses la app (ciérrala para apagarla).")
+    print("=" * 64, flush=True)
+    if not no_browser:
+        threading.Timer(0.3, open_ui).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

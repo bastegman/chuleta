@@ -1,0 +1,81 @@
+﻿NOTAS · grabar, transcribir y resumir reuniones                 (versión del 30/10/2026)
+==================================================================================
+
+Qué es
+  Una app que funciona en tu propio PC, en una ventana de Edge. Graba las reuniones (tu micro y el
+  sonido del ordenador: Teams, Zoom…), las transcribe mientras se habla o al terminar, te deja
+  corregir la transcripción y tomar notas al estilo Notion, y saca un resumen con IA con las
+  decisiones, las tareas y los riesgos.
+
+
+INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
+----------------------------------------------------------------------------------
+  1. Descomprime el .zip y deja la carpeta "Notas" donde quieras tenerla (Documentos, Escritorio,
+     OneDrive…). Las grabaciones, transcripciones y notas se guardan dentro de esa carpeta.
+
+  2. Doble clic en INSTALAR.bat
+       - Si no tienes Python, lo instala (solo para tu usuario).
+       - Instala las librerías y crea el acceso directo "Notas" en el escritorio y en el menú Inicio.
+       - Si Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas formas".
+
+  3. Se abre Notas. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
+       - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y elige el modelo
+         whisper-large-v3 (el más preciso).
+       - Pasarela o API interna de la empresa: elige "Otra (compatible con OpenAI)" y pon su URL
+         base (la que termina en /v1), la key y el nombre del modelo de Whisper.
+       - Pulsa "Probar conexión" y Guardar. Desde ese momento transcribe en la nube por defecto.
+     El resumen con IA usa el mismo proveedor y la misma key (Ajustes > Resumen con IA).
+
+
+ACTUALIZAR A UNA VERSIÓN NUEVA
+----------------------------------------------------------------------------------
+  Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Notas, el instalador
+  la cierra (salvo que esté grabando) y actualiza la de siempre, en su carpeta, con tus grabaciones;
+  la carpeta recién descomprimida ya no hace falta. La versión instalada se ve al final de Ajustes.
+
+
+USO DIARIO
+----------------------------------------------------------------------------------
+  - Abre con el acceso directo "Notas". La ventana negra que queda minimizada es el motor de la
+    app: si la cierras, Notas se apaga.
+  - ● Grabar (o Ctrl+Alt+R desde cualquier programa) empieza y para la grabación. Puedes elegir
+    grabar con o sin micro, y con o sin transcripción en directo.
+  - Si estás en una llamada de Teams y no estás grabando, arriba aparece
+    "📞 Teams en llamada · ● Tomar Notas".
+  - Al parar, termina de transcribir y hace el resumen solo. Cada reunión tiene pestañas
+    Resumen / Transcripción / Notas; la transcripción se puede corregir en la propia página.
+  - Ctrl+P busca en todas las reuniones. Puedes arrastrar a la ventana audios que ya tengas
+    (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
+  - Si grabas con OBS, configúralo para que guarde en la carpeta Notas: la app lo detecta y
+    transcribe en directo mientras graba.
+  - Idioma: por defecto se detecta solo. "Español + inglés" es para reuniones que mezclan los dos
+    (spanglish).
+  - Vocabulario por proyecto y tema: en Ajustes > Vocabulario (o en ● Grabar > Nuevo) creas un
+    proyecto y sus temas, cada uno con su lista de nombres, siglas y productos separados por
+    comas (los más importantes primero). Al grabar eliges el tema y Whisper los escribe bien.
+    Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan fuera.
+
+
+PRIVACIDAD
+----------------------------------------------------------------------------------
+  - Grabaciones, transcripciones y notas: en la carpeta Notas, en tu PC.
+  - Ajustes y API key: en %LOCALAPPDATA%\AudiosApp (fuera de OneDrive; no viajan con la carpeta).
+  - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que
+    configures. Si son reuniones de trabajo, confirma que lo permiten la política de tu empresa y
+    el acuerdo con tu cliente, si lo hay.
+  - Sin nube también funciona: transcribe en el propio PC (más lento, y la primera vez descarga
+    el modelo de Whisper, entre 0,5 y 3 GB según el que elijas).
+
+
+LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/settings/limits)
+----------------------------------------------------------------------------------
+  - Transcripción: unas 2 horas de audio por hora y 8 horas de audio al día.
+  - Resumen: unas 7 reuniones de 1 hora al día.
+
+
+SI ALGO FALLA
+----------------------------------------------------------------------------------
+  - INSTALAR.bat se puede volver a ejecutar sin problema.
+  - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
+    (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.
+  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (worker-*.log, recorder.log).
