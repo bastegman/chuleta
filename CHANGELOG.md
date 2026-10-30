@@ -75,9 +75,13 @@ nada de ningún proyecto concreto.
 - `scripts/build_zip.py` genera `dist/Notas - instalador.zip` sin vocabulario.
 - `server.py` se reparte en módulos planos (el instalador solo copia ficheros sueltos de `_app`): `common.py`
   (utilidades puras y log) y `recording.py` (atajo global, pitidos, avisos, proceso de la grabadora y detección
-  de reunión). El árbol, la cola y la API siguen en `server.py` (2.358 líneas): separarlos exige un módulo de
+  de reunión). El árbol, la cola y la API siguen en `server.py` (≈2.800 líneas): separarlos exige un módulo de
   estado compartido (ROOT, LINKS, COMPLETE, DATA_DIR cambian en tiempo de ejecución) y se deja para otra entrega.
 
 ### Conocido, sin cambiar
+- «Quién habla» y el cifrado con DPAPI se han probado en macOS (sherpa-onnx real; DPAPI con un doble) y todavía no a
+  mano en Windows: la primera ejecución real de DPAPI es el job `windows-latest` de GitHub Actions.
+- Si DPAPI falla en Windows, los secretos se guardan en claro (`plain:`) para no dejar la app sin ajustes; solo se
+  avisa en `server.log`.
 - El aviso de Windows (toast) sale firmado por «Windows PowerShell»: cambiarlo exige registrar un
   AppUserModelID propio en el acceso directo (propiedad del `.lnk` vía COM); se deja como está.

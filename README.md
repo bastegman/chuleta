@@ -33,14 +33,16 @@ El manual completo está en `LEEME.txt`.
 
 - Grabaciones, transcripciones y notas viven en la carpeta de Notas, en tu PC.
 - Ajustes y API key, en `%LOCALAPPDATA%\AudiosApp` (fuera de OneDrive). La API key se guarda cifrada con DPAPI
-  (solo tu cuenta de Windows en ese PC la descifra). Ahí quedan también los registros (`server.log`,
+  (solo tu cuenta de Windows en ese PC la descifra; si DPAPI fallara, se guardaría en claro y quedaría anotado en
+  `server.log`). Ahí quedan también los registros (`server.log`,
   `worker-*.log`, `recorder.log`, `voces.log`).
 - «Quién habla» es opcional y funciona en local: por reunión se escribe `<grabación>.hablantes.json` junto al
   audio (tramos y «Persona N», sin datos de voz); las huellas de voz que decidas recordar van a
   `%LOCALAPPDATA%\AudiosApp\voces.json`, cifrado con DPAPI, máximo 5 por persona, y se pueden olvidar una a una o
   todas. Una huella de voz es un dato biométrico: la app solo la guarda si marcas que tienes el consentimiento de
-  esa persona. Los modelos (segmentación pyannote 3.0, MIT; TitaNet small de NeMo, Apache-2.0; ≈47 MB) se
-  descargan de los releases de sherpa-onnx al activar la opción, con su sha256 comprobado.
+  esa persona. Los modelos (≈47 MB) se descargan de los releases de sherpa-onnx al activar la opción, con su sha256
+  comprobado: segmentación pyannote 3.0 (MIT) y TitaNet-S (`titanet_small`, NVIDIA NeMo; su ficha en NGC remite a
+  la licencia del NeMo Toolkit, Apache-2.0; el `.onnx` lo publica el proyecto sherpa-onnx).
 - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que configures.
   Antes de grabar o enviar reuniones de trabajo, confirma que lo permiten la política de tu empresa y el acuerdo
   con tu cliente, si lo hay.
@@ -72,6 +74,11 @@ Los tests no necesitan Windows ni `faster-whisper`: cubren la lógica pura (SRT,
 cola, paquete instalable, prompts, grabadora, voces) con dobles y ficheros temporales. La prueba de integración de
 voces (`tests/test_voices_integration.py`) solo corre si hay `sherpa-onnx`, `say` (macOS) y `NOTAS_VOCES_DATA`
 apunta a una carpeta de datos con los modelos en `models/voces/`.
+
+«Quién habla» y el cifrado con DPAPI se han desarrollado y probado en macOS (la diarización con sherpa-onnx real;
+DPAPI con un doble, porque `crypt32` solo existe en Windows). En Windows aún no se han ejecutado a mano: la primera
+prueba real de DPAPI es el job `windows-latest` de GitHub Actions (`tests/test_voices.py::test_dpapi_real`). Si usas
+estas dos funciones en Windows y algo no cuadra, abre un issue con el texto de `server.log` o `voces.log`.
 
 ### Generar el zip instalable
 

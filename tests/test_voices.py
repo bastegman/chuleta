@@ -127,6 +127,26 @@ class VoicesStoreTests(TempTree):
         self.assertEqual(again.public()[0]["huellas"], 5)
         self.assertNotIn("vector", json.dumps(again.public()))
 
+    def test_olvidar_y_fusionar_no_dejan_copias_con_huellas(self):
+        v = self.store()
+        p = v.create("Persona 1")
+        v.remember(p["id"], unit(0), 30, "r.wav", "2026-10-30T10:00:00")
+        q = v.create("Persona 2")  # segundo guardado: el .bak ya lleva la huella
+        self.assertTrue(os.path.isfile(v.path + ".bak"))
+        with open(v.path + ".ilegible", "w", encoding="utf-8") as f:
+            f.write("x")
+        v.forget(p["id"])
+        self.assertFalse(os.path.exists(v.path + ".bak"))
+        self.assertFalse(os.path.exists(v.path + ".ilegible"))
+        r = v.create("Persona 3")
+        v.remember(r["id"], unit(1), 20, "s.wav", "2026-10-30T10:00:00")
+        self.assertTrue(os.path.isfile(v.path + ".bak"))  # los guardados normales siguen con copia
+        v.merge(q["id"], r["id"])
+        self.assertFalse(os.path.exists(v.path + ".bak"))
+        v.forget_all()
+        self.assertFalse(os.path.exists(v.path + ".bak"))
+        self.assertEqual(self.store().personas(), [])
+
     def test_rename_merge_forget(self):
         v = self.store()
         a, b = v.create("Ana"), v.create("Persona X")

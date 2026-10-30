@@ -99,4 +99,4 @@ SI ALGO FALLA
   - INSTALAR.bat se puede volver a ejecutar sin problema.
   - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
     (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.
-  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log, recorder.log).
+  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log, recorder.log, voces.log).

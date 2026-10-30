@@ -10,7 +10,8 @@ param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Deskto
 $ErrorActionPreference = "Continue"
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $app
-$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore", "sherpa-onnx==2.0.1")
+$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore")
+$optional = @("sherpa-onnx==2.0.1")  # quien habla: se instala aparte y, si falla, solo se avisa
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
 
 function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color }
@@ -148,22 +149,30 @@ Say "    $py" Green
 Step "Instalando librerias (la primera vez tarda unos minutos)..."
 & $py -m pip --version *> $null
 if ($LASTEXITCODE -ne 0) { & $py -m ensurepip --upgrade }
-function Pip-Install($extra) {
+function Pip-Install($extra, $list) {
     # pip escribe los errores por stderr: se ensenan y se guardan para distinguir despues que ha fallado
     $script:pipOut = @()
     if (-not $extra) { $extra = @() }
-    & $py -m pip install @extra --disable-pip-version-check --no-warn-script-location @packages 2>&1 |
+    if (-not $list) { $list = $packages }
+    & $py -m pip install @extra --disable-pip-version-check --no-warn-script-location @list 2>&1 |
         ForEach-Object { $s = "$_"; Write-Host "    $s"; $script:pipOut += $s }
     return $LASTEXITCODE
 }
+$userMode = $null
 $rc = Pip-Install
 if ($rc -ne 0) {
     Say "    Reintentando en la carpeta de tu usuario (--user)..." Yellow
-    $rc = Pip-Install "--user"
+    $userMode = "--user"
+    $rc = Pip-Install $userMode
 }
 & $py -c "import faster_whisper, soundcard, requests, av, numpy; print('    faster-whisper', faster_whisper.__version__, '| PyAV', av.__version__)"
 $coreOk = ($LASTEXITCODE -eq 0)
-# sherpa-onnx es opcional (quien habla): si no importa, solo se avisa y la app sigue funcionando sin esa opcion
+# sherpa-onnx es opcional (quien habla): se instala aparte para que un fallo suyo no deje sin librerias al resto,
+# y si no importa solo se avisa: la app sigue funcionando sin esa opcion
+if ($coreOk) {
+    Step "Instalando la libreria opcional de voces (quien habla)..."
+    $null = Pip-Install $userMode $optional
+}
 & $py -c "import sherpa_onnx; print('    sherpa-onnx', sherpa_onnx.__version__, '(quien habla: disponible)')" 2>$null
 if ($LASTEXITCODE -ne 0) { Say "    sherpa-onnx no esta disponible: la opcion Voces (quien habla) no se podra activar en este PC" Yellow }
 if (-not $coreOk) {

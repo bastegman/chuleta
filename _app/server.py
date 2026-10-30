@@ -145,7 +145,7 @@ def desktop_dir():
 
 
 def build_package(dest, extra=()):
-    """Zip con la app lista para instalar en otro PC. Lleva solo el codigo, el instalador y el LEEME:
+    """Zip con la app lista para instalar en otro PC. Lleva solo el codigo, el instalador, el LEEME y la licencia:
     ni grabaciones, ni notas, ni ajustes, ni la API key (eso vive en DATA_DIR, que no se toca).
     extra: [(archivo, ruta en el zip)] opcional, p. ej. las listas de vocabulario por workstream."""
     import zipfile
@@ -162,6 +162,9 @@ def build_package(dest, extra=()):
     files += [(e.path, "Notas/" + e.name) for e in templates]
     # las plantillas van tambien dentro de _app/export (con su {FECHA}): la copia instalada podra volver a exportar
     files += [(e.path, "Notas/_app/export/" + e.name) for e in templates]
+    lic = os.path.join(os.path.dirname(APP_DIR), "LICENSE")  # MIT: el aviso acompana a cada copia
+    if os.path.isfile(lic):
+        files.append((lic, "Notas/LICENSE"))
     files += list(extra)
     tmp = dest + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
@@ -1267,7 +1270,13 @@ class Jobs:
 
     def _voices_subprocess(self, job, args, idle_timeout=1800):
         """python voices.py … con prioridad baja; lee su progreso; cancelar = matar el proceso."""
-        err = open(os.path.join(DATA_DIR, "voces.log"), "ab")
+        log_path = os.path.join(DATA_DIR, "voces.log")
+        try:  # rotacion sencilla: el stderr de onnxruntime no debe crecer sin tope
+            if os.path.getsize(log_path) > 1_000_000:
+                os.replace(log_path, log_path + ".1")
+        except OSError:
+            pass
+        err = open(log_path, "ab")
         p = subprocess.Popen([sys.executable, "-u", os.path.join(APP_DIR, "voices.py"), *args, "--data", DATA_DIR,
                               "--threads", "2"], stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
                              creationflags=engines.NO_WINDOW | (voices.IDLE_PRIORITY or engines.BELOW_NORMAL))
@@ -2485,6 +2494,8 @@ class App:
     def voices_person(self, b):
         """Nombre, «Soy yo» y «Recordar» de un hablante (de una reunion) o de una persona ya guardada."""
         v = self.jobs.voices
+        if b.get("recordar") and not self.jobs.voices_on():
+            raise ApiError("Activa «Voces» en Ajustes ⚙ para guardar huellas.")
         pid, path, h = b.get("id"), b.get("path"), b.get("h")
         consent = b.get("consentimiento")
         abs_path = safe(path, "file") if path else None
@@ -2669,6 +2680,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()}))
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            if not isinstance(body, dict):
+                raise ApiError("Cuerpo no válido: se esperaba un objeto JSON")
             route = routes.get(u.path)
             if not route:
                 raise ApiError("No encontrado", 404)

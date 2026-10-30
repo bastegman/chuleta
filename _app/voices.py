@@ -439,7 +439,8 @@ def _now():
 
 class Voices:
     """DATA_DIR/voces.json: personas con sus huellas. Cifrado con DPAPI (ambito usuario) en Windows; escritura
-    atomica con copia .bak. Las huellas solo entran por remember(), que exige el consentimiento."""
+    atomica con copia .bak (que se elimina al olvidar o fusionar: ninguna copia con huellas sobrevive a un borrado).
+    Las huellas solo entran por remember(), que exige el consentimiento."""
 
     EMPTY = {"version": 1, "modelo": MODEL_ID, "dim": DIM, "umbral": UMBRAL, "contador": 0, "personas": []}
 
@@ -463,18 +464,25 @@ class Voices:
             except OSError:
                 pass
 
-    def save(self):
+    def save(self, backup=True):
+        """backup=False al olvidar o fusionar: el .bak (y un .ilegible apartado) guardarian huellas ya borradas."""
         with self.lock:
             body = protect(json.dumps(self.data, ensure_ascii=False).encode("utf-8"))
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(body)
-            if os.path.isfile(self.path):
+            if backup and os.path.isfile(self.path):
                 try:
                     os.replace(self.path, self.path + ".bak")
                 except OSError:
                     pass
             os.replace(tmp, self.path)
+            if not backup:
+                for suffix in (".bak", ".ilegible"):
+                    try:
+                        os.remove(self.path + suffix)
+                    except OSError:
+                        pass
 
     # --- lectura
     def personas(self):
@@ -575,7 +583,7 @@ class Voices:
             a["es_usuario"] = bool(a.get("es_usuario") or b.get("es_usuario"))
             a["consentimiento"] = a.get("consentimiento") or b.get("consentimiento")
             self.data["personas"] = [p for p in self.data["personas"] if p["id"] != other]
-            self.save()
+            self.save(backup=False)
             return other
 
     def forget(self, pid):
@@ -584,12 +592,12 @@ class Voices:
             self.data["personas"] = [p for p in self.data["personas"] if p["id"] != pid]
             if len(self.data["personas"]) == before:
                 raise KeyError(pid)
-            self.save()
+            self.save(backup=False)
 
     def forget_all(self):
         with self.lock:
             self.data["personas"] = []
-            self.save()
+            self.save(backup=False)
 
 
 # ----------------------------------------------------------------------------- sidecar <audio>.hablantes.json

@@ -34,7 +34,8 @@ class BuildPackageTests(unittest.TestCase):
         self.assertTrue(all(n.startswith("Notas/") for n in self.names))
         self.assertFalse(any("Vocabulario" in n or n.endswith((".wav", ".pyc")) or "__pycache__" in n
                              for n in self.names))
-        self.assertFalse(any("tests/" in n or n.endswith(("README.md", "LICENSE")) for n in self.names))
+        self.assertFalse(any("tests/" in n or n.endswith("README.md") for n in self.names))
+        self.assertIn("Notas/LICENSE", self.names)  # MIT: el aviso acompaña a cada copia
 
     def test_crlf_bom_y_fecha(self):
         leeme = self.zip.read("Notas/LEEME.txt")
@@ -78,8 +79,11 @@ class TemplatesTests(unittest.TestCase):
 
     def test_requirements_igual_que_el_instalador(self):
         ps1 = self.read("_app", "instalar.ps1").decode("utf-8-sig")
-        m = re.search(r'\$packages = @\(([^)]*)\)', ps1)
-        pkgs = sorted(re.findall(r'"([^"]+)"', m.group(1)))
+        pkgs = []
+        for var in ("packages", "optional"):  # el core y la librería opcional de voces se instalan por separado
+            m = re.search(r'\$' + var + r' = @\(([^)]*)\)', ps1)
+            pkgs += re.findall(r'"([^"]+)"', m.group(1))
+        pkgs.sort()
         req = sorted(l.strip() for l in self.read("requirements.txt").decode("utf-8").splitlines()
                      if l.strip() and not l.startswith("#"))
         self.assertEqual(pkgs, req)
