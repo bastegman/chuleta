@@ -69,13 +69,26 @@ def enabled(settings):
     return bool((settings or {}).get("voices_enabled"))
 
 
+_AVAILABLE = {}
+
+
 def available():
-    """(True, None) si sherpa_onnx importa; si no, (False, motivo). No se llama si la opcion esta apagada."""
-    try:
-        import sherpa_onnx  # noqa: F401
-        return True, None
-    except Exception as e:  # ImportError o un fallo de DLL en Windows
-        return False, f"{e.__class__.__name__}: {e}"
+    """(True, None) si sherpa_onnx importa en ESTE Python; si no, (False, motivo). Se prueba en un subproceso (asi
+    el servidor no carga las DLL de onnxruntime) y se recuerda. No se llama si la opcion esta apagada."""
+    if not _AVAILABLE:
+        import subprocess
+        try:
+            r = subprocess.run([sys.executable, "-c", "import sherpa_onnx; print(sherpa_onnx.__version__)"],
+                               capture_output=True, timeout=120,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if r.returncode == 0:
+                _AVAILABLE.update(ok=True, why=None)
+            else:  # ImportError o un fallo de DLL en Windows: la ultima linea del error
+                err = r.stderr.decode("utf-8", "replace").strip().splitlines()
+                _AVAILABLE.update(ok=False, why=(err[-1] if err else f"salida {r.returncode}")[:300])
+        except (OSError, subprocess.SubprocessError) as e:
+            _AVAILABLE.update(ok=False, why=f"{e.__class__.__name__}: {e}")
+    return _AVAILABLE["ok"], _AVAILABLE["why"]
 
 
 def models_dir(data_dir):
@@ -183,10 +196,10 @@ def _f32(samples16):
 # ----------------------------------------------------------------------------- diarizacion y huellas (sherpa-onnx)
 
 def _sherpa():
-    ok, why = available()
-    if not ok:
-        raise VoicesError("sherpa-onnx no esta disponible: " + why)
-    import sherpa_onnx
+    try:
+        import sherpa_onnx
+    except Exception as e:  # ImportError o un fallo de DLL en Windows
+        raise VoicesError(f"sherpa-onnx no esta disponible: {e.__class__.__name__}: {e}")
     return sherpa_onnx
 
 

@@ -2445,14 +2445,14 @@ class App:
 
     def voices_toggle(self, b):
         on = bool(b.get("on"))
-        self.settings.update(lambda d: d.update(voices_enabled=on))
         if on:
             ok, why = voices.available()
-            if not ok:
+            if not ok:  # no se activa: la opcion no serviria de nada en este PC
                 raise ApiError("La librería de voces (sherpa-onnx) no está instalada o no carga en este PC: vuelve a "
                                f"ejecutar INSTALAR.bat. Detalle: {why[:200]}")
-            if not voices.models_ready(DATA_DIR):
-                self._download_models()
+        self.settings.update(lambda d: d.update(voices_enabled=on))
+        if on and not voices.models_ready(DATA_DIR):
+            self._download_models()
         log(f"🗣 voces {'activadas' if on else 'desactivadas'}")
         return self.voices_state()
 
