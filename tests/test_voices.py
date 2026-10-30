@@ -272,6 +272,13 @@ class DpapiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             common.unprotect("sk-abc")
 
+    def test_si_dpapi_falla_se_guarda_plain_y_no_rompe_los_ajustes(self):
+        with mock.patch.object(common, "WINDOWS", True), \
+                mock.patch.object(common, "_dpapi", side_effect=OSError("DPAPI: CryptProtectData fallo (13)")):
+            t = common.protect(b"clave")
+        self.assertTrue(t.startswith("plain:"))
+        self.assertEqual(common.unprotect(t), b"clave")
+
     @unittest.skipIf(common.WINDOWS, "fuera de Windows")
     def test_dpapi_no_se_descifra_fuera_de_windows(self):
         with self.assertRaises(OSError):

@@ -219,7 +219,13 @@ def protect(data):
     if isinstance(data, str):
         data = data.encode("utf-8")
     if WINDOWS:
-        return "dpapi:" + base64.b64encode(_dpapi(data, True)).decode("ascii")
+        try:
+            return "dpapi:" + base64.b64encode(_dpapi(data, True)).decode("ascii")
+        except (OSError, AttributeError) as e:  # DPAPI no disponible: mejor guardar que dejar la app sin ajustes
+            if not _PLAIN_WARNED:
+                _PLAIN_WARNED.append(True)
+                log(f"   DPAPI no disponible ({e}): los secretos se guardan en claro (plain:base64)")
+            return "plain:" + base64.b64encode(data).decode("ascii")
     if not _PLAIN_WARNED:
         _PLAIN_WARNED.append(True)
         log("   sin DPAPI fuera de Windows: los secretos se guardan en claro (plain:base64)")
