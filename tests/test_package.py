@@ -101,5 +101,27 @@ class TemplatesTests(unittest.TestCase):
             self.assertIsNone(bad.search(text), rel)
 
 
+class BuildZipScriptTests(unittest.TestCase):
+    def test_script_genera_el_zip_instalable(self):
+        import subprocess
+        import sys
+        dest = os.path.join(tempfile.mkdtemp(prefix="notas-dist-"), "Notas - instalador.zip")
+        r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_zip.py"), dest],
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with zipfile.ZipFile(dest) as z:
+            names = set(z.namelist())
+            self.assertIn("Notas/INSTALAR.bat", names)
+            self.assertIn("Notas/ABRIR NOTAS.bat", names)
+            self.assertIn("Notas/_app/server.py", names)
+            self.assertIn("Notas/_app/static/app.js", names)
+            self.assertIn("Notas/_app/export/LEEME.txt", names)
+            self.assertFalse(any("Vocabulario" in n for n in names))
+            leeme = z.read("Notas/LEEME.txt")
+            self.assertIn(time.strftime("%d/%m/%Y").encode(), leeme.split(b"\r\n")[0])
+            self.assertNotIn(b"{FECHA}", leeme)
+            self.assertEqual(z.testzip(), None)
+
+
 if __name__ == "__main__":
     unittest.main()
