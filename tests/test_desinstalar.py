@@ -408,6 +408,7 @@ class DesinstaladorTextoTests(unittest.TestCase):
             self.assertIn("Headers = (Get-ApiHeaders $post)", function_body(text, "Invoke-Api"))
             self.assertFalse(re.search(r"Invoke-RestMethod\s+\"http", text))  # todas pasan por Invoke-Api
             self.assertIn("$ping.code -eq 401 -or $ping.code -eq 403", text.replace("$running.code", "$ping.code"))
+            self.assertIn("'server\\.py'", text)  # sin respuesta a tiempo pero con su server.py escuchando: abierta
         stop = function_body(self.ps1, "Stop-App")
         self.assertIn('if ($ap.code -eq 200) { return "ok" }', stop)
         self.assertLess(stop.index("Test-Grabadora"), stop.index("Stop-Process"))

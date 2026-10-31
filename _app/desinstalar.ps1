@@ -274,13 +274,23 @@ function Get-AppProcesses {
     }
     return @($out | Where-Object { $_ })
 }
+function Test-ServidorChuleta($id) {
+    # el proceso es un server.py de Chuleta (de esta carpeta o de otra)
+    if (-not $id) { return $false }
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+    return [bool]($p -and "$($p.CommandLine)" -match 'server\.py')
+}
 function Stop-App {
     # "no" (no estaba abierta), "ok" (apagada) o "grabando" (no se toca nada)
-    $ping = Invoke-Api "/api/ping" $false 2
-    # 401/403: contesta una version con la API protegida y no he podido usar su token: esta abierta igual
-    if (-not (($ping.code -eq 200 -and $ping.body.app -eq "audios") -or $ping.code -eq 401 -or $ping.code -eq 403)) { return "no" }
-    $script:appPid = Get-ListenerPid  # su proceso cuenta para Wait-AppGone
-    $ap = Invoke-Api "/api/apagar" $true 5
+    $ping = Invoke-Api "/api/ping" $false 5
+    $lp = Get-ListenerPid
+    # abierta: contesta como Chuleta; 401/403 (API protegida sin token valido); o no contesta a tiempo pero en el
+    # puerto escucha un server.py de Chuleta (ocupada)
+    $abierta = ($ping.code -eq 200 -and $ping.body.app -eq "audios") -or $ping.code -eq 401 -or $ping.code -eq 403 -or
+               ($ping.code -eq 0 -and (Test-ServidorChuleta $lp))
+    if (-not $abierta) { return "no" }
+    $script:appPid = $lp  # su proceso cuenta para Wait-AppGone
+    $ap = Invoke-Api "/api/apagar" $true 20
     Log "POST /api/apagar: $($ap.code)"
     if ($ap.code -eq 409) { return "grabando" }
     if ($ap.code -eq 200) { return "ok" }

@@ -565,14 +565,23 @@ Unblock-AppFiles $app $root
 
 # --- si la app esta abierta se cierra: si no, al terminar se volveria a ver la version vieja (sigue en marcha)
 Step "Comprobando si $AppName está abierta..."
-$running = Invoke-Api "/api/ping" $false 2
-# 401/403: contesta una version con la API protegida y no he podido usar su token: esta abierta igual
-if (($running.code -eq 200 -and $running.body.app -eq "audios") -or $running.code -eq 401 -or $running.code -eq 403) {
+$running = Invoke-Api "/api/ping" $false 5
+# 401/403: contesta una version con la API protegida y no he podido usar su token: esta abierta igual. Sin respuesta a
+# tiempo pero con un server.py de Chuleta escuchando en el puerto: esta abierta y ocupada
+$ocupada = $false
+if ($running.code -eq 0) {
+    try {
+        $lpid = (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess
+        $lp = Get-CimInstance Win32_Process -Filter "ProcessId=$lpid" -ErrorAction Stop
+        $ocupada = [bool]($lp -and $lp.Name -match '^pythonw?\.exe$' -and "$($lp.CommandLine)" -match 'server\.py')
+    } catch {}
+}
+if (($running.code -eq 200 -and $running.body.app -eq "audios") -or $running.code -eq 401 -or $running.code -eq 403 -or $ocupada) {
     $st = Invoke-Api "/api/rec/status" $false 2
     if ($st.code -eq 200 -and $st.body.recording) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
     # primero por las buenas: POST /api/apagar (versiones desde el 31/10/2026; 409 = grabando); si no, como antes
     $apagado = $false
-    $ap = Invoke-Api "/api/apagar" $true 5
+    $ap = Invoke-Api "/api/apagar" $true 20
     if ($ap.code -eq 409) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
     if ($ap.code -eq 200) {
         for ($k = 0; $k -lt 24 -and -not $apagado; $k++) {
