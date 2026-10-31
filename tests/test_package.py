@@ -126,6 +126,28 @@ class BuildZipScriptTests(unittest.TestCase):
             self.assertNotIn(b"{FECHA}", leeme)
             self.assertEqual(z.testzip(), None)
 
+    def test_vocab_solo_si_se_pide(self):
+        import subprocess
+        import sys
+        folder = tempfile.mkdtemp(prefix="notas-vocab-")
+        os.makedirs(os.path.join(folder, "Proyecto Alfa", "Vocabulario"))
+        os.makedirs(os.path.join(folder, "_app", "Vocabulario"))  # carpetas de sistema: no cuentan
+        with open(os.path.join(folder, "Proyecto Alfa", "Vocabulario", "General.txt"), "w", encoding="utf-8") as f:
+            f.write("# siglas\nAPI, SLA\n")
+        with open(os.path.join(folder, "_app", "Vocabulario", "no.txt"), "w", encoding="utf-8") as f:
+            f.write("x")
+        dest = os.path.join(folder, "privado.zip")
+        r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_zip.py"), dest, "--vocab", folder],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with zipfile.ZipFile(dest) as z:
+            names = set(z.namelist())
+            self.assertIn("Notas/Proyecto Alfa/Vocabulario/General.txt", names)
+            self.assertEqual([n for n in names if "Vocabulario" in n], ["Notas/Proyecto Alfa/Vocabulario/General.txt"])
+            body = z.read("Notas/Proyecto Alfa/Vocabulario/General.txt")  # build_package deja los .txt con BOM y CRLF
+            self.assertEqual(body.decode("utf-8-sig").splitlines(), ["# siglas", "API, SLA"])
+        self.assertIn("1 listas de vocabulario", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
