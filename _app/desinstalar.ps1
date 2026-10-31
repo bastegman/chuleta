@@ -369,6 +369,9 @@ function Remove-AppFolder {
             }
             if (-not $ok) { Log "X no se pudo borrar $($file.FullName)"; $script:fallos += $file.FullName }
         }
+        if ($sub -ne ".") {  # dentro de static/export/__pycache__ la app no tiene carpetas: las que haya se quedan
+            foreach ($sd in @(Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue)) { $ajenos += $sd.FullName }
+        }
         if ($sub -ne "." -and -not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
             try { [IO.Directory]::Delete($dir) } catch { Log "X no se pudo borrar $dir"; $script:fallos += $dir }  # vacia: no recursivo
         }
