@@ -100,7 +100,24 @@ STYLE_PROMPT = {
     # espanol + ingles mezclados (spanglish): ensena a Whisper a dejar cada palabra en su idioma
     # en vez de traducirla ("el deadline del workstream", no "la fecha límite del flujo de trabajo")
     "mix": "Vale, perfecto. So, el deadline del workstream es el viernes, ¿no? Okay, let's move on con el roadmap.",
+    # otras mezclas de dos idiomas (reuniones con hablantes de cada uno): misma idea, cada frase en su idioma.
+    # Sin validar aun con audio real; si una reunion es solo en un idioma, fijarlo es mas preciso.
+    "es-pt": "Vale, perfecto. Então vamos começar com a agenda de hoje. ¿Os parece bien? Sim, pode seguir.",
+    "en-pt": "Okay, perfect. Então vamos começar com a agenda de hoje. Does that work for everyone? Sim, pode seguir.",
 }
+PAIRS = {"es-en": ("es", "en"), "es-pt": ("es", "pt"), "en-pt": ("en", "pt")}  # mezclas admitidas: "xx-yy"
+
+
+def lang_pair(language):
+    """("es", "en") para una mezcla de dos idiomas ("es-en"), None para un idioma fijo o la deteccion."""
+    return PAIRS.get(language or "")
+
+
+def style_for(language):
+    """Frase de estilo para ese idioma o mezcla ("" si se detecta: el motor pone la suya al saber el idioma)."""
+    if language == "es-en":
+        return STYLE_PROMPT["mix"]
+    return STYLE_PROMPT.get(language or "", "")
 
 
 # Groq/OpenAI devuelven el idioma con su nombre en ingles
@@ -149,13 +166,27 @@ def split_terms(vocab):
 
 
 CONTEXT_TOKENS = 60  # en directo: lo ultimo que se dijo en el trozo anterior (al final del prompt)
+ABOUT_TOKENS = 100   # contexto libre de la reunion (de que va, quien participa): tope propio dentro del prompt
+ABOUT_CHARS = 500
 
 
-def build_prompt(style, vocab, count=count_tokens, max_bytes=None, limit=PROMPT_TOKENS, context=None):
-    """Frase de estilo + vocabulario (+ en directo, lo ultimo que se dijo) sin pasarse de lo que lee
-    Whisper: si no cabe, se quitan los ULTIMOS terminos del vocabulario (y no la frase de estilo).
-    El contexto va al final, pegado al audio, como haria Whisper con el texto anterior: asi enlaza
-    frases cortadas entre trozos y mantiene nombres y mayusculas. Devuelve (prompt, terminos que no caben)."""
+def _largest(n, ok):
+    """Mayor k en [0, n] con ok(k) (ok es monotona: si cabe k, cabe k-1). Busqueda binaria: contar tokens cuesta."""
+    if ok(n):
+        return n
+    lo, hi = 0, n
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        lo, hi = (mid, hi) if ok(mid) else (lo, mid - 1)
+    return lo
+
+
+def build_prompt(style, vocab, count=count_tokens, max_bytes=None, limit=PROMPT_TOKENS, context=None, about=None):
+    """Frase de estilo + vocabulario + contexto libre de la reunion (+ en directo, lo ultimo que se dijo) sin
+    pasarse de lo que lee Whisper. Si no cabe, primero se recorta el contexto libre por el final (palabra a
+    palabra, hasta quitarlo) y solo despues se quitan los ULTIMOS terminos del vocabulario; la frase de estilo
+    no se toca. Lo ultimo dicho va al final, pegado al audio, como haria Whisper con el texto anterior: asi
+    enlaza frases cortadas entre trozos y mantiene nombres y mayusculas. Devuelve (prompt, terminos que no caben)."""
     vocab = " ".join((vocab or "").split())
     terms, sep = split_terms(vocab), ", "
     if len(terms) <= 1:  # texto libre, sin comas: se recorta por palabras
@@ -165,21 +196,22 @@ def build_prompt(style, vocab, count=count_tokens, max_bytes=None, limit=PROMPT_
         ctx = ctx.split(" ", 1)[1] if " " in ctx else ""
     if max_bytes:
         ctx = ctx.encode("utf-8")[-max_bytes // 4:].decode("utf-8", "ignore").lstrip()
+    words = " ".join((about or "").split())[:ABOUT_CHARS].split()
+    words = words[:_largest(len(words), lambda k: count(" ".join(words[:k])) <= ABOUT_TOKENS)]
 
-    def join(n):
-        return " ".join(p for p in ((style or "").strip(), sep.join(terms[:n]), ctx) if p)
+    def join(n, w=None):
+        w = len(words) if w is None else w
+        return " ".join(p for p in ((style or "").strip(), sep.join(terms[:n]), " ".join(words[:w]), ctx) if p)
 
-    def fits(n):
-        t = join(n)
+    def fits(n, w=None):
+        t = join(n, w)
         return count(t) <= limit and (not max_bytes or len(t.encode("utf-8")) <= max_bytes)
 
     n = len(terms)
     if not fits(n):
-        lo, hi = 0, n  # cuantos terminos caben (busqueda binaria: el tokenizador no es gratis)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            lo, hi = (mid, hi) if fits(mid) else (lo, mid - 1)
-        n = lo
+        words = words[:_largest(len(words), lambda w: fits(n, w))]  # primero cede el contexto libre...
+        if not fits(n):
+            n = _largest(n, fits)  # ...y si ni asi cabe, los ultimos terminos del vocabulario
     return join(n) or None, terms[n:]
 
 
@@ -475,8 +507,8 @@ class LocalEngine:
     def __init__(self, log_dir, name="batch"):
         self.worker = WorkerClient(name, log_dir)
 
-    def transcribe(self, path, preset, language, prompt, threads, report, cancelled, start=0.0):
-        """start > 0: solo desde ese segundo (continuar una transcripcion a medias)."""
+    def transcribe(self, path, preset, language, prompt, threads, report, cancelled, start=0.0, about=None):
+        """start > 0: solo desde ese segundo (continuar una transcripcion a medias). about: contexto libre."""
         def progress(m):
             report(frac=m.get("frac"), stage=m.get("stage"), transcribing=bool(m.get("transcribing")))
 
@@ -484,7 +516,7 @@ class LocalEngine:
         # sin noticias en 20 min = colgado (en modo por lotes llega progreso cada pocos minutos como mucho)
         res = self.worker.request({"op": "file", "model": preset["model"], "threads": threads, "path": path,
                                    "batched": preset["batched"], "beam": preset["beam"], "start": start,
-                                   "language": language or None, "prompt": prompt or None},
+                                   "language": language or None, "prompt": prompt or None, "about": about or None},
                                   on_progress=progress, idle_timeout=1200, cancelled=cancelled)
         segs = [tuple(s) for s in res["segments"]]
         return clean_segments(segs, res.get("prompt"), res.get("language")), res.get("language"), res.get("duration")
@@ -722,11 +754,13 @@ class CloudEngine:
         return list(zip(cuts[:-1], cuts[1:]))
 
     @staticmethod
-    def prompt_for(language, vocab, context=None):
-        """(idioma para la API, prompt). Las APIs no tienen "spanglish": deteccion automatica + frase mezclada."""
-        if language == "es-en":
-            return None, build_prompt(STYLE_PROMPT["mix"], vocab, max_bytes=CLOUD_PROMPT_BYTES, context=context)[0]
-        return language or None, build_prompt("", vocab, max_bytes=CLOUD_PROMPT_BYTES, context=context)[0]
+    def prompt_for(language, vocab, context=None, about=None):
+        """(idioma para la API, prompt). Las APIs no tienen "spanglish" ni otras mezclas: deteccion automatica +
+        frase de estilo mezclada. about: contexto libre de la reunion (va detras del vocabulario)."""
+        if lang_pair(language):
+            return None, build_prompt(style_for(language), vocab, max_bytes=CLOUD_PROMPT_BYTES, context=context,
+                                      about=about)[0]
+        return language or None, build_prompt("", vocab, max_bytes=CLOUD_PROMPT_BYTES, context=context, about=about)[0]
 
     @staticmethod
     def _wait(secs, cancelled):
@@ -736,13 +770,14 @@ class CloudEngine:
                 raise Cancelled()
             time.sleep(min(0.25, max(0.0, end - time.time())))
 
-    def _post(self, cfg, chunk, language, prompt, report, cancelled, context=None, model=None, timeout=300):
+    def _post(self, cfg, chunk, language, prompt, report, cancelled, context=None, model=None, timeout=300,
+              about=None):
         """Una peticion de transcripcion. La clave la elige el KeyPool (rotacion), que tambien marca el ritmo
         (>= 3 s entre peticiones de la misma clave) y aprende de las cabeceras de cupo de la respuesta."""
         import requests
         self.endpoint(cfg, model=model)  # valida la configuracion
         data = {"response_format": "verbose_json", "temperature": "0"}
-        language, prompt = self.prompt_for(language, prompt, context)
+        language, prompt = self.prompt_for(language, prompt, context, about)
         if language:
             data["language"] = language
         if prompt:
@@ -783,7 +818,7 @@ class CloudEngine:
             self._wait(wait, cancelled)
         raise EngineError(last or "la API no respondió")
 
-    def transcribe(self, path, duration, cfg, language, prompt, job_id, report, cancelled, start=0.0):
+    def transcribe(self, path, duration, cfg, language, prompt, job_id, report, cancelled, start=0.0, about=None):
         self.endpoint(cfg)  # valida la configuracion antes de convertir nada
         work = os.path.join(self.tmp_root, job_id)
         os.makedirs(work, exist_ok=True)
@@ -811,7 +846,7 @@ class CloudEngine:
                 return cancelled() or abort.is_set()
 
             def do_part(i, start, end):
-                res = self._post(cfg, chunks[i], language, prompt, report, stop)
+                res = self._post(cfg, chunks[i], language, prompt, report, stop, about=about)
                 return i, parse_verbose(res, start, end), res.get("language")
 
             results, langs, done = {}, [], 0
@@ -833,28 +868,30 @@ class CloudEngine:
                         f.cancel()
                     raise
             segs = [(a + start, b + start, t) for i in range(n) for a, b, t in results[i]]
-            return clean_segments(segs, self.prompt_for(language, prompt)[1]), (langs[0] if langs else None), duration
+            return (clean_segments(segs, self.prompt_for(language, prompt, about=about)[1]),
+                    (langs[0] if langs else None), duration)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
-                         model=None):
+                         model=None, about=None):
         """Un trozo ya en memoria (16 kHz mono), para el modo en directo. context: lo ultimo que se dijo;
-        model: el del directo (cloud.live_model), distinto del de la cola y el repaso final."""
+        model: el del directo (cloud.live_model), distinto del de la cola y el repaso final; about: contexto
+        libre de la reunion."""
         os.makedirs(tmp_dir, exist_ok=True)
         f = os.path.join(tmp_dir, f"live_{job_id}.wav")
         write_wav16(f, audio)
         try:
             # trozos de pocos segundos: si la red se atasca mas de 60 s, mejor fallar y seguir con el siguiente
             res = self._post(cfg, f, language, prompt, lambda **k: stage(k.get("stage", "")), cancelled, context,
-                             model=model, timeout=60)
+                             model=model, timeout=60, about=about)
         finally:
             try:
                 os.remove(f)
             except OSError:
                 pass
         # con el contexto en el filtro de ecos: si Whisper repite la frase anterior, se quita
-        full = self.prompt_for(language, prompt, context)[1]
+        full = self.prompt_for(language, prompt, context, about)[1]
         return clean_segments(parse_verbose(res, 0.0, len(audio) / 16000), full), res.get("language")
 
     def test(self, cfg):
@@ -1072,6 +1109,9 @@ class Summarizer:
         head = f"Reunión «{meta.get('title')}» ({meta.get('date')}, {meta.get('duration')})."
         if meta.get("participants"):
             head += f" Participantes indicados: {meta['participants']}."
+        if (meta.get("about") or "").strip():  # contexto libre de la reunion (perfil o pagina de la reunion)
+            head += f" Contexto indicado por el usuario: {' '.join(meta['about'].split())[:ABOUT_CHARS]}"
+            head += "" if head.endswith((".", "!", "?")) else "."
         notes = (meta.get("notes") or "").strip()
         if notes:
             head += f"\n\nNotas que tomó el usuario (orden del día, contexto; tenlas en cuenta):\n{notes[:3000]}"

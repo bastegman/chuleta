@@ -92,14 +92,15 @@ def main():
             state["key"] = key
         return state["model"]
 
-    def style(model, lang, vocab, context=None):
-        """Frase de estilo + vocabulario (+ en directo, lo ultimo que se dijo), sin que se pierda la frase."""
+    def style(model, lang, vocab, context=None, about=None):
+        """Frase de estilo + vocabulario + contexto libre (+ en directo, lo ultimo que se dijo), sin que se pierda
+        la frase. lang: idioma o mezcla ("es-en", "es-pt"…) para elegir la frase de estilo."""
         tok = model.hf_tokenizer
 
         def count(t):
             return len(tok.encode(" " + t.strip(), add_special_tokens=False).ids) if t.strip() else 0
-        return engines.build_prompt(engines.STYLE_PROMPT.get(lang, "") if lang else "", vocab, count=count,
-                                    context=context)[0]
+        return engines.build_prompt(engines.style_for(lang) if lang else "", vocab, count=count,
+                                    context=context, about=about)[0]
 
     def detect(model, audio, **kw):
         try:
@@ -109,9 +110,10 @@ def main():
 
     def lang_mode(value):
         """Idioma pedido -> (idioma fijo, deteccion en cada bloque, idiomas permitidos).
-        "es-en" = espanol + ingles (spanglish): se detecta en cada bloque pero solo entre esos dos."""
-        if value == "es-en":
-            return None, True, ("es", "en")
+        Una mezcla ("es-en" = espanol + ingles, "es-pt", "en-pt"): se detecta en cada bloque, solo entre esos dos."""
+        pair = engines.lang_pair(value)
+        if pair:
+            return None, True, pair
         if not value:
             return None, True, None
         return value, False, None
@@ -127,7 +129,8 @@ def main():
                 det, prob, _ = detect(model, audio)
                 prev = req.get("prev_language")
                 lang = det if (prob >= 0.6 or not prev or allowed) else prev
-            prompt = style(model, "mix" if allowed else lang, req.get("prompt"), req.get("context"))
+            prompt = style(model, req.get("language") if allowed else lang, req.get("prompt"), req.get("context"),
+                           req.get("about"))
             from faster_whisper import BatchedInferencePipeline
             # bloques internos de 20 s en vez de 30: con 30 s medium/turbo se saltaban a veces el
             # principio del bloque (medido en una reunion real); con 20 s medium no pierde nada
@@ -156,13 +159,15 @@ def main():
                     sr, n = 16000, len(audio)
                     start = int(n * 0.2) if n > sr * 600 else 0
                     lang, _, _ = detect(model, audio[start:start + sr * 120], language_detection_segments=2)
-                prompt = style(model, "mix" if allowed else lang, req.get("prompt"))
+                prompt = style(model, req.get("language") if allowed else lang, req.get("prompt"),
+                               about=req.get("about"))
                 from faster_whisper import BatchedInferencePipeline
                 segments, info = BatchedInferencePipeline(model=model).transcribe(
                     audio, batch_size=8, without_timestamps=False, language=lang, multilingual=multi,
                     beam_size=int(req.get("beam") or 1), initial_prompt=prompt)
             else:
-                prompt = style(model, "mix" if allowed else None, req.get("prompt"))
+                prompt = style(model, req.get("language") if allowed else None, req.get("prompt"),
+                               about=req.get("about"))
                 segments, info = model.transcribe(
                     audio, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500),
                     language=lang, multilingual=multi, beam_size=int(req.get("beam") or 5), initial_prompt=prompt)

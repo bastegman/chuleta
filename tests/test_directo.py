@@ -604,9 +604,10 @@ class FakeCloud:
                            {"x-ratelimit-remaining-requests": str(remaining), "x-ratelimit-reset-requests": "5h"})
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
-                         model=None):
+                         model=None, about=None):
         secs = len(audio) / SR
-        self.calls.append({"secs": secs, "model": model, "at": self.rec.time()})
+        self.calls.append({"secs": secs, "model": model, "at": self.rec.time(), "language": language,
+                           "prompt": prompt, "about": about})
         self.rec.sleep(self.latency)
         if len(self.calls) in self.fail_on:
             raise engines.EngineError("HTTP 500: se cayó")

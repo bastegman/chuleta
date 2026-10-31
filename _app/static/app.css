@@ -473,6 +473,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .pws { max-width: 260px; }
 .lh-ws { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--muted); }
 .lh-ws > svg { width: 15px; height: 15px; }
+/* perfil de reunion (perfil.js): tema en dos pasos, «guardar como perfil» y los campos de la pagina del directo */
+.pf-tema select { flex: 1; min-width: 0; }
+.pf-save { margin-top: 10px; }
+.pf-live { flex-wrap: wrap; }
+.pf-live .pf-ctx { flex: 1; min-width: 220px; height: 28px; background: var(--panel); border: 1px solid var(--line-2); }
 .warn-txt { color: var(--warn); }
 .meter.lost .mdev { color: var(--warn); }
 .ok-txt { color: var(--ok); }

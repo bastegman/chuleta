@@ -276,6 +276,13 @@ DEFAULT_SETTINGS = {
     "summary_lang": "es",     # es / en / same (el de la reunion)
     "summary_extra": "",     # instrucciones extra para el resumen
     "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
+    # perfil de reunion por defecto (Ajustes > Perfil de reunion y «Guardar como perfil por defecto» al grabar).
+    # None en folder/vocab = automatico, como siempre: la ultima carpeta usada (o la del proyecto del tema) y el tema
+    # que sugiera la reunion en curso o el ultimo elegido. El idioma por defecto sigue siendo "language".
+    "perfil": {"folder": None,    # carpeta de destino fija (ruta interna, "" = la raiz) o None
+               "vocab": None,     # tema fijo (id <proyecto>/Vocabulario/<tema>.txt, "" = sin vocabulario) o None
+               "context": "",     # contexto libre: de que van las reuniones y quien participa (Whisper y resumen)
+               "copy_to": ""},    # carpeta (absoluta) donde copiar .txt/.md/.resumen.md al terminar; "" = no
     # nube: whisper-large-v3 (el mas preciso; -turbo es mas rapido y algo menos fino)
     "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3", "base_url": "",
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
@@ -677,7 +684,12 @@ def public_transcript(data):
 # ----------------------------------------------------------------------------- notas (estilo Notion)
 # <audio>.md junto al audio: cabecera con propiedades (como una pagina de base de datos de Notion)
 # y debajo las notas en Markdown. Se mueve con el audio igual que el .txt y el .srt.
-NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream")
+# idioma: codigo ("es", "pt", "es-en"…) o "auto" (detectar); sin la clave, el idioma del perfil (Ajustes).
+# contexto: una o dos frases (de que va, quien participa) que reciben Whisper, tras el vocabulario, y el resumen.
+# copiar_a: carpeta a la que se copian .txt/.md/.resumen.md al terminar (la pone el perfil al grabar).
+NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
+             "contexto", "copiar_a")
+IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
 
 
 def parse_notes(text):
@@ -787,17 +799,288 @@ def vocab_fit(text, language):
             "limit": engines.PROMPT_TOKENS, "dropped": engines.build_prompt(style, joined)[1]}
 
 
-def vocab_for(abs_audio, st):
-    """Vocabulario para Whisper: el del workstream de la reunion o, si no tiene, el general de Ajustes."""
+def md_props(abs_audio):
+    """Propiedades de la cabecera del .md de una grabacion ({} si no hay o no se puede leer)."""
     md = os.path.splitext(abs_audio)[0] + ".md"
     try:
-        props = parse_notes(read_text(md))[0] if os.path.isfile(md) else {}
+        return parse_notes(read_text(md))[0] if os.path.isfile(md) else {}
+    except OSError:
+        return {}
+
+
+def vocab_for(abs_audio, st, props=None):
+    """Vocabulario para Whisper: el del tema de la reunion o, si no tiene, el general de Ajustes."""
+    props = md_props(abs_audio) if props is None else props
+    try:
         v = find_vocab(props.get("proyecto"), props.get("workstream"))
         if v:
             return ", ".join(read_vocab(v["_abs"])[1])
     except OSError:
         pass
     return st.get("prompt") or ""
+
+
+# ----------------------------------------------------------------------------- perfil de reunion
+# Lo que se aplica a cada grabacion: carpeta de destino, idioma, tema de vocabulario y contexto libre. El perfil
+# por defecto vive en los ajustes ("perfil" + "language"); por reunion, idioma y contexto van en la cabecera del .md
+# y el directo los relee en cada trozo (Jobs.refresh_prompt). Prioridad: lo elegido para esa reunion > lo que fija
+# el perfil > la sugerencia de la reunion en curso (Teams/Outlook) > lo ultimo usado.
+PERFIL_KEYS = ("folder", "vocab", "context", "copy_to")
+
+
+def perfil_de(st):
+    """El perfil por defecto normalizado (con el idioma, que sigue en "language")."""
+    p = dict(DEFAULT_SETTINGS["perfil"], **(st.get("perfil") or {}))
+    return {"folder": p["folder"] if isinstance(p.get("folder"), str) else None,
+            "vocab": p["vocab"] if isinstance(p.get("vocab"), str) else None,
+            "context": " ".join(str(p.get("context") or "").split())[:engines.ABOUT_CHARS],
+            "copy_to": str(p.get("copy_to") or "").strip(),
+            "language": st.get("language") or ""}
+
+
+def perfil_folder(st):
+    """Carpeta fija del perfil si sigue existiendo; None si el perfil esta en automatico o la carpeta ya no esta."""
+    rel = perfil_de(st)["folder"]
+    if rel is None:
+        return None
+    try:
+        safe(rel, "dir")
+    except ApiError:
+        return None
+    return rel
+
+
+def perfil_vocab(st, sugerido=None):
+    """Tema de una grabacion nueva: el fijo del perfil (puede ser "" = sin vocabulario); si el perfil lo deja en
+    automatico, el que sugiera la reunion en curso y, si no, el ultimo elegido."""
+    fijo = perfil_de(st)["vocab"]
+    return fijo if fijo is not None else (sugerido or st.get("rec_vocab") or "")
+
+
+def idioma_de(props, st):
+    """Idioma de una reunion: el de su .md ("auto" = detectar) o, si no lo fija, el del perfil (Ajustes)."""
+    v = str((props or {}).get("idioma") or "").strip().lower()
+    if v == "auto":
+        return ""
+    return v if IDIOMA_RE.match(v) else (st.get("language") or "")
+
+
+def meeting_setup(abs_audio, st):
+    """Lo que esta reunion le pide a Whisper: vocabulario del tema, contexto libre e idioma. Se lee al arrancar
+    una transcripcion y, en directo, en cada trozo (refresh_prompt lo vuelve a leer al cambiarlo en la pagina)."""
+    props = md_props(abs_audio)
+    return {"prompt": vocab_for(abs_audio, st, props),
+            "about": " ".join(str(props.get("contexto") or "").split())[:engines.ABOUT_CHARS],
+            "language": idioma_de(props, st)}
+
+
+def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
+    """Lo que se aplica a una grabacion nueva y de donde sale cada campo ("origen": elegido / perfil / reunion /
+    ultimo). `sug` es la sugerencia de la reunion en curso (calendario.suggest) y `elegido` lo que se cambio en el
+    dialogo para esa reunion; `auto_folder(vocab_id)` calcula la carpeta automatica (la ultima usada)."""
+    sug, elegido, p = dict(sug or {}), dict(elegido or {}), perfil_de(st)
+    auto_folder = auto_folder or (lambda vid: st.get("rec_folder") or "")
+    out, origen = {}, {}
+
+    def pick(key, *cands):
+        for origin, val in cands:
+            if val is not None:
+                out[key], origen[key] = val, origin
+                return
+
+    pick("vocab", ("elegido", elegido.get("vocab")), ("perfil", p["vocab"]), ("reunion", sug.get("vocab") or None),
+         ("ultimo", st.get("rec_vocab") or ""))
+    pick("folder", ("elegido", elegido.get("folder")), ("perfil", perfil_folder(st)),
+         ("ultimo", auto_folder(out["vocab"]) or ""))
+    pick("language", ("elegido", elegido.get("language")), ("perfil", p["language"]))
+    pick("context", ("elegido", elegido.get("context")), ("perfil", p["context"]))
+    pick("name", ("elegido", elegido.get("name") or None), ("reunion", sug.get("name") or None), ("ultimo", ""))
+    pick("participantes", ("elegido", elegido.get("participantes") or None),
+         ("reunion", ", ".join(sug.get("participants") or []) or None), ("ultimo", ""))
+    out["copy_to"], origen["copy_to"] = p["copy_to"], "perfil"
+    return dict(out, origen=origen)
+
+
+def check_perfil(b):
+    """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado."""
+    out = {}
+    if "folder" in b:
+        rel = b["folder"]
+        if rel is not None:
+            rel = str(rel).replace("\\", "/").strip("/")
+            folder = safe(rel, "dir")
+            if in_app_dir(folder):
+                raise ApiError("No se puede grabar ahí")
+        out["folder"] = rel
+    if "vocab" in b:
+        vid = b["vocab"]
+        if vid is not None:
+            vid = str(vid).strip()
+            if vid and not find_vocab(None, None, vid):
+                raise ApiError("Ese tema de vocabulario ya no existe.")
+        out["vocab"] = vid
+    if "context" in b:
+        out["context"] = " ".join(str(b["context"] or "").split())[:engines.ABOUT_CHARS]
+    if "copy_to" in b:
+        path = os.path.normpath(os.path.expandvars(str(b["copy_to"] or "").strip().strip('"'))) if b["copy_to"] else ""
+        if path:
+            if not os.path.isabs(path) or not os.path.isdir(path):
+                raise ApiError("Esa carpeta no existe: " + path)
+            if os.path.splitdrive(path)[1] in ("", os.sep):
+                raise ApiError("Elige una carpeta, no una unidad entera.")
+            if in_app_dir(path):
+                raise ApiError("Esa carpeta es la de la propia app.")
+        out["copy_to"] = path
+    if "language" in b:
+        lang = str(b["language"] or "").strip().lower()
+        if lang and not IDIOMA_RE.match(lang):
+            raise ApiError("Idioma no válido: " + lang)
+        out["language"] = lang
+    return out
+
+
+def update_perfil(d, cambios):
+    """Aplica a los ajustes `d` un perfil ya validado por check_perfil."""
+    perfil = dict(DEFAULT_SETTINGS["perfil"], **(d.get("perfil") or {}))
+    for k in PERFIL_KEYS:
+        if k in cambios:
+            perfil[k] = cambios[k]
+    d["perfil"] = perfil
+    if "language" in cambios:
+        d["language"] = cambios["language"]
+
+
+# ----------------------------------------------------------------------------- copia de los textos a otra carpeta
+# Perfil > «Copiar el texto a otra carpeta al terminar»: el audio y sus sidecars se quedan donde se graban (mover,
+# buscar y borrar siguen funcionando) y .txt, .md y .resumen.md se COPIAN (nunca se mueven) a esa carpeta al
+# terminar la transcripcion y el resumen. Para no pisar nada, se recuerda que se copio: una copia nuestra se
+# actualiza; un fichero del destino que alguien haya tocado se deja como esta.
+COPY_EXTS = (".txt", ".md", ".resumen.md")
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(65536), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+class Copias:
+    """destino -> sha256 de lo que se copio la ultima vez (%LOCALAPPDATA%\\AudiosApp\\copias.json)."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.data = json.load(f)
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, dest):
+        with self.lock:
+            return self.data.get(os.path.normcase(dest))
+
+    def set(self, dest, sha):
+        with self.lock:
+            self.data[os.path.normcase(dest)] = sha
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=0)
+            os.replace(tmp, self.path)
+
+
+def copy_texts(audio_abs, dest_dir, copias, exts=COPY_EXTS):
+    """Copia los textos de la grabacion a dest_dir. Devuelve [(ext, "copiado" | "igual" | "omitido" | "sin")]:
+    "omitido" = el destino existe y no es lo que copiamos la ultima vez (lo ha tocado alguien): no se pisa."""
+    base = os.path.splitext(audio_abs)[0]
+    if os.path.normcase(os.path.normpath(os.path.dirname(audio_abs))) == os.path.normcase(os.path.normpath(dest_dir)):
+        return []  # la grabacion ya esta en esa carpeta
+    out = []
+    for ext in exts:
+        src = base + ext
+        if not os.path.isfile(src):
+            out.append((ext, "sin"))
+            continue
+        dest = os.path.join(dest_dir, os.path.basename(base) + ext)
+        sha = sha256_of(src)
+        if os.path.isfile(dest):
+            have = sha256_of(dest)
+            if have == sha:
+                copias.set(dest, sha)
+                out.append((ext, "igual"))
+                continue
+            if copias.get(dest) != have:
+                out.append((ext, "omitido"))
+                continue
+        tmp = dest + ".tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dest)
+        copias.set(dest, sha)
+        out.append((ext, "copiado"))
+    return out
+
+
+# ----------------------------------------------------------------------------- importar listas de vocabulario
+
+def import_vocab(src, project=None):
+    """Copia a este PC las listas de vocabulario de otra carpeta: dentro de `src`, cada <proyecto>/Vocabulario/*.txt;
+    o la propia `src` si es un proyecto (tiene una carpeta Vocabulario) o una carpeta Vocabulario suelta (va al
+    proyecto `project` o, si no se da, al nombre de su carpeta padre). Cada lista va a la carpeta Vocabulario del
+    proyecto (la que ya tenga; si es nuevo, <raiz>/<proyecto>/Vocabulario) y nunca se pisa una que exista.
+    Devuelve {copiadas, omitidas, proyectos}."""
+    src = os.path.normpath(os.path.expandvars((src or "").strip().strip('"')))
+    if not os.path.isabs(src) or not os.path.isdir(src):
+        raise ApiError("Esa carpeta no existe: " + src)
+    if in_app_dir(src):
+        raise ApiError("Esa carpeta es la de la propia app.")
+
+    def vocab_dir(d):
+        try:
+            return next((e.path for e in os.scandir(d) if e.is_dir() and fold(e.name) == VOCAB_FOLDER), None)
+        except OSError:
+            return None
+
+    found = []  # (proyecto, carpeta Vocabulario)
+    if fold(os.path.basename(src)) == VOCAB_FOLDER:
+        found.append((project or os.path.basename(os.path.dirname(src)), src))
+    elif vocab_dir(src):
+        found.append((project or os.path.basename(src), vocab_dir(src)))
+    else:
+        for e in sorted(os.scandir(src), key=lambda e: natural_key(e.name)):
+            if e.is_dir() and not e.name.startswith((".", "_")) and vocab_dir(e.path):
+                found.append((e.name, vocab_dir(e.path)))
+    if not found:
+        raise ApiError("En esa carpeta no hay listas de vocabulario (<Proyecto>\\Vocabulario\\<Tema>.txt).")
+    existing = list_vocab()
+    copied, skipped, projects = 0, 0, []
+    for proj, folder in found:
+        try:
+            proj = clean_name(proj)
+        except ApiError:
+            skipped += 1
+            continue
+        same = next((v for v in existing if fold(v["project"]) == fold(proj)), None)
+        vdir = os.path.dirname(same["_abs"]) if same else os.path.join(ROOT, proj, "Vocabulario")
+        files = [f for f in os.scandir(folder) if f.is_file() and f.name.lower().endswith(".txt")]
+        if not files:
+            continue
+        os.makedirs(vdir, exist_ok=True)
+        projects.append(proj)
+        for f in sorted(files, key=lambda f: natural_key(f.name)):
+            try:
+                name = clean_name(f.name[:-4])
+            except ApiError:
+                skipped += 1
+                continue
+            dest = os.path.join(vdir, name + ".txt")
+            if os.path.exists(dest):
+                skipped += 1
+                continue
+            shutil.copyfile(f.path, dest)
+            copied += 1
+    log(f"🔤 vocabulario importado de {src}: {copied} listas copiadas, {skipped} omitidas ({', '.join(projects)})")
+    return {"copiadas": copied, "omitidas": skipped, "proyectos": projects}
 
 
 def to_recycle_bin(paths):
@@ -958,6 +1241,7 @@ class Jobs:
         self.queues["resumen"] = queue.Queue()
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
+        self._copias = None  # copias.json (perfil: textos copiados a otra carpeta), se abre al primer uso
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
@@ -1023,7 +1307,7 @@ class Jobs:
         abs_path = safe(rel, "file")
         if self.active_for(rel):
             raise ApiError("Ese audio ya se está transcribiendo.")
-        job = Job(rel, os.path.basename(rel), preset, st.get("language") or None)
+        job = Job(rel, os.path.basename(rel), preset, meeting_setup(abs_path, st)["language"] or None)
         job.engine, job.live, job.recording = "live", True, True
         job.status, job.started, job.stage = "running", time.time(), "Empezando en directo…"
         COMPLETE.set(rel, False)  # hasta que termine bien, no se da por completa
@@ -1056,12 +1340,13 @@ class Jobs:
         return True
 
     def refresh_prompt(self, rel):
-        """Cambio el workstream de una reunion: si se esta transcribiendo en directo, nuevo vocabulario ya."""
+        """Cambio el tema, el idioma o el contexto de una reunion: si se esta transcribiendo en directo, live.run lo
+        lee en el siguiente trozo (vocabulario, idioma y contexto libre)."""
         with self.lock:
             jobs = [j for j in self.list if j.path == rel and j.live and j.status == "running" and j.opts]
         for j in jobs:
-            j.opts["prompt"] = vocab_for(safe(rel), self.settings.get())
-            log(f"   directo {j.name}: vocabulario actualizado")
+            j.opts.update(meeting_setup(safe(rel), self.settings.get()))
+            log(f"   directo {j.name}: vocabulario, idioma y contexto actualizados")
 
     def _live_job(self, job_id):
         with self.lock:
@@ -1097,11 +1382,11 @@ class Jobs:
                 resume = [(s["start"], s["end"], s["text"]) for s in parse_srt(read_text(srt))]
             except OSError:
                 resume = []
-        opts = {"preset": job.preset, "language": job.language, "prompt": vocab_for(abs_path, st),
+        opts = {"preset": job.preset, **meeting_setup(abs_path, st),  # language, prompt (vocabulario) y about
                 "threads": int(st.get("threads") or default_threads()),
                 "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": st["cloud"],
                 "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume, "summarizer": self.summarizer}
-        job.opts = opts  # live.run lee el prompt en cada trozo: si cambias el workstream, vale desde el siguiente
+        job.opts = opts  # live.run los lee en cada trozo: si cambias tema, idioma o contexto, vale desde el siguiente
         job.out = LiveOutputs(abs_path)
         if resume:  # lo que ya estaba escrito no se reescribe: lo nuevo se anade detras
             job.out.done, job.raw = list(resume), list(resume)
@@ -1225,7 +1510,7 @@ class Jobs:
                     "date": (a.get("date") or "").replace("T", " ")[:16] or "fecha desconocida",
                     "duration": f"{round(d / 60)} min" if d else "duración desconocida",
                     "participants": props.get("participantes", ""), "notes": notes,
-                    "extra": st.get("summary_extra", "")}
+                    "extra": st.get("summary_extra", ""), "about": props.get("contexto", "")}
             segments = self._with_speakers(abs_path, data["segments"], meta)
             cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"))
 
@@ -1240,6 +1525,7 @@ class Jobs:
             save_text(base + ".resumen.md", head + text.strip() + "\n", "utf-8")
             job.status, job.progress, job.stage = "done", 1.0, "Resumen listo"
             log(f"✔ {job.name}  resumen listo ({(time.time() - job.started):.0f} s, {model})")
+            self.copy_texts(job.path)  # perfil: el resumen (y las notas) a la otra carpeta
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Cancelado"
         except Exception as e:
@@ -1264,9 +1550,34 @@ class Jobs:
 
     def _after_transcribe(self, rel):
         """Transcripcion terminada: primero las voces (si estan activas) y el resumen al acabar estas, para que
-        lleve los nombres; si no, el resumen directamente."""
+        lleve los nombres; si no, el resumen directamente. Antes, la copia de los textos si el perfil la pide."""
+        self.copy_texts(rel)
         if not self.auto_voices(rel):
             self.auto_summary(rel)
+
+    def copy_texts(self, rel):
+        """Perfil > «Copiar el texto a otra carpeta al terminar»: la grabacion lleva la carpeta en su .md
+        (copiar_a). Copia .txt, .md y .resumen.md sin mover nada ni pisar lo que haya tocado alguien."""
+        try:
+            abs_path = safe(rel, "file")
+            dest = str(md_props(abs_path).get("copiar_a") or "").strip()
+            if not dest:
+                return None
+            if not os.path.isdir(dest):
+                log(f"   {os.path.basename(rel)}: no se copian los textos, la carpeta no está disponible: {dest}")
+                return None
+            if getattr(self, "_copias", None) is None:
+                self._copias = Copias(os.path.join(DATA_DIR, "copias.json"))
+            done = copy_texts(abs_path, dest, self._copias)
+            hechas = [e for e, k in done if k == "copiado"]
+            omitidas = [e for e, k in done if k == "omitido"]
+            if hechas or omitidas:
+                log(f"   {os.path.basename(rel)}: textos copiados a {dest}: {', '.join(hechas) or 'ninguno nuevo'}"
+                    + (f" · sin pisar (cambiados en el destino): {', '.join(omitidas)}" if omitidas else ""))
+            return done
+        except Exception:
+            log_exc()
+            return None
 
     def auto_voices(self, rel):
         if not self.voices_on():
@@ -1541,15 +1852,18 @@ class Jobs:
             job.duration = max(1.0, total - start) if total else None  # lo que queda por transcribir
             if start:
                 log(f"   continuando desde {start / 60:.1f} min")
-            vocab = vocab_for(abs_path, st)  # el del workstream de la reunion, o el general
+            ms = meeting_setup(abs_path, st)  # vocabulario del tema (o el general), contexto libre e idioma del .md
+            vocab, about = ms["prompt"], ms["about"]
+            if job.final_pass:  # el repaso final usa el idioma que tenga la reunion al terminar (pudo cambiarse)
+                job.language = ms["language"] or None
             if preset["engine"] == "local":
                 segs, lang, dur = self.local.transcribe(abs_path, preset, job.language, vocab,
                                                         int(st.get("threads") or default_threads()),
-                                                        report, lambda: job.cancel, start=start)
+                                                        report, lambda: job.cancel, start=start, about=about)
             else:
                 segs, lang, dur = self.cloud.transcribe(abs_path, job.duration, st["cloud"], job.language,
                                                         vocab, job.id, report, lambda: job.cancel,
-                                                        start=start)
+                                                        start=start, about=about)
             if job.cancel:
                 raise engines.Cancelled()
             if start:
@@ -1589,6 +1903,7 @@ class Jobs:
                 log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
                 log("   se mantiene el texto del directo")
+                self.copy_texts(job.path)
                 self.auto_summary(job.path)
         finally:
             job.finished = time.time()
@@ -1640,7 +1955,7 @@ class App:
                 # nombre y tema: lo que mande el aviso flotante; si no, la reunión en curso (Teams/Outlook, sin
                 # esperar a COM: calendario.py); si no, el ultimo tema elegido (y la carpeta de su proyecto)
                 sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
-                vid = b.get("vocab") or sug.get("vocab") or st.get("rec_vocab")
+                vid = perfil_vocab(st, b.get("vocab") or sug.get("vocab"))  # fijo en el perfil > reunion > ultimo
                 v = find_vocab(None, None, vid) if vid else None
                 cue("start")  # antes de empezar: asi el pitido no queda grabado
                 r = self.rec_start({"mic": st.get("rec_mic") or "default", "sys": st.get("rec_sys") or "all",
@@ -1750,6 +2065,18 @@ class App:
                 props = {"proyecto": v["project"], "workstream": v["name"]} if v else {}
                 if b.get("participantes"):  # sugeridos por Teams/Outlook: solo a la cabecera del .md, en este PC
                     props["participantes"] = " ".join(str(b["participantes"]).split())[:500]
+                # perfil de la reunion, a la cabecera del .md: idioma y contexto (el directo, la cola y el resumen
+                # los leen de ahi; se pueden cambiar en la pagina de la reunion) y la carpeta a la que copiar textos
+                perfil = perfil_de(self.settings.get())
+                if "language" in b:
+                    lang = str(b.get("language") or "").strip().lower()
+                    props["idioma"] = lang if lang and IDIOMA_RE.match(lang) else "auto"
+                ctx = b.get("contexto") if "contexto" in b else perfil["context"]
+                ctx = " ".join(str(ctx or "").split())[:engines.ABOUT_CHARS]
+                if ctx:
+                    props["contexto"] = ctx
+                if perfil["copy_to"] and os.path.isdir(perfil["copy_to"]):
+                    props["copiar_a"] = perfil["copy_to"]
                 if props:  # antes de arrancar el directo, para que ya use ese vocabulario
                     self.notes_save({"path": rel, "props": props})
 
@@ -1765,8 +2092,7 @@ class App:
                     if mic != "none":
                         d["rec_mic"] = mic
                     d.update(rec_sys=sys_dev, live_preset=preset if preset in LIVE_PRESETS else "medium")
-                    if "language" in b:  # el directo usa el idioma guardado
-                        d["language"] = b.get("language") or ""
+                    # el idioma elegido para ESTA reunion va en su .md; el ajuste general solo lo cambia el perfil
                 self.settings.update(upd)
                 self.library.at = 0
                 if b.get("live"):
@@ -1874,7 +2200,8 @@ class App:
                             "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
                             "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()},
                 "voices": {"enabled": bool(st.get("voices_enabled")), "models_ready": voices.models_ready(DATA_DIR)},
-                "lost_secrets": list(getattr(self.settings, "lost", []))}
+                "lost_secrets": list(getattr(self.settings, "lost", [])),
+                "perfil": perfil_de(st)}
 
     def tree(self, q):
         tree, version = self.library.refresh(max_age=1.0)
@@ -1926,6 +2253,11 @@ class App:
                 if k in NOTE_KEYS:
                     if k == "etiquetas":
                         v = [" ".join(str(t).split()) for t in (v or []) if str(t).strip()]
+                    elif k == "idioma":  # codigo o "auto"; vacio = se quita la clave (vuelve al del perfil)
+                        v = str(v or "").strip().lower()
+                        v = v if IDIOMA_RE.match(v) else ""
+                    elif k in ("contexto", "copiar_a"):
+                        v = " ".join(str(v or "").split())[:engines.ABOUT_CHARS]
                     props[k] = v
             if "body" in b:
                 body = b.get("body") or ""
@@ -1934,8 +2266,8 @@ class App:
                 save_text(md, text, "utf-8")
             elif os.path.isfile(md):
                 os.remove(md)  # sin notas ni propiedades: no se deja un archivo vacio
-        if {"proyecto", "workstream"} & set(b.get("props") or {}):
-            self.jobs.refresh_prompt(rel_of(abs_path))
+        if {"proyecto", "workstream", "idioma", "contexto"} & set(b.get("props") or {}):
+            self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
         self.library.at = 0
         return {"props": props, "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
 
@@ -1958,14 +2290,16 @@ class App:
         self.library.at = 0
 
     def link_pick(self, b):
-        """Abre el selector de carpetas de Windows (en este PC) y devuelve la que elijas."""
+        """Abre el selector de carpetas de Windows (en este PC) y devuelve la que elijas. b.title: lo que dice la
+        ventana (por defecto, la carpeta donde grabar; tambien se usa para la carpeta de copias y para importar)."""
         script = ("import sys, tkinter as tk\nfrom tkinter import filedialog\n"
                   "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
                   "p = filedialog.askdirectory(parent=r, title=sys.argv[1], mustexist=True,"
                   " initialdir=sys.argv[2] or None)\nsys.stdout.write(p or '')\n")
         start = os.path.dirname(ROOT) if not LINKS else os.path.dirname(next(iter(LINKS.values()))["path"])
         try:
-            r = subprocess.run([sys.executable, "-c", script, "Carpeta donde guardar las grabaciones", start],
+            title = " ".join(str(b.get("title") or "").split())[:80] or "Carpeta donde guardar las grabaciones"
+            r = subprocess.run([sys.executable, "-c", script, title, start],
                                capture_output=True, timeout=900, creationflags=engines.NO_WINDOW)
         except (OSError, subprocess.SubprocessError) as e:
             raise ApiError(f"No se pudo abrir el selector de carpetas ({e.__class__.__name__}); pega la ruta a mano.")
@@ -2016,7 +2350,11 @@ class App:
         return {"ok": True}
 
     def rec_folder_for(self, v, st):
-        """Donde se graba: la ultima carpeta usada para ese proyecto o, si no hay, la ultima usada."""
+        """Donde se graba: la carpeta fija del perfil si la hay; si no, la ultima usada para ese proyecto o, si no
+        hay, la ultima usada."""
+        fija = perfil_folder(st)
+        if fija is not None:
+            return fija
         for rel in ((st.get("project_folders") or {}).get(v["project"]) if v else None, st.get("rec_folder")):
             if rel is None:
                 continue
@@ -2064,6 +2402,29 @@ class App:
         self.library.at = 0
         log(f"🔤 vocabulario guardado: {project} · {name} ({len(terms)} términos)")
         return {"id": rel_of(path)}
+
+    def vocab_import(self, b):
+        """POST /api/vocab/import {path, project?}: copia las listas de otra carpeta (ver import_vocab)."""
+        r = import_vocab(b.get("path"), (b.get("project") or "").strip() or None)
+        self.library.at = 0
+        return r
+
+    # --- perfil de reunion
+    def perfil_get(self, q):
+        """GET /api/perfil: el perfil por defecto y lo que se aplicaria ahora mismo a una grabacion (con la reunion
+        en curso, si la hay)."""
+        st = self.settings.get()
+        sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
+        auto = lambda vid: self.rec_folder_for(find_vocab(None, None, vid) if vid else None, st)  # noqa: E731
+        return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto)}
+
+    def perfil_save(self, b):
+        """POST /api/perfil: guarda el perfil por defecto (solo las claves que vengan: folder, vocab, context,
+        copy_to, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar."""
+        cambios = check_perfil(b)
+        self.settings.update(lambda d: update_perfil(d, cambios))
+        log("   perfil de reunión guardado: " + ", ".join(sorted(cambios)))
+        return {"perfil": perfil_de(self.settings.get())}
 
     def vocab_delete(self, b):
         v = find_vocab(None, None, b.get("id"))
@@ -2488,6 +2849,8 @@ class App:
         return {"ok": True}
 
     def save_settings(self, b):
+        perfil = check_perfil(b["perfil"]) if isinstance(b.get("perfil"), dict) else {}  # valida antes de guardar
+
         def upd(d):
             for k in ("preset", "language", "prompt"):
                 if k in b:
@@ -2514,6 +2877,8 @@ class App:
                 d["live_preset"] = b["live_preset"]
             if "threads" in b:
                 d["threads"] = max(1, min(int(b["threads"] or default_threads()), os.cpu_count() or 16))
+            if perfil:
+                update_perfil(d, perfil)
             c = b.get("cloud") or {}
             for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
                 if k in c:
@@ -2764,7 +3129,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
-                  "/api/reunion/actual": a.reunion_actual}
+                  "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get}
         try:
             if u.path in routes:
                 return self._json(routes[u.path](q))
@@ -2798,6 +3163,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/export": a.export_package, "/api/link/pick": a.link_pick, "/api/link/add": a.link_add,
                   "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
                   "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check,
+                  "/api/vocab/import": a.vocab_import, "/api/perfil": a.perfil_save,
                   "/api/voces/activar": a.voices_toggle, "/api/voces/identificar": a.voices_identify,
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,

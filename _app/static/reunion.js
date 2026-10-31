@@ -58,7 +58,9 @@ async function reunionPrefill(d) {
   const prev = { name: name ? name.value : '', vocab: sel ? sel.value : '' };
   if (name && !name.value && s.name) name.value = s.name;
   let vocabOk = false;
-  if (sel && s.vocab && [...sel.options].some(o => o.value === s.vocab)) {
+  // perfil.js marca pfVocab cuando el perfil fija el tema: entonces la sugerencia no lo cambia (el nombre y los
+  // participantes sí se sugieren, porque el perfil no los fija)
+  if (sel && s.vocab && !d.dataset.pfVocab && [...sel.options].some(o => o.value === s.vocab)) {
     sel.value = s.vocab;
     sel.dispatchEvent(new Event('change'));  // carpeta del proyecto y aviso de cuánto cabe, como si lo eligieras tú
     vocabOk = true;

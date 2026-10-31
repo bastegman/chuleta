@@ -86,7 +86,8 @@ const presetIcon = p => !p ? '' : PRESET_ICONS[p.id] ? I[PRESET_ICONS[p.id]] : (
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const DIA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const LANGS = [['es-en', 'Español + inglés (spanglish)'], ['', 'Detectar (cualquier idioma)'], ['es', 'Solo español'], ['en', 'Solo inglés'],
-  ['pt', 'Português'], ['fr', 'Français'], ['it', 'Italiano'], ['de', 'Deutsch'], ['ca', 'Català']];
+  ['pt', 'Português'], ['fr', 'Français'], ['it', 'Italiano'], ['de', 'Deutsch'], ['ca', 'Català'],
+  ['es-pt', 'Español + portugués (mezcla)'], ['en-pt', 'Inglés + portugués (mezcla)']];
 const langSelect = (id, sel) => `<select id="${id}" title="Idioma de la reunión">${LANGS.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const MODEL_GB = { 'small': '0,5 GB', 'medium': '1,5 GB', 'large-v3-turbo': '1,6 GB', 'large-v3': '3 GB' };
@@ -285,6 +286,7 @@ function renderLiveHero(a) {
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
     <div id="directoBar"></div>
     ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
+    ${typeof perfilLiveHtml === 'function' ? perfilLiveHtml(a) : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
     <div class="lh-label">Modelo ${j ? '<span class="muted">(el cambio se aplica desde el siguiente trozo)</span>' : ''}</div>
     ${liveModels(sel, j)}
@@ -353,7 +355,7 @@ async function pollRec() {
 function onRecChange() {
   refreshTree(true); pollJobs(true);
   if (S.recLocal) { S.recLocal = false; return; }  // lo ha pedido esta misma pagina: ya avisa ella
-  if (S.rec.recording) toast('● Grabando · <b>Ctrl+Alt+R</b> para parar. Clic para ver el directo', '', () => go('a', S.rec.path));
+  if (S.rec.recording) toast('● Grabando con el perfil por defecto · <b>Ctrl+Alt+R</b> para parar · clic para ajustar idioma, tema y contexto', '', () => go('a', S.rec.path));
   else toast('■ Grabación guardada · la transcripción termina sola');
 }
 async function toggleRec() {
@@ -403,8 +405,10 @@ const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulari
 async function openRec() {
   if (S.rec.recording) return stopRec();
   recDialog = true;
-  // desde una carpeta: ahi; si no, donde se grabo la ultima vez (con workstream, la de su proyecto: ver applyVocab)
-  const folder = S.route.kind === 'f' ? S.route.path : (S.folders.has(S.config.rec_folder) ? S.config.rec_folder : '');
+  // desde una carpeta: ahi; si no, la fija del perfil; si no, donde se grabo la ultima vez (con tema, la de su proyecto: applyVocab)
+  const pf = S.config.perfil || {};
+  const folder = S.route.kind === 'f' ? S.route.path : (pf.folder != null && S.folders.has(pf.folder)) ? pf.folder
+    : (S.folders.has(S.config.rec_folder) ? S.config.rec_folder : '');
   openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
@@ -416,7 +420,8 @@ async function openRec() {
     let devs, voc;
     try { [devs, voc] = await Promise.all([api('/api/rec/devices'), loadVocab(S.config.language ?? 'es-en')]); }
     catch (err) { $('#rForm', d).innerHTML = `<div class="notice">${esc(err.message)}</div>`; return; }
-    const want = S.vocabJustSaved || voc.last;  // el que se acaba de crear desde este dialogo, o el ultimo usado
+    // tema: el que se acaba de crear desde este dialogo; si no, el fijo del perfil; si no, el ultimo usado
+    const want = S.vocabJustSaved || (pf.vocab != null ? pf.vocab : voc.last);
     S.vocabJustSaved = null;
     const lastWs = S.vocab.some(v => v.id === want) ? want : '';
     // arriba, las opciones que siguen solas a los cascos; debajo, cada dispositivo por si hace falta fijarlo
@@ -431,11 +436,9 @@ async function openRec() {
       + o('none', 'No grabar el audio del ordenador', devs.sys);
     const presets = S.config.presets.map(p => `<option value="${p.id}"${p.id === (S.config.live_preset || 'medium') ? ' selected' : ''}>${esc(p.live_label)} · ${liveFit(p)[1]}</option>`).join('');
     $('#rForm', d).innerHTML = `
-      <label>${I.topic}Tema <span class="muted" style="font-weight:400">· el vocabulario que recibe Whisper</span></label>
-      ${S.vocab.length ? `<div class="row" style="gap:6px;flex-wrap:nowrap"><select id="rVocab" style="flex:1">${vocabOptions(lastWs)}</select>
-          <button class="btn sm" type="button" id="rVocabNew" title="Crear un proyecto o tema nuevo con su lista de nombres y siglas">${I.plus}Nuevo</button></div><div class="help" id="rVocabFit"></div>`
-        : `<div class="row" style="gap:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button>
-          <span class="muted" style="font-size:12px">nombres, siglas y sistemas que salen en sus reuniones, para que Whisper los escriba bien</span></div>`}
+      ${typeof perfilTemaHtml === 'function' ? perfilTemaHtml(lastWs) : `<label>${I.topic}Tema</label>${S.vocab.length
+        ? `<div class="row" style="gap:6px;flex-wrap:nowrap"><select id="rVocab" style="flex:1">${vocabOptions(lastWs)}</select><button class="btn sm" type="button" id="rVocabNew">${I.plus}Nuevo</button></div><div class="help" id="rVocabFit"></div>`
+        : `<div class="row" style="gap:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button></div>`}`}
       <label class="chk"><input type="checkbox" id="rMicOn" checked><span>${I.mic}Grabar también mi micrófono <span class="muted" style="font-weight:400">· desmárcalo para grabar solo el audio del ordenador</span></span></label>
       <div id="rMicBox"><select id="rMic">${mics}</select>
       ${meterHtml('mic', 'Nivel')}</div>
@@ -446,13 +449,15 @@ async function openRec() {
         <div><label>Nombre (opcional)</label><input class="input" id="rName" placeholder="p. ej. Reunión semanal del equipo"></div>
         <div><label title="Donde se guardan el audio y la transcripción">Carpeta de destino</label><select id="rFolder" title="Donde se guardan el audio y la transcripción">${folderOpts(folder)}</select></div>
       </div>
+      ${typeof perfilCamposHtml === 'function' ? perfilCamposHtml(S.config.language ?? 'es-en', pf.context) : langSelect('rLang', S.config.language ?? 'es-en')}
       <label>${I.chat}Transcripción</label>
       <div class="seg2" id="rMode">
         <label class="on"><input type="radio" name="rMode" value="live" checked><b>Transcribir en directo</b><span>El texto va apareciendo mientras se habla</span></label>
         <label><input type="radio" name="rMode" value="rec"><b>Solo grabar</b><span>Si el portátil va lento: la transcribes al terminar</span></label>
       </div>
-      <div class="grid2" id="rLiveOpts"><select id="rPreset">${presets}</select>${langSelect('rLang', S.config.language ?? 'es-en')}</div>
+      <div id="rLiveOpts"><select id="rPreset">${presets}</select></div>
       <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">${I.clipboard}Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
+    if (typeof perfilBindRec === 'function') perfilBindRec(d);  // Proyecto/Tema, importar listas y «Guardar como perfil»
     const micVal = () => $('#rMicOn', d).checked ? $('#rMic', d).value : 'none';
     const monitor = () => api('/api/rec/monitor', { mic: micVal(), sys: $('#rSys', d).value }).catch(() => { });
     $('#rMic', d).onchange = $('#rSys', d).onchange = monitor;
@@ -467,6 +472,7 @@ async function openRec() {
       const v = vocabSel(), fit = $('#rVocabFit', d);
       if (fit) fit.innerHTML = vocabFit(v);
       if (initial && S.route.kind === 'f') return;  // se abrio desde una carpeta: esa manda
+      if (pf.folder != null) return;  // carpeta fija en el perfil: el tema no la cambia
       // la ultima carpeta donde grabaste reuniones de ese proyecto; si aun no hay, se queda la elegida
       const want = v ? S.config.project_folders?.[v.project] : (initial ? S.config.rec_folder || '' : undefined);
       if (want != null && [...fsel.options].some(o => o.value === want)) fsel.value = fsel.dataset.prev = want;
@@ -493,9 +499,9 @@ async function openRec() {
         S.recLocal = true;
         const r = await api('/api/rec/start', { mic: micVal(), sys: $('#rSys', d).value, name: $('#rName', d).value.trim(),
           folder: $('#rFolder', d).value, live: d.querySelector('[name=rMode]:checked').value === 'live', preset: $('#rPreset', d).value,
-          language: $('#rLang', d).value, vocab: $('#rVocab', d)?.value || '', ...(window.reunionExtra?.(d) || {}) });
+          language: $('#rLang', d).value, vocab: $('#rVocab', d)?.value || '', ...(window.reunionExtra?.(d) || {}),
+          ...(typeof perfilRecExtra === 'function' ? perfilRecExtra(d) : {}) });
         S.config.live_preset = $('#rPreset', d).value;
-        S.config.language = S.selLang = $('#rLang', d).value;
         recDialog = false;
         closeModal(true);
         toast((r.workstream ? `🗂 <b>${esc(r.workstream)}</b> · ` : '') + 'Grabando · el texto irá apareciendo en directo');
@@ -761,7 +767,7 @@ function txBox(list, title, opts = {}) {
       + `<div class="pe">${cloudOff ? 'Configurar' : fmtEst(est)}</div>`
       + `<div class="pm">${p.engine === 'cloud' ? (cloudOff ? 'falta API key' : esc(S.config.providers[S.config.cloud.provider]?.label || 'nube')) : esc(p.model)}</div></button>`;
   }).join('');
-  const lang = S.selLang ?? S.config.language;
+  const lang = list.length === 1 && typeof perfilLangOf === 'function' ? perfilLangOf(list[0]) : (S.selLang ?? S.config.language);
   const hint = S.presetsById[sel]?.hint || '';
   return `<div class="card txbox" data-box="${id}">
     <div class="head"><b>${esc(title)}</b><span class="muted">${list.length > 1 ? `${list.length} audios · ` : ''}${fmtDur(total)} de audio${resume && list.some(a => a.partial) ? ' por transcribir' : ''}</span></div>
@@ -1818,11 +1824,9 @@ function openSettings() {
     </fieldset>
     <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
-      <label>Motor para el directo</label>
-      <select id="lPreset">${S.config.presets.map(p => `<option value="${p.id}"${(S.config.live_preset || 'medium') === p.id ? ' selected' : ''}>${esc(p.live_label)} · ~${String(p.live_speed).replace('.', ',')}× · ${liveFit(p)[1]}</option>`).join('')}</select>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
-      <div class="help">Modelo con el que empieza cada directo; se puede cambiar en mitad de la grabación desde la propia pantalla. En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.</div>
+      <div class="help">El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.</div>
     </fieldset>
     ${window.reunionFieldsetHtml?.() || ''}
     <fieldset><legend>${I.monitor}Transcripción local</legend>
@@ -1831,16 +1835,11 @@ function openSettings() {
     </fieldset>
     <fieldset><legend>${I.spark}Resumen con IA</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
-      <div class="grid2"><div><label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
-        <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist></div>
-        <div><label>Idioma del resumen</label><select id="sSumLang">${[['es', 'Español'], ['en', 'Inglés'], ['same', 'El de la reunión']].map(([v, l]) => `<option value="${v}"${v === (S.config.summary?.lang || 'es') ? ' selected' : ''}>${l}</option>`).join('')}</select></div></div>
-      <label>Instrucciones extra (opcional)</label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(S.config.summary?.extra || '')}</textarea>
-      <div class="help">Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+      <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
+      <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
-    <fieldset><legend>${I.globe}Idioma de las reuniones</legend>
-      <label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}
-      <div class="help"><b>Español + inglés</b>: detecta el idioma cada ~20–30 s pero solo entre esos dos, y deja los términos en inglés dentro de frases en español (deadline, feedback…). Si una reunión es solo en un idioma, fijarlo es algo más preciso.</div>
-    </fieldset>
+    ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
     <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
       <div id="sLinks"></div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
@@ -1890,6 +1889,7 @@ function openSettings() {
     bindVocesSettings(d);
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     window.bindReunionSettings?.(d);
+    if (typeof bindPerfilSettings === 'function') bindPerfilSettings(d);
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -1901,9 +1901,10 @@ function openSettings() {
       if (typeof collectDirectoSettings === 'function') Object.assign(cloud, collectDirectoSettings(d));
       S.selLang = $('#sLang', d).value;
       return { cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
-        live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d).value, meeting_detect: $('#lMeet', d).checked,
+        live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
-        summary: { auto: $('#sAuto', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d).value, extra: $('#sExtra', d).value } };
+        ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
+        summary: { auto: $('#sAuto', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
     };
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
@@ -1935,11 +1936,13 @@ function openSettings() {
           <button class="btn ghost sm" type="button" data-vdir="${esc(vs[0].id.split('/').slice(0, -1).join('/'))}" title="Abrir su carpeta Vocabulario">${I.ext}Carpeta</button></div>
         <table class="vtable">${vs.map(v => `<tr><td>${esc(v.name)}</td><td>${vocabFit(v)}</td>
           <td><button class="btn ghost sm" type="button" data-vedit="${esc(v.id)}">editar</button></td></tr>`).join('')}</table>`).join('')}
-        <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button></div>
+        ${typeof perfilVocabEmptyHtml === 'function' && !S.vocab.length ? perfilVocabEmptyHtml() : ''}
+        <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button>${typeof perfilImportar === 'function' ? `<button class="btn sm" type="button" id="sVocabImport">${I.folder}Importar listas de otra carpeta…</button>` : ''}</div>
         <div class="help">Cada tema es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>`;
     });
     d.addEventListener('click', e => {
       const ed = e.target.closest('[data-vedit]'), nw = e.target.closest('[data-vnew]'), r = e.target.closest('[data-vdir]');
+      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', openSettings);
       if (ed) openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit));
       if (nw) openVocabEditor(null, openSettings, nw.dataset.vnew);
       if (r) api('/api/reveal', { path: r.dataset.vdir }).catch(err => toast(esc(err.message), 'err'));

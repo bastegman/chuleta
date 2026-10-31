@@ -342,9 +342,10 @@ def run(job, path, opts, write, log):
     """Bucle de la sesion en directo.
 
     job.preset puede cambiar durante la sesion (se aplica desde el siguiente trozo) y job.restart
-    pide rehacerlo todo desde el principio. opts: language, prompt, threads, worker (WorkerClient
-    propio), cloud, cloud_cfg, tmp_dir, resume (segmentos ya escritos por una sesion anterior),
-    summarizer (traduccion del directo)."""
+    pide rehacerlo todo desde el principio. opts: language, prompt, about (contexto libre de la reunion),
+    threads, worker (WorkerClient propio), cloud, cloud_cfg, tmp_dir, resume (segmentos ya escritos por una
+    sesion anterior), summarizer (traduccion del directo). language, prompt y about se releen en cada trozo:
+    si se cambian en la pagina de la reunion, valen desde el siguiente."""
     info = None
     for _ in range(60):  # OBS puede tardar un instante en escribir la cabecera
         info = wav_info(path)
@@ -392,21 +393,27 @@ def run(job, path, opts, write, log):
                        "live_model": engines.CloudEngine.live_model(cfg) if on_cloud else None}
 
     def transcribe(window, offset):
-        nonlocal lang
+        nonlocal lang, fixed_lang
         preset = engines.PRESETS_BY_ID.get(job.preset) or engines.PRESETS_BY_ID["medium"]
         prev = segs[-1:]  # para no repetir la ultima frase del trozo anterior
         context = " ".join(t for _, _, t in segs[-CONTEXT_SEGS:])  # para enlazar con lo que se estaba diciendo
+        want = opts.get("language") or None  # cambiado en la pagina de la reunion: vale desde este trozo
+        if want != fixed_lang:
+            fixed_lang, lang = want, (want or lang)
+            log(f"   directo: idioma {want or 'detectar'} desde el siguiente trozo")
+        about = opts.get("about") or None
         if preset["engine"] == "cloud":
             out, detected = opts["cloud"].transcribe_array(opts["cloud_cfg"], window, fixed_lang, opts.get("prompt"),
                                                            opts["tmp_dir"], job.id, stage, lambda: job.cancel,
                                                            context=context,
-                                                           model=engines.CloudEngine.live_model(opts["cloud_cfg"]))
+                                                           model=engines.CloudEngine.live_model(opts["cloud_cfg"]),
+                                                           about=about)
             lang = engines.LANG_CODES.get(str(detected or "").lower(), lang)
             out = [(a + offset, b + offset, t) for a, b, t in out]
             return stitch(prev, out, st["dedupe_until"], lang)
         secs = len(window) / SR
         req = {"op": "window", "model": preset["model"], "threads": opts["threads"], "language": fixed_lang,
-               "prev_language": lang, "prompt": opts.get("prompt"), "context": context, "beam": 1}
+               "prev_language": lang, "prompt": opts.get("prompt"), "context": context, "beam": 1, "about": about}
         for attempt in range(2):
             try:
                 worker.ensure(preset["model"], opts["threads"], lambda m: stage(m.get("stage") or job.stage),

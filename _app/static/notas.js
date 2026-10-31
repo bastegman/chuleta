@@ -230,6 +230,7 @@ function propsHtml(a) {
     <div class="prow"><span class="pk">${I.folder}Carpeta</span><span class="pv"><a href="${a.folder ? href('f', a.folder) : '#/'}">${esc(a.folder ? pathLabel(a.folder) : 'Sin clasificar')}</a>
       <button class="btn ghost sm" data-act="move" data-path="${esc(a.path)}">cambiar</button></span></div>
     <div class="prow"><span class="pk">${I.topic}Tema</span><span class="pv">${wsSelect(a)}</span></div>
+    ${typeof perfilPropsHtml === 'function' ? perfilPropsHtml(a) : ''}
     <div class="prow"><span class="pk">${I.state}Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
     <div class="prow"><span class="pk">${I.tag}Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
     <div class="prow"><span class="pk">${I.users}Participantes</span><span class="pv"><input class="pinput" data-prop="participantes" value="${esc(p.participantes || '')}" placeholder="Vacío" autocomplete="off"></span></div>
@@ -243,12 +244,15 @@ const curAudio = () => S.route.kind === 'a' ? S.audios.get(S.route.path) : null;
 main.addEventListener('change', e => {
   const a = curAudio();
   if (a && e.target.dataset.prop === 'estado') { e.target.className = 'pstate ' + (ESTADO_CLS[e.target.value] || ''); saveProps(a, { estado: e.target.value }); }
+  if (a && e.target.dataset.prop === 'idioma') {  // perfil.js: el directo lo relee en el siguiente trozo
+    saveProps(a, { idioma: e.target.value }).then(() => { if (typeof perfilSavedText === 'function') toast(perfilSavedText('idioma', !!liveJob(a), !!(a.txt || a.srt))); });
+  }
 });
 main.addEventListener('keydown', e => {
   const a = curAudio();
   if (!a) return;
   if (e.target.id === 'pTitleTxt' && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-  if (e.target.dataset && e.target.dataset.prop === 'participantes' && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+  if (e.target.dataset && (e.target.dataset.prop === 'participantes' || e.target.dataset.prop === 'contexto') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
   if (e.target.dataset && e.target.dataset.tagAdd !== undefined && e.key === 'Enter') {
     e.preventDefault();
     const t = ' '.concat(e.target.value).trim();
@@ -258,10 +262,10 @@ main.addEventListener('keydown', e => {
     saveProps(a, { etiquetas: tags }).then(() => { renderAudioHead(a, true); $('[data-tag-add]')?.focus(); fillTagList(); });
   }
 });
-/* titulo y participantes: se guardan al dejar de escribir (y al salir del campo) */
+/* titulo, participantes y contexto: se guardan al dejar de escribir (y al salir del campo) */
 let propTimer = null;
 main.addEventListener('input', e => {
-  if (e.target.id !== 'pTitleTxt' && !(e.target.dataset && e.target.dataset.prop === 'participantes')) return;
+  if (e.target.id !== 'pTitleTxt' && !(e.target.dataset && (e.target.dataset.prop === 'participantes' || e.target.dataset.prop === 'contexto'))) return;
   clearTimeout(propTimer);
   propTimer = setTimeout(() => e.target.dispatchEvent(new FocusEvent('focusout', { bubbles: true })), 900);
 });
@@ -274,6 +278,9 @@ main.addEventListener('focusout', e => {
   } else if (e.target.dataset && e.target.dataset.prop === 'participantes') {
     const v = e.target.value.trim();
     if (v !== ((a.props || {}).participantes || '')) saveProps(a, { participantes: v });
+  } else if (e.target.dataset && e.target.dataset.prop === 'contexto') {  // perfil.js: Whisper y el resumen lo usan
+    const v = e.target.value.trim();
+    if (v !== ((a.props || {}).contexto || '')) saveProps(a, { contexto: v }).then(() => { if (typeof perfilSavedText === 'function') toast(perfilSavedText('contexto', !!liveJob(a), !!(a.txt || a.srt))); });
   }
 });
 

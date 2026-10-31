@@ -1,0 +1,234 @@
+'use strict';
+/* Perfil de reunión: carpeta de destino, idioma, tema de vocabulario y contexto libre, con un perfil por defecto
+   (Ajustes → Perfil de reunión, o «Guardar como perfil por defecto» al grabar) y ajustes por reunión (diálogo
+   «● Grabar» y página de la reunión: el directo los relee en el siguiente trozo). También el selector de tema en
+   dos pasos (Proyecto / Tema) y la importación de listas de vocabulario de otra carpeta.
+   Se carga después de app.js y notas.js y usa sus utilidades ($, $$, api, esc, I, S, LANGS, langSelect, folderOpts,
+   liveFit, toast, loadVocab, refreshTree, linkFolder, openRec, openSettings). app.js y notas.js lo invocan con
+   `typeof x === 'function'`: sin este fichero la app funciona igual, con el selector de tema de siempre y sin perfil. */
+
+const PERFIL_AUTO = '__auto';  // valor del <select> para «automático» (null en el servidor)
+
+/* ---------------------------------------------------------------- idioma */
+function perfilLangLabel(code) {
+  const hit = LANGS.find(([v]) => v === (code || ''));
+  return hit ? hit[1] : (code || '');
+}
+/* Opciones del idioma de UNA reunión: «Por defecto» quita la clave del .md (vale el del perfil); «auto» = detectar.
+   sel: lo que tiene el .md ('' o undefined = por defecto, 'auto', o un código). def: el idioma del perfil. */
+function perfilLangOptions(sel, def) {
+  const cur = sel || '';
+  const opts = [['', `Por defecto · ${perfilLangLabel(def)}`], ['auto', perfilLangLabel('')]]
+    .concat(LANGS.filter(([v]) => v).map(([v, l]) => [v, l]));
+  return opts.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
+}
+/* Idioma con el que se transcribe una reunión concreta (para preseleccionar la caja «Transcribir»). */
+function perfilLangOf(a) {
+  const v = (a && a.props && a.props.idioma) || '';
+  if (v === 'auto') return '';
+  return v || (S.selLang ?? S.config.language ?? '');
+}
+
+/* ---------------------------------------------------------------- precedencias */
+/* Qué se aplica a una grabación nueva y de dónde sale cada campo (igual que resolve_perfil en el servidor):
+   lo elegido en el diálogo > lo que fija el perfil > la sugerencia de la reunión en curso > lo último usado.
+   perfil: {folder, vocab, context, language} con null = automático; sug: {name, vocab}; last: {folder, vocab}. */
+function perfilResolve(perfil, sug, last, elegido) {
+  perfil = perfil || {}; sug = sug || {}; last = last || {}; elegido = elegido || {};
+  const out = {}, origen = {};
+  const pick = (k, cands) => {
+    for (const [o, v] of cands) if (v != null) { out[k] = v; origen[k] = o; return; }
+    out[k] = ''; origen[k] = 'ultimo';
+  };
+  pick('vocab', [['elegido', elegido.vocab], ['perfil', perfil.vocab], ['reunion', sug.vocab || null], ['ultimo', last.vocab || '']]);
+  pick('folder', [['elegido', elegido.folder], ['perfil', perfil.folder], ['ultimo', last.folder || '']]);
+  pick('language', [['elegido', elegido.language], ['perfil', perfil.language ?? '']]);
+  pick('context', [['elegido', elegido.context], ['perfil', perfil.context || '']]);
+  pick('name', [['elegido', elegido.name || null], ['reunion', sug.name || null], ['ultimo', '']]);
+  return { ...out, origen };
+}
+
+/* ---------------------------------------------------------------- tema en dos pasos (Proyecto / Tema) */
+function perfilGroups(vocab) {
+  const g = new Map();
+  (vocab || []).forEach(v => { if (!g.has(v.project)) g.set(v.project, []); g.get(v.project).push(v); });
+  return [...g.entries()];
+}
+/* Opciones del <select> Tema: TODAS las listas (así reunion.js y app.js pueden fijar cualquier id con .value),
+   ocultas las de otros proyectos. '' = sin vocabulario. */
+function perfilTemaOptions(vocab, proj, sel) {
+  return '<option value="">Sin vocabulario</option>' + (vocab || []).map(v =>
+    `<option value="${esc(v.id)}" data-proj="${esc(v.project)}"${v.id === sel ? ' selected' : ''}${v.project !== proj ? ' hidden' : ''}>${esc(v.name)}${v.desc ? ' · ' + esc(v.desc) : ''}</option>`).join('');
+}
+function perfilVocabEmptyHtml() {
+  return `<div class="help" style="margin-top:0">Todavía no hay listas. Cada lista es un archivo de texto <code>&lt;Proyecto&gt;\\Vocabulario\\&lt;Tema&gt;.txt</code> en la carpeta de la app (junto a <code>_app</code>) o en una carpeta vinculada, con los nombres, siglas y productos de esas reuniones separados por comas, los más importantes primero.</div>`;
+}
+/* Bloque «Tema» del diálogo Grabar. sel: id de la lista preseleccionada ('' = sin vocabulario). */
+function perfilTemaHtml(sel) {
+  const vocab = S.vocab || [];
+  const label = `<label>${I.topic}Tema <span class="muted" style="font-weight:400">· el vocabulario que recibe Whisper</span></label>`;
+  if (!vocab.length) {
+    return `${label}${perfilVocabEmptyHtml()}
+      <div class="row" style="gap:8px;margin-top:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button>
+        <button class="btn sm" type="button" id="rVocabImport" title="Copia las listas <Proyecto>\\Vocabulario\\*.txt de otra carpeta (la de un compañero, otra copia de la app…) sin pisar las que ya tengas">${I.folder}Importar listas de otra carpeta…</button></div>`;
+  }
+  const cur = vocab.find(v => v.id === sel), proj = cur ? cur.project : '';
+  return `${label}
+    <div class="row pf-tema" style="gap:6px;flex-wrap:nowrap">
+      <select id="rProj" title="Proyecto"><option value="">Sin vocabulario</option>${perfilGroups(vocab).map(([p]) => `<option value="${esc(p)}"${p === proj ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>
+      <select id="rVocab" title="Tema del proyecto">${perfilTemaOptions(vocab, proj, sel)}</select>
+      <button class="btn sm" type="button" id="rVocabNew" title="Crear un proyecto o tema nuevo con su lista de nombres y siglas">${I.plus}Nuevo…</button>
+    </div><div class="help" id="rVocabFit"></div>`;
+}
+/* Enlaza Proyecto ↔ Tema (se llama antes de que app.js ponga su onchange en #rVocab, así «sync» corre primero). */
+function perfilBindTema(d) {
+  const proj = $('#rProj', d), tema = $('#rVocab', d), vocab = S.vocab || [];
+  if (!proj || !tema) return;
+  const sync = () => {
+    const v = vocab.find(x => x.id === tema.value);
+    if (v && proj.value !== v.project) proj.value = v.project;
+    if (!tema.value) proj.value = '';
+    [...tema.options].forEach(o => { o.hidden = !!o.value && o.dataset.proj !== proj.value; });
+  };
+  proj.onchange = () => {
+    const first = vocab.find(v => v.project === proj.value);
+    tema.value = first ? first.id : '';
+    sync();
+    tema.dispatchEvent(new Event('change'));  // app.js: carpeta del proyecto y cuánto le cabe a Whisper
+  };
+  tema.addEventListener('change', sync);
+  sync();
+}
+
+/* ---------------------------------------------------------------- diálogo Grabar: idioma y contexto de ESTA reunión */
+function perfilCamposHtml(language, context) {
+  return `<div class="grid2">
+      <div><label>${I.globe}Idioma de la reunión</label>${langSelect('rLang', language)}</div>
+      <div><label>${I.text}Contexto <span class="muted" style="font-weight:400">· opcional</span></label><input class="input" id="rCtx" maxlength="500" value="${esc(context || '')}" placeholder="De qué va y quién participa, en una o dos frases" autocomplete="off"></div>
+    </div>
+    <div class="row pf-save"><button class="btn ghost sm" type="button" id="rPerfilSave" title="Guarda la carpeta, el idioma, el tema y el contexto de arriba como perfil por defecto: Ctrl+Alt+R y las próximas grabaciones empezarán así">${I.check}Guardar como perfil por defecto</button>
+      <span class="muted" style="font-size:12px">Idioma, tema y contexto van con esta reunión: los usan Whisper y el resumen, y se cambian sobre la marcha en su página.</span></div>`;
+}
+function perfilBindRec(d) {
+  perfilBindTema(d);
+  if (S.config.perfil?.vocab != null) d.dataset.pfVocab = '1';  // tema fijo en el perfil: la sugerencia de Teams no lo pisa
+  const imp = $('#rVocabImport', d);
+  if (imp) imp.onclick = () => perfilImportar($('#rProj', d)?.value || '', openRec);
+  const save = $('#rPerfilSave', d);
+  if (save) save.onclick = async () => {
+    const body = { language: $('#rLang', d)?.value ?? '', context: $('#rCtx', d)?.value.trim() || '' };
+    const folder = $('#rFolder', d)?.value;
+    if (folder != null && folder !== '__pick') body.folder = folder;
+    if ($('#rVocab', d)) body.vocab = $('#rVocab', d).value;
+    save.disabled = true;
+    try {
+      const r = await api('/api/perfil', body);
+      S.config.perfil = r.perfil; S.config.language = S.selLang = r.perfil.language;
+      toast('Perfil por defecto guardado · Ctrl+Alt+R y las próximas grabaciones empiezan así');
+    } catch (err) { toast(esc(err.message), 'err'); }
+    save.disabled = false;
+  };
+}
+/* Lo que el diálogo manda a /api/rec/start además de lo de siempre. */
+function perfilRecExtra(d) {
+  const c = $('#rCtx', d);
+  return c ? { contexto: c.value.trim() } : {};
+}
+
+/* ---------------------------------------------------------------- importar listas de otra carpeta */
+/* Selector de carpetas de Windows (o pegar la ruta) → POST /api/vocab/import → recarga y vuelve a `after`. */
+async function perfilImportar(project, after) {
+  toast('Elige la carpeta con las listas en la ventana de Windows que se acaba de abrir…');
+  let path;
+  try { path = (await api('/api/link/pick', { title: 'Carpeta con las listas de vocabulario' })).path; }
+  catch (err) { path = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta con las listas (<Proyecto>\\Vocabulario\\*.txt):`); }
+  if (!path) return;
+  try {
+    const r = await api('/api/vocab/import', { path, project: project || '' });
+    await loadVocab(S.config.language ?? 'es-en');
+    await refreshTree(true);
+    toast(perfilImportText(r));
+    if (after) after();
+  } catch (err) { toast(esc(err.message), 'err'); }
+}
+function perfilImportText(r) {
+  const n = r.copiadas || 0, o = r.omitidas || 0;
+  if (!n) return `No había listas nuevas${o ? ` (${o} ya existían o no tenían un nombre válido)` : ''}`;
+  return `${n} ${n === 1 ? 'lista copiada' : 'listas copiadas'} · ${esc((r.proyectos || []).join(', '))}${o ? ` · ${o} ya existían` : ''}`;
+}
+
+/* ---------------------------------------------------------------- página de la reunión y directo */
+function perfilPropsHtml(a) {
+  const p = a.props || {};
+  return `<div class="prow"><span class="pk">${I.globe}Idioma</span><span class="pv"><select class="pstate" data-prop="idioma" title="Idioma con el que se transcribe esta reunión (en directo, desde el siguiente trozo)">${perfilLangOptions(p.idioma, S.config.language)}</select></span></div>
+    <div class="prow"><span class="pk">${I.text}Contexto</span><span class="pv"><input class="pinput" data-prop="contexto" maxlength="500" value="${esc(p.contexto || '')}" placeholder="De qué va y quién participa (opcional)" autocomplete="off" title="Lo recibe Whisper detrás del vocabulario y lo tiene en cuenta el resumen"></span></div>`;
+}
+function perfilLiveHtml(a) {
+  const p = a.props || {};
+  return `<div class="lh-ws pf-live">${I.globe}Idioma <select class="pstate" data-prop="idioma" title="Idioma de esta reunión: el directo lo usa desde el siguiente trozo">${perfilLangOptions(p.idioma, S.config.language)}</select>
+    ${I.text}<input class="pinput pf-ctx" data-prop="contexto" maxlength="500" value="${esc(p.contexto || '')}" placeholder="Contexto: de qué va y quién participa (opcional)" autocomplete="off" title="Lo recibe Whisper detrás del vocabulario, desde el siguiente trozo, y lo tiene en cuenta el resumen"></div>`;
+}
+/* Mensaje al guardar idioma o contexto desde la página (notas.js). live: hay un directo en marcha. */
+function perfilSavedText(prop, live, transcribed) {
+  const que = prop === 'idioma' ? 'Idioma' : 'Contexto';
+  if (live) return `${que}: el directo lo usa desde el siguiente trozo`;
+  return transcribed ? `${que} guardado · se aplicará si la vuelves a transcribir (y al resumen)` : `${que} guardado · se usará al transcribirla`;
+}
+
+/* ---------------------------------------------------------------- Ajustes: Perfil de reunión */
+function perfilFieldsetHtml() {
+  const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [], presets = c.presets || [];
+  const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
+  const opt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+  const prov = c.providers?.[c.cloud?.provider]?.label || 'nube';
+  return `<fieldset><legend>${I.clipboard}Perfil de reunión</legend>
+      <div class="help" style="margin-top:4px">Con lo que empieza cada grabación (● Grabar y Ctrl+Alt+R). En el diálogo de grabar se ajusta para una reunión concreta y, desde ahí, se puede guardar como perfil.</div>
+      <div class="grid2">
+        <div><label>${I.folder}Carpeta de destino</label><select id="pfFolder">${opt(PERFIL_AUTO, 'Automática · la última usada (o la del proyecto del tema)', folderSel)}${folderOpts(folderSel)}</select></div>
+        <div><label>${I.globe}Idioma de la reunión</label>${langSelect('sLang', c.language ?? 'es-en')}</div>
+      </div>
+      <label>${I.topic}Tema de vocabulario</label>
+      <select id="pfVocab">${opt(PERFIL_AUTO, 'Automático · el que sugiera la reunión en curso (Teams/Outlook) o el último elegido', vocabSel)}${opt('', 'Sin vocabulario · el general de Ajustes', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => opt(v.id, v.name + (v.desc ? ' · ' + v.desc : ''), vocabSel)).join('')}</optgroup>`).join('')}</select>
+      <label>${I.text}Contexto de las reuniones <span class="muted" style="font-weight:400">· opcional, una o dos frases</span></label>
+      <textarea id="pfContext" rows="2" maxlength="500" placeholder="p. ej. Reuniones semanales del proyecto Alfa con el equipo del cliente: seguimiento de la migración y del plan de pruebas">${esc(p.context || '')}</textarea>
+      <div class="help"><b>Español + inglés</b>, <b>Español + portugués</b> e <b>Inglés + portugués</b> detectan el idioma cada pocos segundos pero solo entre esos dos y dejan cada frase en su idioma; si una reunión es solo en uno, fijarlo es algo más preciso. El contexto lo recibe Whisper detrás del vocabulario (si no cabe todo, se recorta antes que el vocabulario) y lo tiene en cuenta el resumen.</div>
+      <div class="grid2">
+        <div><label>Idioma del resumen</label><select id="sSumLang">${[['es', 'Español'], ['en', 'Inglés'], ['same', 'El de la reunión']].map(([v, l]) => opt(v, l, c.summary?.lang || 'es')).join('')}</select></div>
+        <div><label>Motor del directo</label><select id="lPreset">${presets.map(pr => opt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join('')}</select></div>
+      </div>
+      <label>Instrucciones extra para el resumen (opcional)</label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(c.summary?.extra || '')}</textarea>
+      <label>Motor al transcribir después <span class="muted" style="font-weight:400">· «Solo grabar», «Volver a transcribir» y audios que arrastres</span></label>
+      <select id="pfPreset">${presets.map(pr => opt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('')}</select>
+      <label>${I.copy}Copiar el texto a otra carpeta al terminar <span class="muted" style="font-weight:400">· opcional</span></label>
+      <div class="row" style="gap:6px;flex-wrap:nowrap"><input class="input" id="pfCopy" value="${esc(p.copy_to || '')}" placeholder="Ninguna · los textos se quedan junto al audio" spellcheck="false"><button class="btn sm" type="button" id="pfCopyPick">Elegir…</button><button class="btn ghost sm" type="button" id="pfCopyClear" title="No copiar">Quitar</button></div>
+      <div class="help">Al terminar la transcripción y el resumen de cada grabación nueva se copian su .txt, su .md y su .resumen.md a esa carpeta (p. ej. la del proyecto en OneDrive). El audio y los originales se quedan donde se graban; nunca se mueve nada ni se pisa un archivo que hayas cambiado allí.</div>
+    </fieldset>`;
+}
+function bindPerfilSettings(d) {
+  const pick = $('#pfCopyPick', d), clear = $('#pfCopyClear', d), inp = $('#pfCopy', d), fsel = $('#pfFolder', d);
+  if (pick) pick.onclick = async () => {
+    toast('Elige la carpeta en la ventana de Windows que se acaba de abrir…');
+    try { const r = await api('/api/link/pick', { title: 'Carpeta donde copiar los textos' }); if (r.path) inp.value = r.path; }
+    catch (err) { const p = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta:`); if (p) inp.value = p; }
+  };
+  if (clear) clear.onclick = () => { inp.value = ''; };
+  if (fsel) {
+    fsel.dataset.prev = fsel.value;
+    fsel.onchange = async () => {
+      if (fsel.value !== '__pick') { fsel.dataset.prev = fsel.value; return; }
+      fsel.value = fsel.dataset.prev || PERFIL_AUTO;
+      const rel = await linkFolder();  // se vincula y pasa a ser la carpeta fija
+      if (rel && document.body.contains(fsel)) {
+        fsel.innerHTML = `<option value="${PERFIL_AUTO}">Automática · la última usada (o la del proyecto del tema)</option>` + folderOpts(rel);
+        fsel.dataset.prev = rel;
+      }
+    };
+  }
+}
+function collectPerfilSettings(d) {
+  const f = $('#pfFolder', d), v = $('#pfVocab', d);
+  if (!f || !v) return {};
+  return { preset: $('#pfPreset', d).value,
+    perfil: { folder: f.value === PERFIL_AUTO ? null : f.value, vocab: v.value === PERFIL_AUTO ? null : v.value,
+      context: $('#pfContext', d).value.trim(), copy_to: $('#pfCopy', d).value.trim() } };
+}
