@@ -346,8 +346,9 @@ async function pollRec() {
   // la app se ha actualizado y reiniciado: se recarga sola (sin cortar un dialogo ni un audio que suena)
   if (S.rec.build) {
     S.build = S.build || S.rec.build;
-    if (S.rec.build !== S.build && $('#modal').classList.contains('hidden') && audio.paused) return location.reload();
+    if (S.rec.build !== S.build && $('#modal').classList.contains('hidden') && audio.paused && await txSavedForReload()) return location.reload();
   }
+  if (S.config && S.config.meeting_detect === false) S.rec.meeting = null;  // «Avisarme si estoy en una llamada» apagado: sin chip
   if (was !== !!S.rec.recording) onRecChange();
   renderRecBtn(); updateMeters(); renderMeetChip();
   recTimer = setTimeout(pollRec, S.rec.recording || recDialog ? 300 : 1500);
@@ -1086,35 +1087,107 @@ function scheduleSave() { clearTimeout(S.saveTimer); setSaveState('Sin guardar�
 function editPayload() {
   return { path: S.tx.path, segments: S.tx.segs.filter(s => s.text.trim()).map(s => ({ start: s.start, end: s.end, text: s.text })) };
 }
+/* Correcciones que aun no han llegado al servidor: la ultima version de cada reunion, hasta que el servidor la
+   confirma. Cada version lleva su numero (sin salir en el JSON) y la reunion de la que sale: una version vieja no pisa
+   a una nueva, y los guardados de una misma reunion van en orden. Con alguna pendiente la pagina no se recarga sola y,
+   al cerrarla, se pide confirmacion si no cabe en el ultimo envio. */
+const txPending = new Map(), txInflight = new Map(), txLatest = new Map();
+let txSeq = 0;
+const TX_RETRY_MS = 1000, TX_KEEPALIVE_MAX = 60 * 1024;  // Chromium (WebView2) rechaza keepalive de mas de 64 KiB
+function txVersion() {
+  const p = editPayload();
+  Object.defineProperties(p, { seq: { value: ++txSeq }, tx: { value: S.tx } });
+  txLatest.set(p.path, p.seq);
+  return p;
+}
+const txStale = p => txLatest.get(p.path) !== p.seq;
+function sendTx(payload) {
+  const path = payload.path, prev = txInflight.get(path);
+  txPending.set(path, payload);
+  const p = (prev ? prev.catch(() => { }) : Promise.resolve())
+    .then(() => api('/api/transcript/save', payload))
+    .then(r => {
+      if (txPending.get(path) === payload) txPending.delete(path);
+      const a = S.audios.get(path);
+      if (a) a.tx_mtime = r.tx_mtime;
+      if (S.tx && S.tx === payload.tx) S.tx.mtime = r.tx_mtime;  // si la pagina muestra otra copia, que la recargue
+      return r;
+    })
+    .finally(() => { if (txInflight.get(path) === p) txInflight.delete(path); });
+  txInflight.set(path, p);
+  return p;
+}
+/* guardado al cambiar de reunion: un fetch normal (sin tope de tamano), dos reintentos y, si sigue fallando, aviso */
+async function saveTxNow(payload, tries = 3, quiet = false) {
+  for (let i = 1; ; i++) {
+    if (txStale(payload)) return true;  // ya hay una version mas nueva, que se guarda por su cuenta
+    try { await sendTx(payload); return true; } catch (err) {
+      if (txStale(payload)) return true;
+      if (i >= tries) {
+        const a = S.audios.get(payload.path);
+        if (!quiet) toast(`No se han podido guardar tus correcciones${a ? ` de «${esc(fullTitle(a))}»` : ''}: ${esc(err.message)} · <b>clic para reintentar</b>`, 'err', () => saveTxNow(payload));
+        return false;
+      }
+      await new Promise(res => setTimeout(res, TX_RETRY_MS * i));
+    }
+  }
+}
 async function saveEdits() {
   clearTimeout(S.saveTimer);
-  if (!S.tx) return;
+  if (!S.tx) return true;
   syncEdits();
-  if (!S.dirty) return;
-  S.dirty = false;
+  if (!S.dirty) {  // nada nuevo: si aun va en camino el guardado anterior de este texto, se espera a que se confirme
+    const tx = S.tx;
+    try { await txInflight.get(tx.path); } catch { /* lo dice quien lo lanzo */ }
+    const pend = txPending.get(tx.path);
+    return !(pend && pend.tx === tx);
+  }
+  S.dirty = false;  // lo que se escriba mientras se guarda lo vuelve a marcar (syncEdits)
   setSaveState('Guardando…');
+  const payload = txVersion();
   try {
-    const r = await api('/api/transcript/save', editPayload());
-    S.tx.mtime = r.tx_mtime;
-    const a = S.audios.get(S.tx.path);
-    if (a) a.tx_mtime = r.tx_mtime;
-    if (!r.live) {  // en directo la copia del original se guarda al terminar
+    const r = await sendTx(payload);
+    if (!r.live && S.tx && S.tx === payload.tx) {  // en directo la copia del original se guarda al terminar
       S.tx.has_backup = true;
       $('[data-act="tx-restore"]')?.classList.remove('hidden');
     }
     setSaveState(S.dirty ? 'Sin guardar…' : 'Guardado ✓');
-  } catch (err) { S.dirty = true; setSaveState('No se ha podido guardar'); toast(esc(err.message), 'err'); }
+    return !S.dirty;
+  } catch (err) {
+    if (S.editing && S.tx && S.tx === payload.tx) {  // sigue en la pagina: el siguiente guardado lo reintenta
+      S.dirty = true; setSaveState('No se ha podido guardar'); toast(esc(err.message), 'err');
+    } else saveTxNow(payload);  // ya ha cambiado de reunion: reintentos y aviso
+    return false;
+  }
 }
-/* al salir de la pagina o cambiar de reunion: se guarda sin esperar */
+/* al cambiar de reunion: se guarda en el momento, sin esperar al guardado diferido */
 function flushEdits() {
   if (!S.editing || !S.tx) return;
   syncEdits();
   clearTimeout(S.saveTimer);
   if (S.dirty) {
-    fetch('/api/transcript/save', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Audios': '1' }, body: JSON.stringify(editPayload()) });
     S.dirty = false;
+    saveTxNow(txVersion());
   }
   S.editing = false;
+}
+/* al cerrar o recargar la pagina: ultimo intento con keepalive solo si cabe; devuelve cuantas no se han podido mandar */
+function flushTxOnUnload() {
+  flushEdits();
+  let left = 0;
+  for (const p of txPending.values()) {
+    const body = JSON.stringify(p);
+    if (new TextEncoder().encode(body).length > TX_KEEPALIVE_MAX) { left++; continue; }
+    try { fetch('/api/transcript/save', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Audios': '1' }, body }).catch(() => { }); } catch { left++; }
+  }
+  return left;
+}
+/* antes de la recarga automatica (app actualizada): primero se guarda lo corregido (y se reintenta, sin avisos, lo
+   que hubiera fallado); si algo no se puede guardar, no se recarga */
+async function txSavedForReload() {
+  if (S.editing && !(await saveEdits())) return false;
+  for (const p of [...txPending.values()]) await saveTxNow(p, 1, true);
+  return !txPending.size;
 }
 function startEdit() {
   if (S.tx && S.tx.kind === 'txt') toast('Esta transcripción no tiene tiempos (.txt): se edita igual.');
@@ -1123,7 +1196,8 @@ function startEdit() {
   $('#txBody .s')?.focus();
 }
 async function finishEdit() {
-  await saveEdits();
+  const tx = S.tx;
+  if (!(await saveEdits()) || S.tx !== tx) return;  // no se ha guardado: se sigue editando (el aviso ya ha salido)
   S.editing = false;
   S.tx.segs = S.tx.segs.filter(s => s.text.trim());
   S.tx.starts = S.tx.segs.map(s => s.start ?? 0);
@@ -1422,7 +1496,10 @@ function playBtns() {
     b.innerHTML = `${I.play}${on ? 'Pausa' : 'Reproducir'}`;
   });
 }
-window.addEventListener('beforeunload', () => { savePos(); flushEdits(); });
+window.addEventListener('beforeunload', e => {
+  savePos();
+  if (flushTxOnUnload()) { e.preventDefault(); e.returnValue = ''; }  // correcciones sin guardar: se pide confirmar
+});
 
 /* ---------------------------------------------------------------- acciones (delegadas) */
 main.addEventListener('click', async e => {

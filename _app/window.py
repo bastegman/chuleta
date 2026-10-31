@@ -7,6 +7,10 @@ ventana mas de Edge. Si pywebview no esta instalado o no puede crear la ventana,
   - Cerrar la ventana la OCULTA: el servidor sigue (Ctrl+Alt+R y las grabaciones en curso siguen funcionando) y el
     acceso directo, si el servidor ya responde, pide POST /api/mostrar para volver a ensenarla.
   - Apagar de verdad: Ajustes > Apagar (POST /api/apagar), que llama a destroy().
+  - Si quien cierra es Windows (apagar, reiniciar o cerrar la sesion) se deja cerrar y la app se apaga limpia
+    (server.shutdown): ocultar ahi es lo que hacia que Windows dijera que la app impide apagar.
+  - Sin el runtime de WebView2, pywebview usaria MSHTML (el motor de Internet Explorer): run() no abre la ventana y
+    server.py abre Edge.
 """
 import os
 import threading
@@ -73,6 +77,36 @@ def set_window_icons(hwnd, ico_path):
         return False
 
 
+def renderer(wv):
+    """El motor con que pywebview pintara la ventana: «edgechromium» (WebView2) o, si falta el runtime de WebView2,
+    «mshtml» (el de Internet Explorer: la interfaz sale en blanco). None si no se sabe (entonces decide start(), que
+    fallaria igual). Prepara la parte grafica igual que start(), que luego la reutiliza."""
+    init = getattr(wv, "initialize", None)
+    if not callable(init):
+        return None
+    try:
+        return getattr(init(), "renderer", None)
+    except Exception:
+        log_exc()
+        return None
+
+
+# CloseReason de WinForms con el que se deja cerrar de verdad: Windows apaga, reinicia o cierra la sesion
+# (WM_QUERYENDSESSION y WM_ENDSESSION; tambien un instalador con Restart Manager) o un WM_CLOSE de fuera
+# (Administrador de tareas, taskkill sin /F). El resto (la X, Alt+F4, la barra de tareas) es «cerrar = ocultar».
+_REASONS = {0: "None", 1: "WindowsShutDown", 3: "UserClosing", 4: "TaskManagerClosing", 6: "ApplicationExitCall"}
+QUIT_REASONS = ("WindowsShutDown", "TaskManagerClosing")
+LET_CLOSE = QUIT_REASONS + ("ApplicationExitCall",)  # Application.Exit: la app ya se esta cerrando
+END_SESSION_WAIT = 5.0  # s que el hilo de la ventana espera al apagado limpio mientras Windows espera la respuesta
+_END_SESSION = []  # [fn]: el apagado limpio de server.py, shutdown(motivo) (Window.set_end_session)
+
+
+def close_reason(v):
+    """Nombre del CloseReason tal como llegue de pythonnet (enum, «CloseReason.X» o su numero)."""
+    s = str(v if v is not None else "")
+    return _REASONS.get(int(s), s) if s.isdigit() else s.rsplit(".", 1)[-1]
+
+
 class Window:
     """La ventana de la app. run() en el hilo principal; show() y destroy() valen desde cualquier hilo."""
 
@@ -80,19 +114,37 @@ class Window:
         self.url, self.data_dir, self.ico_path = url, data_dir, ico_path
         self.webview = webview if webview is not None else import_webview()
         self.w, self.hwnd, self.quitting, self.alive = None, None, False, False
+        self.native = False  # True con los manejadores propios de FormClosing/FormClosed enganchados (WinForms)
+        self.ended = False   # ya se ha lanzado el apagado por fin de sesion
+        self.on_end_session = None  # si no, el registrado con set_end_session (los tests ponen aqui un doble)
+
+    @staticmethod
+    def set_end_session(fn):
+        """server.py registra aqui su apagado limpio, fn(motivo): lo llama la ventana cuando Windows apaga, reinicia o
+        cierra la sesion, o pide cerrar la app."""
+        _END_SESSION[:] = [fn]
 
     @property
     def available(self):
         return self.webview is not None
 
     def run(self):
-        """Bloquea hasta que destroy() cierre la ventana (o hasta que no se pueda crear). True si llego a abrirse."""
+        """Bloquea hasta que destroy() cierre la ventana (o hasta que no se pueda crear). True si llego a abrirse.
+        False sin abrirla si pywebview no fuera a usar WebView2: server.py abre entonces Edge."""
         wv = self.webview
         try:
+            motor = renderer(wv) if WINDOWS else None  # None: no se sabe (start() decide, como siempre)
+            if motor is not None and motor != "edgechromium":
+                log(f"la ventana propia necesita WebView2 y pywebview usaría «{motor}» (¿falta el runtime de "
+                    "WebView2?): se abre en Edge")
+                return False
             self.w = wv.create_window(APP_NAME, self.url, width=1500, height=920, min_size=(900, 600),
                                       text_select=True, zoomable=True)
             self.w.events.closing += self._on_closing
             self.w.events.shown += self._on_shown
+            before_show = getattr(self.w.events, "before_show", None)  # en el hilo de la ventana, antes de ensenarla
+            if before_show is not None:
+                before_show += self._hook_native
             self.alive = True
             # cookies y localStorage de la interfaz (modo de la transcripcion, carpetas abiertas...) persisten en
             # DATA_DIR (fuera de OneDrive); private_mode los borraria en cada arranque
@@ -114,21 +166,94 @@ class Window:
             self.hwnd = self._find_hwnd()
             if self.hwnd:
                 set_window_icons(self.hwnd, self.ico_path)
+            if not self.native:  # pywebview sin before_show
+                self._hook_native()
             log(f"ventana abierta ({'WebView2' if WINDOWS else 'pywebview'}; hwnd {self.hwnd})")
         except Exception:
             log_exc()
 
+    def _hook_native(self):
+        """Manejadores propios de FormClosing y FormClosed en la Form de WinForms, despues de los de pywebview: son los
+        que saben POR QUE se cierra (CloseReason), que pywebview no pasa a events.closing. Asi Windows puede apagar,
+        reiniciar o cerrar la sesion sin que la app lo impida. Ademas la app pide que Windows le avise antes que a
+        los demas procesos (SetProcessShutdownParameters), para parar la grabadora antes de que la cierren a ella."""
+        form = getattr(self.w, "native", None)
+        if self.native or form is None or not hasattr(form, "FormClosing"):
+            return False
+        try:
+            form.FormClosing += self._on_form_closing
+            form.FormClosed += self._on_form_closed
+            self.native = True
+        except Exception:
+            log_exc()
+            return False
+        if WINDOWS:
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetProcessShutdownParameters(0x3FF, 0)  # primero de las apps al apagar
+            except Exception:
+                log_exc()
+        return True
+
     def _on_closing(self):
         """Cerrar = ocultar: devolver False cancela el cierre. Solo destroy() (apagar) deja cerrar. Antes de ocultar se
         le pregunta a la pagina (onWindowClosing): la primera vez avisa de que la app sigue en segundo plano y es ella
-        quien pide POST /api/ocultar al cerrar el aviso."""
+        quien pide POST /api/ocultar al cerrar el aviso. Con los manejadores propios (WinForms) es _on_form_closing
+        quien decide si se oculta o, si es Windows quien cierra, se deja cerrar."""
         if self.quitting:
             return True
-        threading.Thread(target=self._ask_page_then_hide, daemon=True).start()  # fuera del propio evento de cierre
+        if not self.native:
+            self._start_hide()
         return False
+
+    def _on_form_closing(self, sender, args):
+        """FormClosing, despues del de pywebview (que lo acaba de cancelar: cerrar = ocultar). Si quien cierra es
+        Windows (WM_QUERYENDSESSION) o un WM_CLOSE de fuera, se deja cerrar: cancelar aqui es lo que hace que Windows
+        diga «esta aplicación impide apagar». Sin ocultar ni avisar de que sigue en segundo plano."""
+        try:
+            motivo = close_reason(getattr(args, "CloseReason", None))
+            if self.quitting or motivo in LET_CLOSE:
+                args.Cancel = False
+                if not self.quitting and motivo in QUIT_REASONS:
+                    log(f"Windows pide cerrar la ventana ({motivo}): se deja cerrar")
+            elif args.Cancel:
+                self._start_hide()
+        except Exception:
+            log_exc()
+
+    def _on_form_closed(self, sender, args):
+        """FormClosed (con WM_ENDSESSION, cuando la sesion se cierra de verdad, o tras un WM_CLOSE de fuera): el mismo
+        apagado limpio que Ajustes > Apagar, mientras Windows espera la respuesta. Si se cancela el apagado
+        (WM_ENDSESSION con FALSE), no llega aqui y la app sigue como estaba."""
+        try:
+            motivo = close_reason(getattr(args, "CloseReason", None))
+            if motivo in QUIT_REASONS and not self.quitting:
+                self._end_session(motivo)
+        except Exception:
+            log_exc()
+
+    def _end_session(self, motivo):
+        """Apaga la app (on_end_session = server.shutdown) y espera como mucho END_SESSION_WAIT s: si no termina en
+        ese tiempo, run() vuelve igual (quitting) y el proceso acaba."""
+        if self.ended:
+            return
+        self.ended = self.quitting = True
+        texto = "Windows cierra la sesión o se apaga" if motivo == "WindowsShutDown" else "Windows ha pedido cerrar"
+        log(f"{texto}: apagado limpio")
+        fn = self.on_end_session or (_END_SESSION[0] if _END_SESSION else None)
+        if not callable(fn):
+            return
+        t = threading.Thread(target=fn, args=(texto,), daemon=True, name="fin-de-sesion")
+        t.start()
+        t.join(END_SESSION_WAIT)
+
+    def _start_hide(self):
+        threading.Thread(target=self._ask_page_then_hide, daemon=True).start()  # fuera del propio evento de cierre
 
     def _ask_page_then_hide(self):
         time.sleep(0.05)
+        if self.quitting:
+            return
         try:
             r = self.w.evaluate_js('typeof onWindowClosing === "function" ? onWindowClosing() : "no"')
         except Exception:
