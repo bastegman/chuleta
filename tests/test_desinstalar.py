@@ -461,7 +461,7 @@ class RegistroWindowsTests(unittest.TestCase):
         out = run_ps_functions(INSTALAR, ["Register-App"],
                                "$UninstallKey = " + q("HKCU:\\" + key) + "; $AppName = 'Chuleta'; "
                                "$Publisher = 'Bernardo Stegmaier'; $RepoUrl = 'https://github.com/bastegman/chuleta'; "
-                               "function Say($t, $c) { Write-Output ('SAY ' + $t) }; "
+                               "function Say($t, $c) { Write-Host ('SAY ' + $t) }; "
                                "Write-Output ('R=' + (Register-App " + q(app) + " " + q(root) +
                                " '2026-10-31 abc1234'))")
         self.assertIn("R=True", out, out)
