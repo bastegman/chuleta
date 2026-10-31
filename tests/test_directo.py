@@ -384,7 +384,9 @@ class StoreSecretsTests(unittest.TestCase):
             raw = f.read()
         self.assertNotIn("gsk_a_000000000", raw)
         self.assertNotIn("gsk_main_000000000", raw)
-        self.assertEqual(json.loads(raw)["cloud"]["extra_keys"][0][:6], "plain:")
+        # en Windows (CI) es "dpapi:", fuera "plain:": lo que importa es que no vaya en claro
+        self.assertTrue(all(server.is_protected(k) for k in json.loads(raw)["cloud"]["extra_keys"]))
+        self.assertTrue(server.is_protected(json.loads(raw)["cloud"]["api_key"]))
         again = server.Store(path, server.DEFAULT_SETTINGS)
         self.assertEqual(again.get()["cloud"]["extra_keys"], ["gsk_a_000000000", "gsk_b_000000000"])
         self.assertEqual(again.get()["cloud"]["api_key"], "gsk_main_000000000")
