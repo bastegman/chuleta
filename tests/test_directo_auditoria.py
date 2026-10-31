@@ -324,6 +324,29 @@ class PonerseAlDiaTests(unittest.TestCase):
         self.assertGreater(len(r.segs), 10)
 
 
+class SinPasarDelLimitePorMinutoTests(unittest.TestCase):  # P1-14: ponerse al dia sin pasar de las RPM
+    def test_con_un_limite_por_minuto_declarado_no_se_pasa(self):
+        tmp, chunk = chunk_file(self)
+        eng = engines.CloudEngine(tmp)
+        eng.keys.clock = Clock()
+        hdr = {"x-ratelimit-limit-requests": "3", "x-ratelimit-remaining-requests": "2",
+               "x-ratelimit-reset-requests": "20s"}
+        with Net([FakeResponse(200, hdr, OK), FakeResponse(200, hdr, OK)]) as net:
+            post(eng, AZURE, chunk)
+            post(eng, AZURE, chunk)  # en el mismo instante del reloj falso: hay que esperar el hueco de 60/3 s
+        self.assertGreaterEqual(max(net.waits), 19.9)
+
+    def test_sin_ninguna_espera_a_que_se_renueve_el_minuto_pero_no_un_cupo_por_dia(self):
+        p = pool()
+        p.note("k", "whisper", 200, {"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "45s"})
+        self.assertAlmostEqual(p.reserve("k", "whisper", per_minute=True), 45.0)
+        q = pool()  # en Groq el limite y la renovacion son del dia: ni hueco de 60/2000 s ni esperar horas
+        q.note("k", "whisper", 200, {"x-ratelimit-limit-requests": "2000", "x-ratelimit-remaining-requests": "0",
+                                     "x-ratelimit-reset-requests": "5h"})
+        self.assertEqual(q.reserve("k", "whisper", per_minute=True), 0.0)
+        self.assertEqual(q.reserve("k", "whisper"), 3.0)
+
+
 # ----------------------------------------------------------------------------- P1-15: modelo con una pasarela
 
 class ModeloDirectoPasarelaTests(unittest.TestCase):
@@ -683,8 +706,10 @@ class TraduccionTests(unittest.TestCase):
         job, summ, tr = self.tr([(0.0, 2.0, "Bom dia.")])
         tr.lock.acquire()  # el hilo esta a mitad de una peticion
         t0 = time.monotonic()
-        self.assertFalse(tr.step(final=True))
-        self.assertLess(time.monotonic() - t0, 1.0)
+        with mock.patch.object(live, "TRANSLATE_LOCK_S", 0.2):
+            self.assertFalse(tr.step(final=True))  # no se espera a que acabe (lo que se llevo lo traduce el)
+        self.assertLess(time.monotonic() - t0, 1.5)
+        self.assertLessEqual(live.TRANSLATE_LOCK_S, 3)
         tr.lock.release()
         self.assertTrue(tr.step(final=True))  # sin nadie: un solo intento corto
         self.assertEqual(summ.kw, {"timeout": live.TRANSLATE_FINAL_S, "attempts": 1})

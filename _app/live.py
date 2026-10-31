@@ -51,6 +51,7 @@ TRANSLATE_EVERY_S = 12      # traduccion del directo: cada 10-15 s, lo ultimo qu
 TRANSLATE_MAX_CHARS = 1500  # por peticion (~500 tokens: cabe de sobra en 8.000 tokens/min)
 TRANSLATE_BACK_S = 30       # solo lo dicho en los ultimos 30 s: al activarla a mitad de reunion (o si se queda atras)
 TRANSLATE_FINAL_S = 10      # al terminar el directo, el ultimo paso: un intento de como mucho 10 s de lectura
+TRANSLATE_LOCK_S = 2        # ...y como mucho 2 s esperando a que el hilo de la traduccion acabe la suya
 TRANSLATION_PUBLIC = 60     # ultimos bloques traducidos que viajan en el estado del trabajo
 
 
@@ -382,8 +383,9 @@ class LiveTranslator:
     def step(self, cancelled=None, final=False):
         """Una pasada: traduce lo pendiente (si hay). Devuelve True si tradujo algo. final: el ultimo paso al terminar
         el directo, que no puede retener el final de la sesion: si el hilo esta a mitad de una peticion no se espera
-        a que acabe, y se hace un solo intento corto (TRANSLATE_FINAL_S)."""
-        if not self.lock.acquire(blocking=not final):
+        mas de TRANSLATE_LOCK_S a que acabe (lo que se llevo lo traduce el), y se hace un solo intento corto
+        (TRANSLATE_FINAL_S)."""
+        if not self.lock.acquire(timeout=TRANSLATE_LOCK_S if final else -1):
             return False
         try:
             take = self.pending()

@@ -603,6 +603,7 @@ RATE_SPACING = {"whisper": 3.0, "chat": 2.0}   # 20 y 30 peticiones/min: >= 3 s 
 ROTATE_BELOW = 20          # con menos peticiones restantes hoy, se pasa a la siguiente clave
 ROTATE_RETRY_AFTER = 60    # un 429 con retry-after mayor bloquea la clave hasta entonces y se pasa a la siguiente
 INVALID_KEY_S = 3600       # una clave que responde 401/403 no se vuelve a usar en 1 h (o hasta «Probar conexión»)
+RPM_MAX_SPACING = 30.0     # con un limite por minuto declarado, el hueco entre dos peticiones no pasa de 30 s
 LIVE_PACES = ((600, (3, 6)), (300, (6, 10)), (60, (10, 15)))  # peticiones restantes -> ventana del directo (s)
 LIVE_PAUSE_BELOW = 60      # con menos en TODAS las claves, el directo se pausa (el repaso final sigue)
 DAILY_PROVIDERS = ("groq",)  # cabeceras de peticiones por DIA: la politica de ventana del directo solo vale ahi
@@ -705,13 +706,21 @@ class KeyPool:
             self.active[slot] = chosen
             return chosen
 
-    def reserve(self, key, family, model=None):
+    def reserve(self, key, family, model=None, per_minute=False):
         """Reserva un hueco para una peticion con esa clave y devuelve los segundos que hay que esperar antes de
         mandarla (ritmo por minuto y, tras un 429 corto, el retry-after que pidio el servicio). Con varias
-        peticiones a la vez cada una recibe el hueco siguiente."""
+        peticiones a la vez cada una recibe el hueco siguiente. per_minute: el proveedor declara su limite por minuto
+        en x-ratelimit-limit-requests (OpenAI, Azure, una pasarela; en Groq es por dia): no se pasa de el (un hueco de
+        60/limite s, como mucho RPM_MAX_SPACING) y, si no queda ninguna y se renueva en menos de un minuto, se
+        espera."""
         with self.lock:
             st, now = self._st(key, family, model), self.clock()
-            slot = max(now, st["last_request"] + RATE_SPACING.get(family, 0.0), st["not_before"])
+            spacing = RATE_SPACING.get(family, 0.0)
+            if per_minute and st["limit"]:
+                spacing = max(spacing, min(RPM_MAX_SPACING, 60.0 / st["limit"]))
+            slot = max(now, st["last_request"] + spacing, st["not_before"])
+            if per_minute and st["remaining"] == 0 and st["reset_at"] and st["reset_at"] - now <= 60:
+                slot = max(slot, st["reset_at"])  # el minuto se renueva enseguida (un cupo por dia no se espera)
             st["last_request"] = slot
             return slot - now
 
@@ -922,7 +931,7 @@ class CloudEngine:
             url, headers, mdl = self.endpoint(cfg, key=key, model=model)
             if mdl:
                 data["model"] = mdl
-            pause = self.keys.reserve(key, family, qm)
+            pause = self.keys.reserve(key, family, qm, per_minute=not daily_quota(cfg))  # sin pasar del limite/min
             tm["wait"] += pause
             self._wait(pause, cancelled)
             try:
@@ -1248,7 +1257,7 @@ class Summarizer:
                 report(stage=f"Esperando al límite por minuto de Groq ({wait:.0f} s)…")
                 self._sleep(wait, cancelled)
             key = self.keys.pick(cfg, family, model=model)
-            self._sleep(self.keys.reserve(key, family, model), cancelled)
+            self._sleep(self.keys.reserve(key, family, model, per_minute=not daily_quota(cfg)), cancelled)
             try:
                 r = HTTP.post(url, timeout, json=body, headers={"Authorization": f"Bearer {key}"})
             except requests.RequestException as e:
