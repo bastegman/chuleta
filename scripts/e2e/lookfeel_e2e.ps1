@@ -35,7 +35,14 @@ function Wait-Http($url, $seconds) {
     }
     return $null
 }
-function Get-Listener { try { Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop } catch { $null } }
+function Get-Listener {
+    # solo los sockets con un proceso vivo detras: tras os._exit el socket puede seguir unos segundos en la tabla TCP
+    # sin dueno (OwningProcess vacio o 0), y eso no es un servidor
+    try {
+        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+            Where-Object { $_.OwningProcess -and (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue) }
+    } catch { $null }
+}
 function Describe-Listeners {
     # quien escucha en el puerto: nombre, pid, hora de arranque y linea de comandos (para entender un servidor inesperado)
     $out = @()
