@@ -1,12 +1,13 @@
 name: lookfeel-spike
 
-# Medición en Windows (rama look-and-feel): qué icono y qué AppUserModelID lleva la ventana de la app según se abra
-# con `msedge --app` (scripts/lookfeel_spike.py) o con una ventana propia de pywebview/WebView2
-# (scripts/lookfeel_webview_probe.py). No toca el repo ni publica nada: solo artefactos con el informe y los PNG.
+# ARCHIVADO: ya no se lanza con cada push. La medición está hecha (la app usa la ventana propia; resultados en el
+# CHANGELOG, «Ventana propia») y el E2E (lookfeel-e2e) comprueba el AUMID y los iconos de la ventana real. Se conserva
+# para repetirla a mano si cambian Edge o WebView2: Actions -> lookfeel-spike -> Run workflow.
+# Medición en Windows: qué icono y qué AppUserModelID lleva la ventana de la app según se abra con `msedge --app`
+# (scripts/lookfeel_spike.py) o con una ventana propia de pywebview/WebView2 (scripts/lookfeel_webview_probe.py). No
+# toca el repo ni publica nada: solo artefactos con el informe y los PNG.
 on:
   workflow_dispatch:
-  push:
-    branches: [look-and-feel]
 
 permissions:
   contents: read

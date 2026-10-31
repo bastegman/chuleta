@@ -8,7 +8,20 @@ name: lookfeel-e2e
 on:
   workflow_dispatch:
   push:
-    branches: [renombrado-chuleta]
+    # main y las ramas de trabajo del instalador, solo cuando el push toca lo que va en el zip o lo que lo prueba (un
+    # cambio de documentación no gasta los ~10 min de Windows). A mano: Actions -> lookfeel-e2e -> Run workflow.
+    branches: [main, renombrado-chuleta, instalacion-empresa]
+    paths:
+      - "_app/**"
+      - "INSTALAR.bat"
+      - "ABRIR CHULETA.bat"
+      - "LEEME.txt"
+      - "LICENSE"
+      - "requirements.txt"
+      - "scripts/build_zip.py"
+      - "scripts/e2e/**"
+      - "scripts/lookfeel_spike.py"
+      - ".github/workflows/lookfeel-e2e.yml"
 
 permissions:
   contents: read
