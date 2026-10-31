@@ -55,7 +55,8 @@ DESINSTALAR
   - Si Chuleta está grabando, el desinstalador no toca nada: para la grabación y vuelve a empezar.
   - Python y sus librerías se quedan (los puede usar otro programa); si no los quieres, se quitan
     aparte, también en Aplicaciones instaladas.
-  - Si vuelves a instalar, Chuleta usa la misma carpeta y vuelve a enseñar tus reuniones.
+  - Si vuelves a instalar, Chuleta vuelve a C:\Users\<tu usuario>\Chuleta y enseña otra vez tus
+    reuniones. Si la tenías en otra carpeta: INSTALAR.bat -Destino "esa carpeta".
 
 
 USO DIARIO

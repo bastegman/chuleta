@@ -54,8 +54,8 @@ notas) se queda en la carpeta donde descomprimas la app.
 **Configuración → Aplicaciones → Aplicaciones instaladas → Chuleta → Desinstalar** (o Panel de control → Programas y
 características). Quita los accesos directos, la entrada de Aplicaciones instaladas y la carpeta `_app` (solo lo que
 es de la app). **Las reuniones se quedan**: audios, transcripciones, notas, resúmenes, hablantes, carpetas de proyecto
-y listas de vocabulario siguen en la carpeta de Chuleta, junto al `LEEME.txt`, y una reinstalación vuelve a usar esa
-carpeta. Una casilla, desmarcada por defecto, borra además `%LOCALAPPDATA%\AudiosApp` (ajustes, API keys, huellas de
+y listas de vocabulario siguen en la carpeta de Chuleta, junto al `LEEME.txt`; una reinstalación vuelve a
+`%USERPROFILE%\Chuleta` (si estaba en otra carpeta, `INSTALAR.bat -Destino <esa carpeta>`). Una casilla, desmarcada por defecto, borra además `%LOCALAPPDATA%\AudiosApp` (ajustes, API keys, huellas de
 voz y registros). Si la app está grabando, no toca nada. Sin ventana: `QuietUninstallString` (`desinstalar.ps1
 -Silencioso`, que no borra `AudiosApp` salvo con `-BorrarDatos`); registro en `%TEMP%\chuleta-desinstalar.log`.
 Python y sus librerías se quedan.
