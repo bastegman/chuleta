@@ -14,7 +14,15 @@ notas) se queda en la carpeta donde descomprimas la app.
   etiquetas, estado, participantes, tema).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
-- **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas.
+- **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas (y se pueden importar las
+  listas de otra carpeta).
+- **Perfil de reunión**: carpeta de destino, idioma (también mezclas español + inglés / portugués), tema de
+  vocabulario y un contexto de una o dos frases con los que empieza cada grabación, también con `Ctrl+Alt+R`; se
+  ajustan por reunión al grabar y sobre la marcha en su página (el directo los usa desde el siguiente trozo).
+- **Destinos de salida**: cada reunión, además, como documento (`.md` con propiedades, resumen, notas y
+  transcripción; `.txt`; o `.docx`) en las carpetas que elijas (un vault de Obsidian, la del proyecto en OneDrive,
+  una biblioteca de SharePoint sincronizada…), al terminar y al guardar cambios, sin mover el original ni pisar
+  nada ajeno.
 - **Reunión en curso**: al grabar, la app sugiere el nombre, el tema y los participantes a partir de la ventana de
   reunión de Teams y, si lo activas, de la cita de tu calendario de Outlook (clásico); al detectar una llamada
   aparece un aviso flotante con «Grabar».
@@ -58,6 +66,8 @@ El manual completo está en `LEEME.txt`.
   la cabecera del `.md` de esa grabación (puedes borrarlos ahí); nada se envía fuera.
 - Las listas de vocabulario (`<proyecto>/Vocabulario/*.txt`) suelen llevar nombres de personas y empresas:
   no se incluyen en el zip que genera la app salvo que lo marques, y este repositorio las ignora.
+- Los destinos de salida escriben texto (nunca audio) en las carpetas que tú elijas: si están sincronizadas
+  (OneDrive, SharePoint), ese texto sale de tu PC por esa vía.
 
 ## Desarrollo
 

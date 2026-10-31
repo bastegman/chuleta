@@ -199,19 +199,46 @@ function perfilFieldsetHtml() {
       <label>Instrucciones extra para el resumen (opcional)</label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(c.summary?.extra || '')}</textarea>
       <label>Motor al transcribir después <span class="muted" style="font-weight:400">· «Solo grabar», «Volver a transcribir» y audios que arrastres</span></label>
       <select id="pfPreset">${presets.map(pr => opt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('')}</select>
-      <label>${I.copy}Copiar el texto a otra carpeta al terminar <span class="muted" style="font-weight:400">· opcional</span></label>
-      <div class="row" style="gap:6px;flex-wrap:nowrap"><input class="input" id="pfCopy" value="${esc(p.copy_to || '')}" placeholder="Ninguna · los textos se quedan junto al audio" spellcheck="false"><button class="btn sm" type="button" id="pfCopyPick">Elegir…</button><button class="btn ghost sm" type="button" id="pfCopyClear" title="No copiar">Quitar</button></div>
-      <div class="help">Al terminar la transcripción y el resumen de cada grabación nueva se copian su .txt, su .md y su .resumen.md a esa carpeta (p. ej. la del proyecto en OneDrive). El audio y los originales se quedan donde se graban; nunca se mueve nada ni se pisa un archivo que hayas cambiado allí.</div>
+      <label>${I.copy}Destinos de salida <span class="muted" style="font-weight:400">· opcional: cada reunión, como documento, en otras carpetas</span></label>
+      <div id="pfOuts">${perfilOutsHtml(p.outputs || [])}</div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="pfOutAdd">${I.plus}Añadir carpeta…</button></div>
+      <div class="help">Un vault de Obsidian, la carpeta del proyecto en OneDrive, una biblioteca de SharePoint sincronizada… Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)}; uno ajeno, o uno nuestro que hayas cambiado allí, se deja como está.</div>
     </fieldset>`;
 }
-function bindPerfilSettings(d) {
-  const pick = $('#pfCopyPick', d), clear = $('#pfCopyClear', d), inp = $('#pfCopy', d), fsel = $('#pfFolder', d);
-  if (pick) pick.onclick = async () => {
+/* ---------------------------------------------------------------- destinos de salida (lista editable de Ajustes) */
+const PERFIL_FORMATS = [['md', 'Markdown (.md)'], ['txt', 'Texto (.txt)'], ['docx', 'Word (.docx)']];
+let perfilOuts = [];
+function perfilOutsHtml(outs) {
+  if (!outs.length) return '<div class="help" style="margin-top:0">Ninguno · los textos se quedan junto al audio.</div>';
+  return `<table class="vtable pf-outs">${outs.map((o, i) => `<tr><td><code title="${esc(o.path)}">${esc(o.path)}</code></td>
+      <td><select data-out-fmt="${i}" title="Formato del documento">${PERFIL_FORMATS.map(([v, l]) => `<option value="${v}"${v === o.format ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></td>
+      <td><label class="chk" style="margin:0;font-weight:400;font-size:12.5px;white-space:nowrap"><input type="checkbox" data-out-proj="${i}"${o.by_project ? ' checked' : ''}> subcarpeta por proyecto</label></td>
+      <td><button class="btn ghost sm" type="button" data-out-del="${i}">quitar</button></td></tr>`).join('')}</table>`;
+}
+function bindPerfilOuts(d) {
+  const box = $('#pfOuts', d), add = $('#pfOutAdd', d);
+  if (!box || !add) return;
+  perfilOuts = (S.config.perfil?.outputs || []).map(o => ({ path: o.path, format: o.format || 'md', by_project: !!o.by_project }));
+  const draw = () => { box.innerHTML = perfilOutsHtml(perfilOuts); };
+  box.addEventListener('click', e => { const b = e.target.closest('[data-out-del]'); if (b) { perfilOuts.splice(+b.dataset.outDel, 1); draw(); } });
+  box.addEventListener('change', e => {
+    const f = e.target.closest('[data-out-fmt]'), p = e.target.closest('[data-out-proj]');
+    if (f) perfilOuts[+f.dataset.outFmt].format = f.value;
+    if (p) perfilOuts[+p.dataset.outProj].by_project = p.checked;
+  });
+  add.onclick = async () => {
     toast('Elige la carpeta en la ventana de Windows que se acaba de abrir…');
-    try { const r = await api('/api/link/pick', { title: 'Carpeta donde copiar los textos' }); if (r.path) inp.value = r.path; }
-    catch (err) { const p = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta:`); if (p) inp.value = p; }
+    let path;
+    try { path = (await api('/api/link/pick', { title: 'Carpeta donde guardar los documentos de las reuniones' })).path; }
+    catch (err) { path = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta:`); }
+    if (!path) return;
+    if (!perfilOuts.some(o => o.path === path && o.format === 'md')) perfilOuts.push({ path, format: 'md', by_project: false });
+    draw();
   };
-  if (clear) clear.onclick = () => { inp.value = ''; };
+}
+function bindPerfilSettings(d) {
+  const fsel = $('#pfFolder', d);
+  bindPerfilOuts(d);
   if (fsel) {
     fsel.dataset.prev = fsel.value;
     fsel.onchange = async () => {
@@ -230,5 +257,5 @@ function collectPerfilSettings(d) {
   if (!f || !v) return {};
   return { preset: $('#pfPreset', d).value,
     perfil: { folder: f.value === PERFIL_AUTO ? null : f.value, vocab: v.value === PERFIL_AUTO ? null : v.value,
-      context: $('#pfContext', d).value.trim(), copy_to: $('#pfCopy', d).value.trim() } };
+      context: $('#pfContext', d).value.trim(), outputs: perfilOuts } };
 }

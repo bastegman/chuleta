@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, urlparse
 import calendario
 import engines
 import live
+import salidas
 import voices
 from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS,  # noqa: F401 (re-exportados)
                     alert, clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key,
@@ -282,7 +283,9 @@ DEFAULT_SETTINGS = {
     "perfil": {"folder": None,    # carpeta de destino fija (ruta interna, "" = la raiz) o None
                "vocab": None,     # tema fijo (id <proyecto>/Vocabulario/<tema>.txt, "" = sin vocabulario) o None
                "context": "",     # contexto libre: de que van las reuniones y quien participa (Whisper y resumen)
-               "copy_to": ""},    # carpeta (absoluta) donde copiar .txt/.md/.resumen.md al terminar; "" = no
+               # destinos de salida: cada reunion como documento en estas carpetas (salidas.py), al terminar la
+               # transcripcion y el resumen y al guardar cambios: [{"path", "format": md|txt|docx, "by_project"}]
+               "outputs": []},
     # nube: whisper-large-v3 (el mas preciso; -turbo es mas rapido y algo menos fino)
     "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3", "base_url": "",
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
@@ -686,9 +689,8 @@ def public_transcript(data):
 # y debajo las notas en Markdown. Se mueve con el audio igual que el .txt y el .srt.
 # idioma: codigo ("es", "pt", "es-en"…) o "auto" (detectar); sin la clave, el idioma del perfil (Ajustes).
 # contexto: una o dos frases (de que va, quien participa) que reciben Whisper, tras el vocabulario, y el resumen.
-# copiar_a: carpeta a la que se copian .txt/.md/.resumen.md al terminar (la pone el perfil al grabar).
 NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
-             "contexto", "copiar_a")
+             "contexto")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
 
 
@@ -825,7 +827,7 @@ def vocab_for(abs_audio, st, props=None):
 # por defecto vive en los ajustes ("perfil" + "language"); por reunion, idioma y contexto van en la cabecera del .md
 # y el directo los relee en cada trozo (Jobs.refresh_prompt). Prioridad: lo elegido para esa reunion > lo que fija
 # el perfil > la sugerencia de la reunion en curso (Teams/Outlook) > lo ultimo usado.
-PERFIL_KEYS = ("folder", "vocab", "context", "copy_to")
+PERFIL_KEYS = ("folder", "vocab", "context", "outputs")
 
 
 def perfil_de(st):
@@ -834,7 +836,7 @@ def perfil_de(st):
     return {"folder": p["folder"] if isinstance(p.get("folder"), str) else None,
             "vocab": p["vocab"] if isinstance(p.get("vocab"), str) else None,
             "context": " ".join(str(p.get("context") or "").split())[:engines.ABOUT_CHARS],
-            "copy_to": str(p.get("copy_to") or "").strip(),
+            "outputs": salidas.destinos_de(p.get("outputs")),
             "language": st.get("language") or ""}
 
 
@@ -897,7 +899,6 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     pick("name", ("elegido", elegido.get("name") or None), ("reunion", sug.get("name") or None), ("ultimo", ""))
     pick("participantes", ("elegido", elegido.get("participantes") or None),
          ("reunion", ", ".join(sug.get("participants") or []) or None), ("ultimo", ""))
-    out["copy_to"], origen["copy_to"] = p["copy_to"], "perfil"
     return dict(out, origen=origen)
 
 
@@ -921,16 +922,8 @@ def check_perfil(b):
         out["vocab"] = vid
     if "context" in b:
         out["context"] = " ".join(str(b["context"] or "").split())[:engines.ABOUT_CHARS]
-    if "copy_to" in b:
-        path = os.path.normpath(os.path.expandvars(str(b["copy_to"] or "").strip().strip('"'))) if b["copy_to"] else ""
-        if path:
-            if not os.path.isabs(path) or not os.path.isdir(path):
-                raise ApiError("Esa carpeta no existe: " + path)
-            if os.path.splitdrive(path)[1] in ("", os.sep):
-                raise ApiError("Elige una carpeta, no una unidad entera.")
-            if in_app_dir(path):
-                raise ApiError("Esa carpeta es la de la propia app.")
-        out["copy_to"] = path
+    if "outputs" in b:
+        out["outputs"] = salidas.check_destinos(b["outputs"], APP_DIR)
     if "language" in b:
         lang = str(b["language"] or "").strip().lower()
         if lang and not IDIOMA_RE.match(lang):
@@ -948,77 +941,6 @@ def update_perfil(d, cambios):
     d["perfil"] = perfil
     if "language" in cambios:
         d["language"] = cambios["language"]
-
-
-# ----------------------------------------------------------------------------- copia de los textos a otra carpeta
-# Perfil > «Copiar el texto a otra carpeta al terminar»: el audio y sus sidecars se quedan donde se graban (mover,
-# buscar y borrar siguen funcionando) y .txt, .md y .resumen.md se COPIAN (nunca se mueven) a esa carpeta al
-# terminar la transcripcion y el resumen. Para no pisar nada, se recuerda que se copio: una copia nuestra se
-# actualiza; un fichero del destino que alguien haya tocado se deja como esta.
-COPY_EXTS = (".txt", ".md", ".resumen.md")
-
-
-def sha256_of(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(65536), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-class Copias:
-    """destino -> sha256 de lo que se copio la ultima vez (%LOCALAPPDATA%\\AudiosApp\\copias.json)."""
-
-    def __init__(self, path):
-        self.path, self.lock = path, threading.Lock()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                self.data = json.load(f)
-        except (OSError, ValueError):
-            self.data = {}
-
-    def get(self, dest):
-        with self.lock:
-            return self.data.get(os.path.normcase(dest))
-
-    def set(self, dest, sha):
-        with self.lock:
-            self.data[os.path.normcase(dest)] = sha
-            tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=0)
-            os.replace(tmp, self.path)
-
-
-def copy_texts(audio_abs, dest_dir, copias, exts=COPY_EXTS):
-    """Copia los textos de la grabacion a dest_dir. Devuelve [(ext, "copiado" | "igual" | "omitido" | "sin")]:
-    "omitido" = el destino existe y no es lo que copiamos la ultima vez (lo ha tocado alguien): no se pisa."""
-    base = os.path.splitext(audio_abs)[0]
-    if os.path.normcase(os.path.normpath(os.path.dirname(audio_abs))) == os.path.normcase(os.path.normpath(dest_dir)):
-        return []  # la grabacion ya esta en esa carpeta
-    out = []
-    for ext in exts:
-        src = base + ext
-        if not os.path.isfile(src):
-            out.append((ext, "sin"))
-            continue
-        dest = os.path.join(dest_dir, os.path.basename(base) + ext)
-        sha = sha256_of(src)
-        if os.path.isfile(dest):
-            have = sha256_of(dest)
-            if have == sha:
-                copias.set(dest, sha)
-                out.append((ext, "igual"))
-                continue
-            if copias.get(dest) != have:
-                out.append((ext, "omitido"))
-                continue
-        tmp = dest + ".tmp"
-        shutil.copyfile(src, tmp)
-        os.replace(tmp, dest)
-        copias.set(dest, sha)
-        out.append((ext, "copiado"))
-    return out
 
 
 # ----------------------------------------------------------------------------- importar listas de vocabulario
@@ -1241,7 +1163,7 @@ class Jobs:
         self.queues["resumen"] = queue.Queue()
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
-        self._copias = None  # copias.json (perfil: textos copiados a otra carpeta), se abre al primer uso
+        self._registro, self._salidas_timers = None, {}  # salidas.json (documentos escritos) y reescrituras pendientes
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
@@ -1525,7 +1447,7 @@ class Jobs:
             save_text(base + ".resumen.md", head + text.strip() + "\n", "utf-8")
             job.status, job.progress, job.stage = "done", 1.0, "Resumen listo"
             log(f"✔ {job.name}  resumen listo ({(time.time() - job.started):.0f} s, {model})")
-            self.copy_texts(job.path)  # perfil: el resumen (y las notas) a la otra carpeta
+            self.write_outputs(job.path)  # destinos de salida: el documento con el resumen
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Cancelado"
         except Exception as e:
@@ -1550,34 +1472,78 @@ class Jobs:
 
     def _after_transcribe(self, rel):
         """Transcripcion terminada: primero las voces (si estan activas) y el resumen al acabar estas, para que
-        lleve los nombres; si no, el resumen directamente. Antes, la copia de los textos si el perfil la pide."""
-        self.copy_texts(rel)
+        lleve los nombres; si no, el resumen directamente. Antes, el documento en los destinos de salida."""
+        self.write_outputs(rel)
         if not self.auto_voices(rel):
             self.auto_summary(rel)
 
-    def copy_texts(self, rel):
-        """Perfil > «Copiar el texto a otra carpeta al terminar»: la grabacion lleva la carpeta en su .md
-        (copiar_a). Copia .txt, .md y .resumen.md sin mover nada ni pisar lo que haya tocado alguien."""
+    # --- destinos de salida (salidas.py): la reunion como documento en otras carpetas
+    def document_for(self, rel):
+        """Lo que va al documento: titulo, fecha, duracion, propiedades, resumen (sin su cabecera), notas y
+        transcripcion (con quien habla, si se sabe)."""
+        abs_path = safe(rel, "file")
+        base = os.path.splitext(abs_path)[0]
+        props, notes = parse_notes(read_text(base + ".md")) if os.path.isfile(base + ".md") else ({}, "")
+        summary, model = "", None
+        if os.path.isfile(base + ".resumen.md"):
+            text = read_text(base + ".resumen.md")
+            m = re.match(r"---\n(.*?)\n---\n", text, re.S)  # cabecera modelo/generado del .resumen.md
+            if m:
+                model = next((l.partition(":")[2].strip() for l in m.group(1).splitlines()
+                              if l.startswith("modelo:")), None)
+                text = text[m.end():]
+            summary = text.strip()
+        data = Transcripts().load(base)
+        segments = data["segments"] if data else []
+        if segments:
+            try:  # con quien habla, si se sabe (no es imprescindible para el documento)
+                segments = self._with_speakers(abs_path, segments, {})
+            except Exception:
+                log_exc()
+        a = self.library.find(rel) or {}
+        stem = os.path.splitext(os.path.basename(abs_path))[0]
+        when = (a.get("date") or "").replace("T", " ")[:16]
+        if not when:
+            m = DATE_RE.search(stem)
+            when = f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}:{m.group(5)}" if m else ""
+        d = a.get("duration") or 0
+        return {"stem": stem, "title": props.get("titulo") or stem, "date": when,
+                "duration": f"{round(d / 60)} min" if d else "", "props": props, "source": rel, "summary": summary,
+                "summary_model": model, "notes": notes, "segments": segments, "app_name": APP_NAME}
+
+    def write_outputs(self, rel):
+        """Escribe la reunion en los destinos de salida del perfil (si hay y la reunion ya tiene transcripcion).
+        Nunca mueve ni toca el original; solo sobrescribe los documentos que genero la propia app (salidas.py)."""
         try:
-            abs_path = safe(rel, "file")
-            dest = str(md_props(abs_path).get("copiar_a") or "").strip()
-            if not dest:
-                return None
-            if not os.path.isdir(dest):
-                log(f"   {os.path.basename(rel)}: no se copian los textos, la carpeta no está disponible: {dest}")
-                return None
-            if getattr(self, "_copias", None) is None:
-                self._copias = Copias(os.path.join(DATA_DIR, "copias.json"))
-            done = copy_texts(abs_path, dest, self._copias)
-            hechas = [e for e, k in done if k == "copiado"]
-            omitidas = [e for e, k in done if k == "omitido"]
-            if hechas or omitidas:
-                log(f"   {os.path.basename(rel)}: textos copiados a {dest}: {', '.join(hechas) or 'ninguno nuevo'}"
-                    + (f" · sin pisar (cambiados en el destino): {', '.join(omitidas)}" if omitidas else ""))
-            return done
+            destinos = perfil_de(self.settings.get())["outputs"]
+            if not destinos:
+                return []
+            base = os.path.splitext(safe(rel, "file"))[0]
+            if not any(os.path.isfile(base + e) for e in (".srt", ".txt")):
+                return []
+            if getattr(self, "_registro", None) is None:
+                self._registro = salidas.Registro(os.path.join(DATA_DIR, "salidas.json"))
+            return salidas.write_all(self.document_for(rel), destinos, self._registro, log)
         except Exception:
             log_exc()
-            return None
+            return []
+
+    def schedule_outputs(self, rel, delay=4.0):
+        """Reescritura al guardar cambios en las notas o la transcripcion: agrupada (se guarda mientras se escribe)."""
+        if not perfil_de(self.settings.get())["outputs"]:
+            return
+        if delay <= 0:
+            return self.write_outputs(rel)
+        timers = getattr(self, "_salidas_timers", None)
+        if timers is None:
+            timers = self._salidas_timers = {}
+        old = timers.pop(rel, None)
+        if old:
+            old.cancel()
+        t = threading.Timer(delay, lambda: (timers.pop(rel, None), self.write_outputs(rel)))
+        t.daemon = True
+        timers[rel] = t
+        t.start()
 
     def auto_voices(self, rel):
         if not self.voices_on():
@@ -1903,7 +1869,7 @@ class Jobs:
                 log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
                 log("   se mantiene el texto del directo")
-                self.copy_texts(job.path)
+                self.write_outputs(job.path)
                 self.auto_summary(job.path)
         finally:
             job.finished = time.time()
@@ -2075,8 +2041,6 @@ class App:
                 ctx = " ".join(str(ctx or "").split())[:engines.ABOUT_CHARS]
                 if ctx:
                     props["contexto"] = ctx
-                if perfil["copy_to"] and os.path.isdir(perfil["copy_to"]):
-                    props["copiar_a"] = perfil["copy_to"]
                 if props:  # antes de arrancar el directo, para que ya use ese vocabulario
                     self.notes_save({"path": rel, "props": props})
 
@@ -2256,7 +2220,7 @@ class App:
                     elif k == "idioma":  # codigo o "auto"; vacio = se quita la clave (vuelve al del perfil)
                         v = str(v or "").strip().lower()
                         v = v if IDIOMA_RE.match(v) else ""
-                    elif k in ("contexto", "copiar_a"):
+                    elif k == "contexto":
                         v = " ".join(str(v or "").split())[:engines.ABOUT_CHARS]
                     props[k] = v
             if "body" in b:
@@ -2268,6 +2232,7 @@ class App:
                 os.remove(md)  # sin notas ni propiedades: no se deja un archivo vacio
         if {"proyecto", "workstream", "idioma", "contexto"} & set(b.get("props") or {}):
             self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
+        self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento con las notas nuevas
         self.library.at = 0
         return {"props": props, "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
 
@@ -2420,7 +2385,7 @@ class App:
 
     def perfil_save(self, b):
         """POST /api/perfil: guarda el perfil por defecto (solo las claves que vengan: folder, vocab, context,
-        copy_to, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar."""
+        outputs, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar."""
         cambios = check_perfil(b)
         self.settings.update(lambda d: update_perfil(d, cambios))
         log("   perfil de reunión guardado: " + ", ".join(sorted(cambios)))
@@ -2604,6 +2569,7 @@ class App:
         else:  # transcripcion solo en .txt (sin tiempos)
             save_text(base + ".txt", "\n".join(t for _, _, t in segs) + "\n", "utf-8-sig")
         self.library.at = 0
+        self.jobs.schedule_outputs(rel)  # destinos de salida: el documento con la transcripcion corregida
         mt = max((os.path.getmtime(base + e) for e in (".txt", ".srt") if os.path.isfile(base + e)), default=0)
         return {"ok": True, "tx_mtime": mt, "count": len(segs)}
 

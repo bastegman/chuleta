@@ -79,6 +79,33 @@ nada de ningún proyecto concreto.
   y habrá que borrarlo a mano).
 
 ### Añadido
+- **Perfil de reunión** (`_app/static/perfil.js`, ajustes `perfil`): carpeta de destino, idioma, tema de vocabulario
+  y contexto libre con los que empieza cada grabación (● Grabar y Ctrl+Alt+R), en Ajustes → Perfil de reunión junto
+  al idioma del resumen, las instrucciones extra y los motores del directo y de la cola. Carpeta y tema admiten
+  «automático» (como hasta ahora: la última carpeta usada o la del proyecto del tema; el tema que sugiera la reunión
+  en curso o el último elegido): una instalación anterior no cambia. El diálogo de grabar carga el perfil, deja
+  ajustarlo para esa reunión y tiene «Guardar como perfil por defecto»; donde el perfil fija algo, la sugerencia de
+  Teams/Outlook no lo pisa. Por reunión, `idioma` (código o `auto`) y `contexto` van en la cabecera del `.md`, se
+  cambian en la página de la reunión (también en el directo) y `live.run` los relee en el siguiente trozo, como el
+  vocabulario; el repaso final usa el idioma que tenga el `.md` al terminar. El contexto entra en el prompt de
+  Whisper detrás del vocabulario (tope propio de 100 tokens; si no cabe, cede antes que un solo término) y en el del
+  resumen. Mezclas «Español + portugués» e «Inglés + portugués» como la de español + inglés (`lang_pair`,
+  `style_for`; frases de estilo nuevas, sin validar aún con audio real). El idioma elegido en ● Grabar es de esa
+  reunión y ya no cambia el ajuste general (eso lo hace el perfil). El tema se elige en dos desplegables
+  (Proyecto / Tema) con «Sin vocabulario» y «Nuevo…»; sin listas, se explica dónde viven
+  (`<Proyecto>\Vocabulario\<Tema>.txt`) e «Importar listas de otra carpeta…» (`POST /api/vocab/import`, sin pisar;
+  también en Ajustes → Vocabulario). `GET/POST /api/perfil`, `perfil` en `/api/config`.
+- **Destinos de salida** (`_app/salidas.py`, `perfil.outputs`): cero, una o varias carpetas (un vault de Obsidian, la
+  del proyecto en OneDrive, una biblioteca de SharePoint sincronizada…) donde cada reunión se escribe como documento
+  al terminar la transcripción y el resumen y al guardar cambios en las notas o en la transcripción (agrupados cada
+  4 s), con formato por destino: Markdown (`<fecha> - <nombre>.md`: un solo documento con cabecera YAML de
+  propiedades, resumen, notas y transcripción con minutos y quién habla; los sidecars junto al audio ya son la
+  versión «en tres ficheros»), texto plano o Word `.docx` generado con la librería estándar (zip + `document.xml`
+  con estilos Título / Heading 1-2, sin dependencias), y subcarpeta por proyecto opcional. Nunca se mueve el
+  original; solo se sobrescriben los documentos que llevan la marca `generado_por` (cabecera del `.md`, segunda
+  línea del `.txt`, `docProps/core.xml` del `.docx`) y cuyo hash coincide con el registro
+  `%LOCALAPPDATA%\AudiosApp\salidas.json`; uno ajeno, o uno nuestro cambiado en el destino, se deja como está y se
+  anota en `server.log`.
 - **Directo en la nube casi en streaming** (`_app/live.py`, `_app/engines.py`, `_app/static/directo.js`): con
   Groq el directo manda trozos de 3–6 s en vez de 8–15: corta en la primera pausa de la voz a partir de 3 s y, si
   nadie calla, a los 6 s con 0,5 s de solape que se deduplica por tiempos; solo se envía la voz (los silencios de
@@ -163,6 +190,9 @@ nada de ningún proyecto concreto.
   estado compartido (ROOT, LINKS, COMPLETE, DATA_DIR cambian en tiempo de ejecución) y se deja para otra entrega.
 
 ### Conocido, sin cambiar
+- Las mezclas español + portugués e inglés + portugués, el contexto en el prompt y los documentos `.docx` de los
+  destinos de salida están probados con dobles (el `.docx` abriendo el zip y su XML), no con audio real ni en Word.
+  Al mover, renombrar o borrar una reunión, los documentos ya escritos en los destinos se quedan como están.
 - La ventana propia, el acceso directo a `pythonw.exe`, el AUMID del .lnk y «Apagar» están probados en el runner
   `windows-latest` (ventana, hide/show, iconos, HTTP) y con dobles en los tests, pero aún no a mano en un Windows con
   barra de tareas: ver la lista de comprobación del informe del 31/10/2026.

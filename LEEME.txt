@@ -54,12 +54,24 @@ USO DIARIO
     (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
   - Si grabas con OBS, configúralo para que guarde en la carpeta Notas: la app lo detecta y
     transcribe en directo mientras graba.
-  - Idioma: por defecto se detecta solo. "Español + inglés" es para reuniones que mezclan los dos
-    (spanglish).
+  - Perfil de reunión (⚙ Ajustes > Perfil de reunión): la carpeta donde se guarda, el idioma
+    (por defecto se detecta solo; "Español + inglés", "Español + portugués" e "Inglés + portugués"
+    son para reuniones que mezclan dos), el tema de vocabulario y un contexto de una o dos frases
+    (de qué va, quién participa) con los que empieza cada grabación, también con Ctrl+Alt+R. En
+    ● Grabar se ajustan para esa reunión y se pueden guardar como perfil; en la página de la
+    reunión, idioma, tema y contexto se cambian sobre la marcha y el directo los usa desde el
+    siguiente trozo. El resumen también tiene en cuenta el contexto.
+  - Destinos de salida (en el mismo apartado): carpetas donde cada reunión se guarda además como
+    documento (.md con propiedades, resumen, notas y transcripción; .txt; o Word .docx), por
+    ejemplo un vault de Obsidian o la carpeta del proyecto en OneDrive, con subcarpeta por proyecto
+    si quieres. Se escribe al terminar y al guardar cambios; el audio y los originales no se mueven,
+    y nunca se pisa un archivo ajeno ni uno que hayas cambiado allí.
   - Vocabulario por proyecto y tema: en Ajustes > Vocabulario (o en ● Grabar > Nuevo) creas un
     proyecto y sus temas, cada uno con su lista de nombres, siglas y productos separados por
-    comas (los más importantes primero). Al grabar eliges el tema y Whisper los escribe bien.
-    Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan fuera.
+    comas (los más importantes primero). Al grabar eliges el proyecto y el tema y Whisper los
+    escribe bien. Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan
+    fuera. Si ya tienes listas en otra carpeta (de un compañero, de otra copia), "Importar listas
+    de otra carpeta…" las copia sin pisar las tuyas.
 
 
 QUIÉN HABLA (opcional)
