@@ -76,6 +76,7 @@ const I = {
   phone: '<svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>',
+  power: '<svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>',
   face: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 10h.01M15 10h.01"/></svg>',
 };
 /* iconos de los presets de transcripcion por id; el emoji que manda engines.py queda solo de reserva */
@@ -1861,7 +1862,7 @@ function openSettings() {
     </fieldset>
     <div class="help" style="margin-top:16px"><b>Atajos:</b> Ctrl+Alt+R empezar/parar grabación (desde cualquier programa) · Espacio reproducir/pausa · ← → 5 s · Shift + ← → 15 s · [ ] velocidad · Ctrl K buscar en todas las transcripciones · Ctrl P ir a una reunión · Ctrl F buscar en la transcripción</div>
     <div class="help" style="margin-top:6px">${esc(APP_NAME)} · versión del ${esc(S.config.version || '')}</div>
-    <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">⏻ Apagar ${esc(APP_NAME)}</button>
+    <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
@@ -1978,7 +1979,7 @@ function onWindowClosing() {
   if (localStorage.getItem('bgNotice') === 'off') { hide(); return 'handled'; }
   openModal(`<h3>${esc(APP_NAME)} sigue en segundo plano</h3>
     <p>Al cerrar la ventana la app <b>no se apaga</b>: las grabaciones y el atajo <b>Ctrl+Alt+R</b> siguen funcionando, y el acceso directo del escritorio vuelve a abrir esta ventana.</p>
-    <p>Para apagarla del todo: Ajustes ⚙ → <b>⏻ Apagar ${esc(APP_NAME)}</b>.</p>
+    <p>Para apagarla del todo: Ajustes ${I.gear} → <b>${I.power}Apagar ${esc(APP_NAME)}</b>.</p>
     <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="bgNoMore"> No volver a avisar</label>
     <div class="btns"><button class="btn" data-m="off" type="button">Apagar ahora</button><button class="btn primary" data-m="ok" type="button" autofocus>Entendido</button></div>`, d => {
     d.addEventListener('click', e => {
