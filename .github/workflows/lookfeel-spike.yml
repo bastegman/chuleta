@@ -64,6 +64,7 @@ jobs:
           python -m pip install --disable-pip-version-check -v numpy pywebview 2>&1 | Select-String -Pattern "Building wheel|Created wheel|Successfully installed|Using cached|Downloading" | ForEach-Object { $_.Line.Trim() }
           python -m pip freeze
           where.exe cl.exe 2>$null; if ($LASTEXITCODE -ne 0) { "sin cl.exe en el PATH del runner" }
+          exit 0
       - name: Ventana propia (pywebview) · AUMID e iconos del HWND
         run: python scripts/lookfeel_webview_probe.py spike-out
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
