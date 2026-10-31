@@ -28,6 +28,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import calendario
 import engines
 import live
 import voices
@@ -264,6 +265,8 @@ DEFAULT_SETTINGS = {
     "favorites": [],          # [{"kind": "a"|"f", "path": ...}] (estilo Notion)
     "folder_icons": {},       # carpeta -> emoji
     "meeting_detect": True,   # avisar si Teams/Zoom/… usa el micro y no se esta grabando
+    "outlook_on": False,      # leer la cita en curso de Outlook clasico (COM, pywin32): nombre, tema y asistentes
+    "rec_aviso": True,        # aviso flotante «Grabar / ✕» al detectar una llamada (calendario.py + aviso.py)
     "summary_auto": True,     # resumen con IA al terminar de transcribir una reunion reciente
     "summary_model": "openai/gpt-oss-120b",
     "summary_lang": "es",     # es / en / same (el de la reunion)
@@ -1595,6 +1598,7 @@ class App:
         self.toggle_lock = threading.Lock()
         self.notes_lock, self.meeting = threading.Lock(), None
         self.voices_dl = None  # descarga de los modelos de voces en curso (progreso para la interfaz)
+        self.vigia = calendario.Vigia()  # reunión en curso (Teams/Outlook): sugerencias y aviso flotante
         threading.Thread(target=self._meeting_watch, daemon=True, name="meeting-watch").start()
         threading.Thread(target=self._monitor_watchdog, daemon=True).start()
         self.hotkey = GlobalHotkey(lambda: self.rec_toggle({"source": "hotkey"}))
@@ -1605,19 +1609,26 @@ class App:
         with self.toggle_lock:
             try:
                 if self.rec and self.rec.alive():
+                    if b.get("start_only"):  # el aviso flotante: si Ctrl+Alt+R se adelantó, no se para la grabación
+                        return {"recording": True, "path": rel_of(self.rec.path)}
                     r = self.rec_stop({})
                     cue("stop")
                     notify("■ Grabación guardada",
                            f"{max(1, round(r['seconds'] / 60))} min · la transcripción termina sola")
                     return dict(r, recording=False)
                 st = self.settings.get()
-                # el ultimo workstream elegido (y se graba en la carpeta de su proyecto)
-                v = find_vocab(None, None, st.get("rec_vocab")) if st.get("rec_vocab") else None
+                # nombre y tema: lo que mande el aviso flotante; si no, la reunión en curso (Teams/Outlook, sin
+                # esperar a COM: calendario.py); si no, el ultimo tema elegido (y la carpeta de su proyecto)
+                sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
+                vid = b.get("vocab") or sug.get("vocab") or st.get("rec_vocab")
+                v = find_vocab(None, None, vid) if vid else None
                 cue("start")  # antes de empezar: asi el pitido no queda grabado
                 r = self.rec_start({"mic": st.get("rec_mic") or "default", "sys": st.get("rec_sys") or "all",
                                     "live": True, "preset": st.get("live_preset") or "medium",
                                     "language": st.get("language") or "", "folder": self.rec_folder_for(v, st),
-                                    "vocab": v["id"] if v else ""})
+                                    "vocab": v["id"] if v else "", "name": b.get("name") or sug.get("name") or "",
+                                    "participantes": b.get("participantes")
+                                    or ", ".join(sug.get("participants") or [])})
                 notify("● Grabando en Notas", (f"{r['workstream']} · " if r.get("workstream") else "")
                        + "Pulsa Ctrl+Alt+R otra vez para parar")
                 return dict(r, recording=True)
@@ -1686,6 +1697,11 @@ class App:
             mic, sys_dev = b.get("mic") or "default", b.get("sys") or "default"
             if mic == "none" and sys_dev == "none":
                 raise ApiError("Elige al menos el micrófono o el audio del ordenador.")
+            if "name" not in b and "vocab" not in b:  # sin nombre ni tema (otra app): la reunión en curso, si la hay
+                sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
+                                                                              outlook=False))
+                b = dict(b, name=sug.get("name") or "", vocab=sug.get("vocab") or "",
+                         participantes=b.get("participantes") or ", ".join(sug.get("participants") or []))
             folder = safe(b.get("folder", ""), "dir")
             if in_app_dir(folder):
                 raise ApiError("No se puede grabar ahí")
@@ -1696,7 +1712,7 @@ class App:
             if self.monitor:
                 self.monitor.stop(timeout=2)
                 self.monitor = None
-            rel = rel_of(path)
+            rel, props = rel_of(path), {}
             # la grabacion es de la app: mientras dure, el vigilante no arranca el directo por su cuenta
             # (si se eligio "solo grabar", no se transcribe hasta que tu lo pidas)
             self.jobs.claimed.add(rel)
@@ -1711,8 +1727,11 @@ class App:
                     raise ApiError("La grabadora no ha podido arrancar (ver %LOCALAPPDATA%\\AudiosApp\\recorder.log).")
                 preset = b.get("preset") or self.settings.get().get("live_preset") or "medium"
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
-                if v:  # antes de arrancar el directo, para que ya use ese vocabulario
-                    self.notes_save({"path": rel, "props": {"proyecto": v["project"], "workstream": v["name"]}})
+                props = {"proyecto": v["project"], "workstream": v["name"]} if v else {}
+                if b.get("participantes"):  # sugeridos por Teams/Outlook: solo a la cabecera del .md, en este PC
+                    props["participantes"] = " ".join(str(b["participantes"]).split())[:500]
+                if props:  # antes de arrancar el directo, para que ya use ese vocabulario
+                    self.notes_save({"path": rel, "props": props})
 
                 def upd(d):
                     if "vocab" in b:
@@ -1738,7 +1757,8 @@ class App:
                     self.jobs.claimed.discard(rel)
         log(f"● Grabando: {rel}" + (f" [{v['project']} · {v['name']}]" if v else "")
             + ("" if b.get("live") else " (solo grabar, sin transcribir)"))
-        return {"path": rel, "workstream": f"{v['project']} · {v['name']}" if v else None}
+        return {"path": rel, "workstream": f"{v['project']} · {v['name']}" if v else None,
+                "participantes": props.get("participantes")}
 
     def rec_mic(self, b):
         """Silenciar / reactivar mi micro a mitad de grabacion (se graba silencio en su lugar)."""
@@ -1794,6 +1814,7 @@ class App:
                 "links": [{"rel": LINK + k, "name": l["name"], "path": l["path"]} for k, l in LINKS.items()],
                 "rec_folder": st.get("rec_folder") or "", "project_folders": st.get("project_folders") or {},
                 "meeting_detect": bool(st.get("meeting_detect", True)),
+                "outlook_on": bool(st.get("outlook_on")), "rec_aviso": bool(st.get("rec_aviso", True)),
                 "summary": {"auto": bool(st.get("summary_auto", True)), "model": st.get("summary_model"),
                             "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
                             "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()},
@@ -2109,7 +2130,14 @@ class App:
                 app = mic_meeting_app()
                 self.meeting = app
                 recording = bool(self.rec and self.rec.alive())
-                if app and not recording and notified != app and self.settings.get().get("meeting_detect", True):
+                st = self.settings.get()
+                # aviso flotante «Grabar / ✕» (calendario.py + aviso.py): una vez por llamada y nunca si ya se graba;
+                # mientras dure la llamada se lee la reunión (Teams y, si está activado, Outlook) para sugerir
+                if self.vigia.tic(app, recording, st, lambda: calendario.reunion_actual(st, self._vocab_terms()),
+                                  PORT, APP_DIR, creationflags=engines.NO_WINDOW):
+                    notified = app  # el aviso flotante sustituye al toast de Windows en esa llamada
+                    log(f"   reunión detectada ({app}): aviso flotante abierto")
+                if app and not recording and notified != app and st.get("meeting_detect", True):
                     notified = app
                     notify("¿Quieres tomar notas de la sesión?", "Pulsa Ctrl+Alt+R para empezar a tomar notas.")
                     log(f"   reunión detectada ({app}): aviso enviado")
@@ -2117,6 +2145,16 @@ class App:
                     notified = None
             except Exception:
                 pass
+
+    def _vocab_terms(self):
+        """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión."""
+        return [dict(v, terms=read_vocab(v["_abs"])[1]) for v in list_vocab()]
+
+    def reunion_actual(self, q):
+        """GET /api/reunion/actual: ventana de Teams, cita de Outlook (si está activado, o ?outlook=1 para probar)
+        y la sugerencia de nombre, tema y participantes. Lo usan el botón «Probar» y el diálogo Grabar."""
+        return self.vigia.recordar(calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
+                                                             outlook=True if q.get("outlook") else None))
 
     # --- edicion de transcripciones
     def save_transcript(self, b):
@@ -2410,6 +2448,9 @@ class App:
                 d["summary_extra"] = (s["extra"] or "").strip()[:500]
             if "meeting_detect" in b:
                 d["meeting_detect"] = bool(b["meeting_detect"])
+            for k in ("outlook_on", "rec_aviso"):  # reuniones: calendario de Outlook y aviso flotante
+                if k in b:
+                    d[k] = bool(b[k])
             if "live_auto" in b:
                 d["live_auto"] = bool(b["live_auto"])
             if "live_final_pass" in b:
@@ -2667,7 +2708,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
-                  "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get}
+                  "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
+                  "/api/reunion/actual": a.reunion_actual}
         try:
             if u.path in routes:
                 return self._json(routes[u.path](q))

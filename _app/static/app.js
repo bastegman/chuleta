@@ -481,6 +481,7 @@ async function openRec() {
     }
     monitor();
     pollRec();
+    window.reunionPrefill?.(d);  // nombre, tema y participantes de la reunión en curso (reunion.js)
     $('#rGo', d).disabled = false;
     $('#rGo', d).onclick = async () => {
       $('#rGo', d).disabled = true;
@@ -488,7 +489,7 @@ async function openRec() {
         S.recLocal = true;
         const r = await api('/api/rec/start', { mic: micVal(), sys: $('#rSys', d).value, name: $('#rName', d).value.trim(),
           folder: $('#rFolder', d).value, live: d.querySelector('[name=rMode]:checked').value === 'live', preset: $('#rPreset', d).value,
-          language: $('#rLang', d).value, vocab: $('#rVocab', d)?.value || '' });
+          language: $('#rLang', d).value, vocab: $('#rVocab', d)?.value || '', ...(window.reunionExtra?.(d) || {}) });
         S.config.live_preset = $('#rPreset', d).value;
         S.config.language = S.selLang = $('#rLang', d).value;
         recDialog = false;
@@ -1818,6 +1819,7 @@ function openSettings() {
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
       <div class="help">Modelo con el que empieza cada directo; se puede cambiar en mitad de la grabación desde la propia pantalla. En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.</div>
     </fieldset>
+    ${window.reunionFieldsetHtml?.() || ''}
     <fieldset><legend>${I.monitor}Transcripción local</legend>
       <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
@@ -1879,6 +1881,7 @@ function openSettings() {
     $('#cProv', d).onchange = fields;
     bindVocesSettings(d);
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
+    window.bindReunionSettings?.(d);
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -1891,7 +1894,7 @@ function openSettings() {
       S.selLang = $('#sLang', d).value;
       return { cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d).value, meeting_detect: $('#lMeet', d).checked,
-        live_final_pass: $('#lFinal', d).checked,
+        live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
         summary: { auto: $('#sAuto', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d).value, extra: $('#sExtra', d).value } };
     };
     $('#cTest', d).onclick = async () => {
