@@ -2277,6 +2277,8 @@ class App:
         """Traducción al español del directo en la nube, por reunión (apagada por defecto); live.py hace el resto."""
         job = self.jobs._live_job(b.get("id"))
         job.translate = bool(b.get("on"))
+        if isinstance(job.directo, dict):  # que la respuesta ya lo refleje (live.py lo vuelve a publicar en <1 s)
+            job.directo = dict(job.directo, translate=job.translate)
         return job.public()
 
     def clear_jobs(self, b):

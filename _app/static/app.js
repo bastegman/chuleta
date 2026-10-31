@@ -280,6 +280,7 @@ function renderLiveHero(a) {
     ${crumbs(a.folder)}
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
+    <div id="directoBar"></div>
     ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
     <div class="lh-label">Modelo ${j ? '<span class="muted">(el cambio se aplica desde el siguiente trozo)</span>' : ''}</div>
@@ -291,6 +292,7 @@ function renderLiveHero(a) {
       <button class="btn sm" data-act="consent" title="Texto para pegar en el chat de Teams">${I.clipboard}Copiar aviso de grabación</button>
       <button class="btn sm" data-act="reveal" data-path="${esc(a.path)}">${I.ext}Mostrar en carpeta</button>
     </div></div>`;
+  if (typeof renderDirectoBar === 'function') renderDirectoBar(a, j);
 }
 function updateLiveHero(a) {
   const el = $('#lHero');
@@ -1186,6 +1188,7 @@ function renderTxBody(fromModel) {
     S.seenSegs = tx.segs.length;
     const a = S.audios.get(tx.path), lj = a && liveJob(a);
     if (lj) body.insertAdjacentHTML('beforeend', `<div class="typing" title="${esc(lj.stage)}"><i></i><i></i><i></i><span>escuchando…</span></div>`);
+    if (typeof directoAfterRender === 'function') directoAfterRender(tx, lj);
   }
   S.marks = $$('mark', body); S.markIdx = -1;
   const n = $('#tqn');
@@ -1601,6 +1604,7 @@ function onJobs(jobs) {
   if (!$('#jobsPanel').classList.contains('hidden')) renderJobsPanel();
   onSummaryJobs(prev);
   onVoicesJobs(prev);
+  if (typeof onDirectoJobs === 'function') onDirectoJobs(prev);
   if (finished) { refreshTree(true); api('/api/config').then(setConfig).catch(() => { }); }
   if (statusChanged) { renderTree(); refreshView(); renderLiveChip(); }
   else applyProgress();
@@ -1799,6 +1803,7 @@ function openSettings() {
       <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
       <div id="cFields"></div>
+      ${typeof directoSettingsHtml === 'function' ? directoSettingsHtml(c) : ''}
       <div class="grid2">
         <div><label>Minutos por trozo</label><input class="input" id="cChunk" type="number" min="2" max="20" value="${c.chunk_minutes}"></div>
         <div><label>Trozos en paralelo</label><input class="input" id="cPar" type="number" min="1" max="8" value="${c.parallel}"></div>
@@ -1873,6 +1878,7 @@ function openSettings() {
     fields();
     $('#cProv', d).onchange = fields;
     bindVocesSettings(d);
+    if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -1881,6 +1887,7 @@ function openSettings() {
       if (p === 'azure') Object.assign(cloud, { azure_endpoint: $('#cAzEp', d).value, azure_deployment: $('#cAzDep', d).value, azure_api_version: $('#cAzVer', d).value });
       else cloud.model = $('#cModel', d).value;
       if (p === 'custom') cloud.base_url = $('#cBase', d).value;
+      if (typeof collectDirectoSettings === 'function') Object.assign(cloud, collectDirectoSettings(d));
       S.selLang = $('#sLang', d).value;
       return { cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d).value, meeting_detect: $('#lMeet', d).checked,

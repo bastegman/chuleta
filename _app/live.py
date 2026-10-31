@@ -509,7 +509,19 @@ def run(job, path, opts, write, log):
                     voice = sum(min(s["end"], cut) - s["start"] for s in ts if s["start"] < cut) / SR
                     audio, a = window, 0
                 if voice >= DIRECT_MIN_VOICE_S:  # menos de 1 s de voz: musica/ruido, Whisper solo inventaria
-                    new = transcribe(audio, t0 + a / SR)
+                    try:
+                        new = transcribe(audio, t0 + a / SR)
+                    except engines.EngineError as e:
+                        if not directo:
+                            raise
+                        # el directo no se cae por un trozo: se salta (el repaso final lo recupera) y, si Groq ha
+                        # bloqueado la clave, la siguiente vuelta entra en pausa
+                        new = []
+                        if str(e) != st.get("last_error"):
+                            st["last_error"] = str(e)
+                            log(f"   trozo sin transcribir ({e}); se sigue con el siguiente")
+                        stage(f"Sin respuesta de la nube ({e}). Se sigue con el siguiente trozo; el repaso final "
+                              "recupera el texto.")
                     if job.restart:  # se pidio rehacer mientras tanto: este trozo ya no vale
                         continue
                     if new:

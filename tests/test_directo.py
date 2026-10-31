@@ -7,6 +7,7 @@ import os
 import struct
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -310,6 +311,28 @@ class CloudPostTests(unittest.TestCase):
         self.assertTrue(eng.keys.blocked(K1, "whisper"))
         self.assertEqual(eng.keys.public(CFG2)["active"], 2)
 
+    def test_429_largo_sin_otra_clave_falla_rapido(self):
+        eng = engines.CloudEngine(self.tmp)
+        eng.keys.clock = Clock()
+        cfg = {"provider": "groq", "api_key": K1}
+        sleeps = []
+        fake = FakeRequests([FakeResponse(429, {"retry-after": "5400"}, {"error": {"message": "daily limit"}})])
+        with mock.patch.dict(sys.modules, {"requests": fake}), mock.patch.object(engines.time, "sleep", sleeps.append):
+            with self.assertRaises(engines.EngineError) as cm:
+                eng._post(cfg, self.chunk, None, None, lambda **k: None, lambda: False)
+        self.assertIn("Groq pide esperar 90 min", str(cm.exception))
+        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(sum(sleeps), 0)  # sin esperar 120 s x 6 dentro
+        self.assertIsNone(eng.keys.live_pace(cfg))  # y el directo entra en pausa
+        # un 429 corto sigue esperando y reintentando
+        ok = {"text": "x", "segments": [], "language": "spanish"}
+        fake = FakeRequests([FakeResponse(429, {"retry-after": "4"}, {}), FakeResponse(200, {}, ok)])
+        eng2 = engines.CloudEngine(self.tmp)
+        eng2.keys.clock = Clock()
+        with mock.patch.dict(sys.modules, {"requests": fake}), mock.patch.object(engines.time, "sleep", lambda s: None):
+            self.assertEqual(eng2._post(cfg, self.chunk, None, None, lambda **k: None, lambda: False)["text"], "x")
+        self.assertEqual(len(fake.calls), 2)
+
     def test_el_directo_usa_su_modelo_y_la_cola_el_de_siempre(self):
         eng = engines.CloudEngine(self.tmp)
         eng.keys.clock = Clock()
@@ -323,7 +346,11 @@ class CloudPostTests(unittest.TestCase):
         self.assertEqual(engines.CloudEngine.live_model({"provider": "groq", "live_model": " whisper-large-v3 "}),
                          "whisper-large-v3")
         self.assertIsNone(engines.CloudEngine.live_model({"provider": "azure", "live_model": "x"}))
-        self.assertIsNone(engines.CloudEngine.live_model({"provider": "openai"}))
+        # con OpenAI el valor por defecto (whisper-large-v3-turbo) no existe: se usa el modelo de siempre (whisper-1)
+        self.assertIsNone(engines.CloudEngine.live_model({"provider": "openai",
+                                                          "live_model": "whisper-large-v3-turbo"}))
+        self.assertIsNone(engines.CloudEngine.live_model({"provider": "custom"}))
+        self.assertEqual(engines.CloudEngine.live_model({"provider": "custom", "live_model": "x"}), "x")
 
     def test_traduccion_con_gpt_oss_20b(self):
         s = engines.Summarizer()
@@ -414,14 +441,15 @@ class LiveTranslateApiTests(unittest.TestCase):
         job = server.Job("a.wav", "a.wav", "nube", None)
         job.live, job.status = True, "running"
         jobs = server.Jobs.__new__(server.Jobs)
-        jobs.list, jobs.lock = [job], __import__("threading").Lock()
+        jobs.list, jobs.lock = [job], threading.Lock()
         app = server.App.__new__(server.App)
         app.jobs = jobs
         self.assertFalse(job.translate)
+        job.directo = {"translate": False, "paused": False}
         out = app.live_translate({"id": job.id, "on": True})
         self.assertTrue(job.translate)
         self.assertTrue(out["live"])
-        self.assertIn("directo", out)
+        self.assertEqual(out["directo"], {"translate": True, "paused": False})  # la respuesta ya lo refleja
         app.live_translate({"id": job.id, "on": False})
         self.assertFalse(job.translate)
         with self.assertRaises(server.ApiError):
@@ -536,7 +564,7 @@ class FakeRecorder:
     def __init__(self, path, y):
         self.path, self.t, self.t0 = path, 1000.0, 1000.0
         self.pcm = (np.clip(y, -1, 1) * 32767).astype("<i2").tobytes()
-        self.written, self.closed = 0, False
+        self.written, self.closed, self.lock = 0, False, threading.RLock()
         with open(path, "wb") as f:
             f.write(wav_bytes(0, open_header=True, rate=SR, channels=1, data=b""))
 
@@ -544,26 +572,27 @@ class FakeRecorder:
         return self.t
 
     def sleep(self, dt):
-        self.t += dt
-        want = min(len(self.pcm), int((self.t - self.t0) * SR) * 2)
-        if want > self.written:
-            with open(self.path, "ab") as f:
-                f.write(self.pcm[self.written:want])
-            self.written = want
-        if self.written >= len(self.pcm) and not self.closed:
-            self.closed = True
-            with open(self.path, "r+b") as f:
-                f.seek(4)
-                f.write(struct.pack("<I", 36 + len(self.pcm)))
-                f.seek(40)
-                f.write(struct.pack("<I", len(self.pcm)))
+        with self.lock:  # el hilo de traduccion tambien "duerme" con este reloj
+            self.t += dt
+            want = min(len(self.pcm), int((self.t - self.t0) * SR) * 2)
+            if want > self.written:
+                with open(self.path, "ab") as f:
+                    f.write(self.pcm[self.written:want])
+                self.written = want
+            if self.written >= len(self.pcm) and not self.closed:
+                self.closed = True
+                with open(self.path, "r+b") as f:
+                    f.seek(4)
+                    f.write(struct.pack("<I", 36 + len(self.pcm)))
+                    f.seek(40)
+                    f.write(struct.pack("<I", len(self.pcm)))
 
 
 class FakeCloud:
     """CloudEngine de mentira: cada trozo tarda `latency` s de reloj falso y devuelve una frase con su duracion."""
 
-    def __init__(self, rec, latency=0.8, remaining=None):
-        self.rec, self.latency, self.calls = rec, latency, []
+    def __init__(self, rec, latency=0.8, remaining=None, fail_on=()):
+        self.rec, self.latency, self.calls, self.fail_on = rec, latency, [], set(fail_on)
         self.keys = engines.KeyPool()
         self.keys.clock = rec.time
         if remaining is not None:
@@ -575,15 +604,17 @@ class FakeCloud:
         secs = len(audio) / SR
         self.calls.append({"secs": secs, "model": model, "at": self.rec.time()})
         self.rec.sleep(self.latency)
+        if len(self.calls) in self.fail_on:
+            raise engines.EngineError("HTTP 500: se cayó")
         return [(0.0, secs, f"trozo {len(self.calls)} de {secs:.1f} s")], "spanish"
 
 
 class RunDirectoTests(unittest.TestCase):
-    def run_live(self, spans, total, latency=0.8, remaining=None, translate=False):
+    def run_live(self, spans, total, latency=0.8, remaining=None, translate=False, fail_on=()):
         tmp = tempfile.mkdtemp(prefix="notas-run-")
         path = os.path.join(tmp, "reunion.wav")
         rec = FakeRecorder(path, synth(spans, total))
-        cloud = FakeCloud(rec, latency, remaining)
+        cloud = FakeCloud(rec, latency, remaining, fail_on)
         job = DirectoJob(preset="nube")
         job.translate = translate
         summ = FakeSummarizer()
@@ -636,6 +667,14 @@ class RunDirectoTests(unittest.TestCase):
         self.assertGreater(cloud.calls[0]["at"], 1000.0 + 12.5)
         self.assertEqual(len(segs), 1)
         self.assertTrue(job.directo["paused"] is False)
+
+    def test_un_trozo_que_falla_no_tumba_el_directo(self):
+        spans = [(0.0, 3.4), (4.0, 7.6), (8.2, 11.3)]
+        segs, _, cloud, job, _, logs, _ = self.run_live(spans, 13.0, fail_on=(2,))
+        self.assertEqual(len(cloud.calls), 3)
+        self.assertEqual(len(segs), 2)  # el segundo se salto; el directo siguio
+        self.assertTrue(any("trozo sin transcribir" in l and "HTTP 500" in l for l in logs))
+        self.assertTrue(any("Sin respuesta de la nube" in s for s in job.stages))
 
     def test_traduccion_al_final_de_la_sesion(self):
         segs, _, cloud, job, _, _, summ = self.run_live([(0.0, 3.4), (4.0, 7.0)], 9.0, translate=True)

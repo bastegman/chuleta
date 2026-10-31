@@ -694,7 +694,7 @@ class CloudEngine:
     def live_model(cfg):
         """Modelo del directo en la nube (cloud.live_model; en Groq, whisper-large-v3-turbo por defecto: mas rapido
         por trozo). El repaso final y la cola siguen con cloud.model. En Azure el modelo lo fija el deployment."""
-        if cfg.get("provider", "groq") == "azure":
+        if cfg.get("provider", "groq") not in ("groq", "custom"):  # OpenAI (whisper-1) y Azure: el de siempre
             return None
         if (cfg.get("live_model") or "").strip():
             return cfg["live_model"].strip()
@@ -772,10 +772,12 @@ class CloudEngine:
                 if r.status_code not in (408, 409, 429, 500, 502, 503, 504):
                     raise EngineError(last)
                 wait = _duration_s(r.headers.get("retry-after", "")) or 3 * 2 ** attempt
-                if r.status_code == 429 and self.keys.blocked(key, family) and len(cloud_keys(cfg)) > 1 \
-                        and self.keys.pick(cfg, family) != key:
-                    report(stage="Esa cuenta de Groq ha agotado su cupo: se sigue con la siguiente clave…")
-                    continue  # otra clave disponible: sin esperar
+                if r.status_code == 429 and self.keys.blocked(key, family):  # retry-after largo (cupo del dia)
+                    if len(cloud_keys(cfg)) > 1 and self.keys.pick(cfg, family) != key:
+                        report(stage="Esa cuenta de Groq ha agotado su cupo: se sigue con la siguiente clave…")
+                        continue  # otra clave disponible: sin esperar
+                    # sin alternativa: fallar ya, con el tiempo que pide (esperar aqui bloquearia el directo)
+                    raise EngineError(f"Groq pide esperar {int(wait // 60)} min ({last})")
             wait = min(max(wait, 1.0), 120.0)
             report(stage=f"La API pide esperar ({last}). Reintento en {wait:.0f} s…")
             self._wait(wait, cancelled)
