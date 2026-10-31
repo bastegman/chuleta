@@ -4,6 +4,9 @@ sugerencia de nombre/tema/participantes, decisiones del vigilante (aviso flotant
 Nada de aquí necesita Windows ni pywin32."""
 import json
 import os
+import re
+import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -542,6 +545,54 @@ class AjustesTests(unittest.TestCase):
         self.assertEqual((st["outlook_on"], st["rec_aviso"]), (True, False))
         a.save_settings({"outlook_on": 0})
         self.assertEqual(a.settings.get()["outlook_on"], False)
+
+
+STATIC = os.path.join(os.path.dirname(calendario.__file__), "static")
+
+
+def static(name):
+    with open(os.path.join(STATIC, name), encoding="utf-8") as f:
+        return f.read()
+
+
+class ReunionFrontendTests(unittest.TestCase):
+    def test_ganchos_en_app_js_e_index(self):
+        app, html = static("app.js"), static("index.html")
+        self.assertIn('<script src="/reunion.js"></script>', html)
+        for s in ("window.reunionPrefill?.(d)", "...(window.reunionExtra?.(d) || {})",
+                  "${window.reunionFieldsetHtml?.() || ''}", "window.bindReunionSettings?.(d)",
+                  "...(window.reunionCollect?.(d) || {})"):
+            self.assertEqual(app.count(s), 1, s)
+        js = static("reunion.js")
+        for s in ("function reunionPrefill", "function reunionExtra", "function reunionFieldsetHtml",
+                  "function bindReunionSettings", "function reunionCollect", "/api/reunion/actual?outlook=1",
+                  'id="rnOutlook"', 'id="rnAviso"', 'id="rnProbar"', "Sugerido por", "Quitar"):
+            self.assertIn(s, js, s)
+        self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")  # sin emojis (Steve los está quitando)
+
+    @unittest.skipUnless(shutil.which("node"), "node no instalado")
+    def test_linea_de_probar(self):
+        src = static("reunion.js")
+        defs = ("const esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"
+                "'\"':'&quot;',\"'\":'&#39;'}[c]));\n")
+        defs += "\n".join(m.group(0) for m in re.finditer(r"^function reunion(Hora|Linea)\(.*?^}", src, re.S | re.M))
+        code = defs + """
+const o = {subject: 'Comité <Q4>', start: '2026-10-31T10:00', end: '2026-10-31T11:00', organizer: 'Ana',
+  attendees: ['Luis', 'Eva'], blocked: []};
+console.log(reunionLinea({outlook: o, teams: {title: 'Comité'}, sugerencia: {vocab_label: 'Alfa · General'},
+  reason: null}));
+console.log(reunionLinea({outlook: null, teams: {title: 'Semanal'}, sugerencia: {},
+  reason: 'Outlook clásico no está abierto.'}));
+console.log(reunionLinea({outlook: null, teams: null, sugerencia: {}, reason: null}));
+"""
+        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = r.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "Ahora: <b>Comité &lt;Q4&gt;</b> · 10:00–11:00 · organiza Ana · 2 asistentes · "
+                                   "tema sugerido: <b>Alfa · General</b>")
+        self.assertIn("Outlook clásico no está abierto.", lines[1])
+        self.assertIn("Teams: <b>Semanal</b>", lines[1])
+        self.assertEqual(lines[2], "Sin ventana de reunión de Teams abierta")
 
 
 if __name__ == "__main__":

@@ -115,6 +115,7 @@ class Aviso:
         semi = "Segoe UI Semibold" if "Segoe UI Semibold" in fams else fam
         f_tit = tkfont.Font(family=semi, size=10, weight="normal" if semi != fam else "bold")
         f_sub, f_x = tkfont.Font(family=fam, size=8), tkfont.Font(family=fam, size=11)
+        self.f_sub = f_sub  # para recortar los mensajes de estado (cget('font') solo da el nombre)
         f_btn, f_dot = tkfont.Font(family=semi, size=10), tkfont.Font(family=fam, size=12)
         px = int(14 * s)
         cont = tk.Frame(root, bg=C["fondo"], padx=px, pady=int(9 * s))
@@ -211,7 +212,7 @@ class Aviso:
 
     def _error(self, msg):
         self.resultado, self.datos = "error", {"error": msg}
-        self.sub(self._encajar(self.l_sub.cget("font"), msg, int(220 * self.s)), C["err"])
+        self.sub(self._encajar(self.f_sub, msg, int(220 * self.s)), C["err"])
         self.root.after(5000, lambda: self.cerrar("error"))
 
     def sondear(self):
