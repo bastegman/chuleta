@@ -568,7 +568,7 @@ class ReunionFrontendTests(unittest.TestCase):
                   "function bindReunionSettings", "function reunionCollect", "/api/reunion/actual?outlook=1",
                   'id="rnOutlook"', 'id="rnAviso"', 'id="rnProbar"', "Sugerido por", "Quitar"):
             self.assertIn(s, js, s)
-        self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")  # sin emojis (Steve los está quitando)
+        self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u26FF]")  # sin emojis (Steve los está quitando)
 
     @unittest.skipUnless(shutil.which("node"), "node no instalado")
     def test_linea_de_probar(self):

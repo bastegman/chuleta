@@ -1,5 +1,5 @@
 /* Reuniones: sugerencia de nombre, tema y participantes al grabar (título de la ventana de reunión de Teams y, si se
-   activa en Ajustes, la cita en curso del Outlook clásico) y los ajustes del aviso flotante «Grabar / ✕».
+   activa en Ajustes, la cita en curso del Outlook clásico) y los ajustes del aviso flotante «Grabar».
    Se carga después de app.js y usa sus utilidades ($, api, esc, I, S). app.js lo invoca con `window.x?.()`:
    sin este fichero la app funciona igual, sin sugerencias. */
 
