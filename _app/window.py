@@ -56,14 +56,15 @@ def set_window_icons(hwnd, ico_path):
         user32.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_int, ctypes.c_int,
                                       ctypes.c_uint]
         user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_void_p]
-        user32.SetClassLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        set_class_long = getattr(user32, "SetClassLongPtrW", None) or user32.SetClassLongW  # Python de 32 bits
+        set_class_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
         ok = False
         for which, size, gclp in ((1, 256, -14), (0, 16, -34)):  # ICON_BIG/GCLP_HICON, ICON_SMALL/GCLP_HICONSM
             h = user32.LoadImageW(None, ico_path, 1, size, size, 0x10)  # IMAGE_ICON, LR_LOADFROMFILE
             if h:
                 _ICONS.append(h)
                 user32.SendMessageW(hwnd, 0x80, which, h)  # WM_SETICON
-                user32.SetClassLongPtrW(hwnd, gclp, h)
+                set_class_long(hwnd, gclp, h)
                 ok = True
         return ok
     except Exception:
