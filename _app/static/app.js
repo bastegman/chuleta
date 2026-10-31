@@ -41,7 +41,46 @@ const I = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   spark: '<svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/><path d="M19 17v4M17 19h4"/></svg>',
   text: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+  /* iconos de linea (monocromos, currentColor) que sustituyen a los emojis de la interfaz */
+  home: '<svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg>',
+  list: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M8 10v9"/></svg>',
+  table: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 10v10"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  mic: '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>',
+  micOff: '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6M4 4l16 16"/></svg>',
+  volume: '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
+  chat: '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12z"/></svg>',
+  notes: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  nube: '<svg viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 1 1 .6-8.96A6 6 0 0 1 19 11a3.5 3.5 0 0 1-.5 7z"/></svg>',
+  monitor: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+  globe: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+  book: '<svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>',
+  package: '<svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
+  voice: '<svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M18 8a4 4 0 0 1 0 6M20.5 5.5a8 8 0 0 1 0 11"/></svg>',
+  users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M17.5 14a6 6 0 0 1 3.5 6"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+  scale: '<svg viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M4 7h16"/><path d="M7 7l-3.5 8a3.5 3.5 0 0 0 7 0zM17 7l-3.5 8a3.5 3.5 0 0 0 7 0z"/></svg>',
+  gauge: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>',
+  target: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg>',
+  star: '<svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.4l-5.7 3.1 1.2-6.4L2.8 9.7l6.4-.8z"/></svg>',
+  starOn: '<svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.4l-5.7 3.1 1.2-6.4L2.8 9.7l6.4-.8z" fill="currentColor"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  link: '<svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
+  tag: '<svg viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.2" fill="currentColor"/></svg>',
+  topic: '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>',
+  clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>',
+  state: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>',
+  clipboard: '<svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4a2 2 0 0 1 6 0M9 11h6M9 15h4"/></svg>',
+  keyboard: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>',
+  phone: '<svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+  stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>',
+  face: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 10h.01M15 10h.01"/></svg>',
 };
+/* iconos de los presets de transcripcion por id; el emoji que manda engines.py queda solo de reserva */
+const PRESET_ICONS = { rapido: 'bolt', turbo: 'scale', medium: 'gauge', calidad: 'target', nube: 'nube' };
+const presetIcon = p => !p ? '' : PRESET_ICONS[p.id] ? I[PRESET_ICONS[p.id]] : (p.icon ? esc(p.icon) + ' ' : '');
 
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const DIA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -204,7 +243,7 @@ function liveModels(sel, j) {
     const off = p.engine === 'cloud' && !S.config.cloud.has_key;
     const [cls, txt] = liveFit(p);
     return `<button class="lmodel${p.id === sel ? ' on' : ''}${off ? ' off' : ''}" data-act="live-model" data-preset="${p.id}"${j ? ` data-id="${j.id}"` : ''} title="${esc(p.live_note || p.hint || '')}">`
-      + `<div class="lm-n">${p.icon} ${esc(p.live_label || p.label)}${p.id === 'medium' ? ' <span class="lm-rec">★</span>' : ''}</div>`
+      + `<div class="lm-n">${presetIcon(p)}${esc(p.live_label || p.label)}${p.id === 'medium' ? ' <span class="lm-rec">★</span>' : ''}</div>`
       + `<div class="lm-s">${off ? 'falta API key' : `<i class="fit ${cls}"></i>~${String(p.live_speed).replace('.', ',')}× · ${txt}`}</div></button>`;
   }).join('')}</div>`;
 }
@@ -232,24 +271,24 @@ function renderLiveHero(a) {
       <span class="lh-clock" data-rec-clock>${fmtClock(clockNow(a.path))}</span>
       <span class="lh-sub">${mine ? 'grabando desde Notas' : 'grabado hasta ahora'}</span>
       <span class="sp"></span>
-      ${mine && S.rec.mic ? `<button class="btn sm${muted ? ' muted-on' : ''}" data-act="rec-mute" title="Deja de grabar tu voz; el audio del ordenador se sigue grabando">${muted ? '🔇 Micro silenciado · reactivar' : '🎙️ Silenciar mi micro'}</button>` : ''}
-      ${mine ? `<button class="btn sm rec-stop" data-act="rec-stop">■ Parar grabación</button>` : ''}
+      ${mine && S.rec.mic ? `<button class="btn sm${muted ? ' muted-on' : ''}" data-act="rec-mute" title="Deja de grabar tu voz; el audio del ordenador se sigue grabando">${muted ? I.micOff + 'Micro silenciado · reactivar' : I.mic + 'Silenciar mi micro'}</button>` : ''}
+      ${mine ? `<button class="btn sm rec-stop" data-act="rec-stop">${I.stop}Parar grabación</button>` : ''}
       ${j ? `<button class="btn sm danger" data-act="cancel-job" data-id="${j.id}" title="${mine ? 'La grabación sigue; la podrás transcribir después' : ''}">${mine ? 'Pausar transcripción' : 'Detener transcripción'}</button>`
         : `<button class="btn primary" data-act="live" data-path="${esc(a.path)}">${I.spark}Transcribir en directo</button>`}
     </div>
-    ${mine ? `<div class="lh-meters">${meterHtml('mic', '🎙 Micro')}${meterHtml('sys', '🔊 Ordenador')}</div>` : ''}
+    ${mine ? `<div class="lh-meters">${meterHtml('mic', I.mic + 'Micro')}${meterHtml('sys', I.volume + 'Ordenador')}</div>` : ''}
     ${crumbs(a.folder)}
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
-    ${S.vocab.length ? `<div class="lh-ws">🗂 Tema ${wsSelect(a)}</div>` : ''}
+    ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
     <div class="lh-label">Modelo ${j ? '<span class="muted">(el cambio se aplica desde el siguiente trozo)</span>' : ''}</div>
     ${liveModels(sel, j)}
     ${S.presetsById[sel]?.live_note ? `<div class="lh-note">${esc(S.presetsById[sel].live_note)}</div>` : ''}
     <div class="lh-actions">
-      ${j ? `<button class="btn sm" data-act="live-restart" data-id="${j.id}">↺ Rehacer desde el principio con este modelo</button>` : ''}
+      ${j ? `<button class="btn sm" data-act="live-restart" data-id="${j.id}">${I.refresh}Rehacer desde el principio con este modelo</button>` : ''}
       <button class="btn sm" data-act="play-live" data-path="${esc(a.path)}">${I.play}Escuchar lo grabado</button>
-      <button class="btn sm" data-act="consent" title="Texto para pegar en el chat de Teams">📋 Copiar aviso de grabación</button>
+      <button class="btn sm" data-act="consent" title="Texto para pegar en el chat de Teams">${I.clipboard}Copiar aviso de grabación</button>
       <button class="btn sm" data-act="reveal" data-path="${esc(a.path)}">${I.ext}Mostrar en carpeta</button>
     </div></div>`;
 }
@@ -354,17 +393,17 @@ async function stopRec() {
 /* carpetas donde grabar: las de Notas, las vinculadas y "otra carpeta…" (se vincula al elegirla) */
 const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulario')
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
-  + '<option value="__pick">📂 Otra carpeta (fuera de Audios)…</option>';
+  + '<option value="__pick">Otra carpeta (fuera de Audios)…</option>';
 async function openRec() {
   if (S.rec.recording) return stopRec();
   recDialog = true;
   // desde una carpeta: ahi; si no, donde se grabo la ultima vez (con workstream, la de su proyecto: ver applyVocab)
   const folder = S.route.kind === 'f' ? S.route.path : (S.folders.has(S.config.rec_folder) ? S.config.rec_folder : '');
-  openModal(`<h3>● Nueva grabación</h3>
+  openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? '⌨ Atajo: <b>Ctrl+Alt+R</b> empieza a grabar con esta misma configuración desde cualquier programa (aunque estés en Teams) y vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
-      : `⌨ El atajo Ctrl+Alt+R solo funciona con Notas en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
+      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar con esta misma configuración desde cualquier programa (aunque estés en Teams) y vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
+      : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con Notas en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
     <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
     d.addEventListener('click', e => { if (e.target.closest('[data-m="no"]')) closeModal(false); });
@@ -384,30 +423,30 @@ async function openRec() {
       + o('default', `Salida predeterminada de Windows (ahora: ${defName(devs.outputs)})`, devs.sys)
       + `<optgroup label="Fijar una salida">${devs.outputs.map(x => o(x.id, nfc(x.name), devs.sys)).join('')}</optgroup>`
       + o('none', 'No grabar el audio del ordenador', devs.sys);
-    const presets = S.config.presets.map(p => `<option value="${p.id}"${p.id === (S.config.live_preset || 'medium') ? ' selected' : ''}>${p.icon} ${esc(p.live_label)} · ${liveFit(p)[1]}</option>`).join('');
+    const presets = S.config.presets.map(p => `<option value="${p.id}"${p.id === (S.config.live_preset || 'medium') ? ' selected' : ''}>${esc(p.live_label)} · ${liveFit(p)[1]}</option>`).join('');
     $('#rForm', d).innerHTML = `
-      <label>🗂 Tema <span class="muted" style="font-weight:400">· el vocabulario que recibe Whisper</span></label>
+      <label>${I.topic}Tema <span class="muted" style="font-weight:400">· el vocabulario que recibe Whisper</span></label>
       ${S.vocab.length ? `<div class="row" style="gap:6px;flex-wrap:nowrap"><select id="rVocab" style="flex:1">${vocabOptions(lastWs)}</select>
           <button class="btn sm" type="button" id="rVocabNew" title="Crear un proyecto o tema nuevo con su lista de nombres y siglas">${I.plus}Nuevo</button></div><div class="help" id="rVocabFit"></div>`
         : `<div class="row" style="gap:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button>
           <span class="muted" style="font-size:12px">nombres, siglas y sistemas que salen en sus reuniones, para que Whisper los escriba bien</span></div>`}
-      <label class="chk"><input type="checkbox" id="rMicOn" checked><span>🎙 Grabar también mi micrófono <span class="muted" style="font-weight:400">· desmárcalo para grabar solo el audio del ordenador</span></span></label>
+      <label class="chk"><input type="checkbox" id="rMicOn" checked><span>${I.mic}Grabar también mi micrófono <span class="muted" style="font-weight:400">· desmárcalo para grabar solo el audio del ordenador</span></span></label>
       <div id="rMicBox"><select id="rMic">${mics}</select>
       ${meterHtml('mic', 'Nivel')}</div>
-      <label>🔊 Audio del ordenador</label><select id="rSys">${outs}</select>
+      <label>${I.volume}Audio del ordenador</label><select id="rSys">${outs}</select>
       ${meterHtml('sys', 'Nivel')}
       <div class="help">Con las opciones de arriba da igual que conectes o quites los cascos, incluso a mitad de la reunión: la grabación sigue con el dispositivo nuevo. Pon algo a sonar para ver que la barra se mueve.</div>
       <div class="grid2">
         <div><label>Nombre (opcional)</label><input class="input" id="rName" placeholder="p. ej. Reunión semanal del equipo"></div>
         <div><label title="Donde se guardan el audio y la transcripción">Carpeta de destino</label><select id="rFolder" title="Donde se guardan el audio y la transcripción">${folderOpts(folder)}</select></div>
       </div>
-      <label>💬 Transcripción</label>
+      <label>${I.chat}Transcripción</label>
       <div class="seg2" id="rMode">
         <label class="on"><input type="radio" name="rMode" value="live" checked><b>Transcribir en directo</b><span>El texto va apareciendo mientras se habla</span></label>
         <label><input type="radio" name="rMode" value="rec"><b>Solo grabar</b><span>Si el portátil va lento: la transcribes al terminar</span></label>
       </div>
       <div class="grid2" id="rLiveOpts"><select id="rPreset">${presets}</select>${langSelect('rLang', S.config.language ?? 'es-en')}</div>
-      <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">📋 Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
+      <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">${I.clipboard}Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
     const micVal = () => $('#rMicOn', d).checked ? $('#rMic', d).value : 'none';
     const monitor = () => api('/api/rec/monitor', { mic: micVal(), sys: $('#rSys', d).value }).catch(() => { });
     $('#rMic', d).onchange = $('#rSys', d).onchange = monitor;
@@ -711,7 +750,7 @@ function txBox(list, title, opts = {}) {
     const tag = p.id === 'rapido' ? '<span class="tag">Recomendado</span>'
       : (p.engine === 'local' && !p.cached ? `<span class="tag dl">descarga ${MODEL_GB[p.model] || ''}</span>` : '');
     return `<button class="preset${p.id === sel ? ' on' : ''}${cloudOff ? ' off' : ''}" data-preset="${p.id}" data-box="${id}">${tag}`
-      + `<div class="pn">${p.icon} ${esc(p.label)}</div>`
+      + `<div class="pn">${presetIcon(p)}${esc(p.label)}</div>`
       + `<div class="pe">${cloudOff ? 'Configurar' : fmtEst(est)}</div>`
       + `<div class="pm">${p.engine === 'cloud' ? (cloudOff ? 'falta API key' : esc(S.config.providers[S.config.cloud.provider]?.label || 'nube')) : esc(p.model)}</div></button>`;
   }).join('');
@@ -745,17 +784,17 @@ async function submitTx(paths, preset, language, resume = false) {
   try {
     const r = await api('/api/transcribe', { paths, preset, language, resume });
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
-    toast(r.added.length ? `${r.added.length === 1 ? 'Añadido' : r.added.length + ' añadidos'} a la cola · ${p.icon} ${esc(p.label)}` : 'Ya estaba en la cola');
+    toast(r.added.length ? `${r.added.length === 1 ? 'Añadido' : r.added.length + ' añadidos'} a la cola · ${presetIcon(p)}${esc(p.label)}` : 'Ya estaba en la cola');
     S.txOpen = false;
     pollJobs(true);
   } catch (err) { toast(esc(err.message), 'err'); }
 }
 
 function jobSub(j) {
-  if (j.kind === 'voces') return `🗣 Quién habla (en este PC)${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
-  if (j.kind === 'summary') return `✨ Resumen con IA (${provName()})${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
+  if (j.kind === 'voces') return `${I.voice}Quién habla (en este PC)${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
+  if (j.kind === 'summary') return `${I.spark}Resumen con IA (${provName()})${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
   const p = S.presetsById[j.preset] || { icon: '', label: j.preset };
-  const parts = [`${p.icon} ${esc(j.live ? (p.live_label || p.label) : p.label)}`];
+  const parts = [`${presetIcon(p)}${esc(j.live ? (p.live_label || p.label) : p.label)}`];
   if (j.live) {
     parts.push(`transcrito hasta ${fmtClock(j.transcribed)} de ${fmtClock(j.recorded)}${j.recording ? ' grabados' : ''}`);
     const lag = j.recorded - j.transcribed;
@@ -826,8 +865,8 @@ function viewFolder(f) {
   const pending = list.filter(a => (!(a.txt || a.srt) || a.partial) && !jobFor(a.path) && !a.recording);
   main.innerHTML = `<div class="page">
     ${crumbs(f.path.split('/').slice(0, -1).join('/'))}
-    <div class="ptitle-row"><button class="picon" data-act="folder-icon" data-path="${esc(f.path)}" title="Cambiar icono">${fIcon(f) || '<span class="picon-add">☺</span>'}</button>
-      <h1 class="ptitle static">${esc(nfc(f.name))}</h1><button class="pfav${isFav('f', f.path) ? ' on' : ''}" data-act="fav" data-kind="f" data-path="${esc(f.path)}">${isFav('f', f.path) ? '★' : '☆'}</button></div>
+    <div class="ptitle-row"><button class="picon" data-act="folder-icon" data-path="${esc(f.path)}" title="Cambiar icono">${fIcon(f) || '<span class="picon-add">' + I.face + '</span>'}</button>
+      <h1 class="ptitle static">${esc(nfc(f.name))}</h1><button class="pfav${isFav('f', f.path) ? ' on' : ''}" data-act="fav" data-kind="f" data-path="${esc(f.path)}">${isFav('f', f.path) ? I.starOn : I.star}</button></div>
     <div class="meta"><span><b>${f.total}</b> audio${f.total === 1 ? '' : 's'}</span><span><b>${fmtDur(f.secs)}</b> de audio</span><span><b>${f.done}</b> transcritos</span></div>
     <div class="actions">
       <button class="btn" data-act="new-folder" data-path="${esc(f.path)}">${I.plus}Subcarpeta</button>
@@ -835,7 +874,7 @@ function viewFolder(f) {
       <button class="btn" data-act="reveal" data-path="${esc(f.path)}">${I.ext}Abrir en el Explorador</button>
       ${f.linked ? `<button class="btn" data-act="link-remove" data-path="${esc(f.path)}" title="Deja de verse en Notas; no se borra nada">Quitar de Notas</button>` : ''}
     </div>
-    ${f.linked ? `<div class="help">🔗 Carpeta vinculada: <code>${esc(f.linked)}</code>${f.missing ? ' · <span class="warn-txt">ahora no se encuentra (¿disco o OneDrive desconectado?)</span>' : ''}. «Renombrar» solo cambia cómo se llama en Notas.</div>` : ''}
+    ${f.linked ? `<div class="help">${I.link}Carpeta vinculada: <code>${esc(f.linked)}</code>${f.missing ? ' · <span class="warn-txt">ahora no se encuentra (¿disco o OneDrive desconectado?)</span>' : ''}. «Renombrar» solo cambia cómo se llama en Notas.</div>` : ''}
     ${pending.length ? `<h2>Pendientes <span class="count">${pending.length}</span></h2>${txBox(pending, pending.length === 1 ? 'Transcribir el pendiente' : `Transcribir los ${pending.length} pendientes`, { resume: true })}` : ''}
     ${f.folders.length ? `<h2>Carpetas <span class="count">${f.folders.length}</span></h2><div class="fgrid">${f.folders.map(fcard).join('')}</div>` : ''}
     ${f.audios.length || !f.folders.length ? `<h2>Grabaciones <span class="count">${f.audios.length}</span></h2>${alist(f.audios)}` : ''}
@@ -888,7 +927,7 @@ function renderAudioHead(a, force) {
       <button class="btn" data-act="move" data-path="${esc(a.path)}">${I.move}Mover / renombrar</button>
       <button class="btn" data-act="reveal" data-path="${esc(a.path)}">${I.ext}Mostrar en carpeta</button>
       ${a.txt ? `<button class="btn" data-act="open-txt" data-path="${esc(a.path)}">${I.text}Abrir .txt</button>` : ''}
-      <button class="btn ghost danger" data-act="delete" data-path="${esc(a.path)}" title="A la papelera de Windows">🗑️ Eliminar</button>
+      <button class="btn ghost danger" data-act="delete" data-path="${esc(a.path)}" title="A la papelera de Windows">${I.trash}Eliminar</button>
     </div>
     ${docs.length ? `<div class="related">${docs.map(d => `<a href="${href('d', d.path)}">${I.doc}${esc(nfc(d.name))}</a>`).join('')}</div>` : ''}`;
   fillTagList();
@@ -1004,15 +1043,15 @@ function renderTxSection() {
         <button class="btn sm primary" data-act="tx-done">${I.check}Listo</button>`
         : `${!jobFor(tx.path) || jobFor(tx.path).live ? `<button class="btn sm" data-act="tx-edit" title="Corregir lo que Whisper haya entendido mal${jobFor(tx.path) ? ' (también mientras se transcribe en directo)' : ''}">${I.edit}Editar</button>` : ''}
         <button class="btn sm" data-act="copy-tx">${I.copy}Copiar texto</button>
-        ${tx.kind === 'srt' ? `<button class="btn sm" data-act="seg-to-notes" title="Añade la frase que suena (o la última que pulsaste) a tus notas, con su minuto">＋ A mis notas</button>` : ''}`}
+        ${tx.kind === 'srt' ? `<button class="btn sm" data-act="seg-to-notes" title="Añade la frase que suena (o la última que pulsaste) a tus notas, con su minuto">${I.plus}A mis notas</button>` : ''}`}
     </div>
     ${S.editing ? `<div class="tx-editbar">
-      <span>✎ Haz clic en cualquier frase para corregirla. Se guarda solo.${liveJob(S.audios.get(tx.path) || {}) ? ' Lo nuevo sigue llegando debajo.' : ''}</span>
+      <span>${I.edit}Haz clic en cualquier frase para corregirla. Se guarda solo.${liveJob(S.audios.get(tx.path) || {}) ? ' Lo nuevo sigue llegando debajo.' : ''}</span>
       <span class="sp"></span>
       <span class="muted">Cambiar lo buscado por</span>
       <input class="input" id="trep" placeholder="p. ej. nombre del cliente" autocomplete="off" spellcheck="false">
       <button class="btn sm" data-act="tx-replace-all">Reemplazar todo</button>
-      <button class="btn sm ghost${tx.has_backup && !jobFor(tx.path) ? '' : ' hidden'}" data-act="tx-restore" title="Volver a lo que transcribió Whisper">↺ Restaurar original</button>
+      <button class="btn sm ghost${tx.has_backup && !jobFor(tx.path) ? '' : ' hidden'}" data-act="tx-restore" title="Volver a lo que transcribió Whisper">${I.refresh}Restaurar original</button>
     </div>` : ''}
     <div class="tx-body${S.mode === 'lines' && tx.kind === 'srt' ? ' lines' : ''}${S.editing ? ' editing' : ''}" id="txBody"></div>`;
   renderTxBody();
@@ -1281,7 +1320,7 @@ async function viewSearch(q) {
     const k = x.kind === 'audio' ? 'a' : 'd';
     const hits = x.hits.map(h => `<div class="hit" data-go="${k}" data-path="${esc(x.path)}" data-t="${h.start ?? ''}" data-q="${esc(q)}">`
       + `<span class="ts">${h.start != null ? fmtClock(h.start) : '·'}</span><span>${hlTerms(h.text, terms)}</span></div>`).join('');
-    return `<div class="card sres"><div class="h" data-go="${k}" data-path="${esc(x.path)}" data-q="${esc(q)}"><b>${x.kind === 'doc' ? '📄 ' : ''}${esc(title)}</b>`
+    return `<div class="card sres"><div class="h" data-go="${k}" data-path="${esc(x.path)}" data-q="${esc(q)}"><b>${x.kind === 'doc' ? I.doc : ''}${esc(title)}</b>`
       + `<span class="f">${esc(nfc(x.folder || 'Notas').replaceAll('/', ' › '))} · ${x.count} ${x.count === 1 ? 'vez' : 'veces'}</span></div>${hits}`
       + `${x.count > x.hits.length ? `<div class="muted" style="font-size:12.5px;padding-top:6px">y ${x.count - x.hits.length} más…</div>` : ''}</div>`;
   }).join('');
@@ -1691,7 +1730,7 @@ function openMove(path) {
   const isAudio = S.audios.has(path);
   const stem = nfc(isAudio ? item.stem : item.name.replace(/\.[^.]+$/, ''));
   let dest = item.parent ? item.parent.path : '';
-  const list = () => flatFolders().map(f => `<div data-f="${esc(f.path)}" class="${f.path === dest ? 'on' : ''}" style="padding-left:${10 + f.depth * 16}px">${f.depth ? '📁 ' : '🏠 '}${esc(f.name)}</div>`).join('');
+  const list = () => flatFolders().map(f => `<div data-f="${esc(f.path)}" class="${f.path === dest ? 'on' : ''}" style="padding-left:${10 + f.depth * 16}px">${f.depth ? I.folder : I.home}${esc(f.name)}</div>`).join('');
   openModal(`<h3>Mover / renombrar</h3>
     <label>Nombre</label><input class="input" id="mvName" value="${esc(stem)}" autofocus>
     <div class="help">${isAudio ? 'Se renombran y mueven también su .txt y .srt. Truco: deja la fecha y añade detrás quién o qué, p. ej. “… - Reunión de seguimiento”.' : ''}</div>
@@ -1755,8 +1794,8 @@ $('#btnNewFolder').onclick = () => openNewFolder(S.route.kind === 'f' ? S.route.
 function openSettings() {
   const c = S.config.cloud, P = S.config.providers;
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
-  openModal(`<h3>Ajustes</h3>
-    <fieldset><legend>☁ Transcripción en la nube</legend>
+  openModal(`<h3>${I.gear}Ajustes</h3>
+    <fieldset><legend>${I.nube}Transcripción en la nube</legend>
       <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
       <div id="cFields"></div>
@@ -1766,19 +1805,19 @@ function openSettings() {
       </div>
       <div class="row" style="margin-top:14px"><button class="btn sm" id="cTest">Probar conexión</button><span id="cTestRes" class="muted" style="font-size:12.5px"></span></div>
     </fieldset>
-    <fieldset><legend>● En directo (mientras graba OBS)</legend>
+    <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
       <label>Motor para el directo</label>
-      <select id="lPreset">${S.config.presets.map(p => `<option value="${p.id}"${(S.config.live_preset || 'medium') === p.id ? ' selected' : ''}>${p.icon} ${esc(p.live_label)} · ~${String(p.live_speed).replace('.', ',')}× · ${liveFit(p)[1]}</option>`).join('')}</select>
+      <select id="lPreset">${S.config.presets.map(p => `<option value="${p.id}"${(S.config.live_preset || 'medium') === p.id ? ' selected' : ''}>${esc(p.live_label)} · ~${String(p.live_speed).replace('.', ',')}× · ${liveFit(p)[1]}</option>`).join('')}</select>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
       <div class="help">Modelo con el que empieza cada directo; se puede cambiar en mitad de la grabación desde la propia pantalla. En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.</div>
     </fieldset>
-    <fieldset><legend>💻 Transcripción local</legend>
+    <fieldset><legend>${I.monitor}Transcripción local</legend>
       <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
     </fieldset>
-    <fieldset><legend>✨ Resumen con IA</legend>
+    <fieldset><legend>${I.spark}Resumen con IA</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
       <div class="grid2"><div><label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
         <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist></div>
@@ -1786,16 +1825,16 @@ function openSettings() {
       <label>Instrucciones extra (opcional)</label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(S.config.summary?.extra || '')}</textarea>
       <div class="help">Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
-    <fieldset><legend>🌐 Idioma de las reuniones</legend>
+    <fieldset><legend>${I.globe}Idioma de las reuniones</legend>
       <label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}
       <div class="help"><b>Español + inglés</b>: detecta el idioma cada ~20–30 s pero solo entre esos dos, y deja los términos en inglés dentro de frases en español (deadline, feedback…). Si una reunión es solo en un idioma, fijarlo es algo más preciso.</div>
     </fieldset>
-    <fieldset><legend>📂 Carpetas fuera de Audios</legend>
+    <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
       <div id="sLinks"></div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
       <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. Notas la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de Notas no borra nada.</div>
     </fieldset>
-    <fieldset><legend>🔤 Vocabulario</legend>
+    <fieldset><legend>${I.book}Vocabulario</legend>
       <label>Por tema <span class="muted" style="font-weight:400">· se elige al grabar o en cada reunión</span></label>
       <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
       <label>General · para reuniones sin tema</label>
@@ -1803,7 +1842,7 @@ function openSettings() {
       <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
     </fieldset>
     ${vocesFieldsetHtml()}
-    <fieldset><legend>📦 Compartir Notas</legend>
+    <fieldset><legend>${I.package}Compartir Notas</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario por tema <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="xExport" type="button">Crear instalador para otra persona</button><span id="xRes" class="muted" style="font-size:12.5px"></span></div>
       <div class="help">Crea en el escritorio <b>Notas - instalador.zip</b> con la app completa y un INSTALAR.bat. No lleva tus grabaciones, notas, ajustes ni tu API key: la otra persona conecta su propio proveedor. Compártelo por un enlace de OneDrive o Teams (el correo suele bloquear los .zip con .bat).<br>
@@ -1859,7 +1898,7 @@ function openSettings() {
     };
     const drawLinks = () => {
       const box = $('#sLinks', d), ls = S.config.links || [];
-      box.innerHTML = ls.length ? `<table class="vtable">${ls.map(l => `<tr><td>🔗 ${esc(nfc(l.name))}</td><td><code>${esc(l.path)}</code></td>
+      box.innerHTML = ls.length ? `<table class="vtable">${ls.map(l => `<tr><td>${I.link}${esc(nfc(l.name))}</td><td><code>${esc(l.path)}</code></td>
           <td><button class="btn ghost sm" type="button" data-unlink="${esc(l.rel)}">quitar</button></td></tr>`).join('')}</table>`
         : '<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta Audios.</div>';
     };
@@ -1873,7 +1912,7 @@ function openSettings() {
       // agrupado por proyecto: cada uno con sus temas y un boton para anadir otro
       const groups = {};
       S.vocab.forEach(v => (groups[v.project] ||= []).push(v));
-      box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>📁 ${esc(p)}</b>
+      box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>${I.folder}${esc(p)}</b>
           <button class="btn ghost sm" type="button" data-vnew="${esc(p)}">${I.plus}Tema</button>
           <button class="btn ghost sm" type="button" data-vdir="${esc(vs[0].id.split('/').slice(0, -1).join('/'))}" title="Abrir su carpeta Vocabulario">${I.ext}Carpeta</button></div>
         <table class="vtable">${vs.map(v => `<tr><td>${esc(v.name)}</td><td>${vocabFit(v)}</td>

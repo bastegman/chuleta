@@ -6,6 +6,12 @@ Punto de partida: la versión del 30/10/2026 tal como se exportaba desde la prop
 nada de ningún proyecto concreto.
 
 ### Cambiado
+- Nueva identidad **Chuleta**: logo (chuleta con hueso) en la cabecera, en el icono de la app y en el favicon;
+  paleta burdeos/rosa sobre neutros cálidos con contraste AA en el texto, también en modo oscuro; iconos de línea
+  (SVG) en vez de emojis en la navegación, los botones, las pestañas, las propiedades, Ajustes y las etiquetas de
+  formulario (los iconos que elige el usuario para carpetas y reuniones siguen siendo emojis, y los avisos
+  emergentes no cambian); etiquetas de hablante con un color estable por persona; botones, chips, diálogos y
+  tablas con radios, sombras y estados de foco coherentes. Los demás textos «Notas» se cambian en el renombrado.
 - La app es agnóstica: ejemplos, placeholders, avisos y el manual ya no nombran a ningún cliente, empresa ni
   persona. Los avisos de privacidad hablan de «la política de tu empresa y el acuerdo con tu cliente, si lo hay».
 - La etiqueta «Workstream» de la interfaz pasa a «Tema». Los ficheros `.md` siguen usando las claves `proyecto`

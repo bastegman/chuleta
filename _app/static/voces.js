@@ -7,7 +7,7 @@ const spkLabel = h => h === 'varios' ? 'varios' : (spkInfo(h) || {}).label || (h
 function spkChip(h) {
   if (!h) return '';
   const i = spkInfo(h), cls = h === 'varios' ? ' many' : i && i.usuario ? ' me' : i && i.breve ? ' brief' : i && i.provisional ? ' doubt' : i && i.persona ? ' known' : '';
-  return `<button class="spk${cls}" data-spk="${esc(h)}" title="${h === 'varios' ? 'Hablan varias personas a la vez' : 'Quién habla · clic para poner nombre, recordar o corregir'}">${esc(spkLabel(h))}</button>`;
+  return `<button class="spk${cls}${/^h\d+$/.test(h) ? ' c' + ((parseInt(h.slice(1), 10) - 1) % 5 + 1) : ''}" data-spk="${esc(h)}" title="${h === 'varios' ? 'Hablan varias personas a la vez' : 'Quién habla · clic para poner nombre, recordar o corregir'}">${esc(spkLabel(h))}</button>`;
 }
 const fmtSecs = s => s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`;
 
@@ -32,16 +32,16 @@ function renderVoicesBar(a) {
   const on = S.config.voices && S.config.voices.enabled;
   let html = '';
   if (j) {
-    html = `<span class="vz-st">🗣 ${esc(j.status === 'queued' ? 'En cola para identificar voces' : j.stage)}${j.status === 'running' ? ` (${Math.round(j.progress * 100)} %)` : ''}</span>
+    html = `<span class="vz-st">${I.voice}${esc(j.status === 'queued' ? 'En cola para identificar voces' : j.stage)}${j.status === 'running' ? ` (${Math.round(j.progress * 100)} %)` : ''}</span>
       <span class="sp"></span><button class="btn ghost sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button>`;
   } else if (s && s.exists) {
-    html = `<span class="vz-st">🗣 Voces: ${s.n} ${s.n === 1 ? 'persona' : 'personas'} · ${s.known} reconocida${s.known === 1 ? '' : 's'}${s.tu ? ' · Tú' : ''}</span>
+    html = `<span class="vz-st">${I.voice}Voces: ${s.n} ${s.n === 1 ? 'persona' : 'personas'} · ${s.known} reconocida${s.known === 1 ? '' : 's'}${s.tu ? ' · Tú' : ''}</span>
       <span class="muted">· clic en una etiqueta para poner nombre</span><span class="sp"></span>
       ${S.tx && S.tx.kind === 'srt' ? `<button class="btn ghost sm" data-act="voz-export" title="Guarda <reunión>.hablantes.txt junto al audio">${I.text}Exportar con hablantes</button>` : ''}
-      ${on ? `<button class="btn ghost sm" data-act="voz-identify" title="Repetir la identificación">↻ Volver a identificar</button>` : ''}`;
+      ${on ? `<button class="btn ghost sm" data-act="voz-identify" title="Repetir la identificación">${I.refresh}Volver a identificar</button>` : ''}`;
   } else if (on && (a.txt || a.srt) && !a.recording && !jobFor(a.path)) {
-    html = `${last && last.status === 'error' ? `<span class="vz-st err">No se pudieron identificar las voces: ${esc(last.error || '')}</span>` : '<span class="muted">🗣 Quién habla: aún sin identificar</span>'}
-      <span class="sp"></span><button class="btn sm" data-act="voz-identify">🗣 Identificar voces</button>`;
+    html = `${last && last.status === 'error' ? `<span class="vz-st err">No se pudieron identificar las voces: ${esc(last.error || '')}</span>` : '<span class="muted">' + I.voice + 'Quién habla: aún sin identificar</span>'}
+      <span class="sp"></span><button class="btn sm" data-act="voz-identify">${I.voice}Identificar voces</button>`;
   }
   el.innerHTML = html ? `<div class="card voz-bar">${html}</div>` : '';
 }
@@ -148,7 +148,7 @@ main.addEventListener('click', async e => {
 /* ---------------------------------------------------------------- Ajustes → Voces */
 function vocesFieldsetHtml() {
   const v = S.config.voices || {};
-  return `<fieldset><legend>🗣️ Voces (opcional)</legend>
+  return `<fieldset><legend>${I.voice}Voces (opcional)</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="vzOn" ${v.enabled ? 'checked' : ''}> Reconocer quién habla en cada reunión (en este PC, sin enviar nada fuera)</label>
       <div id="vzModels" class="help" style="margin-top:4px"></div>
       <div id="vzPeople" class="help" style="margin-top:6px">${v.enabled ? 'Cargando…' : 'Al activarlo se descargan dos modelos (≈47 MB, una sola vez) y, al terminar cada transcripción, un proceso de prioridad baja separa las voces (≈2 s por minuto de reunión). En la transcripción verás «Persona 1», «Persona 2»…: ponles nombre y, si tienes su consentimiento, pulsa «Recordar» para reconocerlas en las próximas reuniones.'}</div>

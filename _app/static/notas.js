@@ -33,9 +33,9 @@ function recents(n = 8) {
   return JSON.parse(localStorage.getItem('recent') || '[]').map(x => ({ ...x, item: itemOf(x.k, x.p) })).filter(x => x.item).slice(0, n);
 }
 function itemLabel(k, it) {
-  if (k === 'a') return { icon: iconOf(it) || '🎙️', text: titleOf(it) || shortTitle(it), sub: titleOf(it) ? shortTitle(it) : nfc(it.label || '') };
-  if (k === 'f') return { icon: fIcon(it) || '📁', text: nfc(it.name), sub: '' };
-  return { icon: '📄', text: nfc(it.name), sub: '' };
+  if (k === 'a') return { icon: iconOf(it) || I.mic, text: titleOf(it) || shortTitle(it), sub: titleOf(it) ? shortTitle(it) : nfc(it.label || '') };
+  if (k === 'f') return { icon: fIcon(it) || I.folder, text: nfc(it.name), sub: '' };
+  return { icon: I.doc, text: nfc(it.name), sub: '' };
 }
 const isFav = (k, p) => (S.config.favorites || []).some(f => f.kind === k && f.path === p);
 async function toggleFav(k, p) {
@@ -44,14 +44,14 @@ async function toggleFav(k, p) {
     const r = await api('/api/favorite', { kind: k, path: p, on });
     S.config.favorites = r.favorites;
     renderTree();
-    $$(`[data-act="fav"][data-path="${CSS.escape(p)}"]`).forEach(b => { b.classList.toggle('on', on); b.textContent = on ? '★' : '☆'; });
+    $$(`[data-act="fav"][data-path="${CSS.escape(p)}"]`).forEach(b => { b.classList.toggle('on', on); b.innerHTML = on ? I.starOn : I.star; });
     toast(on ? '★ Añadido a favoritos' : 'Quitado de favoritos');
   } catch (err) { toast(esc(err.message), 'err'); }
 }
 function favHtml() {
   const favs = (S.config.favorites || []).map(f => ({ ...f, item: itemOf(f.kind, f.path) })).filter(f => f.item);
   if (!favs.length) return '';
-  return '<div class="tsec">★ Favoritos</div>' + favs.map(f => {
+  return '<div class="tsec">' + I.star + 'Favoritos</div>' + favs.map(f => {
     const L = itemLabel(f.kind, f.item);
     const sel = S.route.kind === f.kind && S.route.path === f.path;
     return `<div class="trow fav${sel ? ' sel' : ''}" data-${f.kind === 'a' ? 'audio' : f.kind === 'f' ? 'folder' : 'doc'}="${esc(f.path)}" data-favrow="1" style="padding-left:14px">`
@@ -72,11 +72,11 @@ function recentCards() {
 function welcomeCard(all) {
   const key = S.config.cloud?.has_key;
   if (key && all.length) return '';
-  return `<div class="card welcome"><div class="wi">👋</div><div>
+  return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : 'Bienvenido a Notas'}</b>
     <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Transcripción en la nube: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
     ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). También puedes arrastrar aquí audios que ya tengas, o guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
-    ${key ? '' : '<button class="btn sm primary" data-act="settings">⚙ Abrir Ajustes</button>'}</div></div>`;
+    ${key ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
 }
 
 /* acciones nuevas (los botones llevan data-act y los recoge este manejador) */
@@ -149,7 +149,7 @@ function vocabFit(v) {
 /* crear / editar un workstream (y con el, un proyecto nuevo). after: a donde volver al terminar */
 function openVocabEditor(v, after = openSettings, project = '') {
   const isNew = !v, projects = [...new Set(S.vocab.map(x => x.project))];
-  openModal(`<h3>🔤 ${isNew ? (project ? `Nuevo tema en ${esc(project)}` : 'Nuevo proyecto o tema') : `${esc(v.project)} · ${esc(v.name)}`}</h3>
+  openModal(`<h3>${I.book}${isNew ? (project ? `Nuevo tema en ${esc(project)}` : 'Nuevo proyecto o tema') : `${esc(v.project)} · ${esc(v.name)}`}</h3>
     <div class="grid2">
       <div><label>Proyecto</label><input class="input" id="veProj" list="veProjs" value="${esc(v ? v.project : project)}" placeholder="p. ej. Proyecto Alfa, Comunidad de vecinos…" ${isNew ? 'autofocus' : ''}>
         <datalist id="veProjs">${projects.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
@@ -216,24 +216,24 @@ async function saveProps(a, patch) {
 function titleRowHtml(a) {
   const fav = isFav('a', a.path);
   return `<div class="ptitle-row">
-    <button class="picon" data-act="pick-icon" data-path="${esc(a.path)}" title="Cambiar icono">${iconOf(a) || '<span class="picon-add">☺</span>'}</button>
+    <button class="picon" data-act="pick-icon" data-path="${esc(a.path)}" title="Cambiar icono">${iconOf(a) || '<span class="picon-add">' + I.face + '</span>'}</button>
     <h1 class="ptitle" id="pTitleTxt" contenteditable="plaintext-only" spellcheck="false" data-ph="${esc(longTitle(a))}" title="Haz clic para poner un título">${esc(titleOf(a))}</h1>
-    <button class="pfav${fav ? ' on' : ''}" data-act="fav" data-kind="a" data-path="${esc(a.path)}" title="Favorito">${fav ? '★' : '☆'}</button>
+    <button class="pfav${fav ? ' on' : ''}" data-act="fav" data-kind="a" data-path="${esc(a.path)}" title="Favorito">${fav ? I.starOn : I.star}</button>
   </div>`;
 }
 function propsHtml(a) {
   const p = a.props || {}, st = p.estado || '';
   const tags = (p.etiquetas || []).map(t => `<span class="tag-chip">${esc(t)}<button data-act="tag-del" data-tag="${esc(t)}" title="Quitar">×</button></span>`).join('');
   return `<div class="props">
-    <div class="prow"><span class="pk">📅 Fecha</span><span class="pv">${esc(longTitle(a))}</span></div>
-    <div class="prow"><span class="pk">⏱️ Duración</span><span class="pv">${fmtDur(estDuration(a))} <span class="muted">· ${fmtSize(a.size)} · ${esc(a.ext.slice(1).toUpperCase())}</span></span></div>
-    <div class="prow"><span class="pk">📁 Carpeta</span><span class="pv"><a href="${a.folder ? href('f', a.folder) : '#/'}">${esc(a.folder ? pathLabel(a.folder) : 'Sin clasificar')}</a>
+    <div class="prow"><span class="pk">${I.calendar}Fecha</span><span class="pv">${esc(longTitle(a))}</span></div>
+    <div class="prow"><span class="pk">${I.clock}Duración</span><span class="pv">${fmtDur(estDuration(a))} <span class="muted">· ${fmtSize(a.size)} · ${esc(a.ext.slice(1).toUpperCase())}</span></span></div>
+    <div class="prow"><span class="pk">${I.folder}Carpeta</span><span class="pv"><a href="${a.folder ? href('f', a.folder) : '#/'}">${esc(a.folder ? pathLabel(a.folder) : 'Sin clasificar')}</a>
       <button class="btn ghost sm" data-act="move" data-path="${esc(a.path)}">cambiar</button></span></div>
-    <div class="prow"><span class="pk">🗂 Tema</span><span class="pv">${wsSelect(a)}</span></div>
-    <div class="prow"><span class="pk">◉ Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
-    <div class="prow"><span class="pk">🏷️ Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
-    <div class="prow"><span class="pk">👥 Participantes</span><span class="pv"><input class="pinput" data-prop="participantes" value="${esc(p.participantes || '')}" placeholder="Vacío" autocomplete="off"></span></div>
-    <div class="prow"><span class="pk">💬 Transcripción</span><span class="pv">${statusPill(a)}${a.cloud ? ` <span class="pill cloud">${I.cloud}Solo en OneDrive</span>` : ''}</span></div>
+    <div class="prow"><span class="pk">${I.topic}Tema</span><span class="pv">${wsSelect(a)}</span></div>
+    <div class="prow"><span class="pk">${I.state}Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
+    <div class="prow"><span class="pk">${I.tag}Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
+    <div class="prow"><span class="pk">${I.users}Participantes</span><span class="pv"><input class="pinput" data-prop="participantes" value="${esc(p.participantes || '')}" placeholder="Vacío" autocomplete="off"></span></div>
+    <div class="prow"><span class="pk">${I.chat}Transcripción</span><span class="pv">${statusPill(a)}${a.cloud ? ` <span class="pill cloud">${I.cloud}Solo en OneDrive</span>` : ''}</span></div>
   </div><datalist id="tagList"></datalist>`;
 }
 async function fillTagList() {
@@ -282,9 +282,9 @@ const defaultTab = a => S.tab || (isLive(a) ? 'tx' : a.has_summary ? 'sum' : (a.
 function tabsHtml(a) {
   const tab = defaultTab(a), sj = sumJobFor(a.path);
   return `<div class="ptabs">
-    <button data-tab="sum" class="${tab === 'sum' ? 'on' : ''}">✨ Resumen${sj ? ' <i class="tab-dot busy"></i>' : a.has_summary ? ' <i class="tab-dot"></i>' : ''}</button>
-    <button data-tab="tx" class="${tab === 'tx' ? 'on' : ''}">💬 Transcripción</button>
-    <button data-tab="notes" class="${tab === 'notes' ? 'on' : ''}">📝 Notas${a.has_notes ? ' <i class="tab-dot"></i>' : ''}</button>
+    <button data-tab="sum" class="${tab === 'sum' ? 'on' : ''}">${I.spark}Resumen${sj ? ' <i class="tab-dot busy"></i>' : a.has_summary ? ' <i class="tab-dot"></i>' : ''}</button>
+    <button data-tab="tx" class="${tab === 'tx' ? 'on' : ''}">${I.chat}Transcripción</button>
+    <button data-tab="notes" class="${tab === 'notes' ? 'on' : ''}">${I.notes}Notas${a.has_notes ? ' <i class="tab-dot"></i>' : ''}</button>
     <span class="sp"></span><span class="muted ptab-hint">${tab === 'notes' ? 'Se guardan solas en un .md junto al audio' : tab === 'sum' ? `Hecho con IA en ${provName()}: no carga tu portátil` : ''}</span>
   </div>`;
 }
@@ -319,27 +319,27 @@ function renderSummary(a) {
   if (!box || !s || s.path !== a.path) return;
   const j = sumJobFor(a.path), has = a.txt || a.srt;
   const last = S.jobs.filter(x => x.path === a.path && x.kind === 'summary').pop();
-  const progress = j ? `<div class="card jobline sumline"><div><div class="st">✨ ${esc(j.status === 'queued' ? 'En cola para resumir' : j.stage)}</div>
+  const progress = j ? `<div class="card jobline sumline"><div><div class="st">${I.spark}${esc(j.status === 'queued' ? 'En cola para resumir' : j.stage)}</div>
       <div class="sub">Se hace en ${provName()} por partes, al ritmo que permite tu plan · ${Math.round((j.progress || 0) * 100)} %</div></div>
       <button class="btn sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button><div class="pbar${j.progress < 0.02 ? ' indet' : ''}"><i style="width:${(j.progress || 0) * 100}%"></i></div></div>` : '';
   const err = !j && last && last.status === 'error' ? `<div class="notice">No se pudo resumir: ${esc(last.error)}</div>` : '';
   if (!s.exists) {
     box.innerHTML = progress + err + `<div class="card sum-empty">
-      <div class="se-i">✨</div>
+      <div class="se-i">${I.spark}</div>
       <div><b>Resumen con IA de la reunión</b><div class="muted">Resumen, puntos clave, decisiones, próximos pasos y participantes, con el minuto de cada punto. Usa también tus notas.</div></div>
       ${!has ? '<div class="muted">Primero hay que transcribir la reunión.</div>'
         : !s.ready ? '<button class="btn" data-act="settings">Configurar la nube en Ajustes</button>'
-          : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">✨ Resumir esta reunión</button>`}
+          : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">${I.spark}Resumir esta reunión</button>`}
     </div>`;
     return;
   }
   const m = s.meta || {};
   box.innerHTML = progress + err + `<div class="sum-tools">
-      <span class="muted">✨ Generado con IA${m.modelo ? ` (${esc(m.modelo)})` : ''}${m.generado ? ` · ${esc(m.generado)}` : ''} · revísalo antes de compartirlo</span>
+      <span class="muted">${I.spark}Generado con IA${m.modelo ? ` (${esc(m.modelo)})` : ''}${m.generado ? ` · ${esc(m.generado)}` : ''} · revísalo antes de compartirlo</span>
       <span class="sp"></span>
       <button class="btn sm" data-act="sum-copy">${I.copy}Copiar</button>
-      <button class="btn sm" data-act="sum-to-notes">＋ A mis notas</button>
-      ${j ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">↻ Regenerar</button>`}
+      <button class="btn sm" data-act="sum-to-notes">${I.plus}A mis notas</button>
+      ${j ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">${I.refresh}Regenerar</button>`}
     </div>
     <div class="card docview sumview">${linkStamps(md(s.text).replace(/<li>\[ \]\s?/g, '<li class="todo">☐ ').replace(/<li>\[x\]\s?/gi, '<li class="todo done">☑ '))}</div>`;
 }
@@ -656,7 +656,7 @@ async function addSegToNotes() {
 /* ---------------------------------------------------------------- vista "Reuniones" (base de datos) */
 S.tbl = Object.assign({ q: '', folder: '*', tag: '*', estado: '*', tx: '*', group: 'month', sort: 'desc' }, JSON.parse(localStorage.getItem('tbl') || '{}'));
 function dbTabs(kind) {
-  return `<div class="db-tabs"><a href="#/r/" class="${kind === 'r' ? 'on' : ''}">☰ Tabla</a><a href="#/c/" class="${kind === 'c' ? 'on' : ''}">📅 Calendario</a></div>`;
+  return `<div class="db-tabs"><a href="#/r/" class="${kind === 'r' ? 'on' : ''}">${I.table}Tabla</a><a href="#/c/" class="${kind === 'c' ? 'on' : ''}">${I.calendar}Calendario</a></div>`;
 }
 function allTags() { const s = new Set(); allAudios().forEach(a => ((a.props || {}).etiquetas || []).forEach(t => s.add(t))); return [...s].sort((x, y) => fold(x).localeCompare(fold(y))); }
 function txState(a) { const st = statusOf(a); return st === 'done' ? 'done' : st === 'partial' ? 'partial' : (st === 'rec' || st === 'running' || st === 'queued') ? 'busy' : 'pending'; }
@@ -685,7 +685,7 @@ function groupKey(a) {
 function rowHtml(a) {
   const p = a.props || {}, d = aDate(a);
   return `<tr data-go="a" data-path="${esc(a.path)}" draggable="true" data-drag="${esc(a.path)}">
-    <td class="nm"><span class="ticon">${iconOf(a) || '🎙️'}</span>${esc(titleOf(a) || longTitle(a))}${titleOf(a) ? '' : (a.label ? ` <small class="muted">${esc(nfc(a.label))}</small>` : '')}</td>
+    <td class="nm"><span class="ticon">${iconOf(a) || I.mic}</span>${esc(titleOf(a) || longTitle(a))}${titleOf(a) ? '' : (a.label ? ` <small class="muted">${esc(nfc(a.label))}</small>` : '')}</td>
     <td class="nw">${d ? `${d.getDate()} ${MES[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}` : '—'}</td>
     <td class="nw num">${fmtDur(estDuration(a))}</td>
     <td class="muted">${esc(a.folder ? folderName(a.folder) : 'Sin clasificar')}</td>
@@ -703,7 +703,7 @@ function viewTable() {
     body += rowHtml(a);
   }
   main.innerHTML = `<div class="page wide">
-    <div class="db-head"><h1>🗂️ Reuniones <span class="sub">${list.length}</span></h1>${dbTabs('r')}</div>
+    <div class="db-head"><h1>${I.list}Reuniones <span class="sub">${list.length}</span></h1>${dbTabs('r')}</div>
     <div class="db-tools">
       <input class="input" data-tbl="q" placeholder="Filtrar por título, etiqueta, participante…" value="${esc(t.q)}" autocomplete="off" spellcheck="false">
       ${sel('folder', [['*', 'Todas las carpetas'], ...flatFolders().filter(f => f.path).map(f => [f.path, '  '.repeat(f.depth - 1) + f.name])])}
@@ -747,7 +747,7 @@ function viewCalendar(ym) {
       + (list.length > 4 ? `<div class="cmore" data-act="cal-day" data-day="${key}">+${list.length - 4} más</div>` : '') + '</div>';
   }
   main.innerHTML = `<div class="page wide">
-    <div class="db-head"><h1>📅 ${MESES[m - 1][0].toUpperCase() + MESES[m - 1].slice(1)} ${y}</h1>${dbTabs('c')}
+    <div class="db-head"><h1>${I.calendar}${MESES[m - 1][0].toUpperCase() + MESES[m - 1].slice(1)} ${y}</h1>${dbTabs('c')}
       <div class="cal-nav"><a class="btn sm" href="${href('c', prev)}">‹</a><a class="btn sm" href="#/c/">Hoy</a><a class="btn sm" href="${href('c', next)}">›</a></div></div>
     <div class="cal card"><div class="cwk">${['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'].map(x => `<div>${x}</div>`).join('')}</div><div class="cgrid">${cells}</div></div></div>`;
 }
@@ -762,14 +762,14 @@ main.addEventListener('click', e => {
 
 /* ---------------------------------------------------------------- busqueda rapida (Ctrl+P) */
 const ACTIONS = [
-  ['● Grabar ahora', () => openRec()], ['🗂️ Reuniones', () => go('r', '')], ['📅 Calendario', () => go('c', '')],
-  ['🏠 Inicio', () => go('home', '')], ['⚙️ Ajustes', () => openSettings()], ['＋ Nueva carpeta', () => openNewFolder('')],
-  ['📋 Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
+  ['<i class="recdot"></i>', 'Grabar ahora', () => openRec()], [I.list, 'Reuniones', () => go('r', '')], [I.calendar, 'Calendario', () => go('c', '')],
+  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings()], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
+  [I.clipboard, 'Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
 function paletteItems(q) {
   const f = fold(q.trim()), out = [];
   if (!f) {
     recents(7).forEach(r => out.push({ kind: r.k, path: r.p, ...itemLabel(r.k, r.item), group: 'Visto recientemente' }));
-    ACTIONS.forEach(([l, fn]) => out.push({ icon: '', text: l, fn, group: 'Acciones' }));
+    ACTIONS.forEach(([ic, l, fn]) => out.push({ icon: ic, text: l, fn, group: 'Acciones' }));
     return out;
   }
   const score = s => { const x = fold(s); return x.startsWith(f) ? 3 : x.includes(' ' + f) ? 2 : x.includes(f) ? 1 : 0; };
@@ -782,8 +782,8 @@ function paletteItems(q) {
   S.folders.forEach(fo => { if (fo.path && score(fo.name)) cands.push({ s: score(fo.name) * 1.5, kind: 'f', path: fo.path, ...itemLabel('f', fo), sub: `${fo.total} reuniones` }); });
   S.docs.forEach(d => { if (score(d.name)) cands.push({ s: score(d.name), kind: 'd', path: d.path, ...itemLabel('d', d) }); });
   cands.sort((x, y) => y.s - x.s).slice(0, 25).forEach(c => out.push({ ...c, group: 'Páginas' }));
-  ACTIONS.filter(([l]) => fold(l).includes(f)).forEach(([l, fn]) => out.push({ icon: '', text: l, fn, group: 'Acciones' }));
-  out.push({ icon: '🔎', text: `Buscar «${q.trim()}» dentro de todas las transcripciones y notas`, fn: () => go('s', q.trim()), group: 'Texto completo' });
+  ACTIONS.filter(([, l]) => fold(l).includes(f)).forEach(([ic, l, fn]) => out.push({ icon: ic, text: l, fn, group: 'Acciones' }));
+  out.push({ icon: I.search, text: `Buscar «${q.trim()}» dentro de todas las transcripciones y notas`, fn: () => go('s', q.trim()), group: 'Texto completo' });
   return out;
 }
 function openPalette() {
@@ -865,7 +865,7 @@ async function importFiles(files, folder) {
 function renderMeetChip() {
   const c = $('#meetChip'), m = S.rec && S.rec.meeting;
   c.classList.toggle('hidden', !m || !!S.rec.recording);
-  if (m) c.innerHTML = `📞 ${esc(m)} en llamada · <b>● Tomar Notas</b>`;
+  if (m) c.innerHTML = `${I.phone}${esc(m)} en llamada · <b><i class="recdot"></i>Tomar Notas</b>`;
 }
 $('#meetChip').onclick = () => toggleRec();
 
