@@ -128,7 +128,7 @@ def is_link_root(rel):
 
 
 def safe(rel, must=None):
-    """Ruta absoluta dentro de la carpeta de Notas o de una carpeta vinculada (no deja salir de ahi)."""
+    """Ruta absoluta dentro de la carpeta de la app o de una carpeta vinculada (no deja salir de ahi)."""
     rel = (rel or "").replace("\\", "/").strip("/")
     base = ROOT
     if rel.startswith(LINK):

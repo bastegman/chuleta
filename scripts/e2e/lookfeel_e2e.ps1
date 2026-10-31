@@ -41,11 +41,12 @@ function Wait-Http($url, $seconds) {
 }
 function Get-Listener {
     # solo los sockets con un proceso vivo detras: tras os._exit el socket puede seguir unos segundos en la tabla TCP
-    # sin dueno (OwningProcess vacio o 0), y eso no es un servidor
+    # sin dueno (OwningProcess vacio o 0), y eso no es un servidor. Sin ninguno no devuelve nada (ni $null: @($null)
+    # cuenta 1 y acababa en Get-Process -Id $null)
     try {
         Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
             Where-Object { $_.OwningProcess -and (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue) }
-    } catch { $null }
+    } catch { }
 }
 function Describe-Listeners {
     # quien escucha en el puerto: nombre, pid, hora de arranque y linea de comandos (para entender un servidor inesperado)
@@ -100,6 +101,17 @@ function Tail-Log($name, $n = 40) {
     $f = Join-Path $logDir $name
     if (Test-Path -LiteralPath $f) { return ((Get-Content -LiteralPath $f -Tail $n) -join "`n") }
     return "(no existe $f)"
+}
+function Last-Run-Log($n = 400) {
+    # solo lo que escribio la ULTIMA ejecucion de instalar.ps1: el fichero acumula todas las instalaciones (cada una
+    # empieza por "==== fecha instalar.ps1 desde ..."), y una comprobacion de la fase f2 leia lineas de la fase f
+    $f = Join-Path $logDir "instalar.log"
+    if (-not (Test-Path -LiteralPath $f)) { return "(no existe $f)" }
+    $lines = @(Get-Content -LiteralPath $f)
+    if ($lines.Count -eq 0) { return "" }
+    $start = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -like "==== *instalar.ps1*") { $start = $i } }
+    return (($lines[$start..($lines.Count - 1)] | Select-Object -Last $n) -join "`n")
 }
 function Copy-Logs($suffix) {
     foreach ($n in "server.log", "instalar.log") {
@@ -178,7 +190,7 @@ $env:NOTAS_INSTALADOR_AUTOCERRAR = "15"
 $env:NOTAS_INSTALADOR_SIMULAR_FALLO = ""
 $rc = Run-Installer $dir1 "c.instalador" 25  # pip real (faster-whisper, sherpa-onnx, pywebview, pywin32): 5-14 min segun el runner
 Copy-Logs "c"
-$ilog = Tail-Log "instalar.log" 400
+$ilog = Last-Run-Log 400
 Check "c.exitcode_0" ($rc -eq 0) $rc
 Check "c.modo_ventana" ($ilog -match "modo: ventana") (($ilog -split "`n" | Select-String "modo:") -join "; ")
 Check "c.sin_winget" (-not ($ilog -match "winget install")) ($ilog -match "No hay Python")
@@ -283,7 +295,7 @@ Rename-Item -LiteralPath $prog -NewName "$Legacy.lnk"
 Check "f.preparado_lnk_antiguo" ((Test-Path -LiteralPath $deskLegacy) -and (Test-Path -LiteralPath $progLegacy) -and -not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog)) ""
 $rc2 = Run-Installer $dir2 "f.instalador" 15
 Copy-Logs "f"
-$ilog2 = Tail-Log "instalar.log" 200
+$ilog2 = Last-Run-Log 400
 Check "f.exitcode_0" ($rc2 -eq 0) $rc2
 Check "f.detecta_anterior_por_notas_lnk" ($ilog2 -match "Ya ten") (($ilog2 -split "`n" | Select-String "Ya ten" | Select-Object -First 1) -join "")
 Check "f.actualiza_la_vieja" ($ilog2 -match [regex]::Escape($dir1)) ""
@@ -322,7 +334,7 @@ Copy-Item -LiteralPath $desk -Destination $deskLegacy -Force
 Check "f2.preparado_los_dos" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
 $rc22 = Run-Installer $dir2 "f2.instalador" 15
 Copy-Logs "f2"
-$ilog22 = Tail-Log "instalar.log" 200
+$ilog22 = Last-Run-Log 400
 Check "f2.exitcode_0" ($rc22 -eq 0) $rc22
 Check "f2.conserva_notas_lnk" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
 Check "f2.conserva_avisado" ($ilog22 -match "Se conserva el acceso directo antiguo") (($ilog22 -split "`n" | Select-String "Se conserva" | Select-Object -First 1) -join "")
@@ -346,7 +358,7 @@ $env:NOTAS_INSTALADOR_AUTOCERRAR = "20"
 $rc3 = Run-Installer $dir3 "g.instalador" 10
 $env:NOTAS_INSTALADOR_SIMULAR_FALLO = ""
 Copy-Logs "g"
-$ilog3 = Tail-Log "instalar.log" 120
+$ilog3 = Last-Run-Log 400
 Check "g.exitcode_0_en_ventana" ($rc3 -eq 0) $rc3 $false
 Check "g.error_proxy_mostrado" ($ilog3 -match "X No se han podido descargar") (($ilog3 -split "`n" | Select-String "^X " | Select-Object -First 1) -join "") $false
 Check "g.autocierre" ($ilog3 -match "autocierre tras 20") "" $false
