@@ -448,6 +448,14 @@ function Invoke-Desinstalar($borrarDatos) {
     return "ok"
 }
 
+function Exit-Desinstalar($code) {
+    # la copia de %TEMP% se borra sola al terminar, por cualquier camino (tambien al cancelar o si algo falla)
+    if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -like "chuleta-desinstalar-*.ps1" -and (Same-Path (Split-Path -Parent $PSCommandPath) $env:TEMP)) {
+        Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+    }
+    exit $code
+}
+
 # --- 4. comprobacion: solo se desinstala una carpeta _app con su desinstalador (nunca otra cosa)
 if ((Split-Path -Leaf $App) -ne "_app" -or -not (Test-Path -LiteralPath (Join-Path $App "desinstalar.ps1"))) {
     Log "X $App no es la carpeta _app de ${AppName}: no se toca nada"
@@ -457,7 +465,7 @@ if ((Split-Path -Leaf $App) -ne "_app" -or -not (Test-Path -LiteralPath (Join-Pa
             $null = [System.Windows.Forms.MessageBox]::Show("No encuentro $AppName en $App. No se ha tocado nada.", "Desinstalar $AppName")
         } catch {}
     }
-    exit 1
+    Exit-Desinstalar 1
 }
 
 $gui = $false
@@ -466,7 +474,7 @@ if (-not $Silencioso) {
     if (-not $gui) {
         # sin ventana no se puede preguntar (PowerShell restringido por la empresa, sin escritorio...): no se toca nada
         Log "X no se ha podido abrir la ventana: no se ha tocado nada (sin preguntar no se desinstala; -Silencioso desde una consola)"
-        exit 1
+        Exit-Desinstalar 1
     }
 }
 $borrar = [bool]$BorrarDatos
@@ -477,7 +485,7 @@ if ($gui) {
         if ($choice -ne "desinstalar") {
             Log "cancelado: no se ha tocado nada"
             $script:ui.form.Close()
-            exit 0
+            Exit-Desinstalar 0
         }
         $borrar = $script:ui.chk.Checked
         $script:ui.busy = $true
@@ -533,10 +541,6 @@ if ($gui) {
     $null = Wait-Choice "cerrar"
     if ($ui.form.Visible) { $ui.form.Close() }
 }
-# la copia de %TEMP% se borra sola al terminar
-if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -like "chuleta-desinstalar-*.ps1" -and (Same-Path (Split-Path -Parent $PSCommandPath) $env:TEMP)) {
-    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-}
-if ($resultado -eq "ok") { exit 0 }
-if ($resultado -eq "grabando") { exit 2 }
-exit 1
+if ($resultado -eq "ok") { Exit-Desinstalar 0 }
+if ($resultado -eq "grabando") { Exit-Desinstalar 2 }
+Exit-Desinstalar 1

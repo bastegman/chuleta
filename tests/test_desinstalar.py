@@ -385,7 +385,10 @@ class DesinstaladorTextoTests(unittest.TestCase):
                      "Remove-Desinstalador"):
             self.assertLess(i, inv.index(paso), paso)
             self.assertLess(j, inv.index(paso), paso)
-        self.assertIn('if ($resultado -eq "grabando") { exit 2 }', self.ps1)
+        self.assertIn('if ($resultado -eq "grabando") { Exit-Desinstalar 2 }', self.ps1)
+        # todas las salidas de la copia relanzada borran la copia de %TEMP% (tambien al cancelar)
+        tail = self.ps1[self.ps1.index("# --- 4. comprobacion"):]
+        self.assertFalse(re.search(r"^\s*exit\b|\{ exit\b", tail, re.M), "salida sin Exit-Desinstalar")
         gone = function_body(self.ps1, "Wait-AppGone")  # la grabadora nunca se cierra a la fuerza
         self.assertLess(gone.index("recorder\\.py"), gone.index("Stop-Process"))
         # sin ventana y sin -Silencioso no se desinstala sin preguntar
