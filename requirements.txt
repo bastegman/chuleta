@@ -5,3 +5,5 @@ requests
 truststore
 # quien habla (opcional en la app; importacion perezosa): diarizacion y huellas de voz en local
 sherpa-onnx==2.0.1
+# calendario de Outlook clasico por COM (opcional; solo si se activa en Ajustes): ruedas para Python 3.9-3.15
+pywin32==312

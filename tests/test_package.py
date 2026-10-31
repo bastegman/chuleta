@@ -28,7 +28,8 @@ class BuildPackageTests(unittest.TestCase):
                   "Notas/_app/engines.py", "Notas/_app/worker.py", "Notas/_app/live.py", "Notas/_app/recorder.py",
                   "Notas/_app/Notas.bat", "Notas/_app/instalar.ps1", "Notas/_app/static/index.html",
                   "Notas/_app/static/app.js", "Notas/_app/static/notas.js", "Notas/_app/static/app.css",
-                  "Notas/_app/static/notas.ico"):
+                  "Notas/_app/static/notas.ico", "Notas/_app/calendario.py", "Notas/_app/aviso.py",
+                  "Notas/_app/static/reunion.js"):
             self.assertIn(n, self.names)
         self.assertEqual(self.n, len(self.names))
         self.assertTrue(all(n.startswith("Notas/") for n in self.names))

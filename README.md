@@ -15,6 +15,9 @@ notas) se queda en la carpeta donde descomprimas la app.
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
 - **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas.
+- **Reunión en curso**: al grabar, la app sugiere el nombre, el tema y los participantes a partir de la ventana de
+  reunión de Teams y, si lo activas, de la cita de tu calendario de Outlook (clásico); al detectar una llamada
+  aparece un aviso flotante con «Grabar».
 - **Quién habla** (opcional): separa las voces de cada reunión en tu PC (sherpa-onnx), etiqueta «Persona 1»,
   «Persona 2», «Tú»… en la transcripción, deja ponerles nombre y, con consentimiento, recordarlas en las
   próximas reuniones. El resumen usa esos nombres.
@@ -48,13 +51,17 @@ El manual completo está en `LEEME.txt`.
 - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que configures.
   Antes de grabar o enviar reuniones de trabajo, confirma que lo permiten la política de tu empresa y el acuerdo
   con tu cliente, si lo hay.
+- La reunión en curso se lee en el propio PC: el título de la ventana de Teams siempre, y la cita de Outlook clásico
+  (por COM) solo si lo activas en Ajustes → Reuniones. Los nombres de los asistentes sugeridos solo se escriben en
+  la cabecera del `.md` de esa grabación (puedes borrarlos ahí); nada se envía fuera.
 - Las listas de vocabulario (`<proyecto>/Vocabulario/*.txt`) suelen llevar nombres de personas y empresas:
   no se incluyen en el zip que genera la app salvo que lo marques, y este repositorio las ignora.
 
 ## Desarrollo
 
 El servidor es Python 3.10–3.13 con la librería estándar más `faster-whisper`, `soundcard`, `requests`,
-`truststore` y `sherpa-onnx` (opcional, importación perezosa); la interfaz es HTML/JS sin compilar (`_app/static`). No hay paso de build: `_app/Notas.bat`
+`truststore`, y `sherpa-onnx` y `pywin32` (opcionales, importación perezosa); la interfaz es HTML/JS sin compilar
+(`_app/static`). No hay paso de build: `_app/Notas.bat`
 lanza `python server.py`.
 
 En macOS/Linux el servidor arranca para desarrollar la interfaz y la lógica (la grabadora, el atajo global,
@@ -75,7 +82,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 Los tests no necesitan Windows ni `faster-whisper`: cubren la lógica pura (SRT, notas, árbol de carpetas,
 cola, paquete instalable, prompts, grabadora, voces) con dobles y ficheros temporales. La prueba de integración de
 voces (`tests/test_voices_integration.py`) solo corre si hay `sherpa-onnx`, `say` (macOS) y `NOTAS_VOCES_DATA`
-apunta a una carpeta de datos con los modelos en `models/voces/`.
+apunta a una carpeta de datos con los modelos en `models/voces/`. Los tests de escritorio de Windows
+(`tests/test_reunion_windows.py`: ventana de Teams simulada, aviso flotante con captura de pantalla) solo corren allí,
+en el workflow `reunion-windows`; en el resto se saltan.
 
 «Quién habla» y el cifrado con DPAPI se han desarrollado y probado en macOS (la diarización con sherpa-onnx real;
 DPAPI con un doble, porque `crypt32` solo existe en Windows). En Windows, DPAPI real se prueba en el job

@@ -85,6 +85,28 @@ nada de ningún proyecto concreto.
 - `scripts/directo_bench.py`: audio sintético con `say` (español y portugués, con pausas) y reproducción de un WAV
   por el chunker con un transcriptor falso de latencia configurable (`--real` usa Groq con `GROQ_API_KEY`).
   `tests/test_directo.py` y `tests/test_directo_frontend.py`.
+- **Reunión en curso al grabar** (`_app/calendario.py`, `_app/static/reunion.js`): al pulsar Grabar (o Ctrl+Alt+R)
+  la app sugiere el nombre, el tema de vocabulario y los participantes a partir de dos fuentes locales: el título
+  de la ventana de reunión de Teams (nivel 1, siempre y sin activar nada: `EnumWindows` sobre los procesos
+  `ms-teams.exe`/`Teams.exe`/`msteams.exe`, descartando la ventana principal) y, si se enciende en Ajustes →
+  Reuniones, la cita en curso del Outlook clásico de escritorio por COM (nivel 2, `pywin32`, opcional: asunto,
+  horas, organizador, asistentes sin correos, categorías y si es de Teams; `Sort` → `IncludeRecurrences` →
+  `Restrict` con la fecha en el formato regional del usuario y sin segundos, consulta con tope de 8 s en un hilo,
+  y motivos legibles si Outlook no está abierto, es el nuevo Outlook, está ocupado o se rechaza su aviso de
+  seguridad). El tema es la lista de vocabulario con más términos (y nombre de proyecto/tema) presentes en asunto,
+  categorías, organizador y asistentes, con un umbral para no sugerir a ciegas. Los participantes sugeridos van a
+  la cabecera del `.md` de la grabación nueva (en este PC). Botón «Probar» en Ajustes que dice qué reunión ve en
+  ese momento. `GET /api/reunion/actual`; ajustes `outlook_on` (apagado por defecto) y `rec_aviso`.
+- **Aviso flotante al detectar una llamada** (`_app/aviso.py`, proceso aparte): ventanita abajo en el centro del
+  monitor principal (sobre la barra de tareas, DPI aware, sin borde, siempre visible y que no roba el foco:
+  `WS_EX_NOACTIVATE`) con el título de la reunión, «● Grabar» y «✕». «Grabar» empieza con la configuración de
+  Ctrl+Alt+R y el nombre/tema sugeridos; si ya se grababa no toca nada. Se cierra sola a los 20 s, al grabar
+  (también con Ctrl+Alt+R), al terminar la llamada o si la app se cierra. Sale una vez por llamada y, mientras
+  está abierta, sustituye al toast de Windows de «¿Quieres tomar notas?».
+- `pywin32==312` en `requirements.txt` y en el instalador (opcional y aparte, como `sherpa-onnx`: si no se instala,
+  solo se avisa). Tests con dobles (`tests/test_reunion.py`) y de escritorio en Windows
+  (`tests/test_reunion_windows.py`, workflow `reunion-windows`: ventana de Teams simulada, aviso con captura de
+  pantalla y pulsación de «Grabar»).
 - **Quién habla** (opcional, apagado por defecto): diarización en local con `sherpa-onnx` 2.0.1 (segmentación
   pyannote 3.0 + huellas TitaNet small, ≈47 MB de modelos que se descargan al activar la opción, sha256 anclado)
   en un subproceso de prioridad baja al terminar cada transcripción (`_app/voices.py`). Sidecar
@@ -122,3 +144,8 @@ nada de ningún proyecto concreto.
   avisa en `server.log`.
 - El aviso de Windows (toast) sale firmado por «Windows PowerShell»: cambiarlo exige registrar un
   AppUserModelID propio en el acceso directo (propiedad del `.lnk` vía COM); se deja como está.
+- La lectura de Outlook se ha probado con un doble del modelo de objetos y, en el job de Windows, solo el camino
+  «sin Outlook abierto» (pywin32 real). Con un Outlook clásico de verdad (citas periódicas, aviso de seguridad,
+  nombres de asistentes) aún no se ha ejecutado: se comprueba con el botón «Probar» de Ajustes → Reuniones.
+- La ventana de reunión de Teams se reconoce por el sufijo «| Microsoft Teams» de su título; un chat abierto en
+  ventana aparte o una llamada 1:1 se tomarían como reunión (es una sugerencia, siempre editable).
