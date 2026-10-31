@@ -2010,7 +2010,7 @@ function shutdownScreen() {
   S.off = true;  // los sondeos paran: el servidor ya no contesta
   clearTimeout(recTimer); clearTimeout(jobsTimer);
   document.title = `${APP_NAME} · apagada`;
-  document.body.innerHTML = `<div class="page" style="max-width:520px;margin:18vh auto;text-align:center"><img src="/notas.png" alt="" style="width:72px;height:72px">
+  document.body.innerHTML = `<div class="page" style="max-width:520px;margin:18vh auto;text-align:center"><img src="/chuleta.png" alt="" style="width:72px;height:72px">
     <h2 style="margin:16px 0 8px">${esc(APP_NAME)} se ha apagado</h2><p class="muted">Cierra esta ventana. Para volver a usar ${esc(APP_NAME)}, ábrela con el acceso directo del escritorio.</p></div>`;
 }
 

@@ -90,7 +90,15 @@ class NombreCentralizadoTests(unittest.TestCase):
         self.assertNotIn("notas.ico", html)
         for n in ("chuleta.ico", "chuleta.png", "notas.js"):
             self.assertTrue(os.path.isfile(os.path.join(STATIC, n)), n)
-        self.assertNotIn("notas.ico", read("server.py"))
+        # los iconos renombrados: ninguna referencia a los nombres antiguos en el código ni en la interfaz (el aviso
+        # flotante, la pantalla de apagado y el instalador los cargan por ruta)
+        files = [n for n in os.listdir(APP) if n.endswith((".py", ".ps1"))]
+        files += [os.path.join("static", n) for n in os.listdir(STATIC) if n.endswith((".js", ".html", ".css"))]
+        for n in files:
+            with open(os.path.join(APP, n), encoding="utf-8-sig") as f:
+                src = f.read()
+            self.assertNotIn("notas.ico", src, n)
+            self.assertNotIn("notas.png", src, n)
 
     def test_acerca_de_en_ajustes(self):
         """Al final de Ajustes: nombre, versión, licencia, repositorio, carpeta de datos con «Abrir» y «Copiar

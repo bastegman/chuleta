@@ -130,7 +130,7 @@ class Aviso:
         root.withdraw()
         root.title("Aviso de llamada")
         try:  # el icono de la app (no se ve sin barra de título, pero sí en herramientas que listan ventanas)
-            root.iconbitmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "notas.ico"))
+            root.iconbitmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "chuleta.ico"))
         except Exception:
             pass
         root.overrideredirect(True)
