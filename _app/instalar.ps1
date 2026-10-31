@@ -1,8 +1,8 @@
 ﻿# Instalador de Chuleta (lo lanza INSTALAR.bat). No necesita permisos de administrador:
 #   1. Python de 3.10 a 3.13 (si no hay, instala 3.13 con winget solo para este usuario)
-#   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests,
-#      pywebview (la ventana de la app sobre WebView2; sin ella se abre en Edge),
-#      sherpa-onnx (quien habla) y pywin32 (calendario de Outlook), opcionales: si no cargan, la app funciona igual
+#   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests y truststore;
+#      opcionales, cada una aparte (si no se instalan o no cargan, la app funciona igual): pywebview (la ventana de la
+#      app sobre WebView2; sin ella se abre en Edge), sherpa-onnx (quien habla) y pywin32 (calendario de Outlook)
 #   3. Accesos directos "Chuleta" en el escritorio y en el menu Inicio: apuntan a pythonw.exe (sin ventana de consola)
 #      y llevan el AppUserModelID de la app, para que la barra de tareas agrupe y ancle la ventana como algo propio.
 #      Si hay un acceso directo "Notas" (nombre anterior de la app), sirve para encontrar la instalacion anterior y pasa
@@ -47,9 +47,11 @@ trap {
 }
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $app
-$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore", "pywebview==6.2.1")
-# opcionales: se instalan una a una y aparte del resto; si alguna falla, solo se avisa (la app funciona sin ella)
-$optional = @("sherpa-onnx==2.0.1", "pywin32==312")  # quien habla / calendario de Outlook
+$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore")
+# opcionales: se instalan una a una y aparte del resto; si alguna falla, solo se avisa (la app funciona sin ella).
+# pywebview tambien: depende de proxy_tools, que solo se publica como codigo fuente, y con un pip "only-binary" o un
+# repositorio de la empresa que solo tenga paquetes compilados no se instala; sin ella la app se abre en Edge
+$optional = @("pywebview==6.2.1", "sherpa-onnx==2.0.1", "pywin32==312")  # ventana propia / quien habla / calendario de Outlook
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
 $AppId = "Bernardo.Chuleta"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
 $LegacyName = "Notas"  # nombre anterior de la app: sus accesos directos se reconocen y pasan a llamarse $AppName
@@ -305,6 +307,91 @@ function Find-Python {
     return $null
 }
 
+function Get-ApiHeaders($post) {
+    # X-Audios en los POST y, si la app ha escrito su token de sesion (%LOCALAPPDATA%\AudiosApp\sesion.token, versiones
+    # con la API protegida), X-Chuleta-Token. Sin el fichero, como siempre. El token no se escribe en ningun registro
+    $h = @{}
+    if ($post) { $h["X-Audios"] = "1" }
+    try {
+        $tf = Join-Path $env:LOCALAPPDATA "AudiosApp\sesion.token"
+        if (Test-Path -LiteralPath $tf -PathType Leaf) {
+            $tok = [IO.File]::ReadAllText($tf).Trim()
+            if ($tok) { $h["X-Chuleta-Token"] = $tok }
+        }
+    } catch {}
+    return $h
+}
+
+function Invoke-Api($path, $post = $false, $timeout = 2) {
+    # @{ code; body }: 200 si contesta bien, el codigo HTTP si contesta con error (409 grabando, 401/403 sin token
+    # valido...) y 0 si no contesta (apagada)
+    $a = @{ Uri = "http://127.0.0.1:$Port$path"; TimeoutSec = $timeout; Headers = (Get-ApiHeaders $post) }
+    if ($post) { $a.Method = "Post"; $a.ContentType = "application/json"; $a.Body = "{}" }
+    try { return @{ code = 200; body = (Invoke-RestMethod @a) } }
+    catch {
+        $c = 0
+        try { if ($_.Exception.Response) { $c = [int]$_.Exception.Response.StatusCode } } catch {}
+        return @{ code = $c; body = $null }
+    }
+}
+
+function Test-Grabadora {
+    # la grabadora de la app (recorder.py) en marcha: con ella viva no se cierra nada a la fuerza (puede estar grabando)
+    try {
+        return (@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.Name -match '^pythonw?\.exe$' -and "$($_.CommandLine)" -match 'recorder\.py' }).Count -gt 0)
+    } catch { return $false }
+}
+
+function Unblock-AppFiles($appDir, $rootDir) {
+    # quita la marca de Internet (Zone.Identifier) solo a los ficheros del paquete: _app y los de la raiz que trae el
+    # zip. Sin esto Windows pregunta al abrirlos; las reuniones y demas ficheros del usuario conservan su marca
+    Get-ChildItem -LiteralPath $appDir -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+    foreach ($n in @("INSTALAR.bat", "ABRIR CHULETA.bat", "LEEME.txt", "LICENSE")) {
+        $f = Join-Path $rootDir $n
+        if (Test-Path -LiteralPath $f -PathType Leaf) { Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue }
+    }
+}
+
+function Describe-PipFailure($log, $pyVer, $pipCfg) {
+    # el error de las librerias principales con el paquete que fallo y la causa con lo que se sabe: la red o el proxy
+    # (pip tambien dice "no encuentra" cuando no llega al repositorio), un Python sin paquetes publicados, un pip
+    # "only-binary" o el repositorio de la empresa. De una URL solo se ensena el servidor (puede llevar credenciales)
+    $names = @()
+    foreach ($m in [regex]::Matches("$log", '(?:No matching distribution found for|Could not find a version that satisfies the requirement)\s+([A-Za-z0-9][A-Za-z0-9._\-]*)')) {
+        if ($names -notcontains $m.Groups[1].Value) { $names += $m.Groups[1].Value }
+    }
+    $lista = $(if ($names.Count) { $names -join ", " } else { "Alguna librería" })
+    $cuales = $(if ($names.Count) { " (" + ($names -join ", ") + ")" } else { "" })
+    $verNum = 0
+    if ("$pyVer" -match '^(\d+)\.(\d+)') { $verNum = [int]$Matches[1] * 100 + [int]$Matches[2] }
+    if ("$log" -match "ProxyError|SSLError|CERTIFICATE_VERIFY|Could not fetch URL|Temporary failure|timed out|Max retries exceeded|Network is unreachable|Connection (refused|reset|aborted)") {
+        return ("No se han podido descargar las librerías" + $cuales + ": parece la red o el proxy de la empresa. Prueba " +
+                "con otra red (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org, y vuelve a abrir INSTALAR.bat.")
+    }
+    if ($verNum -gt $MaxPy -and ($names.Count -or "$log" -match "is not a supported wheel")) {
+        return ("$lista todavía no está publicada para Python $pyVer. Instala Python 3.13 (winget install -e --id " +
+                "Python.Python.3.13 --scope user, o desde python.org) y vuelve a abrir INSTALAR.bat.")
+    }
+    if ($names.Count -and "$pipCfg" -match 'only[-_]binary') {
+        return ("No se ha podido instalar $lista`: la configuración de pip de este PC solo acepta paquetes ya compilados " +
+                "(only-binary) y no los hay para Python $pyVer. Pide a IT que lo permita para esos paquetes y vuelve a abrir INSTALAR.bat.")
+    }
+    $idx = [regex]::Match("$pipCfg", "index-url\s*=\s*'?([^'\s]+)")
+    if ($names.Count -and $idx.Success) {
+        $hostName = "otro servidor"
+        try { $hostName = ([uri]$idx.Groups[1].Value).Host } catch {}
+        return ("No se ha podido instalar $lista`: el repositorio de paquetes configurado en este PC ($hostName) no lo tiene " +
+                "para Python $pyVer. Pide a IT que lo añada, o prueba con otra red, y vuelve a abrir INSTALAR.bat.")
+    }
+    if ($names.Count) {
+        return ("pip no encuentra $lista para Python $pyVer. Revisa los mensajes de arriba (en la red de la empresa puede " +
+                "ser el proxy o un repositorio de paquetes propio) y vuelve a abrir INSTALAR.bat.")
+    }
+    return ("No se han podido instalar las librerías (Python $pyVer). Revisa los mensajes de arriba: en la red de la " +
+            "empresa puede ser el proxy; con un Python muy nuevo, instala Python 3.13 y vuelve a abrir INSTALAR.bat.")
+}
+
 function Same-Path($a, $b) {
     # misma carpeta (sin distinguir mayusculas ni la barra final)
     if (-not $a -or -not $b) { return $false }
@@ -360,10 +447,19 @@ function Test-CarpetaLibre($dir) {
     # LEEME.txt junto a las reuniones: al reinstalar se vuelve a la misma carpeta y se ven otra vez)
     if (-not (Test-Path -LiteralPath $dir)) { return $true }
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $false }
-    if (-not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) { return $true }
+    try { $first = Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | Select-Object -First 1 }
+    catch { return $false }  # no se puede listar: no se sabe que hay dentro, no se usa
+    if (-not $first) { return $true }
     if (Test-Instalacion $dir) { return $true }
     $l1 = "$(Get-Content -LiteralPath (Join-Path $dir 'LEEME.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)"
     return ($l1.TrimStart([char]0xFEFF) -like "$($FolderName.ToUpper()) *")
+}
+
+function Test-TieneReuniones($rootDir, $appDir) {
+    # grabaciones fuera de _app: una carpeta en uso, no un zip recien descomprimido (no se dice que se puede borrar)
+    $ext = @(".wav", ".m4a", ".mp3", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".wma", ".webm", ".mkv", ".mov")
+    return [bool](Get-ChildItem -LiteralPath $rootDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $ext -contains $_.Extension.ToLowerInvariant() -and $_.FullName -notlike "$appDir*" } | Select-Object -First 1)
 }
 
 function Get-CarpetaNueva {
@@ -404,7 +500,7 @@ function Copy-AppFiles($fromApp, $fromRoot, $toApp, $toRoot) {
                 if (-not (Test-Path -LiteralPath $to)) { Copy-Item -LiteralPath $_.FullName -Destination $to }
             }
         }
-    Get-ChildItem -LiteralPath $toApp -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+    Unblock-AppFiles $toApp $toRoot
 }
 
 function Read-AppVersion($appDir, $rootDir) {
@@ -458,26 +554,27 @@ Write-Host "    $($AppName.ToUpper())  ·  grabar, transcribir y resumir reunion
 Write-Host "  ==========================================================" -ForegroundColor DarkCyan
 Say "    Carpeta: $root"
 
-# archivos descargados de Teams/correo: sin esto Windows pregunta cada vez al abrirlos
-Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+# el zip descargado de Teams/correo trae la marca de Internet: sin quitarla Windows pregunta cada vez al abrir sus
+# ficheros. Solo los del paquete: lo demas de la carpeta (las reuniones) conserva la suya
+Unblock-AppFiles $app $root
 
 # --- si la app esta abierta se cierra: si no, al terminar se volveria a ver la version vieja (sigue en marcha)
 Step "Comprobando si $AppName está abierta..."
-$running = $null
-try { $running = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 2 } catch {}
-if ($running -and $running.app -eq "audios") {
-    $st = $null
-    try { $st = Invoke-RestMethod "http://127.0.0.1:$Port/api/rec/status" -TimeoutSec 2 } catch {}
-    if ($st -and $st.recording) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
-    # primero por las buenas: POST /api/apagar (versiones desde el 31/10/2026); si no contesta, como antes
+$running = Invoke-Api "/api/ping" $false 2
+# 401/403: contesta una version con la API protegida y no he podido usar su token: esta abierta igual
+if (($running.code -eq 200 -and $running.body.app -eq "audios") -or $running.code -eq 401 -or $running.code -eq 403) {
+    $st = Invoke-Api "/api/rec/status" $false 2
+    if ($st.code -eq 200 -and $st.body.recording) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
+    # primero por las buenas: POST /api/apagar (versiones desde el 31/10/2026; 409 = grabando); si no, como antes
     $apagado = $false
-    try {
-        $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5
+    $ap = Invoke-Api "/api/apagar" $true 5
+    if ($ap.code -eq 409) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
+    if ($ap.code -eq 200) {
         for ($k = 0; $k -lt 24 -and -not $apagado; $k++) {
             Start-Sleep -Milliseconds 250
-            try { $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 1 } catch { $apagado = $true }
+            if ((Invoke-Api "/api/ping" $false 1).code -eq 0) { $apagado = $true }
         }
-    } catch {}
+    }
     $owner = $null
     if ($apagado) { $owner = -1 }
     try { $owner = (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess } catch {}
@@ -487,6 +584,9 @@ if ($running -and $running.app -eq "audios") {
     }
     if (-not $owner) { Fail "$AppName está abierta y no he podido cerrarla: ciérrala (Ajustes > Apagar, o su ventana de consola) y vuelve a abrir INSTALAR.bat." }
     if ($owner -gt 0) {
+        # sin la API (version antigua, sin token valido o sin respuesta) se cierra su proceso; nunca con la grabadora
+        # abierta, que puede estar grabando una reunion
+        if (Test-Grabadora) { Fail "$AppName no se ha podido apagar y su grabadora sigue abierta (puede estar grabando): apágala desde Ajustes > Apagar $AppName y vuelve a abrir INSTALAR.bat." }
         $ids = @($owner)
         $p = Get-CimInstance Win32_Process -Filter "ProcessId=$owner"
         for ($k = 0; $k -lt 2 -and $p; $k++) {  # tambien el "py" y la ventana de consola que lo lanzaron (instalaciones antiguas)
@@ -506,8 +606,12 @@ if ($running -and $running.app -eq "audios") {
 # propia (%USERPROFILE%\Chuleta, o -Destino) y la descomprimida deja de hacer falta.
 $origen = $null  # la carpeta descomprimida, si la app ha quedado en otra
 $prev = $null
-if (-not $NoShortcut -or $Desktop) { $prev = Find-Instalacion }
-if ($prev -and -not (Same-Path $prev.root $root)) {
+# python.txt lo escribe este instalador: si esta carpeta ya se instalo (quiza con sus grabaciones), se actualiza ella
+$yaInstalada = Test-Path -LiteralPath (Join-Path $app "python.txt")
+if (-not $yaInstalada -and (-not $NoShortcut -or $Desktop)) { $prev = Find-Instalacion }
+if ($yaInstalada) {
+    Say "    Esta carpeta ya estaba instalada: se actualiza en su sitio"
+} elseif ($prev -and -not (Same-Path $prev.root $root)) {
     $old, $oldRoot = $prev.app, $prev.root
     if ($Destino -and -not (Same-Path $Destino $oldRoot)) { Say "    -Destino no se usa: ya está instalada en $oldRoot (para cambiarla de carpeta, desinstálala antes; tus reuniones no se borran)." Yellow }
     Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..."
@@ -516,14 +620,12 @@ if ($prev -and -not (Same-Path $prev.root $root)) {
     # lo que queda del nombre anterior no se borra (sigue funcionando), solo se dice
     $sobrantes = @("ABRIR NOTAS.bat", "_app\Notas.bat") | Where-Object { Test-Path -LiteralPath (Join-Path $oldRoot $_) }
     if ($sobrantes) { Say "    De la versión anterior quedan $($sobrantes -join ' y ') en $oldRoot : ya no hacen falta (puedes borrarlos)." }
-    Say "    Actualizada. La carpeta que acabas de descomprimir ya no hace falta: puedes borrarla." Green
+    if (Test-TieneReuniones $root $app) { Say "    Actualizada. Ojo: $root tiene grabaciones; no la borres sin revisarla." Yellow }
+    else { Say "    Actualizada. La carpeta que acabas de descomprimir ya no hace falta: puedes borrarla." Green }
     $origen = $root
     $app, $root = $old, $oldRoot
 } elseif ($prev) {
     Say "    Instalada en esta misma carpeta (encontrada por: $($prev.how)): se actualiza en su sitio"
-} elseif (Test-Path -LiteralPath (Join-Path $app "python.txt")) {
-    # python.txt lo escribe este instalador: esta carpeta ya se instalo antes (quiza con sus grabaciones) y se queda
-    Say "    Esta carpeta ya estaba instalada: se actualiza en su sitio"
 } else {
     $dest = $null
     if ($Destino) {
@@ -589,10 +691,10 @@ $v = & $py -c "import faster_whisper, soundcard, requests, av, numpy; print('   
 $coreOk = ($LASTEXITCODE -eq 0)
 if ($env:NOTAS_INSTALADOR_SIMULAR_FALLO -eq "pip") { $coreOk = $false }  # solo CI
 if ($coreOk) { Say ($v -join "`n") Green } else { Say ($v -join "`n") Yellow }
-# sherpa-onnx es opcional (quien habla): se instala aparte para que un fallo suyo no deje sin librerias al resto,
-# y si no importa solo se avisa: la app sigue funcionando sin esa opcion
+# las opcionales (ventana propia, quien habla, calendario) se instalan aparte para que un fallo suyo no deje sin
+# librerias al resto, y si no importan solo se avisa: la app sigue funcionando sin esa opcion
 if ($coreOk) {
-    Step "Instalando las librerías opcionales (quién habla, calendario de Outlook)..."
+    Step "Instalando las librerías opcionales (ventana propia, quién habla, calendario de Outlook)..."
     foreach ($opt in $optional) { $null = Pip-Install $userMode @($opt) }
 }
 $v = & $py -c "import sherpa_onnx; print('    sherpa-onnx', sherpa_onnx.__version__, '(quien habla: disponible)')" 2>$null
@@ -605,17 +707,11 @@ if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    pywebview no es
 if (-not $coreOk) {
     $log = ($script:pipOut -join "`n")
     $pyVer = & $py -c "import sys; print('%d.%d' % sys.version_info[:2])"
-    if ($log -match "No matching distribution|Could not find a version that satisfies|is not a supported wheel") {
-        Fail ("Alguna librería (faster-whisper / ctranslate2) todavía no está publicada para Python $pyVer. " +
-              "Instala Python 3.13 (winget install -e --id Python.Python.3.13 --scope user, o desde python.org) " +
-              "y vuelve a abrir INSTALAR.bat.")
-    }
-    if ($log -match "ProxyError|SSLError|CERTIFICATE_VERIFY|Could not fetch URL|Temporary failure|timed out|Max retries exceeded|Network is unreachable|Connection (refused|reset|aborted)") {
-        Fail ("No se han podido descargar las librerías: parece la red o el proxy de la empresa. Prueba con otra red " +
-              "(p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org, y vuelve a abrir INSTALAR.bat.")
-    }
-    Fail ("No se han podido instalar las librerías (Python $pyVer). Revisa los mensajes de arriba: en la red de la " +
-          "empresa puede ser el proxy; con un Python muy nuevo, instala Python 3.13 y vuelve a abrir INSTALAR.bat.")
+    # la configuracion de pip (only-binary, repositorio propio) explica muchos "no encuentra": solo se mira, no se ensena
+    $pipCfg = ((& $py -m pip config list 2>$null) -join "`n")
+    if ($env:PIP_ONLY_BINARY) { $pipCfg += "`nenv.only-binary='$env:PIP_ONLY_BINARY'" }
+    if ($env:PIP_INDEX_URL) { $pipCfg += "`nenv.index-url='$env:PIP_INDEX_URL'" }
+    Fail (Describe-PipFailure $log $pyVer $pipCfg)
 }
 # el lanzador usa este Python (si hay varios instalados, el de las librerias)
 [IO.File]::WriteAllText((Join-Path $app "python.txt"), $py, (New-Object Text.UTF8Encoding $false))
@@ -675,13 +771,14 @@ $ver = $verRaw
 $ver = if ($ver) { " (versión $ver)" } else { "" }
 Say "  Listo$ver." Green
 Say "  Instalada en $root" Green
-if ($origen) { Say "  La carpeta que descomprimiste ($origen) ya no hace falta: puedes borrarla." Green }
+$borrable = $origen -and -not (Test-TieneReuniones $origen (Join-Path $origen "_app"))
+if ($borrable) { Say "  La carpeta que descomprimiste ($origen) ya no hace falta: puedes borrarla." Green }
 Say "  Si es la primera vez: Ajustes (rueda dentada) > Transcripción en la nube > tu API key (Groq u otro proveedor)." Green
 Say "  Para apagar $AppName del todo: Ajustes > Apagar $AppName (cerrar la ventana la deja en segundo plano)." Green
 Say "  Instrucciones completas en LEEME.txt" Green
 $abrir = -not $NoLaunch
 if ($Gui) {
-    $borrable = if ($origen) { " La carpeta descomprimida ya se puede borrar." } else { "" }
+    $borrable = if ($borrable) { " La carpeta descomprimida ya se puede borrar." } else { "" }
     Finish-Ui $true "Listo$ver. Instalada en $root.$borrable Si es la primera vez: Ajustes > Transcripción en la nube > tu API key. Para apagar $AppName del todo: Ajustes > Apagar $AppName."
     $abrir = $script:ui.abrir
 }

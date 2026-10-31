@@ -162,6 +162,27 @@ class InstaladorEmpresaTests(unittest.TestCase):
         self.assertNotIn("Remove-Item", self.ps1)  # el instalador no borra nada
         self.assertNotIn("Move-Item", self.ps1)  # ni mueve nada: las grabaciones se quedan donde estan
 
+    def test_p2_16_solo_desbloquea_el_paquete(self):
+        """La marca de Internet (Zone.Identifier) solo se quita a los ficheros del paquete, nunca a las reuniones."""
+        self.assertEqual(self.ps1.count("Unblock-File"), 2)  # las dos de Unblock-AppFiles
+        body = function_body(self.ps1, "Unblock-AppFiles")
+        self.assertIn("Get-ChildItem -LiteralPath $appDir -Recurse -File", body)
+        self.assertIn('@("INSTALAR.bat", "ABRIR CHULETA.bat", "LEEME.txt", "LICENSE")', body)
+        self.assertFalse(re.search(r"Get-ChildItem -LiteralPath \$(root|toRoot|rootDir)\b[^\n]*Unblock", self.ps1))
+        self.assertIn("Unblock-AppFiles $app $root", self.ps1)
+        self.assertIn("Unblock-AppFiles $toApp $toRoot", function_body(self.ps1, "Copy-AppFiles"))
+
+    def test_p2_36_pywebview_opcional(self):
+        core = re.search(r'\$packages = @\(([^)]*)\)', self.ps1).group(1)
+        opt = re.search(r'\$optional = @\(([^)]*)\)', self.ps1).group(1)
+        self.assertNotIn("pywebview", core)
+        self.assertIn('"pywebview==6.2.1"', opt)
+        self.assertIn("Fail (Describe-PipFailure $log $pyVer $pipCfg)", self.ps1)
+
+    def test_p2_37_licencia_al_actualizar(self):
+        copia = function_body(self.ps1, "Copy-AppFiles")
+        self.assertIn('@("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat")', copia)
+
     def test_registro_tras_los_accesos_directos(self):
         i = self.ps1.index('Step "Creando el acceso directo')
         j = self.ps1.index("$null = Register-App $app $root $verRaw")
@@ -181,6 +202,55 @@ def run_ps_functions(ps1, names, body):
     r = subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     return r.stdout + r.stderr
+
+
+@unittest.skipUnless(powershell(), "sin PowerShell (CHULETA_PWSH, powershell.exe o pwsh)")
+class DiagnosticoPipTests(unittest.TestCase):
+    """Describe-PipFailure (P2-36): nombra el paquete y la causa; nunca culpa a Python si no es la version, nunca
+    ensena credenciales de la URL del repositorio."""
+
+    def describe(self, log, py_ver="3.13", cfg=""):
+        q = lambda s: "'" + s.replace("'", "''") + "'"  # noqa: E731
+        out = run_ps_functions(INSTALAR, ["Describe-PipFailure"],
+                               f"$MaxPy = 313; Write-Output ('R=' + "
+                               f"(Describe-PipFailure {q(log)} {q(py_ver)} {q(cfg)}))")
+        m = re.search(r"R=(.*)", out)
+        self.assertTrue(m, out)
+        return m.group(1)
+
+    def test_only_binary(self):
+        log = ("ERROR: Could not find a version that satisfies the requirement proxy_tools (from versions: none)\n"
+               "ERROR: No matching distribution found for proxy_tools")
+        r = self.describe(log, cfg="global.only-binary=':all:'")
+        self.assertIn("proxy_tools", r)
+        self.assertIn("only-binary", r)
+        self.assertNotIn("Instala Python 3.13", r)
+
+    def test_python_demasiado_nuevo(self):
+        r = self.describe("ERROR: No matching distribution found for ctranslate2", py_ver="3.14")
+        self.assertIn("ctranslate2 todavía no está publicada para Python 3.14", r)
+
+    def test_repositorio_de_la_empresa_sin_credenciales(self):
+        r = self.describe("ERROR: No matching distribution found for faster-whisper==1.2.1",
+                          cfg="global.index-url='https://usuario:CLAVE-SECRETA@pypi.empresa.example/simple'")
+        self.assertIn("faster-whisper", r)
+        self.assertIn("pypi.empresa.example", r)
+        self.assertNotIn("CLAVE-SECRETA", r)
+        self.assertNotIn("usuario", r)
+
+    def test_la_red_antes_que_el_no_encuentra(self):
+        # sin red, pip tambien acaba en "Could not find a version": la causa es la red, no Python
+        log = ("WARNING: Retrying ... ProxyError('Cannot connect to proxy.')\n"
+               "ERROR: Could not find a version that satisfies the requirement faster-whisper==1.2.1 "
+               "(from versions: none)")
+        r = self.describe(log)
+        self.assertTrue(r.startswith("No se han podido descargar las librerías (faster-whisper)"), r)
+        r = self.describe("ERROR: ProxyError: fallo simulado (NOTAS_INSTALADOR_SIMULAR_FALLO=pip)")
+        self.assertTrue(r.startswith("No se han podido descargar las librerías: parece la red"), r)
+
+    def test_sin_mas_pistas(self):
+        r = self.describe("ERROR: No matching distribution found for soundcard")
+        self.assertIn("pip no encuentra soundcard para Python 3.13", r)
 
 
 @unittest.skipUnless(powershell(), "sin PowerShell (CHULETA_PWSH, powershell.exe o pwsh)")
@@ -250,7 +320,7 @@ class DesinstaladorTextoTests(unittest.TestCase):
                   "Borrar también mis ajustes, claves y voces guardadas (%LOCALAPPDATA%\\AudiosApp)",
                   "datos biométricos", '"Desinstalar"', '"Cancelar"', '"Abrir la carpeta"',
                   "$AppName se ha desinstalado. Tus reuniones siguen en $Root", "chuleta-desinstalar.log",
-                  '"X-Audios" = "1"', "/api/apagar", "-eq 409", "-NoNewWindow", "-Relanzado",
+                  '$h["X-Audios"] = "1"', "/api/apagar", "-eq 409", "-NoNewWindow", "-Relanzado",
                   "static\\chuleta.png", "static\\chuleta.ico"):
             self.assertTrue(s in self.ps1, s)
         self.assertTrue("$chk.Checked = [bool]$BorrarDatos" in self.ps1)  # desmarcada salvo -BorrarDatos
@@ -263,8 +333,7 @@ class DesinstaladorTextoTests(unittest.TestCase):
         """Cada Remove-Item va sobre algo de la app: un acceso directo, la clave, ficheros de _app filtrados por
         Test-AppFile, carpetas vacias de _app, el propio _app vacio, los .bat de la raiz, AudiosApp (solo con la
         casilla) o la copia en %TEMP%. Ninguno sobre la raiz ni con comodines."""
-        allowed = {"$lnk", "$UninstallKey", "$file.FullName", "$dir.FullName", "$self", "$App", "$launcher", "$Datos",
-                   "$PSCommandPath"}
+        allowed = {"$lnk", "$UninstallKey", "$file.FullName", "$self", "$launcher", "$PSCommandPath"}
         lines = [ln for ln in self.ps1.split("\n") if "Remove-Item" in ln and not ln.lstrip().startswith("#")]
         self.assertGreater(len(lines), 5)
         for ln in lines:
@@ -273,9 +342,16 @@ class DesinstaladorTextoTests(unittest.TestCase):
             for t in targets:
                 self.assertIn(t, allowed, ln)
             self.assertNotIn("$Root", ln)
-        # lo que se borra de _app: solo extensiones de codigo y tres .txt por nombre exacto
-        code = re.search(r"\$CodeExt = @\(([^)]*)\)", self.ps1).group(1)
-        exts = set(re.findall(r'"(\.[a-z0-9]+)"', code))
+        # carpetas: solo [IO.Directory]::Delete no recursivo (vacias) y AudiosApp con el recursivo (no entra en enlaces)
+        deletes = re.findall(r"\[IO\.Directory\]::Delete\(([^)]*)\)", self.ps1)
+        self.assertEqual(sorted(deletes), sorted(["$dir", "$App", "$Datos, $true"]), deletes)
+        # lo que se borra de _app: por carpeta, solo extensiones de codigo y tres .txt por nombre exacto
+        folders = re.search(r"\$AppFolders = \[ordered\]@\{(.*?)\n\}", self.ps1, re.S).group(1)
+        per_folder = dict(re.findall(r'"([^"]+)"\s*=\s*@\(([^)]*)\)', folders))
+        self.assertEqual(set(per_folder), {".", "static", "export", "__pycache__"})
+        exts = set()
+        for v in per_folder.values():
+            exts |= set(re.findall(r'"(\.[a-z0-9]+)"', v))
         self.assertTrue(exts)
         self.assertFalse(exts & MEETING_EXT, exts & MEETING_EXT)
         txt = re.search(r"\$CodeTxt = @\(([^)]*)\)", self.ps1).group(1)
@@ -284,12 +360,16 @@ class DesinstaladorTextoTests(unittest.TestCase):
         self.assertTrue(all(n.endswith(".bat") for n in re.findall(r'"([^"]+)"', launchers)))
         # $file solo sale de _app y pasa por Test-AppFile; $dir solo son carpetas vacias de _app
         body = function_body(self.ps1, "Remove-AppFolder")
-        self.assertIn("Get-ChildItem -LiteralPath $App -Recurse -File", body)
-        self.assertIn("if (-not (Test-AppFile $file))", body)
-        self.assertIn("Get-ChildItem -LiteralPath $App -Recurse -Directory", body)
+        recorre = r"(Get-ChildItem|Remove-Item)[^\n]*-Recurse"  # 5.1 entra en los enlaces: nada se recorre a ciegas
+        self.assertFalse(re.search(recorre, body))
+        self.assertIn("Get-ChildItem -LiteralPath $dir -File -Force", body)
+        self.assertIn("if (Test-Enlace $d) { $ajenos += $dir; continue }", body)
+        self.assertIn("(-not (Test-Enlace $file))", body)
+        self.assertFalse(re.search(recorre, function_body(self.ps1, "Remove-Datos")))
+        self.assertNotIn("Remove-Item", function_body(self.ps1, "Remove-Datos"))
         self.assertIn("$launcher = Join-Path $Root $n", function_body(self.ps1, "Remove-Launchers"))
         # AudiosApp solo con la casilla / -BorrarDatos, y solo si se llama asi
-        self.assertIn("Remove-Item -LiteralPath $Datos", function_body(self.ps1, "Remove-Datos"))
+        self.assertIn("[IO.Directory]::Delete($Datos, $true)", function_body(self.ps1, "Remove-Datos"))
         self.assertIn('(Split-Path -Leaf $Datos) -ne "AudiosApp"', function_body(self.ps1, "Remove-Datos"))
         inv = function_body(self.ps1, "Invoke-Desinstalar")
         self.assertRegex(inv, r"if \(\$borrarDatos\) \{\s+Say [^\n]+\n\s+Remove-Datos")
@@ -310,6 +390,26 @@ class DesinstaladorTextoTests(unittest.TestCase):
         self.assertLess(gone.index("recorder\\.py"), gone.index("Stop-Process"))
         # sin ventana y sin -Silencioso no se desinstala sin preguntar
         self.assertIn("if (-not $gui) {", self.ps1)
+
+    def test_api_con_token_y_plan_b(self):
+        """Contrato P1-02: si existe AudiosApp\\sesion.token, cada llamada lleva X-Chuleta-Token; un 401/403 es
+        «la API no la ha apagado» (plan B: cerrar su proceso), nunca un exito, y el plan B nunca con una grabadora
+        viva."""
+        for text in (self.ps1, ps_text(INSTALAR)):
+            heads = function_body(text, "Get-ApiHeaders")
+            self.assertIn('sesion.token"', heads)
+            self.assertIn('$h["X-Chuleta-Token"] = $tok', heads)
+            self.assertIn('if ($post) { $h["X-Audios"] = "1" }', heads)
+            self.assertNotIn("Log", heads)  # el token no va a ningun registro
+            self.assertNotIn("Say", heads)
+            self.assertIn("Headers = (Get-ApiHeaders $post)", function_body(text, "Invoke-Api"))
+            self.assertFalse(re.search(r"Invoke-RestMethod\s+\"http", text))  # todas pasan por Invoke-Api
+            self.assertIn("$ping.code -eq 401 -or $ping.code -eq 403", text.replace("$running.code", "$ping.code"))
+        stop = function_body(self.ps1, "Stop-App")
+        self.assertIn('if ($ap.code -eq 200) { return "ok" }', stop)
+        self.assertLess(stop.index("Test-Grabadora"), stop.index("Stop-Process"))
+        self.assertIn("-LocalAddress 127.0.0.1", function_body(self.ps1, "Get-ListenerPid"))
+        self.assertIn("^(pythonw?|py)$", function_body(self.ps1, "Get-ListenerPid"))  # nunca otro programa
 
     def test_la_entrada_y_el_desinstalador_se_quitan_al_final(self):
         """Si algo falla, la entrada de Aplicaciones instaladas y el desinstalador se quedan: se puede reintentar."""
@@ -424,6 +524,31 @@ class DesinstaladorWindowsTests(unittest.TestCase):
         self.assertIn("se queda (no es de la app):", log)
         self.assertIn(f"se ha desinstalado. Tus reuniones siguen en {root}".lower(), log.lower())
         self.assertEqual([n for n in os.listdir(temp) if n.endswith(".ps1")], [])  # la copia de %TEMP% se borra
+
+    def test_no_entra_en_enlaces(self):
+        root, app, datos, temp, local, files, _ = self.make_tree()
+        fuera = os.path.join(os.path.dirname(root), "fuera de la app")
+        os.makedirs(os.path.join(fuera, "sub"))
+        victimas = {}
+        for rel in ("foto.png", "script.py", "sub\\pagina.html", "notas.md"):
+            q = os.path.join(fuera, rel)
+            with open(q, "wb") as f:
+                f.write(b"del usuario")
+            victimas[q] = sha(q)
+        # junction dentro de _app\static y otra en AudiosApp (no hacen falta permisos de administrador)
+        for link in (os.path.join(app, "static", "enlace"), os.path.join(datos, "modelos")):
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", link, fuera], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.run_uninstaller(app, temp, local, "-BorrarDatos")
+        log = self.log(temp)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr + log)
+        for q, h in victimas.items():  # el destino de los enlaces, intacto
+            self.assertTrue(os.path.exists(q), q + "\n" + log)
+            self.assertEqual(sha(q), h, q)
+        for p, h in files.items():
+            self.assertEqual(sha(p), h, p)
+        self.assertFalse(os.path.exists(datos), log)  # AudiosApp borrada (el enlace, no su destino)
+        self.assertIn("se queda (no es de la app):", log)  # el enlace de static se queda y se dice
 
     def test_borrar_datos(self):
         root, app, datos, temp, local, files, _ = self.make_tree()

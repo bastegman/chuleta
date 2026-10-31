@@ -37,10 +37,18 @@ function Save-Summary {
     foreach ($k in $script:checks.Keys) { $o[$k] = $script:checks[$k] }
     ($o | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $Out "resumen.json") -Encoding UTF8
 }
+function Api-Headers($post) {
+    # como el instalador: X-Audios en los POST y X-Chuleta-Token si la app ha escrito AudiosApp\sesion.token
+    $h = @{}
+    if ($post) { $h["X-Audios"] = "1" }
+    $tf = Join-Path $logDir "sesion.token"
+    if (Test-Path -LiteralPath $tf -PathType Leaf) { $tok = [IO.File]::ReadAllText($tf).Trim(); if ($tok) { $h["X-Chuleta-Token"] = $tok } }
+    return $h
+}
 function Wait-Http($url, $seconds) {
     $end = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
-        try { return Invoke-RestMethod $url -TimeoutSec 3 } catch { Start-Sleep -Milliseconds 500 }
+        try { return Invoke-RestMethod $url -Headers (Api-Headers $false) -TimeoutSec 3 } catch { Start-Sleep -Milliseconds 500 }
     }
     return $null
 }
@@ -187,7 +195,7 @@ function Wait-Tree($text, $seconds) {
     $end = (Get-Date).AddSeconds($seconds)
     $json = ""
     while ((Get-Date) -lt $end) {
-        try { $json = Invoke-RestMethod "$Base/api/tree" -TimeoutSec 10 | ConvertTo-Json -Depth 30 -Compress } catch { $json = "" }
+        try { $json = Invoke-RestMethod "$Base/api/tree" -Headers (Api-Headers $false) -TimeoutSec 10 | ConvertTo-Json -Depth 30 -Compress } catch { $json = "" }
         if ($json -match [regex]::Escape($text)) { return $json }
         Start-Sleep -Seconds 1
     }
@@ -369,9 +377,9 @@ Check "e.config_app_name" ($cfg -and $cfg.app_name -eq $App) "$($cfg.app_name)"
 Check "e.root_carpeta_propia" ($cfg -and $cfg.root -ieq $inst) "root=$($cfg.root)"
 Check "e.config_version_del_zip" ($cfg -and $cfg.version -eq $verZip) "$($cfg.version) vs $verZip"
 Check "e.config_acerca" ($cfg -and $cfg.acerca.repo -eq "https://github.com/bastegman/chuleta" -and $cfg.acerca.licencia -eq "MIT" -and $cfg.acerca.datos -ieq $logDir) ("repo=$($cfg.acerca.repo) licencia=$($cfg.acerca.licencia) datos=$($cfg.acerca.datos)")
-try { $diag = Invoke-RestMethod "$Base/api/diagnostico" -TimeoutSec 10 } catch { $diag = $null }
+try { $diag = Invoke-RestMethod "$Base/api/diagnostico" -Headers (Api-Headers $false) -TimeoutSec 10 } catch { $diag = $null }
 Check "e.diagnostico" ($diag -and $diag.texto -match "^$App . versi.n " -and $diag.texto -match "server\.log") $(if ($diag) { ($diag.texto -split "`n" | Select-Object -First 3) -join " | " } else { "sin respuesta" })
-Check "e.server_header" (((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -TimeoutSec 5).Headers["Server"]) -like "$App/*") ((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -TimeoutSec 5).Headers["Server"])
+Check "e.server_header" (((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -Headers (Api-Headers $false) -TimeoutSec 5).Headers["Server"]) -like "$App/*") ((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -Headers (Api-Headers $false) -TimeoutSec 5).Headers["Server"])
 Start-Sleep -Seconds 6  # que la ventana termine de pintar (y una captura mas)
 $lis = @(Get-Listener)
 Check "e.un_servidor" ($lis.Count -eq 1) ("listeners en ${Port}: " + $lis.Count)
@@ -388,7 +396,7 @@ $slog = Tail-Log "server.log" 200
 Check "e.log_aumid" ($slog -match "AppUserModelID Bernardo\.Chuleta: fijado") ""
 Check "e.log_ventana" ($slog -match "ventana abierta \(WebView2") (($slog -split "`n" | Select-String "ventana abierta") -join "")
 # ocultar (como al pulsar la X y «Entendido») y volver a abrir con el acceso directo
-try { $r = Invoke-RestMethod "$Base/api/ocultar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch { $r = $null }
+try { $r = Invoke-RestMethod "$Base/api/ocultar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch { $r = $null }
 Start-Sleep -Seconds 2
 $w2 = Ventana "find"
 Check "e.ocultar" ($r -and $r.ok -eq $true -and $w2.hwnd -and -not $w2.visible) ("ok=$($r.ok) visible=$($w2.visible)")
@@ -405,7 +413,7 @@ $slog = Tail-Log "server.log" 200
 Check "e.log_ya_abierta" ($slog -match "ya estaba abierta") ""
 Start-Sleep -Seconds 5
 # apagar
-try { $r = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch { $r = @{ error = $_.Exception.Message } }
+try { $r = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch { $r = @{ error = $_.Exception.Message } }
 $gone = Wait-Process-Gone $appPid 5
 Check "e.apagar_responde" ($r -and $r.ok -eq $true) ("$($r | ConvertTo-Json -Compress)")
 Check "e.apagar_proceso_muere_5s" $gone "pid $appPid"
@@ -435,6 +443,11 @@ Expand-Archive -LiteralPath $zip -DestinationPath $test2 -Force
 $dir2 = Join-Path $test2 $App
 Set-Content -LiteralPath (Join-Path $inst "LEEME.txt") -Value "VIEJO" -Encoding UTF8  # marca: la actualizacion debe pisarlo
 Set-Content -LiteralPath (Join-Path $inst "_app\version.txt") -Value "2000-01-01 . 0000000" -Encoding UTF8  # version vieja: debe pisarse
+Remove-Item -LiteralPath (Join-Path $inst "LICENSE") -Force  # P2-37: la actualizacion debe volver a ponerla
+# P2-16: marca de Internet (Zone.Identifier, zona 3) en ficheros del zip "descargado" y en la reunion del usuario
+$motw = @("[ZoneTransfer]", "ZoneId=3")
+foreach ($f in @((Join-Path $dir2 "_app\window.py"), (Join-Path $dir2 "LEEME.txt"), $wav)) { Set-Content -LiteralPath $f -Stream Zone.Identifier -Value $motw }
+Check "f.preparada_marca" ((Get-Item -LiteralPath $wav -Stream Zone.Identifier -ErrorAction SilentlyContinue) -and (Get-Item -LiteralPath (Join-Path $dir2 "_app\window.py") -Stream Zone.Identifier -ErrorAction SilentlyContinue)) ""
 $rc2 = Run-Installer $dir2 "f.instalador" 15
 Copy-Logs "f"
 $ilog2 = Last-Run-Log 400
@@ -448,6 +461,9 @@ Check "f.sin_python_txt_en_nueva" (-not (Test-Path -LiteralPath (Join-Path $dir2
 Check "f.window_py_copiado" ((Get-FileHash (Join-Path $inst "_app\window.py")).Hash -eq (Get-FileHash (Join-Path $dir2 "_app\window.py")).Hash) ""
 Check "f.desinstalar_copiado" ((Get-FileHash (Join-Path $inst "_app\desinstalar.ps1")).Hash -eq (Get-FileHash (Join-Path $dir2 "_app\desinstalar.ps1")).Hash) ""
 Check "f.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
+Check "f.licencia_copiada" (Test-Path -LiteralPath (Join-Path $inst "LICENSE")) ""
+Check "f.paquete_sin_marca" (-not (Get-Item -LiteralPath (Join-Path $inst "_app\window.py") -Stream Zone.Identifier -ErrorAction SilentlyContinue) -and -not (Get-Item -LiteralPath (Join-Path $inst "LEEME.txt") -Stream Zone.Identifier -ErrorAction SilentlyContinue)) ""
+Check "f.reunion_conserva_marca" ($null -ne (Get-Item -LiteralPath $wav -Stream Zone.Identifier -ErrorAction SilentlyContinue)) $wav
 $regf = Get-Registro
 Check "f.registro_misma_carpeta" ($regf -and $regf["InstallLocation"].valor -ieq $inst -and $regf["DisplayVersion"].valor -eq $verZip) $(if ($regf) { "$($regf['InstallLocation'].valor) $($regf['DisplayVersion'].valor)" } else { "sin clave" })
 $cfg2 = Wait-Http "$Base/api/config" 90
@@ -459,7 +475,7 @@ Start-Sleep -Seconds 4
 $lisf = @(Get-Listener)
 if ($lisf.Count -ge 1) {
     $pidf = $lisf[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
     Check "f.apagar" (Wait-Process-Gone $pidf 5) "pid $pidf"
 }
 
@@ -503,7 +519,7 @@ Check "fn.titulo" ($wf.hwnd -and $wf.title -eq $App) "$($wf.title) visible=$($wf
 $lisf = @(Get-Listener)
 if ($lisf.Count -ge 1) {
     $pidf = $lisf[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
     Check "fn.apagar" (Wait-Process-Gone $pidf 5) "pid $pidf"
 }
 
@@ -511,10 +527,13 @@ if ($lisf.Count -ge 1) {
 # el antiguo no se toca y se dice en el detalle
 Copy-Item -LiteralPath $desk -Destination $deskLegacy -Force
 Check "f2.preparado_los_dos" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
-$rc22 = Run-Installer $dir2 "f2.instalador" 15
+$rc22 = Run-Installer $inst "f2.instalador" 15  # desde la propia carpeta instalada: se actualiza en su sitio
 Copy-Logs "f2"
 $ilog22 = Last-Run-Log 400
 Check "f2.exitcode_0" ($rc22 -eq 0) $rc22
+Check "f2.en_su_sitio" ($ilog22 -match "Esta carpeta ya estaba instalada") (($ilog22 -split "`n" | Select-String "ya estaba instalada|Encontrada por" | Select-Object -First 1) -join "")
+Check "f2.reunion_conserva_marca" ($null -ne (Get-Item -LiteralPath $wav -Stream Zone.Identifier -ErrorAction SilentlyContinue)) ""
+Check "f2.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
 Check "f2.conserva_notas_lnk" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
 Check "f2.conserva_avisado" ($ilog22 -match "Se conserva el acceso directo antiguo") (($ilog22 -split "`n" | Select-String "Se conserva" | Select-Object -First 1) -join "")
 Check "f2.no_renombra" (-not ($ilog22 -match "pasa a llamarse")) ""
@@ -524,7 +543,7 @@ Check "f2.app_arranca" ($cfg22 -and $cfg22.root -ieq $inst) "root=$($cfg22.root)
 $lisf2 = @(Get-Listener)
 if ($lisf2.Count -ge 1) {
     $pidf2 = $lisf2[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
     Check "f2.apagar" (Wait-Process-Gone $pidf2 5) "pid $pidf2"
 }
 
@@ -655,7 +674,7 @@ Check "u3.reunion_intacta" ($reunion3 -eq $reunion0) $reunion3
 $lish = @(Get-Listener)
 if ($lish.Count -ge 1) {
     Note "h.servidor_restante" (Describe-Listeners)
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
     Note "h.servidor_restante_apagado" (Wait-Process-Gone $lish[0].OwningProcess 5)
 }
 Copy-Logs "h"

@@ -58,9 +58,16 @@ if (-not $Relanzado) {
 }
 
 Log "desinstalando $AppName de $Root (silencioso=$Silencioso borrar_datos=$BorrarDatos pid=$PID)"
-# lo que la app trae en _app y lo que genera alli (__pycache__, python.txt): solo eso se borra. Ninguna extension de
-# reunion (audio, .txt, .srt, .md, .json) esta en la lista; los .txt se borran solo por su nombre exacto
-$CodeExt = @(".py", ".pyc", ".bat", ".ps1", ".css", ".js", ".html", ".svg", ".ico", ".png")
+# lo que la app trae en cada carpeta de _app y lo que genera alli (__pycache__, python.txt): solo eso se borra, carpeta
+# por carpeta y sin recorrer nada a ciegas (Windows PowerShell 5.1 entra en los enlaces al recorrer: otra subcarpeta,
+# un enlace o un fichero de otro tipo se quedan y se dicen). Ninguna extension de reunion (audio, .txt, .srt, .md,
+# .json) esta en las listas; los .txt se borran solo por su nombre exacto
+$AppFolders = [ordered]@{
+    "."           = @(".py", ".ps1", ".bat")
+    "static"      = @(".css", ".js", ".html", ".svg", ".ico", ".png")
+    "export"      = @(".bat")
+    "__pycache__" = @(".pyc")
+}
 $CodeTxt = @("version.txt", "python.txt", "export\LEEME.txt")
 # los .bat de la raiz (sin _app no funcionan); el LEEME.txt y la licencia se quedan junto a las reuniones
 $RootLaunchers = @("INSTALAR.bat", "ABRIR CHULETA.bat", "ABRIR NOTAS.bat")
@@ -107,42 +114,44 @@ function New-UninstallWindow {
         $msg = New-Object System.Windows.Forms.Label
         $msg.Text = "Se quitará la aplicación $AppName de este PC."
         $msg.Location = New-Object System.Drawing.Point(24, 104)
-        $msg.Size = New-Object System.Drawing.Size(592, 24)
+        $msg.AutoSize = $true
+        $msg.MaximumSize = New-Object System.Drawing.Size(592, 0)
         $keep = New-Object System.Windows.Forms.Label
-        $keep.Text = "Tus reuniones, transcripciones y notas en $Root NO se borran."
+        $keep.Text = "Tus reuniones, transcripciones y notas en $Root NO se borran. Las carpetas vinculadas tampoco se tocan."
         $keep.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
         $keep.ForeColor = [System.Drawing.Color]::FromArgb(22, 128, 61)
-        $keep.Location = New-Object System.Drawing.Point(24, 130)
-        $keep.Size = New-Object System.Drawing.Size(592, 44)
+        $keep.AutoSize = $true
+        $keep.MaximumSize = New-Object System.Drawing.Size(592, 0)
         $chk = New-Object System.Windows.Forms.CheckBox
         $chk.Text = "Borrar también mis ajustes, claves y voces guardadas (%LOCALAPPDATA%\AudiosApp)"
-        $chk.Location = New-Object System.Drawing.Point(24, 186)
-        $chk.Size = New-Object System.Drawing.Size(592, 26)
+        $chk.Left = 24
+        $chk.AutoSize = $true
         $chk.Checked = [bool]$BorrarDatos
         $warn = New-Object System.Windows.Forms.Label
         $warn.Text = ("Las huellas de voz son datos biométricos: si las borras, se pierden para siempre y habría que volver a " +
                       "grabarlas con el consentimiento de cada persona. Las API keys habría que escribirlas otra vez, y se pierden " +
-                      "las copias de las transcripciones de antes de editarlas a mano. Desmarcada, todo eso se queda en " +
-                      "este PC y una reinstalación lo vuelve a usar.")
+                      "las copias de las transcripciones de antes de editarlas a mano y la lista de carpetas vinculadas (las " +
+                      "carpetas no se tocan). Desmarcada, todo eso se queda en este PC y una reinstalación lo vuelve a usar.")
         $warn.Font = New-Object System.Drawing.Font("Segoe UI", 9)
         $warn.ForeColor = [System.Drawing.Color]::DimGray
-        $warn.Location = New-Object System.Drawing.Point(42, 214)
-        $warn.Size = New-Object System.Drawing.Size(574, 62)
+        $warn.Left = 42
+        $warn.AutoSize = $true
+        $warn.MaximumSize = New-Object System.Drawing.Size(574, 0)
         $status = New-Object System.Windows.Forms.Label
-        $status.Location = New-Object System.Drawing.Point(24, 280)
-        $status.Size = New-Object System.Drawing.Size(592, 52)
+        $status.Left = 24
+        $status.Size = New-Object System.Drawing.Size(592, 44)
         $status.Text = ""
         $btnOk = New-Object System.Windows.Forms.Button
         $btnOk.Text = "Desinstalar"
-        $btnOk.Location = New-Object System.Drawing.Point(366, 342)
+        $btnOk.Left = 366
         $btnOk.Size = New-Object System.Drawing.Size(130, 34)
         $btnCancel = New-Object System.Windows.Forms.Button
         $btnCancel.Text = "Cancelar"
-        $btnCancel.Location = New-Object System.Drawing.Point(506, 342)
+        $btnCancel.Left = 506
         $btnCancel.Size = New-Object System.Drawing.Size(110, 34)
         $btnFolder = New-Object System.Windows.Forms.Button
         $btnFolder.Text = "Abrir la carpeta"
-        $btnFolder.Location = New-Object System.Drawing.Point(346, 342)
+        $btnFolder.Left = 346
         $btnFolder.Size = New-Object System.Drawing.Size(150, 34)
         $btnFolder.Visible = $false
         $f.Controls.AddRange(@($logo, $title, $sub, $msg, $keep, $chk, $warn, $status, $btnOk, $btnCancel, $btnFolder))
@@ -154,6 +163,7 @@ function New-UninstallWindow {
         $f.Add_FormClosing({ param($s, $e) if ($script:ui.busy) { $e.Cancel = $true } elseif (-not $script:ui.choice) { $script:ui.choice = "cancelar" } })
         $script:ui = @{ form = $f; msg = $msg; keep = $keep; chk = $chk; warn = $warn; status = $status; btnOk = $btnOk
                         btnCancel = $btnCancel; btnFolder = $btnFolder; choice = $null; busy = $false }
+        Layout-Ui
         $f.Show()
         $f.Activate()
         $btnCancel.Focus() | Out-Null  # por defecto, lo que no borra nada
@@ -164,6 +174,20 @@ function New-UninstallWindow {
         $script:ui = $null
         return $false
     }
+}
+function Layout-Ui {
+    # en columna, cada control debajo del anterior visible (las etiquetas crecen con rutas largas)
+    $ui = $script:ui
+    $y = $ui.msg.Bottom + 6
+    foreach ($c in @($ui.keep, $ui.chk, $ui.warn)) {
+        if (-not $c.Visible -and $ui.form.Visible) { continue }
+        if ($c -eq $ui.chk) { $y += 8 }
+        $c.Top = $y
+        $y = $c.Bottom + 2
+    }
+    $ui.status.Top = $y + 10
+    foreach ($b in @($ui.btnOk, $ui.btnCancel, $ui.btnFolder)) { $b.Top = $ui.status.Bottom + 8 }
+    $ui.form.ClientSize = New-Object System.Drawing.Size(640, ($ui.btnCancel.Bottom + 18))
 }
 function Wait-Choice($auto) {
     # espera a que se pulse un boton o se cierre la ventana; con -AutoCerrar (CI), responde $auto a los N segundos
@@ -186,16 +210,53 @@ function Same-Path($a, $b) {
     try { return ([IO.Path]::GetFullPath("$a").TrimEnd('\') -ieq [IO.Path]::GetFullPath("$b").TrimEnd('\')) } catch { return $false }
 }
 function Get-ListenerPid {
+    # el proceso que escucha en 127.0.0.1:<puerto>, solo si es Python (la app); cualquier otro programa no se toca
+    $ids = @()
     try {
-        $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
-            Where-Object { $_.OwningProcess -and (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue) } | Select-Object -First 1
-        if ($c) { return [int]$c.OwningProcess }
-    } catch {}
-    try {
-        $m = netstat -ano -p tcp | Select-String ":$Port\s+\S+\s+LISTENING\s+(\d+)" | Select-Object -First 1
-        if ($m) { $id = [int]$m.Matches[0].Groups[1].Value; if (Get-Process -Id $id -ErrorAction SilentlyContinue) { return $id } }
-    } catch {}
+        $ids = @(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $Port -State Listen -ErrorAction Stop | ForEach-Object { [int]$_.OwningProcess })
+    } catch {
+        try { $ids = @(netstat -ano -p tcp | Select-String "127\.0\.0\.1:$Port\s+\S+\s+LISTENING\s+(\d+)" | ForEach-Object { [int]$_.Matches[0].Groups[1].Value }) } catch {}
+    }
+    foreach ($id in $ids) {
+        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($p -and $p.ProcessName -match '^(pythonw?|py)$') { return $id }
+    }
     return $null
+}
+function Get-ApiHeaders($post) {
+    # X-Audios en los POST y, si la app ha escrito su token de sesion (AudiosApp\sesion.token, versiones con la API
+    # protegida), X-Chuleta-Token. Sin el fichero, como siempre. El token no va a ningun registro
+    $h = @{}
+    if ($post) { $h["X-Audios"] = "1" }
+    try {
+        if ($Datos) {
+            $tf = Join-Path $Datos "sesion.token"
+            if (Test-Path -LiteralPath $tf -PathType Leaf) {
+                $tok = [IO.File]::ReadAllText($tf).Trim()
+                if ($tok) { $h["X-Chuleta-Token"] = $tok }
+            }
+        }
+    } catch {}
+    return $h
+}
+function Invoke-Api($path, $post = $false, $timeout = 2) {
+    # @{ code; body }: 200 si contesta bien, el codigo HTTP si contesta con error (409 grabando, 401/403 sin token
+    # valido...) y 0 si no contesta
+    $a = @{ Uri = "http://127.0.0.1:$Port$path"; TimeoutSec = $timeout; Headers = (Get-ApiHeaders $post) }
+    if ($post) { $a.Method = "Post"; $a.ContentType = "application/json"; $a.Body = "{}" }
+    try { return @{ code = 200; body = (Invoke-RestMethod @a) } }
+    catch {
+        $c = 0
+        try { if ($_.Exception.Response) { $c = [int]$_.Exception.Response.StatusCode } } catch {}
+        return @{ code = $c; body = $null }
+    }
+}
+function Test-Grabadora {
+    # alguna grabadora de Chuleta (recorder.py) en marcha: puede estar grabando una reunion
+    try {
+        return (@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.Name -match '^pythonw?\.exe$' -and "$($_.CommandLine)" -match 'recorder\.py' }).Count -gt 0)
+    } catch { return $true }  # sin poder mirarlo, se supone que si
 }
 function Get-AppProcesses {
     # procesos de esta instalacion: el servidor (si Stop-App vio que era Chuleta) y los que llevan _app o la carpeta de
@@ -215,27 +276,20 @@ function Get-AppProcesses {
 }
 function Stop-App {
     # "no" (no estaba abierta), "ok" (apagada) o "grabando" (no se toca nada)
-    $ping = $null
-    try { $ping = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 2 } catch {}
-    if (-not ($ping -and $ping.app -eq "audios")) { return "no" }
-    $script:appPid = Get-ListenerPid  # es Chuleta: su proceso cuenta para Wait-AppGone
-    $code = 0
-    try {
-        $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5
-        $code = 200
-    } catch {
-        $code = -1
-        try { $code = [int]$_.Exception.Response.StatusCode } catch {}
-    }
-    Log "POST /api/apagar: $code"
-    if ($code -eq 409) { return "grabando" }
-    if ($code -ne 200) {
-        # una version sin /api/apagar: como hace el instalador, se mira si graba y, si no, se cierra su proceso
-        $st = $null
-        try { $st = Invoke-RestMethod "http://127.0.0.1:$Port/api/rec/status" -TimeoutSec 2 } catch {}
-        if ($st -and $st.recording) { return "grabando" }
-        if ($script:appPid) { Log "cierro el proceso $($script:appPid)"; Stop-Process -Id $script:appPid -Force -ErrorAction SilentlyContinue }
-    }
+    $ping = Invoke-Api "/api/ping" $false 2
+    # 401/403: contesta una version con la API protegida y no he podido usar su token: esta abierta igual
+    if (-not (($ping.code -eq 200 -and $ping.body.app -eq "audios") -or $ping.code -eq 401 -or $ping.code -eq 403)) { return "no" }
+    $script:appPid = Get-ListenerPid  # su proceso cuenta para Wait-AppGone
+    $ap = Invoke-Api "/api/apagar" $true 5
+    Log "POST /api/apagar: $($ap.code)"
+    if ($ap.code -eq 409) { return "grabando" }
+    if ($ap.code -eq 200) { return "ok" }
+    # plan B (version sin /api/apagar, sin token valido o sin respuesta): se cierra su proceso, pero nunca si graba o si
+    # hay una grabadora viva
+    $st = Invoke-Api "/api/rec/status" $false 2
+    if ($st.code -eq 200 -and $st.body.recording) { return "grabando" }
+    if (Test-Grabadora) { Log "hay una grabadora (recorder.py) en marcha"; return "grabando" }
+    if ($script:appPid) { Log "cierro el proceso $($script:appPid)"; Stop-Process -Id $script:appPid -Force -ErrorAction SilentlyContinue }
     return "ok"
 }
 function Wait-AppGone {
@@ -289,29 +343,39 @@ function Remove-Registro {
     try { Remove-Item -LiteralPath $UninstallKey -Recurse -Force -ErrorAction Stop; Log "borrada la entrada $UninstallKey" }
     catch { Log "X no se pudo borrar $UninstallKey : $($_.Exception.Message)"; $script:fallos += $UninstallKey }
 }
-function Test-AppFile($file) {
-    $rel = $file.FullName.Substring($App.Length).TrimStart('\')
-    if ($CodeExt -contains $file.Extension.ToLowerInvariant()) { return $true }
-    return ($CodeTxt -contains $rel)
+function Test-Enlace($item) {
+    # junction o enlace simbolico (los ficheros de OneDrive tambien son "reparse points", pero no enlaces)
+    return ($item -and ($item.LinkType -eq "Junction" -or $item.LinkType -eq "SymbolicLink"))
 }
 function Remove-AppFolder {
-    # _app: todo lo de la app menos este desinstalador (lo borra Remove-Desinstalador al final, si nada ha fallado: asi,
-    # si algo falla, "Aplicaciones instaladas" puede volver a lanzarlo)
+    # _app, carpeta por carpeta ($AppFolders): todo lo de la app menos este desinstalador (lo borra Remove-Desinstalador
+    # al final, si nada ha fallado: asi, si algo falla, "Aplicaciones instaladas" puede volver a lanzarlo)
     $self = Join-Path $App "desinstalar.ps1"
     $ajenos = @()
-    foreach ($file in @(Get-ChildItem -LiteralPath $App -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-        if (Same-Path $file.FullName $self) { continue }
-        if (-not (Test-AppFile $file)) { $ajenos += $file.FullName; continue }
-        $ok = $false
-        for ($k = 0; $k -lt 5 -and -not $ok; $k++) {
-            try { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop; $ok = $true } catch { Start-Sleep -Milliseconds 400 }
+    foreach ($sub in @($AppFolders.Keys)) {
+        $dir = $(if ($sub -eq ".") { $App } else { Join-Path $App $sub })
+        $d = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+        if (-not $d) { continue }
+        if (Test-Enlace $d) { $ajenos += $dir; continue }  # un enlace no se recorre
+        foreach ($file in @(Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue)) {
+            if (Same-Path $file.FullName $self) { continue }
+            $rel = $(if ($sub -eq ".") { $file.Name } else { "$sub\$($file.Name)" })
+            $nuestro = (-not (Test-Enlace $file)) -and
+                       (($AppFolders[$sub] -contains $file.Extension.ToLowerInvariant()) -or ($CodeTxt -contains $rel))
+            if (-not $nuestro) { $ajenos += $file.FullName; continue }
+            $ok = $false
+            for ($k = 0; $k -lt 5 -and -not $ok; $k++) {
+                try { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop; $ok = $true } catch { Start-Sleep -Milliseconds 400 }
+            }
+            if (-not $ok) { Log "X no se pudo borrar $($file.FullName)"; $script:fallos += $file.FullName }
         }
-        if (-not $ok) { Log "X no se pudo borrar $($file.FullName)"; $script:fallos += $file.FullName }
+        if ($sub -ne "." -and -not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            try { [IO.Directory]::Delete($dir) } catch { Log "X no se pudo borrar $dir"; $script:fallos += $dir }  # vacia: no recursivo
+        }
     }
-    foreach ($dir in @(Get-ChildItem -LiteralPath $App -Recurse -Directory -Force -ErrorAction SilentlyContinue | Sort-Object { $_.FullName.Length } -Descending)) {
-        if (-not (Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-            try { Remove-Item -LiteralPath $dir.FullName -Force -ErrorAction Stop } catch { Log "X no se pudo borrar $($dir.FullName)"; $script:fallos += $dir.FullName }
-        }
+    # otras carpetas de _app (no las trae la app): se quedan
+    foreach ($e in @(Get-ChildItem -LiteralPath $App -Directory -Force -ErrorAction SilentlyContinue)) {
+        if (@($AppFolders.Keys) -notcontains $e.Name) { $ajenos += $e.FullName }
     }
     foreach ($a in $ajenos) { Log "se queda (no es de la app): $a" }
     $script:ajenos = $ajenos
@@ -321,7 +385,7 @@ function Remove-Desinstalador {
     $self = Join-Path $App "desinstalar.ps1"
     try { Remove-Item -LiteralPath $self -Force -ErrorAction Stop } catch { Log "X no se pudo borrar $self"; $script:fallos += $self; return }
     if (-not (Get-ChildItem -LiteralPath $App -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        try { Remove-Item -LiteralPath $App -Force -ErrorAction Stop; Log "borrada $App" } catch { Log "X no se pudo borrar $App"; $script:fallos += $App }
+        try { [IO.Directory]::Delete($App); Log "borrada $App" } catch { Log "X no se pudo borrar $App"; $script:fallos += $App }
     }
 }
 function Remove-Launchers {
@@ -339,9 +403,13 @@ function Remove-Datos {
     # %LOCALAPPDATA%\AudiosApp: ajustes, API keys (DPAPI), huellas de voz, modelos de voces, registros y la ventana
     if (-not $Datos -or (Split-Path -Leaf $Datos) -ne "AudiosApp") { Log "X carpeta de datos desconocida: $Datos"; return }
     if (-not (Test-Path -LiteralPath $Datos)) { Log "no hay $Datos"; return }
+    # [IO.Directory]::Delete recursivo no entra en enlaces (junction/symlink): borra el enlace, no su destino
+    # (learn.microsoft.com, Directory.Delete(String, Boolean)); el borrado recursivo de PowerShell 5.1 podria entrar
+    $d = Get-Item -LiteralPath $Datos -Force -ErrorAction SilentlyContinue
+    if (Test-Enlace $d) { Log "X $Datos es un enlace: no se borra"; $script:fallos += $Datos; return }
     $ok = $false
     for ($k = 0; $k -lt 5 -and -not $ok; $k++) {
-        try { Remove-Item -LiteralPath $Datos -Recurse -Force -ErrorAction Stop; $ok = $true } catch { Start-Sleep -Milliseconds 600 }
+        try { [IO.Directory]::Delete($Datos, $true); $ok = $true } catch { Start-Sleep -Milliseconds 600 }
     }
     if ($ok) { Log "borrada $Datos" } else { Log "X no se pudo borrar del todo $Datos"; $script:fallos += $Datos }
 }
@@ -445,7 +513,6 @@ Log $final
 if ($gui) {
     $ui = $script:ui
     $ui.msg.Text = $final
-    $ui.msg.Size = New-Object System.Drawing.Size(592, 64)
     $ui.keep.Visible = $false
     $ui.chk.Visible = $false
     $ui.warn.Visible = $false
@@ -458,6 +525,7 @@ if ($gui) {
     $ui.btnCancel.Text = "Cerrar"
     $ui.btnCancel.Enabled = $true
     $ui.choice = $null
+    Layout-Ui
     $ui.btnCancel.Focus() | Out-Null
     $null = Wait-Choice "cerrar"
     if ($ui.form.Visible) { $ui.form.Close() }
