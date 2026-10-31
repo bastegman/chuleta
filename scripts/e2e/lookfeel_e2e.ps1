@@ -36,6 +36,15 @@ function Wait-Http($url, $seconds) {
     return $null
 }
 function Get-Listener { try { Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop } catch { $null } }
+function Describe-Listeners {
+    # quien escucha en el puerto: nombre, pid, hora de arranque y linea de comandos (para entender un servidor inesperado)
+    $out = @()
+    foreach ($c in @(Get-Listener)) {
+        $w = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue
+        $out += "pid=$($c.OwningProcess) " + $(if ($w) { "$($w.Name) desde $($w.CreationDate) :: $($w.CommandLine)" } else { "(sin proceso)" })
+    }
+    return ($out -join " || ")
+}
 function Wait-Process-Gone($procId, $seconds) {
     $end = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
@@ -209,8 +218,9 @@ $w2 = Ventana "find"
 Check "e.ocultar" ($r -and $r.ok -eq $true -and $w2.hwnd -and -not $w2.visible) ("ok=$($r.ok) visible=$($w2.visible)")
 $l = Get-Lnk $desk
 $again = Start-Process -FilePath $l.TargetPath -ArgumentList $l.Arguments -WorkingDirectory $l.WorkingDirectory -PassThru
-$again.WaitForExit(30000) | Out-Null
+$salio = $again.WaitForExit(30000)
 Start-Sleep -Seconds 3
+Check "e.acceso_directo_termina" $salio ("pid " + $again.Id + " exit=" + $(if ($salio) { $again.ExitCode } else { "sigue vivo" }))
 $lis2 = @(Get-Listener)
 $w3 = Ventana "find"
 Check "e.acceso_directo_no_duplica" ($lis2.Count -eq 1 -and $lis2[0].OwningProcess -eq $appPid) ("listeners=" + $lis2.Count + " pid=" + $(if ($lis2.Count) { $lis2[0].OwningProcess } else { "" }))
@@ -267,9 +277,17 @@ Check "g.exitcode_0_en_ventana" ($rc3 -eq 0) $rc3 $false
 Check "g.error_proxy_mostrado" ($ilog3 -match "X No se han podido descargar") (($ilog3 -split "`n" | Select-String "^X " | Select-Object -First 1) -join "") $false
 Check "g.autocierre" ($ilog3 -match "autocierre tras 20") "" $false
 $lisg = @(Get-Listener)
-Check "g.no_lanza_la_app" ($lisg.Count -eq 0) ("listeners=" + $lisg.Count) $false
+Check "g.no_lanza_la_app" ($lisg.Count -eq 0) ("listeners=" + $lisg.Count + " " + (Describe-Listeners)) $false
+Note "g.server_log_cola" ((Tail-Log "server.log" 6) -replace "`n", " | ")
 
-# ---- h) cierre
+# ---- h) cierre: no dejar ningun servidor vivo en el runner
+$lish = @(Get-Listener)
+if ($lish.Count -ge 1) {
+    Note "h.servidor_restante" (Describe-Listeners)
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    Note "h.servidor_restante_apagado" (Wait-Process-Gone $lish[0].OwningProcess 5)
+}
+Copy-Logs "h"
 Set-Content -LiteralPath (Join-Path $capDir "STOP") -Value "stop"
 Start-Sleep -Seconds 6
 Stop-Process -Id $cap.Id -Force -ErrorAction SilentlyContinue
