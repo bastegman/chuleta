@@ -7,16 +7,25 @@
 #      y llevan el AppUserModelID de la app, para que la barra de tareas agrupe y ancle la ventana como algo propio.
 #      Si hay un acceso directo "Notas" (nombre anterior de la app), sirve para encontrar la instalacion anterior y pasa
 #      a llamarse "Chuleta" (se renombra; no se borra nada).
+#   4. Carpeta propia: si no hay instalacion anterior, la app se copia de la carpeta descomprimida (Descargas...) a
+#      %USERPROFILE%\Chuleta (fuera de Descargas y de OneDrive; si esa carpeta ya existe y no es de Chuleta,
+#      "Chuleta (2)"...) y los accesos directos apuntan alli. -Destino <carpeta> elige otra (nueva o vacia).
+#      Si ya estaba instalada (por este orden: la entrada de "Aplicaciones instaladas", el acceso directo
+#      Chuleta/Notas del escritorio o de Inicio, o %USERPROFILE%\Chuleta), se actualiza en su sitio: ahi estan sus
+#      grabaciones, que nunca se mueven.
+#   5. "Aplicaciones instaladas": HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta (sin
+#      administrador) con la version, el icono y la orden de _app\desinstalar.ps1, que quita la app y NO las reuniones.
 # Se puede repetir sin problema. Para probarlo sin tocar nada: -NoShortcut / -NoLaunch, y -Port / -Desktop
-# (otro puerto y otra carpeta de escritorio, como si fuera otro PC). -AppName cambia el nombre visible (el de
-# common.APP_NAME); las carpetas y los .bat no cambian.
+# (otro puerto y otra carpeta de escritorio, como si fuera otro PC: sin -Destino se instala donde esta descomprimido y
+# no se lee ni se escribe la entrada de "Aplicaciones instaladas"). -AppName cambia el nombre visible (el de
+# common.APP_NAME); las carpetas, los .bat y la clave de registro no cambian.
 # Con escritorio abre su propia ventana (WinForms: pasos, barra y detalle) y esconde la consola; -Consola, -NoShortcut o
 # -NoLaunch (pruebas, CI) lo dejan como consola de siempre.
 # Solo para CI: -AutoCerrar N (o la variable NOTAS_INSTALADOR_AUTOCERRAR=N) cierra la ventana sola N segundos despues de
 # terminar, bien o mal; si termino bien, como si se hubiera pulsado "Abrir". NOTAS_INSTALADOR_SIMULAR_FALLO=pip ensaya la
 # pantalla de error sin tocar la red. Ninguna de las dos se usa en un PC normal.
 param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Chuleta",
-      [switch]$Consola, [int]$AutoCerrar = 0)
+      [switch]$Consola, [int]$AutoCerrar = 0, [string]$Destino = "")
 
 $ErrorActionPreference = "Continue"
 if ($AutoCerrar -le 0 -and $env:NOTAS_INSTALADOR_AUTOCERRAR) { try { $AutoCerrar = [int]$env:NOTAS_INSTALADOR_AUTOCERRAR } catch {} }
@@ -44,6 +53,13 @@ $optional = @("sherpa-onnx==2.0.1", "pywin32==312")  # quien habla / calendario 
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
 $AppId = "Bernardo.Chuleta"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
 $LegacyName = "Notas"  # nombre anterior de la app: sus accesos directos se reconocen y pasan a llamarse $AppName
+$FolderName = "Chuleta"  # carpeta propia en el perfil del usuario (no cambia con -AppName, como los .bat)
+$UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta"  # "Aplicaciones instaladas"
+$Publisher = "Bernardo Stegmaier"
+$RepoUrl = "https://github.com/bastegman/chuleta"  # = server.REPO_URL
+# con -NoShortcut (probar sin tocar nada) o -Desktop (otro PC simulado) no se lee ni se escribe nada del sistema:
+# ni la carpeta propia por defecto ni la entrada de "Aplicaciones instaladas"
+$Sistema = -not $NoShortcut -and -not $Desktop
 
 # --- presentacion: consola y, si hay ventana ($script:ui), tambien la ventana. La logica de instalacion no depende de esto.
 $script:ui = $null
@@ -171,8 +187,8 @@ function New-InstallerWindow {
         $bar.Style = "Continuous"
         $bar.Maximum = 100
         $status = New-Object System.Windows.Forms.Label
-        $status.Location = New-Object System.Drawing.Point(24, 474)
-        $status.Size = New-Object System.Drawing.Size(712, 60)
+        $status.Location = New-Object System.Drawing.Point(24, 472)
+        $status.Size = New-Object System.Drawing.Size(712, 72)
         $status.Text = "Preparando..."
         $btnCopy = New-Object System.Windows.Forms.Button
         $btnCopy.Text = "Copiar el detalle"
@@ -194,7 +210,7 @@ function New-InstallerWindow {
         $btnOpen.Add_Click({ $script:ui.abrir = $true; $script:ui.form.Close() })
         $f.Add_FormClosing({ param($s, $e) if (-not $script:ui.done) { $e.Cancel = $true; $script:ui.status.Text = "Espera a que termine la instalación..." } })
         $script:ui = @{ form = $f; steps = $steps; log = $log; bar = $bar; status = $status; btnOpen = $btnOpen; btnClose = $btnClose
-                        btnCopy = $btnCopy; current = $null; n = 0; total = 6; done = $false; abrir = $false
+                        btnCopy = $btnCopy; current = $null; n = 0; total = 7; done = $false; abrir = $false
                         verde = [System.Drawing.Color]::FromArgb(22, 128, 61); rojo = [System.Drawing.Color]::FromArgb(185, 28, 28)
                         azul = [System.Drawing.Color]::FromArgb(37, 99, 235) }
         $f.Show()
@@ -289,6 +305,149 @@ function Find-Python {
     return $null
 }
 
+function Same-Path($a, $b) {
+    # misma carpeta (sin distinguir mayusculas ni la barra final)
+    if (-not $a -or -not $b) { return $false }
+    try { return ([IO.Path]::GetFullPath("$a").TrimEnd('\') -ieq [IO.Path]::GetFullPath("$b").TrimEnd('\')) } catch { return $false }
+}
+
+function Test-Instalacion($dir) {
+    # una carpeta de Chuleta instalada (o descomprimida): <dir>\_app\server.py
+    return [bool]($dir -and (Test-Path -LiteralPath (Join-Path $dir "_app\server.py")))
+}
+
+function Find-Instalacion {
+    # la instalacion que ya hay en este PC: @{ root; app; how } o $null. Por este orden:
+    #   a) la entrada de "Aplicaciones instaladas" (InstallLocation), si sigue teniendo _app\server.py
+    #   b) el acceso directo de la app ("Chuleta.lnk") o el del nombre anterior ("Notas.lnk"), en el escritorio y, si
+    #      alli no hay ninguno, en el menu Inicio
+    #   c) %USERPROFILE%\Chuleta
+    # a) y c) solo sin -NoShortcut ni -Desktop ($Sistema); b) tambien con -Desktop (su escritorio)
+    if ($Sistema) {
+        try {
+            $loc = "$((Get-ItemProperty -LiteralPath $UninstallKey -ErrorAction Stop).InstallLocation)".Trim()
+            if (Test-Instalacion $loc) { return @{ root = $loc; app = (Join-Path $loc "_app"); how = "Aplicaciones instaladas" } }
+        } catch {}
+    }
+    try {
+        $dirs = @($(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }))
+        if (-not $Desktop) { $dirs += [Environment]::GetFolderPath("Programs") }
+        foreach ($dir in $dirs) {
+            foreach ($name in @("$AppName.lnk", "$LegacyName.lnk")) {
+                $lnkPath = Join-Path $dir $name
+                if (-not (Test-Path -LiteralPath $lnkPath)) { continue }
+                $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
+                # el acceso directo apunta a pythonw.exe (desde el 31/10/2026) o a Notas.bat: la carpeta de la app es
+                # WorkingDirectory en los dos casos (y la del destino, en los antiguos)
+                $oldApp = $sc.WorkingDirectory
+                if (-not $oldApp -or -not (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) { $oldApp = Split-Path -Parent $sc.TargetPath }
+                if ($oldApp -and (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) {
+                    $oldApp = (Resolve-Path -LiteralPath $oldApp).Path
+                    return @{ root = (Split-Path -Parent $oldApp); app = $oldApp; how = "acceso directo $name ($dir)" }
+                }
+            }
+        }
+    } catch {}
+    if ($Sistema) {
+        $own = Join-Path $script:UserHome $FolderName
+        if (Test-Instalacion $own) { return @{ root = $own; app = (Join-Path $own "_app"); how = "carpeta $own" } }
+    }
+    return $null
+}
+
+function Test-CarpetaLibre($dir) {
+    # vale como carpeta nueva: no existe, esta vacia, ya es de Chuleta (con _app) o lo fue (el desinstalador deja el
+    # LEEME.txt junto a las reuniones: al reinstalar se vuelve a la misma carpeta y se ven otra vez)
+    if (-not (Test-Path -LiteralPath $dir)) { return $true }
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $false }
+    if (-not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) { return $true }
+    if (Test-Instalacion $dir) { return $true }
+    $l1 = "$(Get-Content -LiteralPath (Join-Path $dir 'LEEME.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)"
+    return ($l1.TrimStart([char]0xFEFF) -like "$($FolderName.ToUpper()) *")
+}
+
+function Get-CarpetaNueva {
+    # %USERPROFILE%\Chuleta o, si esa ya tiene otras cosas, "Chuleta (2)", "Chuleta (3)"... ($null si ninguna vale)
+    for ($i = 1; $i -le 20; $i++) {
+        $dir = Join-Path $script:UserHome $(if ($i -eq 1) { $FolderName } else { "$FolderName ($i)" })
+        if (Test-CarpetaLibre $dir) { return $dir }
+    }
+    return $null
+}
+
+function Copy-AppFiles($fromApp, $fromRoot, $toApp, $toRoot) {
+    # copia la app de la carpeta descomprimida a la de destino (nueva o la instalacion anterior): el codigo de _app,
+    # static y export, la version, el manual, la licencia y los .bat de la raiz; las listas de vocabulario que traiga el
+    # paquete, sin pisar las que ya haya. Las grabaciones de la carpeta de destino no se tocan.
+    New-Item -ItemType Directory -Force $toApp | Out-Null
+    Get-ChildItem -LiteralPath $fromApp -File | Where-Object { $_.Extension -in ".py", ".bat", ".ps1" } |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $toApp -Force }
+    foreach ($sub in @("static", "export")) {  # export: plantillas del instalador (para "Compartir $AppName")
+        New-Item -ItemType Directory -Force (Join-Path $toApp $sub) | Out-Null
+        Get-ChildItem -LiteralPath (Join-Path $fromApp $sub) -File -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $toApp $sub) -Force }
+    }
+    # la version del paquete (la ensena Ajustes > Acerca de), el manual y los .bat de la raiz tambien se renuevan
+    if (Test-Path -LiteralPath (Join-Path $fromApp "version.txt")) { Copy-Item -LiteralPath (Join-Path $fromApp "version.txt") -Destination $toApp -Force }
+    foreach ($n in @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat")) {
+        if (Test-Path -LiteralPath (Join-Path $fromRoot $n)) {
+            Copy-Item -LiteralPath (Join-Path $fromRoot $n) -Destination (Join-Path $toRoot $n) -Force
+        }
+    }
+    # listas de vocabulario que traiga el paquete, sin pisar las que ya tengas
+    Get-ChildItem -LiteralPath $fromRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq "Vocabulario" -and $_.FullName -notlike "$fromApp*" } | ForEach-Object {
+            $dst = Join-Path $toRoot $_.FullName.Substring($fromRoot.Length).TrimStart('\')
+            New-Item -ItemType Directory -Force $dst | Out-Null
+            Get-ChildItem -LiteralPath $_.FullName -File | ForEach-Object {
+                $to = Join-Path $dst $_.Name
+                if (-not (Test-Path -LiteralPath $to)) { Copy-Item -LiteralPath $_.FullName -Destination $to }
+            }
+        }
+    Get-ChildItem -LiteralPath $toApp -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+}
+
+function Read-AppVersion($appDir, $rootDir) {
+    # la version instalada: _app/version.txt (la escribe scripts/build_zip.py: fecha del commit · sha) o, si no, el LEEME
+    $app = $appDir
+    $ver = ""
+    try { $ver = "$(Get-Content -LiteralPath (Join-Path $app 'version.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)".Trim() } catch {}
+    if (-not $ver) {
+        $l1 = "$(Get-Content -LiteralPath (Join-Path $rootDir 'LEEME.txt') -TotalCount 1 -ErrorAction SilentlyContinue)"
+        if ($l1 -match '\(versi[^ )]*\s*(?:del\s+)?([^)]+)\)') { $ver = $Matches[1].Trim() }
+    }
+    return $ver
+}
+
+function Register-App($appDir, $rootDir, $version) {
+    # entrada de "Aplicaciones instaladas" (Configuracion > Aplicaciones y el Panel de control) para este usuario:
+    # HKCU, sin administrador. Nombres de los valores: los de la clave Uninstall de Windows (learn.microsoft.com,
+    # "Uninstall Registry Key"); EstimatedSize en KB (ARPSIZE). Si una politica lo impide, la app funciona igual.
+    try {
+        if (-not (Test-Path -LiteralPath $UninstallKey)) { New-Item -Path $UninstallKey -ErrorAction Stop | Out-Null }
+        if (-not $version) { $version = Get-Date -Format "yyyy-MM-dd" }
+        $bytes = (Get-ChildItem -LiteralPath $appDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $kb = [int][Math]::Ceiling([double]$bytes / 1024)
+        $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $appDir "desinstalar.ps1") + '"'
+        $values = [ordered]@{
+            DisplayName = @($AppName, "String"); DisplayVersion = @($version, "String"); Publisher = @($Publisher, "String")
+            DisplayIcon = @((Join-Path $appDir "static\chuleta.ico"), "String"); InstallLocation = @($rootDir, "String")
+            InstallDate = @((Get-Date -Format "yyyyMMdd"), "String"); EstimatedSize = @($kb, "DWord")
+            NoModify = @(1, "DWord"); NoRepair = @(1, "DWord"); URLInfoAbout = @($RepoUrl, "String")
+            UninstallString = @($cmd, "String"); QuietUninstallString = @("$cmd -Silencioso", "String")
+        }
+        foreach ($n in $values.Keys) {
+            New-ItemProperty -LiteralPath $UninstallKey -Name $n -Value $values[$n][0] -PropertyType $values[$n][1] -Force -ErrorAction Stop | Out-Null
+        }
+        Say "    $AppName $version, en Aplicaciones instaladas (para quitarla: Configuración > Aplicaciones > $AppName > Desinstalar)" Green
+        return $true
+    } catch {
+        Say "    No se ha podido añadir a Aplicaciones instaladas ($($_.Exception.Message)): la app funciona igual; para quitarla, _app\desinstalar.ps1." Yellow
+        return $false
+    }
+}
+
+$script:UserHome = $(if ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath("UserProfile") })
 $Gui = $false
 if (-not ($Consola -or $NoShortcut -or $NoLaunch) -and [Environment]::UserInteractive) { $Gui = New-InstallerWindow }
 Log-File ("modo: " + $(if ($Gui) { "ventana" } else { "consola" }) + " · AutoCerrar=$AutoCerrar · PowerShell $($PSVersionTable.PSVersion)")
@@ -342,63 +501,46 @@ if ($running -and $running.app -eq "audios") {
     Say "    No estaba abierta"
 }
 
-# --- si ya estaba instalado en otra carpeta (p. ej. el zip nuevo se ha descomprimido en Descargas),
-# se actualiza aquella: ahi estan sus grabaciones, y el acceso directo ya apunta a ella
-if (-not $NoShortcut -or $Desktop) {
-    $old = $null
-    try {
-        # el acceso directo de la app ("Chuleta.lnk") o el del nombre anterior ("Notas.lnk"), en el escritorio y, si
-        # alli no hay ninguno, en el menu Inicio
-        $dirs = @($(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }))
-        if (-not $Desktop) { $dirs += [Environment]::GetFolderPath("Programs") }
-        foreach ($dir in $dirs) {
-            foreach ($name in @("$AppName.lnk", "$LegacyName.lnk")) {
-                $lnkPath = Join-Path $dir $name
-                if (-not (Test-Path -LiteralPath $lnkPath)) { continue }
-                $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
-                # el acceso directo apunta a pythonw.exe (desde el 31/10/2026) o a Notas.bat: la carpeta de la app es
-                # WorkingDirectory en los dos casos (y la del destino, en los antiguos)
-                $oldApp = $sc.WorkingDirectory
-                if (-not $oldApp -or -not (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) { $oldApp = Split-Path -Parent $sc.TargetPath }
-                if ($oldApp -and (Test-Path -LiteralPath (Join-Path $oldApp "server.py")) -and
-                    ((Resolve-Path -LiteralPath $oldApp).Path -ne (Resolve-Path -LiteralPath $app).Path)) { $old = $oldApp; break }
-            }
-            if ($old) { break }
+# --- donde queda la app: si ya estaba instalada en otra carpeta (p. ej. el zip nuevo se ha descomprimido en Descargas),
+# se actualiza aquella: ahi estan sus grabaciones, y el acceso directo ya apunta a ella. Si no, se copia a su carpeta
+# propia (%USERPROFILE%\Chuleta, o -Destino) y la descomprimida deja de hacer falta.
+$origen = $null  # la carpeta descomprimida, si la app ha quedado en otra
+$prev = $null
+if (-not $NoShortcut -or $Desktop) { $prev = Find-Instalacion }
+if ($prev -and -not (Same-Path $prev.root $root)) {
+    $old, $oldRoot = $prev.app, $prev.root
+    if ($Destino -and -not (Same-Path $Destino $oldRoot)) { Say "    -Destino no se usa: ya está instalada en $oldRoot (para cambiarla de carpeta, desinstálala antes; tus reuniones no se borran)." Yellow }
+    Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..."
+    Say "    Encontrada por: $($prev.how)"
+    Copy-AppFiles $app $root $old $oldRoot
+    # lo que queda del nombre anterior no se borra (sigue funcionando), solo se dice
+    $sobrantes = @("ABRIR NOTAS.bat", "_app\Notas.bat") | Where-Object { Test-Path -LiteralPath (Join-Path $oldRoot $_) }
+    if ($sobrantes) { Say "    De la versión anterior quedan $($sobrantes -join ' y ') en $oldRoot : ya no hacen falta (puedes borrarlos)." }
+    Say "    Actualizada. La carpeta que acabas de descomprimir ya no hace falta: puedes borrarla." Green
+    $origen = $root
+    $app, $root = $old, $oldRoot
+} elseif ($prev) {
+    Say "    Instalada en esta misma carpeta (encontrada por: $($prev.how)): se actualiza en su sitio"
+} elseif (Test-Path -LiteralPath (Join-Path $app "python.txt")) {
+    # python.txt lo escribe este instalador: esta carpeta ya se instalo antes (quiza con sus grabaciones) y se queda
+    Say "    Esta carpeta ya estaba instalada: se actualiza en su sitio"
+} else {
+    $dest = $null
+    if ($Destino) {
+        $dest = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Destino)
+        if (-not (Same-Path $dest $root) -and -not (Test-CarpetaLibre $dest)) {
+            Fail "La carpeta $dest ya tiene otras cosas: elige con -Destino una carpeta nueva o vacía."
         }
-    } catch {}
-    if ($old) {
-        $oldRoot = Split-Path -Parent $old
-        Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..."
-        Get-ChildItem -LiteralPath $app -File | Where-Object { $_.Extension -in ".py", ".bat", ".ps1" } |
-            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $old -Force }
-        foreach ($sub in @("static", "export")) {  # export: plantillas del instalador (para "Compartir $AppName")
-            New-Item -ItemType Directory -Force (Join-Path $old $sub) | Out-Null
-            Get-ChildItem -LiteralPath (Join-Path $app $sub) -File -ErrorAction SilentlyContinue |
-                ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $old $sub) -Force }
-        }
-        # la version del paquete (la ensena Ajustes > Acerca de), el manual y los .bat de la raiz tambien se renuevan
-        if (Test-Path -LiteralPath (Join-Path $app "version.txt")) { Copy-Item -LiteralPath (Join-Path $app "version.txt") -Destination $old -Force }
-        foreach ($n in @("LEEME.txt", "INSTALAR.bat", "ABRIR CHULETA.bat")) {
-            if (Test-Path -LiteralPath (Join-Path $root $n)) {
-                Copy-Item -LiteralPath (Join-Path $root $n) -Destination (Join-Path $oldRoot $n) -Force
-            }
-        }
-        # lo que queda del nombre anterior no se borra (sigue funcionando), solo se dice
-        $sobrantes = @("ABRIR NOTAS.bat", "_app\Notas.bat") | Where-Object { Test-Path -LiteralPath (Join-Path $oldRoot $_) }
-        if ($sobrantes) { Say "    De la versión anterior quedan $($sobrantes -join ' y ') en $oldRoot : ya no hacen falta (puedes borrarlos)." }
-        # listas de vocabulario que traiga el paquete, sin pisar las que ya tengas
-        Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq "Vocabulario" -and $_.FullName -notlike "$app*" } | ForEach-Object {
-                $dst = Join-Path $oldRoot $_.FullName.Substring($root.Length).TrimStart('\')
-                New-Item -ItemType Directory -Force $dst | Out-Null
-                Get-ChildItem -LiteralPath $_.FullName -File | ForEach-Object {
-                    $to = Join-Path $dst $_.Name
-                    if (-not (Test-Path -LiteralPath $to)) { Copy-Item -LiteralPath $_.FullName -Destination $to }
-                }
-            }
-        Get-ChildItem -LiteralPath $old -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
-        Say "    Actualizada. La carpeta que acabas de descomprimir ya no hace falta: puedes borrarla." Green
-        $app, $root = $old, $oldRoot
+    } elseif ($Sistema) {
+        $dest = Get-CarpetaNueva
+        if (-not $dest) { Say "    No encuentro una carpeta libre en $script:UserHome : se instala aquí ($root)." Yellow }
+    }
+    if ($dest -and -not (Same-Path $dest $root)) {
+        Step "Instalando en $dest..."
+        Copy-AppFiles $app $root (Join-Path $dest "_app") $dest
+        Say "    Copiada desde $root" Green
+        $origen = $root
+        $app, $root = (Join-Path $dest "_app"), $dest
     }
 }
 
@@ -522,22 +664,25 @@ if (-not $NoShortcut) {
     }
 }
 
-Write-Host ""
-# la version instalada: _app/version.txt (la escribe scripts/build_zip.py: fecha del commit · sha) o, si no, el LEEME
-$ver = ""
-try { $ver = "$(Get-Content -LiteralPath (Join-Path $app 'version.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)".Trim() } catch {}
-if (-not $ver) {
-    $l1 = "$(Get-Content -LiteralPath (Join-Path $root 'LEEME.txt') -TotalCount 1 -ErrorAction SilentlyContinue)"
-    if ($l1 -match '\(versi[^ )]*\s*(?:del\s+)?([^)]+)\)') { $ver = $Matches[1].Trim() }
+$verRaw = Read-AppVersion $app $root
+if ($Sistema) {
+    Step "Añadiendo $AppName a Aplicaciones instaladas..."
+    $null = Register-App $app $root $verRaw
 }
+
+Write-Host ""
+$ver = $verRaw
 $ver = if ($ver) { " (versión $ver)" } else { "" }
 Say "  Listo$ver." Green
+Say "  Instalada en $root" Green
+if ($origen) { Say "  La carpeta que descomprimiste ($origen) ya no hace falta: puedes borrarla." Green }
 Say "  Si es la primera vez: Ajustes (rueda dentada) > Transcripción en la nube > tu API key (Groq u otro proveedor)." Green
 Say "  Para apagar $AppName del todo: Ajustes > Apagar $AppName (cerrar la ventana la deja en segundo plano)." Green
 Say "  Instrucciones completas en LEEME.txt" Green
 $abrir = -not $NoLaunch
 if ($Gui) {
-    Finish-Ui $true "Listo$ver. Si es la primera vez: Ajustes > Transcripción en la nube > tu API key. Para apagar $AppName del todo: Ajustes > Apagar $AppName."
+    $borrable = if ($origen) { " La carpeta descomprimida ya se puede borrar." } else { "" }
+    Finish-Ui $true "Listo$ver. Instalada en $root.$borrable Si es la primera vez: Ajustes > Transcripción en la nube > tu API key. Para apagar $AppName del todo: Ajustes > Apagar $AppName."
     $abrir = $script:ui.abrir
 }
 if ($abrir) {

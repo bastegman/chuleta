@@ -1,14 +1,17 @@
 name: lookfeel-e2e
 
-# E2E real en Windows (rama renombrado-chuleta): zip -> INSTALAR.bat en modo ventana (PowerShell 5.1, como en el PC
-# del usuario) -> la app abre su ventana con el titulo «Chuleta» -> acceso directo -> Apagar -> segunda instalacion
-# sobre una copia con el acceso directo antiguo «Notas» (lo detecta, actualiza y renombra) -> tercera con los dos
-# accesos directos (conserva el antiguo) -> instalacion que falla a proposito. Capturas de pantalla cada 5 s. Solo lee
+# E2E real en Windows (ramas renombrado-chuleta e instalacion-empresa): zip -> INSTALAR.bat en modo ventana
+# (PowerShell 5.1, como en el PC del usuario) -> se instala en %USERPROFILE%\Chuleta con su entrada de «Aplicaciones
+# instaladas» -> la app abre su ventana con el titulo «Chuleta» -> acceso directo -> Apagar -> reunion falsa ->
+# segunda instalacion (la encuentra por «Aplicaciones instaladas») -> tercera sin esa entrada y con el acceso directo
+# antiguo «Notas» (lo detecta, actualiza y renombra) -> cuarta con los dos accesos directos -> instalacion que falla a
+# proposito -> desinstalador: cancelado, con la app grabando, -Silencioso con la app abierta y, tras reinstalar, con
+# «Borrar tambien mis ajustes». La reunion se compara por sha256 en cada fase. Capturas de pantalla cada 5 s. Solo lee
 # el repo; deja todo como artefacto.
 on:
   workflow_dispatch:
   push:
-    branches: [renombrado-chuleta]
+    branches: [renombrado-chuleta, instalacion-empresa]
 
 permissions:
   contents: read

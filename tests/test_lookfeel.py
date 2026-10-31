@@ -462,7 +462,7 @@ class InstaladorTests(unittest.TestCase):
                   'Rename-Item -LiteralPath $legacy -NewName "$AppName.lnk"',
                   "Se conserva el acceso directo antiguo '$LegacyName'", "pasa a llamarse '$AppName'",
                   '-like "*$LegacyName.bat*"', '@("ABRIR NOTAS.bat", "_app\\Notas.bat")', "ya no hacen falta",
-                  '(Join-Path $app "version.txt")', '"ABRIR CHULETA.bat"'):
+                  '(Join-Path $fromApp "version.txt")', '"ABRIR CHULETA.bat"'):
             self.assertIn(s, ps1, s)
         self.assertNotIn("Remove-Item", ps1)  # el instalador no borra nada del usuario
         self.assertNotIn("NotasLnk", ps1)
