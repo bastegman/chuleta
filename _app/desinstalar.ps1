@@ -239,19 +239,27 @@ function Stop-App {
     return "ok"
 }
 function Wait-AppGone {
-    # hasta 15 s a que terminen solos (los hijos mueren al quedarse sin padre); los que queden se cierran
+    # "ok", "grabando" o "procesos". Hasta 15 s a que terminen solos (los hijos mueren al quedarse sin padre); los que
+    # queden se cierran, salvo la grabadora (recorder.py): si sigue viva (la app no contesta, u otro puerto) puede estar
+    # grabando una reunion y no se toca nada
     $end = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $end) {
         $left = @(Get-AppProcesses)
-        if ($left.Count -eq 0) { return $true }
+        if ($left.Count -eq 0) { return "ok" }
         Start-Sleep -Milliseconds 400
     }
-    foreach ($p in @(Get-AppProcesses)) {
+    $left = @(Get-AppProcesses)
+    if (@($left | Where-Object { "$($_.CommandLine)" -match 'recorder\.py' }).Count -gt 0) {
+        Log "sigue viva la grabadora (recorder.py): no se toca nada"
+        return "grabando"
+    }
+    foreach ($p in $left) {
         Log "cierro $($p.Name) $($p.ProcessId)"
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 1
-    return (@(Get-AppProcesses).Count -eq 0)
+    if (@(Get-AppProcesses).Count -eq 0) { return "ok" }
+    return "procesos"
 }
 function Remove-Shortcuts {
     # Chuleta.lnk (y Notas.lnk, el nombre anterior) en el escritorio y en Inicio, solo si apuntan a esta instalacion:
@@ -287,7 +295,7 @@ function Test-AppFile($file) {
     return ($CodeTxt -contains $rel)
 }
 function Remove-AppFolder {
-    # _app: primero todo lo de la app menos este desinstalador; si nada ha fallado, el desinstalador y la carpeta (asi,
+    # _app: todo lo de la app menos este desinstalador (lo borra Remove-Desinstalador al final, si nada ha fallado: asi,
     # si algo falla, "Aplicaciones instaladas" puede volver a lanzarlo)
     $self = Join-Path $App "desinstalar.ps1"
     $ajenos = @()
@@ -307,7 +315,10 @@ function Remove-AppFolder {
     }
     foreach ($a in $ajenos) { Log "se queda (no es de la app): $a" }
     $script:ajenos = $ajenos
-    if ($script:fallos.Count -gt 0) { return }
+}
+function Remove-Desinstalador {
+    # lo ultimo, y solo si todo lo demas ha ido bien: este desinstalador y _app (si ha quedado vacia)
+    $self = Join-Path $App "desinstalar.ps1"
     try { Remove-Item -LiteralPath $self -Force -ErrorAction Stop } catch { Log "X no se pudo borrar $self"; $script:fallos += $self; return }
     if (-not (Get-ChildItem -LiteralPath $App -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
         try { Remove-Item -LiteralPath $App -Force -ErrorAction Stop; Log "borrada $App" } catch { Log "X no se pudo borrar $App"; $script:fallos += $App }
@@ -344,18 +355,24 @@ function Invoke-Desinstalar($borrarDatos) {
         Log "la app esta grabando: no se toca nada"
         return "grabando"
     }
-    if (-not (Wait-AppGone)) { Log "X sigue algun proceso de la app"; $script:fallos += "procesos" ; return "procesos" }
+    $w = Wait-AppGone
+    if ($w -ne "ok") { Log "X sigue algun proceso de la app ($w): no se toca nada"; return $w }
     Say "Quitando los accesos directos..."
     $null = Remove-Shortcuts
-    Say "Quitando $AppName de Aplicaciones instaladas..."
-    Remove-Registro
-    Say "Borrando la aplicación ($App)..."
-    Remove-AppFolder
-    Remove-Launchers
     if ($borrarDatos) {
         Say "Borrando ajustes, claves y voces ($Datos)..."
         Remove-Datos
     }
+    Say "Borrando la aplicación ($App)..."
+    Remove-AppFolder
+    Remove-Launchers
+    # la entrada de "Aplicaciones instaladas" y el desinstalador, lo ultimo: si algo ha fallado se quedan y se puede
+    # volver a desinstalar desde alli
+    if ($script:fallos.Count -gt 0) { return "incompleta" }
+    Say "Quitando $AppName de Aplicaciones instaladas..."
+    Remove-Registro
+    if ($script:fallos.Count -gt 0) { return "incompleta" }
+    Remove-Desinstalador
     if ($script:fallos.Count -gt 0) { return "incompleta" }
     return "ok"
 }
@@ -373,7 +390,14 @@ if ((Split-Path -Leaf $App) -ne "_app" -or -not (Test-Path -LiteralPath (Join-Pa
 }
 
 $gui = $false
-if (-not $Silencioso) { $gui = New-UninstallWindow }
+if (-not $Silencioso) {
+    $gui = New-UninstallWindow
+    if (-not $gui) {
+        # sin ventana no se puede preguntar (PowerShell restringido por la empresa, sin escritorio...): no se toca nada
+        Log "X no se ha podido abrir la ventana: no se ha tocado nada (sin preguntar no se desinstala; -Silencioso desde una consola)"
+        exit 1
+    }
+}
 $borrar = [bool]$BorrarDatos
 $resultado = $null
 if ($gui) {
@@ -412,6 +436,8 @@ if ($resultado -eq "ok") {
     if ($script:ajenos.Count -gt 0) { $final += " (en _app quedan $($script:ajenos.Count) archivos que no son de la app)" }
 } elseif ($resultado -eq "grabando") {
     $final = "$AppName está grabando ahora mismo: para la grabación y vuelve a desinstalar. No se ha tocado nada."
+} elseif ($resultado -eq "procesos") {
+    $final = "No he podido cerrar ${AppName}: apágala (Ajustes > Apagar $AppName) y vuelve a desinstalar. No se ha tocado nada."
 } else {
     $final = "La desinstalación no ha terminado: no se ha podido quitar $($script:fallos -join ', '). Tus reuniones siguen en $Root. Cierra $AppName y vuelve a desinstalar (detalle en $script:logFile)."
 }

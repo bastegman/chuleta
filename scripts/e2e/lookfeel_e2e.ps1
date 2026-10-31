@@ -182,6 +182,17 @@ function Get-Reunion {
     }
     return (($o.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ";")
 }
+function Wait-Tree($text, $seconds) {
+    # el arbol de la app (/api/tree) en JSON en cuanto contiene $text (la biblioteca se lee en segundo plano al arrancar)
+    $end = (Get-Date).AddSeconds($seconds)
+    $json = ""
+    while ((Get-Date) -lt $end) {
+        try { $json = Invoke-RestMethod "$Base/api/tree" -TimeoutSec 10 | ConvertTo-Json -Depth 30 -Compress } catch { $json = "" }
+        if ($json -match [regex]::Escape($text)) { return $json }
+        Start-Sleep -Seconds 1
+    }
+    return $json
+}
 function Wait-Window($title, $seconds) {
     $end = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
@@ -327,8 +338,11 @@ if ($reg) {
     Check "d.registro.EstimatedSize" ($es -and $es.tipo -eq "DWord" -and [int]$es.valor -gt 100 -and [int]$es.valor -le $kbApp) $(if ($es) { "[$($es.tipo)] $($es.valor) KB (ahora _app ocupa $kbApp KB)" } else { "no existe" })
 }
 # lo que ve Windows: el proveedor "Programs" de PackageManagement lee las mismas claves Uninstall que el Panel de control
-try { $pk = @(Get-Package -Name $App -ProviderName Programs -ErrorAction Stop) } catch { $pk = @(); Note "d.get_package_error" $_.Exception.Message }
-Note "d.get_package" (($pk | ForEach-Object { "$($_.Name) $($_.Version)" }) -join "; ")
+# (en un job con tope de 90 s: si PackageManagement pidiera algo, no cuelga el E2E)
+$jp = Start-Job -ScriptBlock { param($n) Get-Package -Name $n -ProviderName Programs -ErrorAction Stop | ForEach-Object { "$($_.Name) $($_.Version) [$($_.ProviderName)]" } } -ArgumentList $App
+if (Wait-Job $jp -Timeout 90) { $pk = @(Receive-Job $jp -ErrorAction SilentlyContinue 2>&1) } else { $pk = @("sin respuesta en 90 s"); Stop-Job $jp }
+Remove-Job $jp -Force -ErrorAction SilentlyContinue
+Note "d.get_package" (($pk | ForEach-Object { "$_" }) -join "; ")
 # y como lo ve una persona: Panel de control > Programas y caracteristicas, y Configuracion > Aplicaciones instaladas
 try {
     Start-Process -FilePath "control.exe" -ArgumentList "appwiz.cpl" | Out-Null
@@ -439,7 +453,7 @@ Check "f.registro_misma_carpeta" ($regf -and $regf["InstallLocation"].valor -ieq
 $cfg2 = Wait-Http "$Base/api/config" 90
 Check "f.app_arranca_desde_la_instalada" ($cfg2 -and $cfg2.root -ieq $inst) "root=$($cfg2.root)"
 Check "f.app_version_nueva" ($cfg2 -and $cfg2.version -eq $verZip) "$($cfg2.version)"
-try { $tree = Invoke-RestMethod "$Base/api/tree" -TimeoutSec 10 | ConvertTo-Json -Depth 12 -Compress } catch { $tree = "" }
+$tree = Wait-Tree "Reunion de prueba" 40
 Check "f.app_ve_la_reunion" ($tree -match "Proyecto Alfa" -and $tree -match "Reunion de prueba") $(if ($tree) { "$($tree.Length) caracteres" } else { "sin respuesta" })
 Start-Sleep -Seconds 4
 $lisf = @(Get-Listener)
@@ -610,7 +624,7 @@ Check "u3.exitcode_0" ($rc3i -eq 0) $rc3i
 Check "u3.misma_carpeta" ($ilog3i -match ("Instalando en " + [regex]::Escape($inst) + "\.\.\.") -and -not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "$App (2)"))) (($ilog3i -split "`n" | Select-String "Instalando en" | Select-Object -First 1) -join "")
 Check "u3.registro" (Test-Path -LiteralPath $UninstallKey) ""
 $cfg3 = Wait-Http "$Base/api/config" 90
-try { $tree = Invoke-RestMethod "$Base/api/tree" -TimeoutSec 10 | ConvertTo-Json -Depth 12 -Compress } catch { $tree = "" }
+$tree = Wait-Tree "Reunion de prueba" 40
 Check "u3.app_ve_la_reunion" ($cfg3 -and $cfg3.root -ieq $inst -and $tree -match "Reunion de prueba") "root=$($cfg3.root)"
 Check "u3.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
 Start-Sleep -Seconds 4

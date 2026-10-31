@@ -85,14 +85,16 @@ class FicherosTests(unittest.TestCase):
 
     @unittest.skipUnless(powershell(), "sin PowerShell (CHULETA_PWSH, powershell.exe o pwsh)")
     def test_parsean_sin_errores(self):
-        script = ("$n = 0; foreach ($f in $args) { $t = $null; $e = $null; "
+        files = [INSTALAR, DESINSTALAR, os.path.join(REPO, "scripts", "e2e", "lookfeel_e2e.ps1")]
+        # las rutas van dentro del texto de -Command (lo que sigue a -Command se concatena: $args llegaria vacio)
+        lista = ", ".join("'" + f.replace("'", "''") + "'" for f in files)
+        script = ("$n = 0; $k = 0; foreach ($f in @(" + lista + ")) { $k++; $t = $null; $e = $null; "
                   "$null = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$t, [ref]$e); "
                   "foreach ($x in $e) { Write-Output ($f + ':' + $x.Extent.StartLineNumber + ': ' + $x.Message) }; "
-                  "$n += $e.Count }; Write-Output \"errores=$n\"")
-        files = [INSTALAR, DESINSTALAR, os.path.join(REPO, "scripts", "e2e", "lookfeel_e2e.ps1")]
-        r = subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script, *files],
+                  "$n += $e.Count }; Write-Output \"ficheros=$k errores=$n\"")
+        r = subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
-        self.assertIn("errores=0", r.stdout, r.stdout + r.stderr)
+        self.assertIn(f"ficheros={len(files)} errores=0", r.stdout, r.stdout + r.stderr)
 
 
 class InstaladorEmpresaTests(unittest.TestCase):
@@ -229,15 +231,28 @@ class DesinstaladorTextoTests(unittest.TestCase):
     def test_grabando_no_toca_nada(self):
         inv = function_body(self.ps1, "Invoke-Desinstalar")
         i = inv.index('if ($st -eq "grabando")')
-        for paso in ("Remove-Shortcuts", "Remove-Registro", "Remove-AppFolder", "Remove-Launchers", "Remove-Datos"):
+        j = inv.index('if ($w -ne "ok")')  # tambien si queda la grabadora viva o un proceso que no se deja cerrar
+        for paso in ("Remove-Shortcuts", "Remove-Registro", "Remove-AppFolder", "Remove-Launchers", "Remove-Datos",
+                     "Remove-Desinstalador"):
             self.assertLess(i, inv.index(paso), paso)
+            self.assertLess(j, inv.index(paso), paso)
         self.assertIn('if ($resultado -eq "grabando") { exit 2 }', self.ps1)
+        gone = function_body(self.ps1, "Wait-AppGone")  # la grabadora nunca se cierra a la fuerza
+        self.assertLess(gone.index("recorder\\.py"), gone.index("Stop-Process"))
+        # sin ventana y sin -Silencioso no se desinstala sin preguntar
+        self.assertIn("if (-not $gui) {", self.ps1)
 
-    def test_el_desinstalador_se_borra_el_ultimo(self):
+    def test_la_entrada_y_el_desinstalador_se_quitan_al_final(self):
+        """Si algo falla, la entrada de Aplicaciones instaladas y el desinstalador se quedan: se puede reintentar."""
         body = function_body(self.ps1, "Remove-AppFolder")
         self.assertIn("if (Same-Path $file.FullName $self) { continue }", body)
-        self.assertLess(body.index("if ($script:fallos.Count -gt 0) { return }"),
-                        body.index("Remove-Item -LiteralPath $self"))
+        self.assertNotIn("Remove-Item -LiteralPath $self", body)
+        inv = function_body(self.ps1, "Invoke-Desinstalar")
+        orden = [inv.index(s) for s in ("Remove-Shortcuts", "Remove-AppFolder", "Remove-Launchers",
+                                        'if ($script:fallos.Count -gt 0) { return "incompleta" }', "Remove-Registro",
+                                        "Remove-Desinstalador")]
+        self.assertEqual(orden, sorted(orden))
+        self.assertIn("Remove-Item -LiteralPath $self", function_body(self.ps1, "Remove-Desinstalador"))
 
 
 def free_port():
@@ -260,7 +275,8 @@ class DesinstaladorWindowsTests(unittest.TestCase):
     se apaga) y los accesos directos y la clave de registro solo se borran si apuntan a la carpeta temporal."""
 
     def make_tree(self, extra_in_app=False):
-        base = tempfile.mkdtemp(prefix="chuleta-des-")
+        # ruta larga: en el runner TEMP es C:\Users\RUNNER~1\... (8.3) y el desinstalador usa la larga
+        base = os.path.realpath(tempfile.mkdtemp(prefix="chuleta-des-"))
         root = os.path.join(base, "Chuleta")
         app = os.path.join(root, "_app")
         os.makedirs(os.path.join(app, "static"))
@@ -337,7 +353,7 @@ class DesinstaladorWindowsTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(datos, "voces.json")))  # sin -BorrarDatos, AudiosApp se queda
         self.assertIn("relanzo:", log)
         self.assertIn("se queda (no es de la app):", log)
-        self.assertIn(f"se ha desinstalado. Tus reuniones siguen en {root}", log)
+        self.assertIn(f"se ha desinstalado. Tus reuniones siguen en {root}".lower(), log.lower())
         self.assertEqual([n for n in os.listdir(temp) if n.endswith(".ps1")], [])  # la copia de %TEMP% se borra
 
     def test_borrar_datos(self):
