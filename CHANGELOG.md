@@ -59,6 +59,32 @@ nada de ningún proyecto concreto.
   y habrá que borrarlo a mano).
 
 ### Añadido
+- **Directo en la nube casi en streaming** (`_app/live.py`, `_app/engines.py`, `_app/static/directo.js`): con
+  Groq el directo manda trozos de 3–6 s en vez de 8–15: corta en la primera pausa de la voz a partir de 3 s y, si
+  nadie calla, a los 6 s con 0,5 s de solape que se deduplica por tiempos; solo se envía la voz (los silencios de
+  los extremos se recortan y una ventana sin voz no se manda ni cuenta). El modelo del directo es configurable
+  (`cloud.live_model`, por defecto `whisper-large-v3-turbo`); el repaso final sigue con `cloud.model`. Se mide la
+  latencia de cada trozo (fin del audio → texto escrito) y se enseña la mediana y el p95 de la sesión. Lo local
+  (20–45 s) y «ponerse al día» (120–300 s) no cambian.
+- **Cupo y ritmo del plan gratuito de Groq**: por clave se guardan `x-ratelimit-remaining-requests`,
+  `x-ratelimit-reset-requests` y el último `retry-after` (la primera vez se anotan en `server.log` todas las
+  cabeceras `x-ratelimit-*`), nunca más de una petición cada 3 s por clave (20/min) y la ventana del directo crece
+  según lo que queda del día: ≥600 peticiones → 3–6 s; 300–600 → 6–10 s; <300 → 10–15 s; <60 → el directo se pausa
+  con aviso (la grabación sigue, lo que falte se transcribe al terminar en trozos grandes y el repaso final se hace
+  igual). La cabecera del directo y Ajustes enseñan «Groq: quedan N peticiones hoy · se renuevan en …».
+- **Claves adicionales** (`cloud.extra_keys`, cifradas como la API key): cuando a la clave activa le quedan menos
+  de 20 peticiones del día, o Groq responde 429 con `retry-after` > 60 s, se pasa a la siguiente; el resumen, la
+  traducción y el repaso final usan la misma rotación. En Ajustes → nube, «Claves adicionales (opcional)» con el
+  aviso de que cada clave es de una cuenta distinta y el audio y el texto se procesan bajo esa cuenta. Las claves
+  no se escriben nunca en el log ni salen en claro por la API.
+- **Seguir la reunión**: el último trozo llegado queda resaltado y el texto baja solo; «Modo seguir» (letra grande,
+  para leer de reojo); y, por reunión, «Traducir al español» (apagado por defecto): cada 10–15 s manda lo último
+  dicho a `openai/gpt-oss-20b` y lo pinta en una columna lateral (una ayuda para seguir la reunión; no se guarda).
+  API: `POST /api/live/traducir`; el estado del directo (`directo` en `/api/jobs`) lleva cupo, ventana, latencia y
+  traducción.
+- `scripts/directo_bench.py`: audio sintético con `say` (español y portugués, con pausas) y reproducción de un WAV
+  por el chunker con un transcriptor falso de latencia configurable (`--real` usa Groq con `GROQ_API_KEY`).
+  `tests/test_directo.py` y `tests/test_directo_frontend.py`.
 - **Quién habla** (opcional, apagado por defecto): diarización en local con `sherpa-onnx` 2.0.1 (segmentación
   pyannote 3.0 + huellas TitaNet small, ≈47 MB de modelos que se descargan al activar la opción, sha256 anclado)
   en un subproceso de prioridad baja al terminar cada transcripción (`_app/voices.py`). Sidecar

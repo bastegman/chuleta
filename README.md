@@ -7,7 +7,9 @@ notas) se queda en la carpeta donde descomprimas la app.
 - **Grabar** el micrófono y el sonido del ordenador (Teams, Zoom, el navegador…) a la vez, con `Ctrl+Alt+R`
   desde cualquier programa.
 - **Transcribir** mientras se habla o al terminar: en tu PC (faster-whisper) o en la nube (Groq, OpenAI,
-  Azure OpenAI o cualquier API compatible con OpenAI).
+  Azure OpenAI o cualquier API compatible con OpenAI). En la nube el directo va casi en streaming: trozos de 3–6 s
+  cortados en las pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de otras
+  cuentas de respaldo si las añades); con «Modo seguir» y, si quieres, traducción al español en una columna.
 - **Corregir** la transcripción en la propia página y **tomar notas** por reunión (bloques, propiedades,
   etiquetas, estado, participantes, tema).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio.
@@ -80,6 +82,18 @@ DPAPI con un doble, porque `crypt32` solo existe en Windows). En Windows, DPAPI 
 `windows-latest` de GitHub Actions (`tests/test_voices.py::test_dpapi_real`); el instalador, la grabadora y la
 interfaz de voces aún no se han ejecutado a mano en Windows. Si algo no cuadra, abre un issue con el texto de
 `server.log` o `voces.log`.
+
+### Banco de pruebas del directo en la nube
+
+```
+.venv/bin/python scripts/directo_bench.py synth --lang es --out /tmp/es.wav   # audio con `say` (macOS) y pausas
+.venv/bin/python scripts/directo_bench.py run /tmp/es.wav --latency 1.0       # chunker + ritmo con reloj falso
+.venv/bin/python scripts/directo_bench.py run /tmp/es.wav --real              # Groq de verdad (GROQ_API_KEY)
+```
+
+Imprime la distribución de tamaños de trozo, cuánto silencio se manda, la latencia (fin del audio del trozo → texto
+escrito) y el ritmo de peticiones. Con `--remaining N` simula lo que queda del cupo del día (la ventana crece).
+La VAD es la de faster-whisper si está instalada; si no, una por energía.
 
 ### Generar el zip instalable
 
