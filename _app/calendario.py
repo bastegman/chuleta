@@ -142,6 +142,9 @@ _SIN_OUTLOOK = "Outlook clásico no está abierto (el nuevo Outlook no deja leer
 _HRESULT = {
     -2147221021: _SIN_OUTLOOK,  # MK_E_UNAVAILABLE: GetActiveObject sin Outlook en marcha
     -2146959355: _SIN_OUTLOOK,  # CO_E_SERVER_EXEC_FAILURE
+    # CO_E_CLASSSTRING: el ProgID Outlook.Application no existe en el registro (sin Office clásico)
+    -2147221005: "Outlook clásico no está instalado en este PC (el nuevo Outlook no deja leer el calendario desde "
+                 "otras aplicaciones).",
     -2147418111: "Outlook está ocupado (cierra sus cuadros de diálogo y vuelve a probar).",
     -2147417846: "Outlook está ocupado (cierra sus cuadros de diálogo y vuelve a probar).",
     -2147024891: "Outlook no ha dado permiso (aviso de seguridad rechazado, o Outlook abierto como administrador).",

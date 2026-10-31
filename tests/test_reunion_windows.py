@@ -107,6 +107,39 @@ def servidor():
     return srv
 
 
+def ventana_activa():
+    import ctypes
+    ctypes.windll.user32.GetForegroundWindow.restype = ctypes.c_void_p
+    return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+
+
+class VentanaDeTrabajo:
+    """Una ventana normal de otro proceso (tkinter) puesta en primer plano: simula la llamada en la que estás."""
+    TITULO = "Ventana de trabajo (prueba de foco)"
+    SCRIPT = ("import sys, tkinter as tk\nr = tk.Tk(); r.title(sys.argv[1]); r.geometry('480x240+120+120')\n"
+              "r.after(60000, r.destroy); r.mainloop()\n")
+
+    def __init__(self):
+        import ctypes
+        u = ctypes.windll.user32
+        u.FindWindowW.restype = ctypes.c_void_p
+        self.proc = subprocess.Popen([sys.executable, "-c", self.SCRIPT, self.TITULO])
+        self.hwnd = 0
+        for _ in range(50):
+            self.hwnd = int(u.FindWindowW(None, self.TITULO) or 0)
+            if self.hwnd:
+                break
+            time.sleep(0.1)
+        if self.hwnd:
+            u.SetForegroundWindow(ctypes.c_void_p(self.hwnd))
+            time.sleep(0.4)
+        self.en_primer_plano = bool(self.hwnd) and ventana_activa() == self.hwnd
+
+    def cerrar(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+
+
 def clic(x, y):
     """Clic izquierdo real en coordenadas de pantalla (SetCursorPos + mouse_event)."""
     import ctypes
@@ -204,10 +237,22 @@ class AvisoTests(unittest.TestCase):
         return []
 
     def test_geometria_estilo_captura_y_auto_grabar(self):
-        p, est = self.abrir("auto", "--auto-grabar-ms", "4500")
+        trabajo = VentanaDeTrabajo()
+        p, est = self.abrir("auto", "--auto-grabar-ms", "6000")
         e = self.estado(est)
+        time.sleep(0.6)
+        activa_con_aviso = ventana_activa()  # medido desde fuera, con el aviso ya en pantalla
         x, y, w, h = e["geometry"]
         l, t, r, b = e["area_trabajo"]
+        png = captura(os.path.join(ART, "aviso.png"), (x, y, w, h))  # la evidencia primero, las aserciones después
+        foco = {"ventana_trabajo": trabajo.hwnd, "trabajo_en_primer_plano_antes": trabajo.en_primer_plano,
+                "activa_antes_segun_aviso": e.get("activa_antes"),
+                "activa_despues_segun_aviso": e.get("activa_despues"),
+                "activa_con_aviso_segun_test": activa_con_aviso, "hwnd_aviso": e.get("hwnd"),
+                "exstyle": hex(e.get("exstyle", 0))}
+        with open(os.path.join(ART, "foco.json"), "w", encoding="utf-8") as f:
+            json.dump(foco, f, indent=1)
+        trabajo.cerrar()
         # abajo y centrado en el área de trabajo (sin pisar la barra de tareas), tamaño ~340×64 × escala
         self.assertGreaterEqual(x, l)
         self.assertLessEqual(x + w, r)
@@ -217,9 +262,12 @@ class AvisoTests(unittest.TestCase):
         self.assertLessEqual(abs(h - 64 * e["escala"]), 4)
         self.assertTrue(e.get("exstyle", 0) & 0x08000000, "WS_EX_NOACTIVATE")  # no roba el foco
         self.assertTrue(e.get("exstyle", 0) & 0x80, "WS_EX_TOOLWINDOW")  # ni sale en la barra de tareas
-        self.assertNotEqual(e.get("activa_despues"), e.get("hwnd"))  # al aparecer no se ha convertido en la activa
-        png = captura(os.path.join(ART, "aviso.png"), (x, y, w, h))
         self.assertGreater(os.path.getsize(png), 1000)
+        if trabajo.en_primer_plano:  # la ventana en la que estabas sigue activa con el aviso en pantalla
+            self.assertEqual(activa_con_aviso, trabajo.hwnd, foco)
+            self.assertEqual(e.get("activa_despues"), trabajo.hwnd, foco)
+        else:  # en un escritorio sin ventana activa (runner vacío) solo se comprueba que no la hemos cambiado
+            self.assertEqual(e.get("activa_antes"), e.get("activa_despues"), foco)
         res = self.resultado(p)
         self.assertEqual(res["resultado"], "grabar", res)
         self.assertEqual(res["path"], "Reuniones/x.wav")

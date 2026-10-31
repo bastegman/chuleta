@@ -249,7 +249,8 @@ class OutlookTests(unittest.TestCase):
         self.assertIn("pywin32", reason)
 
     def test_motivos_com(self):
-        for hr, frag in ((-2147221021, "no está abierto"), (-2147418111, "ocupado"), (-2147024891, "permiso"),
+        for hr, frag in ((-2147221021, "no está abierto"), (-2147221005, "no está instalado"), (-2147418111, "ocupado"),
+                         (-2147024891, "permiso"),
                          (-2147467260, "aviso de seguridad"), (-2147352567, "0x80020009")):
             def session(hr=hr):
                 raise ComError(hr, "texto de Outlook")

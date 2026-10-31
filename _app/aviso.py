@@ -93,11 +93,12 @@ def estilo_windows(root, x, y):
 
 
 class Aviso:
-    def __init__(self, args):
+    def __init__(self, args, activa_antes=0):
         import tkinter as tk
         import tkinter.font as tkfont
         self.args, self.tk = args, tk
         self.resultado, self.enviando, self.fallos, self.info = None, False, 0, {}
+        self.activa_antes = activa_antes  # la ventana activa ANTES de crear la nuestra (para medir que no la robamos)
         self.url = f"http://127.0.0.1:{args.puerto}"
         root = self.root = tk.Tk()
         root.withdraw()
@@ -257,7 +258,6 @@ class Aviso:
     def run(self):
         a, root = self.args, self.root
         self.datos = {}
-        self.activa_antes = ventana_activa()
         root.update_idletasks()
         self.info = estilo_windows(root, self.x, self.y)  # antes de mostrarla: así no se activa al aparecer
         root.deiconify()
@@ -285,8 +285,9 @@ def main(argv=None):
     p.add_argument("--auto-grabar-ms", dest="auto_grabar_ms", type=int, default=0)
     args = p.parse_args(argv)
     dpi_aware()
+    activa = ventana_activa()  # antes de que exista nuestra ventana
     try:
-        aviso = Aviso(args)
+        aviso = Aviso(args, activa)
     except Exception as e:  # sin tkinter o sin escritorio: se dice y se sale sin ruido
         print(json.dumps({"resultado": "error", "error": f"{e.__class__.__name__}: {e}"}), flush=True)
         return 2
