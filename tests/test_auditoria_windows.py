@@ -32,7 +32,7 @@ ART = os.environ.get("NOTAS_ARTEFACTOS") or os.path.join(tempfile.gettempdir(), 
 STATIC = os.path.join(APP, "static")
 
 # textos que rompian el aviso: comillas tipograficas (PowerShell tambien las toma por comillas), $, backtick y saltos
-NASTY = ["Pla d’acció", "O’Higgins · ‘Kick-off’ ‚x‛", 'Cliente "A" · “Fase 2” · „B“', "$(Get-Date) ${env:USERNAME} $x",
+NASTY = ["Pla d’acció", "L’informe · ‘Kick-off’ ‚x‛", 'Cliente "A" · “Fase 2” · „B“', "$(Get-Date) ${env:USERNAME} $x",
          "`n `$ `` fin", "línea 1\nlínea 2\r\nlínea 3", "'; Remove-Item -Recurse C:\\ ; '", "x’)) > $null; calc; ((’"]
 
 
