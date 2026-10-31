@@ -233,13 +233,15 @@ class LogSinConsolaTests(unittest.TestCase):
         """pythonw.exe: sys.stdout es None; nada de StreamHandler(None) (escribiria en sys.stderr, tambien None)."""
         tmp = tempfile.mkdtemp(prefix="notas-log-")
         try:
-            with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None):
+            # WINDOWS=False tambien en el job de Windows: alert() abriria un MessageBox real y dejaria el test colgado
+            with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None), \
+                    mock.patch.object(common, "WINDOWS", False):
                 self.assertFalse(common.has_console())
                 common.setup_logging(tmp)
                 kinds = [type(h).__name__ for h in common.LOGGER.handlers]
                 self.assertEqual(kinds, ["RotatingFileHandler"])
                 common.log("hola sin consola")
-                common.alert("Prueba", "aviso sin consola")  # fuera de Windows: solo al log
+                common.alert("Prueba", "aviso sin consola")  # sin Windows: solo al log
                 try:
                     raise ValueError("traza")
                 except ValueError:
