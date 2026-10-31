@@ -267,6 +267,31 @@ class LogSinConsolaTests(unittest.TestCase):
         self.assertIn("MessageBoxW", read("common.py"))
 
 
+class InstaladorTests(unittest.TestCase):
+    """instalar.ps1 e INSTALAR.bat no se pueden ejecutar aqui: se comprueba el texto (el parseo lo hace pwsh aparte)."""
+
+    def read_repo(self, *parts):
+        with open(os.path.join(os.path.dirname(APP), *parts), "rb") as f:
+            return f.read()
+
+    def test_instalador_sin_consola_y_ventana(self):
+        ps1 = self.read_repo("_app", "instalar.ps1").decode("utf-8-sig")
+        for s in ("[switch]$Consola", "pythonw.exe", "Set-ShortcutAppId", "/api/apagar", "System.Windows.Forms",
+                  "GetConsoleWindow", "New-InstallerWindow", "Finish-Ui", '"pywebview==6.2.1"', "Abrir $AppName",
+                  "Copiar el detalle", "$sc.WorkingDirectory", "[string]$AppName"):
+            self.assertIn(s, ps1, s)
+        m = re.search(r'\$AppId = "([^"]+)"', ps1)
+        self.assertEqual(m.group(1), common.APP_ID)  # el .lnk y el proceso llevan el mismo AppUserModelID
+        self.assertNotIn("Write-Host \"    $s\"", ps1)  # la salida de pip pasa por Say (consola + ventana)
+
+    def test_instalar_bat_solo_para_si_falla(self):
+        for parts in (("INSTALAR.bat",), ("_app", "export", "INSTALAR.bat")):
+            bat = self.read_repo(*parts)
+            self.assertIn(b"if errorlevel 1 (", bat)
+            self.assertIn(b'instalar.ps1" %*', bat)
+            self.assertNotIn(b"\r\necho.\r\npause", bat)
+
+
 class FakeEvent:
     def __init__(self):
         self.handlers = []
