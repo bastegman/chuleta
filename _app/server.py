@@ -1279,6 +1279,9 @@ def preload_model(st, cached=None):
     return None
 
 
+_SALIDAS_LOCK = threading.Lock()  # temporizadores de la reescritura agrupada de los destinos de salida
+
+
 class Jobs:
     def __init__(self, settings, library):
         self.settings, self.library = settings, library
@@ -1685,16 +1688,26 @@ class Jobs:
             return
         if delay <= 0:
             return self.write_outputs(rel)
-        timers = getattr(self, "_salidas_timers", None)
-        if timers is None:
-            timers = self._salidas_timers = {}
-        old = timers.pop(rel, None)
-        if old:
-            old.cancel()
-        t = threading.Timer(delay, lambda: (timers.pop(rel, None), self.write_outputs(rel)))
-        t.daemon = True
-        timers[rel] = t
+        with _SALIDAS_LOCK:
+            timers = getattr(self, "_salidas_timers", None)
+            if timers is None:
+                timers = self._salidas_timers = {}
+            old = timers.pop(rel, None)
+            if old:
+                old.cancel()
+            t = threading.Timer(delay, lambda: self._fire_outputs(rel, t))
+            t.daemon = True
+            timers[rel] = t
         t.start()
+
+    def _fire_outputs(self, rel, timer):
+        """Vence la espera: se quita de la lista solo si sigue siendo el temporizador vigente (si entretanto se guardo
+        otra vez, el nuevo ya ocupa su sitio y no hay que perderlo) y escribe."""
+        with _SALIDAS_LOCK:
+            timers = getattr(self, "_salidas_timers", {})
+            if timers.get(rel) is timer:
+                timers.pop(rel, None)
+        self.write_outputs(rel)
 
     def auto_voices(self, rel):
         if not self.voices_on():

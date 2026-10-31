@@ -620,10 +620,22 @@ class JobsOutputsTests(TempTree):
             for _ in range(3):
                 self.jobs.schedule_outputs(self.rel, delay=0.15)
             self.assertEqual(len(self.jobs._salidas_timers), 1)  # tres guardados seguidos: una sola escritura
-            time.sleep(0.8)
+            timer = self.jobs._salidas_timers[self.rel]
+            timer.join(10)  # sin espera fija: en un runner cargado la escritura puede pasar del segundo
+            self.assertFalse(timer.is_alive())
             self.assertEqual(self.jobs._salidas_timers, {})
             self.assertTrue(os.path.isfile(os.path.join(self.dest, "Alfa", STEM + ".md")))
             self.assertEqual([k for _, k in self.jobs.schedule_outputs(self.rel, delay=0)], ["igual"])  # inmediato
+
+    def test_un_temporizador_vencido_no_borra_al_nuevo(self):
+        """Si se guarda justo cuando vence la espera anterior, el temporizador nuevo no debe perderse de la lista."""
+        with mock.patch.object(server, "log"):
+            viejo, nuevo = object(), object()
+            self.jobs._salidas_timers = {self.rel: nuevo}
+            self.jobs._fire_outputs(self.rel, viejo)  # vence el viejo cuando ya se ha programado el nuevo
+            self.assertIs(self.jobs._salidas_timers.get(self.rel), nuevo)
+            self.jobs._fire_outputs(self.rel, nuevo)
+            self.assertEqual(self.jobs._salidas_timers, {})
 
     def test_los_ganchos_del_servidor(self):
         """Se escribe al terminar la transcripcion y el resumen, y se reescribe al guardar notas o transcripcion."""
