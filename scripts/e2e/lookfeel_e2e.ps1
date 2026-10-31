@@ -198,6 +198,23 @@ function Get-Reunion {
     }
     return (($o.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ";")
 }
+function Diag-Lenta($label) {
+    # si la API tarda: CPU de los procesos de la app en 10 s y estado de las conexiones al puerto (para saber si el
+    # servidor esta ocupado o las peticiones se quedan en cola). Solo nombre, pid y el script, nunca la linea entera
+    $antes = @{}
+    $procs = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(pythonw?|msedgewebview2)\.exe$" })
+    foreach ($p in $procs) { $antes[$p.ProcessId] = ($p.KernelModeTime + $p.UserModeTime) }
+    Start-Sleep -Seconds 10
+    $out = @()
+    foreach ($p in @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(pythonw?)\.exe$" })) {
+        $cpu = [Math]::Round((($p.KernelModeTime + $p.UserModeTime) - [double]$antes[$p.ProcessId]) / 1e7, 1)
+        $script = [regex]::Match("$($p.CommandLine)", "[\w-]+\.py").Value
+        $out += "$($p.Name) $($p.ProcessId) $script cpu10s=$cpu hilos=$($p.ThreadCount)"
+    }
+    $wv = @($procs | Where-Object { $_.Name -eq "msedgewebview2.exe" }).Count
+    $con = @(Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue | Group-Object State | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ","
+    Note "$label.diag" (($out -join " | ") + " || webview2=$wv || puerto: $con")
+}
 function Wait-Tree($text, $seconds) {
     # el arbol de la app (/api/tree) en JSON en cuanto contiene $text (la biblioteca se lee en segundo plano al arrancar)
     $end = (Get-Date).AddSeconds($seconds)
@@ -477,6 +494,7 @@ $regf = Get-Registro
 Check "f.registro_misma_carpeta" ($regf -and $regf["InstallLocation"].valor -ieq $inst -and $regf["DisplayVersion"].valor -eq $verZip) $(if ($regf) { "$($regf['InstallLocation'].valor) $($regf['DisplayVersion'].valor)" } else { "sin clave" })
 $cfg2 = Wait-Http "$Base/api/config" 150
 Note "f.api_tarda_s" $script:ultimaEspera
+if ($script:ultimaEspera -gt 5) { Diag-Lenta "f" }
 Check "f.app_arranca_desde_la_instalada" ($cfg2 -and $cfg2.root -ieq $inst) "root=$($cfg2.root)"
 Check "f.app_version_nueva" ($cfg2 -and $cfg2.version -eq $verZip) "$($cfg2.version)"
 $tree = Wait-Tree "Reunion de prueba" 40
@@ -523,6 +541,7 @@ Check "fn.registro_creado" ($regn -and $regn["InstallLocation"].valor -ieq $inst
 Check "fn.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
 $cfg2 = Wait-Http "$Base/api/config" 150
 Note "fn.api_tarda_s" $script:ultimaEspera
+if ($script:ultimaEspera -gt 5) { Diag-Lenta "fn" }
 Check "fn.app_arranca_desde_la_vieja" ($cfg2 -and $cfg2.root -ieq $inst) "root=$($cfg2.root)"
 Start-Sleep -Seconds 6
 $wf = Ventana "icons" "actualizada"
@@ -551,6 +570,7 @@ Check "f2.no_renombra" (-not ($ilog22 -match "pasa a llamarse")) ""
 Check "f2.inicio_sin_antiguo" (-not (Test-Path -LiteralPath $progLegacy)) ""
 $cfg22 = Wait-Http "$Base/api/config" 150
 Note "f2.api_tarda_s" $script:ultimaEspera
+if ($script:ultimaEspera -gt 5) { Diag-Lenta "f2" }
 Check "f2.app_arranca" ($cfg22 -and $cfg22.root -ieq $inst) "root=$($cfg22.root)"
 $lisf2 = @(Get-Listener)
 if ($lisf2.Count -ge 1) {
@@ -621,6 +641,7 @@ $l = Get-Lnk $desk
 $null = Start-Process -FilePath $l.TargetPath -ArgumentList $l.Arguments -WorkingDirectory $l.WorkingDirectory -PassThru
 $cfgu = Wait-Http "$Base/api/config" 150
 Note "u2.api_tarda_s" $script:ultimaEspera
+if ($script:ultimaEspera -gt 5) { Diag-Lenta "u2" }
 Check "u2.app_abierta" ($cfgu -and $cfgu.root -ieq $inst) "root=$($cfgu.root)"
 Start-Sleep -Seconds 5
 $rcu2 = Run-Orden $ordenSilencio "u2.silencioso" 180
@@ -657,6 +678,7 @@ Check "u3.misma_carpeta" ($ilog3i -match ("Instalando en " + [regex]::Escape($in
 Check "u3.registro" (Test-Path -LiteralPath $UninstallKey) ""
 $cfg3 = Wait-Http "$Base/api/config" 150
 Note "u3.api_tarda_s" $script:ultimaEspera
+if ($script:ultimaEspera -gt 5) { Diag-Lenta "u3" }
 $tree = Wait-Tree "Reunion de prueba" 40
 Check "u3.app_ve_la_reunion" ($cfg3 -and $cfg3.root -ieq $inst -and $tree -match "Reunion de prueba") "root=$($cfg3.root)"
 Check "u3.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
