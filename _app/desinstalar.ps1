@@ -522,7 +522,8 @@ if ($gui) {
 # --- 5. final
 if ($resultado -eq "ok") {
     $final = "$AppName se ha desinstalado. Tus reuniones siguen en $Root"
-    if ($script:ajenos.Count -gt 0) { $final += " (en _app quedan $($script:ajenos.Count) archivos que no son de la app)" }
+    if ($script:ajenos.Count -eq 1) { $final += " (en _app queda 1 archivo que no es de la app)" }
+    elseif ($script:ajenos.Count -gt 1) { $final += " (en _app quedan $($script:ajenos.Count) archivos que no son de la app)" }
 } elseif ($resultado -eq "grabando") {
     $final = "$AppName está grabando ahora mismo: para la grabación y vuelve a desinstalar. No se ha tocado nada."
 } elseif ($resultado -eq "procesos") {

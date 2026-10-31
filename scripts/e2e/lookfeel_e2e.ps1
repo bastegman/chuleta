@@ -52,7 +52,8 @@ function Wait-Http($url, $seconds) {
     $end = $t0.AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
         try {
-            $r = Invoke-RestMethod $url -Headers (Api-Headers $false) -TimeoutSec 30
+            $left = [int][Math]::Max(1, [Math]::Min(30, ($end - (Get-Date)).TotalSeconds))  # sin pasarse del total
+            $r = Invoke-RestMethod $url -Headers (Api-Headers $false) -TimeoutSec $left
             $script:ultimaEspera = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
             return $r
         } catch { Start-Sleep -Milliseconds 500 }
@@ -513,7 +514,7 @@ if ($lisf.Count -ge 1) {
 Remove-Item -LiteralPath $UninstallKey -Recurse -Force
 Set-Content -LiteralPath (Join-Path $inst "LEEME.txt") -Value "VIEJO" -Encoding UTF8
 Set-Content -LiteralPath (Join-Path $inst "_app\static\marca-vieja.txt") -Value "x" -Encoding UTF8
-Set-Content -LiteralPath (Join-Path $inst "ABRIR NOTAS.bat") -Value "@echo off" -Encoding Ascii       # restos del nombre anterior
+Set-Content -LiteralPath (Join-Path $inst "ABRIR NOTAS.bat") -Value "@echo off", "call `"%~dp0_app\Notas.bat`" %*" -Encoding Ascii  # restos del nombre anterior (como el real)
 Set-Content -LiteralPath (Join-Path $inst "_app\Notas.bat") -Value "@echo off" -Encoding Ascii
 Rename-Item -LiteralPath $desk -NewName "$Legacy.lnk"
 Rename-Item -LiteralPath $prog -NewName "$Legacy.lnk"
@@ -552,6 +553,8 @@ if ($lisf.Count -ge 1) {
     try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
     Check "fn.apagar" (Wait-Process-Gone $pidf 20) "pid $pidf"
 }
+
+Remove-Item -LiteralPath (Join-Path $inst "_app\static\marca-vieja.txt") -Force -ErrorAction SilentlyContinue  # andamio de fn
 
 # ---- f2) tercera instalacion con los DOS accesos directos (Chuleta.lnk y un Notas.lnk que el usuario conserva):
 # el antiguo no se toca y se dice en el detalle
