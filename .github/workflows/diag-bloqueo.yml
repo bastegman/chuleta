@@ -18,19 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {nombre: main-ventana-completa, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: completa}
-          - {nombre: main-ventana-sinmarca, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: completa-sinmarca}
-          - {nombre: main-ventana-solowav, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: solo-wav}
-          - {nombre: main-ventana-vocab, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: vocab}
-          - {nombre: main-ventana-hablantes, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: hablantes}
-          - {nombre: main-ventana-ninguna, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: ninguna}
-          - {nombre: main-sinventana-completa, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: sin-ventana, reunion: completa}
-          - {nombre: main-edge-completa, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: edge, reunion: completa}
-          - {nombre: fc31276-ventana-completa, ref: fc312767680b52f3745a68370a15ba431405b0cf, modo: ventana, reunion: completa}
-          - {nombre: a53f9b1-ventana-completa, ref: a53f9b1523e08bb0d05f6f093b1b34a85f80a84a, modo: ventana, reunion: completa}
-          - {nombre: 4f877f9-ventana-completa, ref: 4f877f9fe36666a21359546773ea47ba38255cfd, modo: ventana, reunion: completa}
-          - {nombre: c5bbe97-ventana-completa, ref: c5bbe9729ad5d512b4d8c73ceb33dad36ea5ceba, modo: ventana, reunion: completa}
-          - {nombre: 97f9378-ventana-completa, ref: 97f937867f047d7900c92d3bced9f8ca230a834a, modo: ventana, reunion: completa}
+          # ronda 1 (run 41211868287): 13 variantes sin cuelgue (ventana/sin ventana/Edge; 5 tipos de reunion; 6 commits)
+          - {nombre: main-shell-defecto-previo, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: completa, extra: "--lanzar shell --datos-por-defecto --previo"}
+          - {nombre: main-shell-completa, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: completa, extra: "--lanzar shell"}
+          - {nombre: main-popen-previo, ref: 5c55e54ef8689e6829a15cdfa1cb692e994f21fe, modo: ventana, reunion: completa, extra: "--previo"}
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -47,10 +38,48 @@ jobs:
       - name: Versiones
         run: python -m pip list --disable-pip-version-check
       - name: Reproducir y volcar pilas
-        run: python scripts/diag/diag_bloqueo.py --app app --modo ${{ matrix.modo }} --reunion ${{ matrix.reunion }} --out diag-out --seconds 180
+        run: python scripts/diag/diag_bloqueo.py --app app --modo ${{ matrix.modo }} --reunion ${{ matrix.reunion }} --out diag-out --seconds 180 ${{ matrix.extra }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
           name: diag-${{ matrix.nombre }}
           path: diag-out
+          if-no-files-found: warn
+
+  e2e:
+    # el E2E de instalacion-empresa tal cual (instala con INSTALAR.bat y arranca la app como el usuario) y, en segundo
+    # plano, un vigia que vuelca las pilas del servidor con py-spy en cuanto /api/config deja de contestar
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          ref: 67ae77b8cdfa3de8760b30733159522bcd87f135
+          path: inst
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: numpy (build_zip importa live.py) y py-spy (solo diagnostico)
+        shell: powershell
+        run: python -m pip install --disable-pip-version-check numpy py-spy
+      - name: Vigia en segundo plano
+        shell: powershell
+        run: |
+          $py = (Get-Command python).Source
+          Start-Process -FilePath $py -ArgumentList "$env:GITHUB_WORKSPACE\scripts\diag\vigia_e2e.py", "--out", "$env:GITHUB_WORKSPACE\vigia-out", "--minutes", "40" -WindowStyle Hidden
+      - name: E2E (PowerShell 5.1)
+        shell: powershell
+        timeout-minutes: 26
+        continue-on-error: true
+        run: |
+          & "$env:GITHUB_WORKSPACE\inst\scripts\e2e\lookfeel_e2e.ps1" -Repo "$env:GITHUB_WORKSPACE\inst" -Out "$env:GITHUB_WORKSPACE\e2e-out"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: diag-e2e
+          path: |
+            vigia-out
+            e2e-out
           if-no-files-found: warn

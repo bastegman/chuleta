@@ -126,6 +126,37 @@ class Probe:
         return None
 
 
+class ShellProc:
+    """Proceso arrancado con Start-Process (como el instalador y el acceso directo): sin handles estandar, asi que
+    en pythonw sys.stdout y sys.stderr son None, igual que en el PC del usuario. poll()/wait() por su PID."""
+
+    def __init__(self, exe, args, cwd):
+        quoted = ",".join("'" + a.replace("'", "''") + "'" for a in args)
+        ps = (f"$p = Start-Process -FilePath '{exe}' -ArgumentList {quoted} -WorkingDirectory '{cwd}' -PassThru; "
+              "$p.Id")
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=60)
+        self.pid = int(out.stdout.strip().splitlines()[-1])
+
+    def poll(self):
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, self.pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return 1
+        code = ctypes.c_ulong()
+        k32.GetExitCodeProcess(h, ctypes.byref(code))
+        k32.CloseHandle(h)
+        return None if code.value == 259 else code.value  # STILL_ACTIVE
+
+    def wait(self, timeout):
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.poll() is not None:
+                return self.poll()
+            time.sleep(0.5)
+        raise subprocess.TimeoutExpired("server", timeout)
+
+
 def windows_of(pid):
     """Ventanas de nivel superior del proceso (titulo, clase, visible): un MessageBox es la clase #32770."""
     if sys.platform != "win32":
@@ -179,6 +210,22 @@ def dump(pid, out, tag, log):
         log(f"ventanas/captura fallo: {e!r}")
 
 
+def launch(a, app_dir, data, fh, tag):
+    exe_dir = os.path.dirname(sys.executable)
+    exe = os.path.join(exe_dir, "pythonw.exe" if a.modo == "ventana" else "python.exe")
+    if not os.path.exists(exe):  # fuera de Windows (prueba local del propio script)
+        exe = sys.executable
+    cmd = [exe, os.path.join(HERE, "diag_launch.py"), app_dir, fh, "20", "--port", str(a.port)]
+    if not a.datos_por_defecto:
+        cmd += ["--data", data]
+    if a.modo != "ventana":
+        cmd.append("--no-browser")
+    if a.lanzar == "shell":
+        return ShellProc(cmd[0], cmd[1:], app_dir)
+    out_f = open(os.path.join(a.out, f"server-stdout{tag}.txt"), "w", encoding="utf-8")
+    return subprocess.Popen(cmd, cwd=app_dir, stdout=out_f, stderr=subprocess.STDOUT)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True, help="carpeta que contiene _app (checkout del commit a probar)")
@@ -187,6 +234,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--seconds", type=float, default=180)
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--lanzar", choices=("popen", "shell"), default="popen")
+    ap.add_argument("--previo", action="store_true", help="antes, un arranque sin reunion (como las fases e -> f)")
+    ap.add_argument("--datos-por-defecto", action="store_true", help="sin --data: %%LOCALAPPDATA%%\\AudiosApp")
     a = ap.parse_args()
     a.app, a.out = os.path.abspath(a.app), os.path.abspath(a.out)  # el servidor arranca con otro cwd
     os.makedirs(a.out, exist_ok=True)
@@ -200,24 +250,28 @@ def main():
 
     root = os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), "Chuleta")
     data = os.path.join(os.environ.get("RUNNER_TEMP") or os.environ.get("TEMP") or "/tmp", "chuleta-diag-data")
+    if a.datos_por_defecto:
+        data = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
     for p in (root, data):
         shutil.rmtree(p, ignore_errors=True)
     shutil.copytree(os.path.join(a.app, "_app"), os.path.join(root, "_app"),
                     ignore=shutil.ignore_patterns("__pycache__"))
+    app_dir = os.path.join(root, "_app")
+    if a.previo:
+        prev = launch(a, app_dir, data, os.path.join(a.out, "faulthandler-previo.txt"), "previo")
+        pr = Probe(a.port, data, log)
+        ok = any(pr.get("/api/ping", timeout=2)[1] == 200 or time.sleep(0.5) for _ in range(180))
+        time.sleep(20)  # la ventana carga la pagina (y guarda su estado en DATA_DIR\webview)
+        log(f"arranque previo sin reunion: ping {ok} · apagar {pr.post('/api/apagar', timeout=15)[:2]}")
+        try:
+            prev.wait(20)
+        except subprocess.TimeoutExpired:
+            log("el arranque previo no se apaga")
+        time.sleep(2)
     files = make_meeting(root, a.reunion) if a.reunion != "ninguna" else []
     log(f"carpeta {root} · datos {data} · reunion {a.reunion}: {files}")
-    app_dir = os.path.join(root, "_app")
-    exe_dir = os.path.dirname(sys.executable)
-    exe = os.path.join(exe_dir, "pythonw.exe" if a.modo == "ventana" else "python.exe")
-    if not os.path.exists(exe):  # fuera de Windows (prueba local del propio script)
-        exe = sys.executable
-    fh = os.path.join(a.out, "faulthandler.txt")
-    cmd = [exe, os.path.join(HERE, "diag_launch.py"), app_dir, fh, "20", "--data", data, "--port", str(a.port)]
-    if a.modo != "ventana":
-        cmd.append("--no-browser")
-    out_f = open(os.path.join(a.out, "server-stdout.txt"), "w", encoding="utf-8")
-    p = subprocess.Popen(cmd, cwd=app_dir, stdout=out_f, stderr=subprocess.STDOUT)
-    log(f"servidor pid {p.pid}: {os.path.basename(exe)} ({a.modo})")
+    p = launch(a, app_dir, data, os.path.join(a.out, "faulthandler.txt"), "")
+    log(f"servidor pid {p.pid} ({a.modo}, {a.lanzar})")
     probe = Probe(a.port, data, log)
     t_ready = None
     for _ in range(180):
