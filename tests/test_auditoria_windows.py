@@ -17,12 +17,13 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime
 from unittest import mock
 
-from support import APP, server
+from support import APP, TempTree, server, srt_text
 import calendario  # noqa: E402
 import recording  # noqa: E402
 import window  # noqa: E402
@@ -631,7 +632,8 @@ let apiFails = 0, apiDelay = 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const S = { tx: null, editing: false, dirty: false, saveTimer: 0,
             audios: new Map([['r/a.wav', { path: 'r/a.wav', title: 'Kick-off' }]]) };
-const $ = () => null, $$ = () => [];
+let dom = null;  // los segmentos editables de la pagina, solo en los tests que escriben en ella (page())
+const $ = () => null, $$ = sel => (dom && sel === '#txBody .s[data-i]' ? dom : []);
 const esc = s => String(s), fullTitle = a => a.title, renderTxSection = () => { };
 const toast = (html, kind, fn) => out.toasts.push({ html, kind: kind || '', fn });
 async function api(path, body) {
@@ -653,6 +655,7 @@ function segs(n, len) {
     ({ start: i, end: i + 1, text: ('Corrección número ' + i + ' · ').padEnd(len, 'ñ') }));
 }
 function edit(n, len) { S.tx = { path: 'r/a.wav', segs: segs(n, len), mtime: 1 }; S.editing = true; S.dirty = true; }
+function page() { dom = S.tx.segs.map((s, i) => ({ dataset: { i: String(i) }, innerText: s.text })); }
 const pending = () => typeof txPending === 'undefined' ? -1 : txPending.size;
 """
 
@@ -698,6 +701,25 @@ class TranscripcionNoSePierdeTests(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertLessEqual(kept[0]["bytes"], 60 * 1024)
 
+    def test_si_se_queda_tras_el_aviso_sigue_corrigiendo(self):
+        # el aviso de beforeunload invita a quedarse: lo que se escriba despues se guarda y «Listo» no dice «guardado»
+        # sin guardarlo. Tambien sin aviso (cabe en keepalive), si la pagina sigue viva (p. ej., era una descarga)
+        for n, size, left in ((1500, 90, 1), (3, 40, 0)):
+            with self.subTest(n=n):
+                out = self.run_js(f"apiDelay = 30; edit({n}, {size}); page(); out.left = flushTxOnUnload();"
+                                  "out.editing = S.editing; await sleep(100);"
+                                  "dom[0].innerText = 'Corregido después del aviso'; await finishEdit();"
+                                  "out.editing2 = S.editing; out.pending = pending();")
+                self.assertEqual(out["left"], left)
+                self.assertTrue(out["editing"])  # no sale del modo edicion
+                saves = [c for c in out["api"] if c["path"] == "/api/transcript/save"]
+                self.assertEqual([c["n"] for c in saves], [n, n])  # el que sale con el aviso y el de «Listo»
+                self.assertEqual(saves[1]["first"], "Corregido después del aviso")
+                self.assertEqual(len([t for t in out["toasts"] if "Cambios guardados" in t["html"]]), 1)
+                self.assertEqual([t for t in out["toasts"] if t["kind"] == "err"], [])
+                self.assertFalse(out["editing2"])
+                self.assertEqual(out["pending"], 0)
+
     def test_listo_no_dice_guardado_si_no_se_guardo(self):
         out = self.run_js("apiFails = 1; edit(3, 20); await finishEdit();"
                           "out.editing = S.editing; out.dirty = S.dirty;")
@@ -738,6 +760,51 @@ class TranscripcionTextoTests(unittest.TestCase):
         load = src[i:src.index("\n}\n", i)]
         # al volver a la misma reunion, primero termina el guardado en curso y luego se lee el texto
         self.assertLess(load.index("await txInflight.get(want)"), load.index("api('/api/transcript?path="))
+
+
+class GuardadosALaVezTests(TempTree):
+    """Al cerrar o recargar la pagina con correcciones, el mismo texto llega dos veces a la vez (el keepalive y el fetch
+    normal). El segundo no puede escribir lo corregido antes de que el primero copie lo que transcribio Whisper."""
+
+    def test_la_copia_del_original_es_la_de_whisper(self):
+        self.wav("r/a.wav")
+        self.write("r/a.srt", srt_text([(0.0, 1.5, "Texto de Whisper"), (1.5, 3.0, "segunda frase")]))
+        self.write("r/a.txt", "Texto de Whisper\nsegunda frase\n")
+        app = server.App.__new__(server.App)
+        app.jobs, app.library = mock.Mock(), mock.Mock()
+        app.jobs.active_for.return_value = None
+        body = {"path": "r/a.wav", "segments": [{"start": 0.0, "end": 1.5, "text": "Texto corregido"},
+                                                {"start": 1.5, "end": 3.0, "text": "segunda frase"}]}
+        copying, second_done, errors, copy = threading.Event(), threading.Event(), [], shutil.copyfile
+
+        def slow_copy(src, dst, *a, **k):  # el primer guardado, a punto de copiar el original
+            if not copying.is_set():
+                copying.set()
+                second_done.wait(1.0)  # sin candado, el segundo escribe ahora; con el, espera a que acabe el primero
+            return copy(src, dst, *a, **k)
+
+        def save():
+            try:
+                app.save_transcript(dict(body))
+            except Exception as e:
+                errors.append(repr(e))
+
+        def second():
+            copying.wait(10)
+            save()
+            second_done.set()
+
+        with mock.patch.object(server.shutil, "copyfile", slow_copy):
+            ts = [threading.Thread(target=second), threading.Thread(target=save)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(20)
+        self.assertEqual(errors, [])
+        with open(os.path.join(server.backup_dir("r/a.wav"), "original.srt"), encoding="utf-8") as f:
+            self.assertIn("Texto de Whisper", f.read())  # «Restaurar el original» devuelve lo de Whisper
+        with open(os.path.join(self.root, "r", "a.srt"), encoding="utf-8") as f:
+            self.assertIn("Texto corregido", f.read())
 
 
 # ------------------------------------------------------------------------ P2-32 · «Avisarme si estoy en una llamada»

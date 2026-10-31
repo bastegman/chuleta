@@ -1172,9 +1172,10 @@ function flushEdits() {
   }
   S.editing = false;
 }
-/* al cerrar o recargar la pagina: ultimo intento con keepalive solo si cabe; devuelve cuantas no se han podido mandar */
+/* al cerrar o recargar la pagina: ultimo intento con keepalive solo si cabe; devuelve cuantas no se han podido mandar.
+   No sale del modo edicion: si tras el aviso se sigue en la pagina, lo que se escriba despues se sigue guardando */
 function flushTxOnUnload() {
-  flushEdits();
+  if (S.editing && S.tx) saveEdits();  // sin esperar: sale ya con un fetch normal y queda pendiente para el keepalive
   let left = 0;
   for (const p of txPending.values()) {
     const body = JSON.stringify(p);

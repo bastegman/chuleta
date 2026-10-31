@@ -2786,8 +2786,16 @@ class App:
                                                              outlook=True if q.get("outlook") else None))
 
     # --- edicion de transcripciones
+    _tx_save_lock = threading.Lock()
+
     def save_transcript(self, b):
-        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver)."""
+        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver). De uno en uno:
+        al cerrar la pagina el mismo texto llega dos veces a la vez (keepalive y el fetch normal), y el segundo podia
+        escribir lo corregido antes de que el primero copiara el original."""
+        with self._tx_save_lock:
+            return self._save_transcript(b)
+
+    def _save_transcript(self, b):
         abs_path = safe(b.get("path"), "file")
         rel, base = rel_of(abs_path), os.path.splitext(abs_path)[0]
         segs = []
