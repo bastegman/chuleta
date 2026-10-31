@@ -185,7 +185,7 @@ class Store:
     antiguo con la clave en claro se lee igual y queda cifrado en el primer guardado (migracion transparente).
     Si no se puede descifrar (otro usuario de Windows, otro PC), la clave queda vacia y se avisa en el log."""
 
-    SECRETS = (("cloud", "api_key"),)
+    SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"))  # un texto o una lista de textos
 
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
@@ -205,14 +205,23 @@ class Store:
             d = self.data
             for k in keys[:-1]:
                 d = d.get(k) if isinstance(d, dict) else None
-            if not isinstance(d, dict) or not is_protected(d.get(keys[-1])):
+            if not isinstance(d, dict):
                 continue
-            try:
-                d[keys[-1]] = unprotect(d[keys[-1]]).decode("utf-8")
-            except (OSError, ValueError) as e:
-                d[keys[-1]] = ""
-                self.lost.append(".".join(keys))
-                log(f"   no se pudo descifrar {'.'.join(keys)} de settings.json ({e}): vuelve a pegarla en Ajustes")
+            v = d.get(keys[-1])
+            items = v if isinstance(v, list) else [v]
+            out = []
+            for item in items:
+                if not is_protected(item):
+                    out.append(item)
+                    continue
+                try:
+                    out.append(unprotect(item).decode("utf-8"))
+                except (OSError, ValueError) as e:
+                    out.append("")
+                    if ".".join(keys) not in self.lost:
+                        self.lost.append(".".join(keys))
+                    log(f"   no se pudo descifrar {'.'.join(keys)} de settings.json ({e}): vuelve a pegarla en Ajustes")
+            d[keys[-1]] = [x for x in out if x] if isinstance(v, list) else out[0]
 
     def get(self):
         with self.lock:
@@ -228,6 +237,8 @@ class Store:
                     d = d.get(k) if isinstance(d, dict) else None
                 if isinstance(d, dict) and isinstance(d.get(keys[-1]), str) and d[keys[-1]]:
                     d[keys[-1]] = protect(d[keys[-1]])
+                elif isinstance(d, dict) and isinstance(d.get(keys[-1]), list):
+                    d[keys[-1]] = [protect(x) for x in d[keys[-1]] if isinstance(x, str) and x]
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(out, f, ensure_ascii=False, indent=1)
@@ -261,7 +272,9 @@ DEFAULT_SETTINGS = {
     # nube: whisper-large-v3 (el mas preciso; -turbo es mas rapido y algo menos fino)
     "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3", "base_url": "",
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
-              "chunk_minutes": 10, "parallel": 3},
+              "chunk_minutes": 10, "parallel": 3,
+              # directo en la nube: modelo rapido por trozo y claves de otras cuentas de Groq (rotacion de cupo)
+              "live_model": engines.LIVE_MODEL_DEFAULT, "extra_keys": []},
     "speed": {},
 }
 
@@ -905,6 +918,7 @@ class Job:
         self.resume_from = None  # continuar una transcripcion a medias desde este segundo
         self.final_pass = False  # repaso del archivo entero al terminar un directo en la nube
         self.opts = None  # solo en directo: opciones que live.run va leyendo (vocabulario incluido)
+        self.translate, self.translation, self.directo = False, [], None  # directo en la nube (live.py publish)
         # correcciones a mano durante el directo: {inicio de la frase: texto}, sobre lo que da Whisper (raw)
         self.edits, self.raw, self.out, self.edit_lock = {}, [], None, threading.Lock()
 
@@ -918,7 +932,7 @@ class Job:
              "resume_from": self.resume_from, "kind": self.kind, "final_pass": self.final_pass}
         if self.live:
             d.update(live=True, recording=self.recording, recorded=round(self.recorded, 1),
-                     transcribed=round(self.transcribed, 1), rev=self.rev)
+                     transcribed=round(self.transcribed, 1), rev=self.rev, directo=self.directo)
         return d
 
 
@@ -932,8 +946,8 @@ class Jobs:
         # cada uno con su modelo en memoria
         self.local = engines.LocalEngine(DATA_DIR, "batch")
         self.live_worker = engines.WorkerClient("live", DATA_DIR)
-        self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"))
-        self.summarizer = engines.Summarizer()  # en la nube (Groq): no carga el portatil
+        self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"), log=log)
+        self.summarizer = engines.Summarizer(keys=self.cloud.keys)  # en la nube (Groq); mismas claves y cupo
         self.queues["resumen"] = queue.Queue()
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
@@ -1063,7 +1077,7 @@ class Jobs:
         opts = {"preset": job.preset, "language": job.language, "prompt": vocab_for(abs_path, st),
                 "threads": int(st.get("threads") or default_threads()),
                 "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": st["cloud"],
-                "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume}
+                "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume, "summarizer": self.summarizer}
         job.opts = opts  # live.run lee el prompt en cada trozo: si cambias el workstream, vale desde el siguiente
         job.out = LiveOutputs(abs_path)
         if resume:  # lo que ya estaba escrito no se reescribe: lo nuevo se anade detras
@@ -1768,6 +1782,8 @@ class App:
         cloud = dict(st["cloud"])
         cloud["has_key"] = bool(cloud.get("api_key"))
         cloud["api_key"] = masked(cloud.get("api_key"))
+        cloud["extra_keys"] = [masked(k) for k in (cloud.get("extra_keys") or []) if k]  # nunca en claro
+        cloud["quota"] = self.jobs.cloud.keys.public(st["cloud"]) if cloud["has_key"] else None
         return {"root": ROOT, "version": VERSION, "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "preset": st["preset"], "language": st["language"], "threads": st["threads"],
                 "prompt": st["prompt"], "cpu_count": os.cpu_count(),
@@ -2257,6 +2273,12 @@ class App:
     def live_model(self, b):
         return self.jobs.set_live_preset(b.get("id"), b.get("preset"), bool(b.get("restart")))
 
+    def live_translate(self, b):
+        """Traducción al español del directo en la nube, por reunión (apagada por defecto); live.py hace el resto."""
+        job = self.jobs._live_job(b.get("id"))
+        job.translate = bool(b.get("on"))
+        return job.public()
+
     def clear_jobs(self, b):
         self.jobs.clear()
         return {"ok": True}
@@ -2408,6 +2430,12 @@ class App:
                 d["cloud"]["api_key"] = c["api_key"].strip()
             if c.get("clear_key"):
                 d["cloud"]["api_key"] = ""
+            if "live_model" in c:
+                d["cloud"]["live_model"] = (c["live_model"] or "").strip()[:80]
+            if isinstance(c.get("extra_keys"), list):  # las ya guardadas vuelven enmascaradas: se conservan
+                old = {masked(k): k for k in d["cloud"].get("extra_keys") or []}
+                new = [old.get(k.strip(), k.strip()) for k in c["extra_keys"] if isinstance(k, str) and k.strip()]
+                d["cloud"]["extra_keys"] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
         return self.config({})
 
@@ -2662,6 +2690,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/move": a.move, "/api/mkdir": a.mkdir, "/api/rename-folder": a.rename_folder,
                   "/api/reveal": a.reveal, "/api/open": a.open_file, "/api/settings": a.save_settings,
                   "/api/cloud/test": a.test_cloud, "/api/live": a.start_live, "/api/live/model": a.live_model,
+                  "/api/live/traducir": a.live_translate,
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,
                   "/api/summarize": a.summarize,

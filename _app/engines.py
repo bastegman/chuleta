@@ -69,6 +69,7 @@ PROVIDERS = {
     # pasarela interna, proxy de empresa, LiteLLM, vLLM... cualquier API con el formato de OpenAI
     "custom": {"label": "Otra (compatible con OpenAI)", "url": "", "models": ["whisper-large-v3"], "keys": ""},
 }
+LIVE_MODEL_DEFAULT = "whisper-large-v3-turbo"  # directo en Groq: ~1 s por trozo; el repaso final usa cloud.model
 
 
 def base_url(cfg):
@@ -489,16 +490,186 @@ class LocalEngine:
         return clean_segments(segs, res.get("prompt"), res.get("language")), res.get("language"), res.get("duration")
 
 
+# ----------------------------------------------------------------------------- cupo y claves (Groq)
+# El plan gratuito de Groq limita por organizacion (= por clave): Whisper 20 peticiones/min y 2.000/dia;
+# chat (gpt-oss) 30/min, 1.000/dia y 8.000 tokens/min. Cada respuesta trae x-ratelimit-remaining-requests
+# (lo que queda HOY), x-ratelimit-reset-requests ("2m59.56s") y, en un 429, retry-after (segundos).
+# El KeyPool guarda eso por clave y familia, reparte las peticiones entre la clave principal y las adicionales
+# y le dice al directo que ventana usar segun lo que queda del dia. Nunca escribe una clave en el log.
+RATE_SPACING = {"whisper": 3.0, "chat": 2.0}   # 20 y 30 peticiones/min: >= 3 s / 2 s entre dos de la misma clave
+ROTATE_BELOW = 20          # con menos peticiones restantes hoy, se pasa a la siguiente clave
+ROTATE_RETRY_AFTER = 60    # un 429 con retry-after mayor bloquea la clave hasta entonces y se pasa a la siguiente
+LIVE_PACES = ((600, (3, 6)), (300, (6, 10)), (60, (10, 15)))  # peticiones restantes -> ventana del directo (s)
+LIVE_PAUSE_BELOW = 60      # con menos en TODAS las claves, el directo se pausa (el repaso final sigue)
+DAILY_PROVIDERS = ("groq",)  # cabeceras de peticiones por DIA: la politica de ventana del directo solo vale ahi
+
+
+def cloud_keys(cfg):
+    """La API key principal y las adicionales (cloud.extra_keys), sin vacias ni repetidas, en ese orden."""
+    out = []
+    for k in [cfg.get("api_key")] + list(cfg.get("extra_keys") or []):
+        k = (k or "").strip() if isinstance(k, str) else ""
+        if k and k not in out:
+            out.append(k)
+    return out
+
+
+def daily_quota(cfg):
+    return cfg.get("provider", "groq") in DAILY_PROVIDERS
+
+
+class KeyPool:
+    """Estado de cupo por (clave, familia) y eleccion de la clave para cada peticion."""
+
+    FAMILIES = ("whisper", "chat")
+
+    def __init__(self, log=None):
+        self.lock = threading.Lock()
+        self.state = {}       # (clave, familia) -> dict
+        self.active = {}      # familia -> clave activa
+        self.log = log or (lambda m: None)
+        self.headers_logged = False
+        self.clock = time.time  # los tests y el banco ponen un reloj falso
+
+    def _st(self, key, family):
+        st = self.state.get((key, family))
+        if st is None:
+            st = self.state[(key, family)] = {"remaining": None, "limit": None, "reset_at": None, "retry_after": None,
+                                              "blocked_until": 0.0, "last_request": 0.0, "used": 0}
+        if st["reset_at"] and self.clock() >= st["reset_at"]:  # el dia de Groq se renovo: se olvida lo gastado
+            st.update(remaining=None, reset_at=None)
+        return st
+
+    @staticmethod
+    def _label(keys, key):
+        return f"clave {keys.index(key) + 1}/{len(keys)}" if key in keys else "clave"
+
+    def _usable(self, st, now, need):
+        return st["blocked_until"] <= now and (st["remaining"] is None or st["remaining"] >= need)
+
+    def _free_at(self, st, now):
+        if st["blocked_until"] > now:
+            return st["blocked_until"]
+        if st["remaining"] is not None and st["reset_at"]:
+            return st["reset_at"]
+        return now
+
+    def pick(self, cfg, family, need=ROTATE_BELOW):
+        """Clave para la siguiente peticion: la activa mientras le queden >= need peticiones y no este bloqueada;
+        si no, la siguiente que sirva; si ninguna sirve, la que antes se libere (la peticion fallara con un 429
+        que dira cuanto esperar)."""
+        keys = cloud_keys(cfg)
+        if not keys:
+            raise EngineError("Falta la API key de la nube (Ajustes ⚙).")
+        with self.lock:
+            now = self.clock()
+            cur = self.active.get(family)
+            order = keys if cur not in keys else keys[keys.index(cur):] + keys[:keys.index(cur)]
+            chosen = next((k for k in order if self._usable(self._st(k, family), now, need)), None)
+            if chosen is None:
+                chosen = min(keys, key=lambda k: self._free_at(self._st(k, family), now))
+            if chosen != cur and cur is not None and len(keys) > 1:
+                st = self._st(cur, family)
+                why = ("bloqueada" if st["blocked_until"] > now else
+                       f"quedan {st['remaining']} peticiones hoy" if st["remaining"] is not None else "sin uso")
+                self.log(f"   {family}: {self._label(keys, cur)} {why} → {self._label(keys, chosen)}")
+            self.active[family] = chosen
+            return chosen
+
+    def reserve(self, key, family):
+        """Reserva un hueco para una peticion con esa clave y devuelve los segundos que hay que esperar antes de
+        mandarla (ritmo por minuto). Con varias peticiones a la vez cada una recibe el hueco siguiente."""
+        with self.lock:
+            st, now = self._st(key, family), self.clock()
+            slot = max(now, st["last_request"] + RATE_SPACING.get(family, 0.0))
+            st["last_request"] = slot
+            return slot - now
+
+    def note(self, key, family, status, headers):
+        """Aprende de la respuesta: cabeceras x-ratelimit-* y retry-after. Devuelve una copia del estado."""
+        h = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+        rl = {k: v for k, v in h.items() if k.startswith("x-ratelimit-")}
+        with self.lock:
+            st, now = self._st(key, family), self.clock()
+            st["used"] += 1
+            if rl and not self.headers_logged:  # la primera vez, todas: para saber que cabeceras manda el servicio
+                self.headers_logged = True
+                self.log("   cabeceras de cupo del servicio: " + ", ".join(f"{k}={v}" for k, v in sorted(rl.items())))
+            try:
+                if "x-ratelimit-remaining-requests" in rl:
+                    st["remaining"] = int(float(rl["x-ratelimit-remaining-requests"]))
+                if "x-ratelimit-limit-requests" in rl:
+                    st["limit"] = int(float(rl["x-ratelimit-limit-requests"]))
+            except ValueError:
+                pass
+            if "x-ratelimit-reset-requests" in rl:
+                secs = _duration_s(rl["x-ratelimit-reset-requests"])
+                if secs > 0:
+                    st["reset_at"] = now + secs
+            if status == 429:
+                ra = _duration_s(h.get("retry-after", "")) or None
+                st["retry_after"] = ra
+                if ra and ra > ROTATE_RETRY_AFTER:
+                    st["blocked_until"] = now + ra
+            elif status is not None and 200 <= int(status) < 300 and st["remaining"] is not None:
+                st["blocked_until"] = 0.0
+            return dict(st)
+
+    def blocked(self, key, family):
+        with self.lock:
+            return self._st(key, family)["blocked_until"] > self.clock()
+
+    def live_pace(self, cfg):
+        """Ventana (min_s, max_s) del directo segun las peticiones que quedan hoy en la mejor clave; None = pausa.
+        Con un proveedor sin cupo diario (OpenAI, Azure, pasarela propia) siempre la ventana corta."""
+        if not daily_quota(cfg):
+            return LIVE_PACES[0][1]
+        key = self.pick(cfg, "whisper", need=LIVE_PAUSE_BELOW)  # para el directo se prefiere una clave con cupo
+        with self.lock:
+            st, now = self._st(key, "whisper"), self.clock()
+            if st["blocked_until"] > now:
+                return None
+            rem = st["remaining"]
+        if rem is None:
+            return LIVE_PACES[0][1]
+        for floor, pace in LIVE_PACES:
+            if rem >= floor:
+                return pace
+        return None
+
+    def public(self, cfg, family="whisper"):
+        """Para la interfaz: lo que queda hoy en la clave activa (o la principal), cuando se renueva y cuantas claves
+        hay. Nunca las claves."""
+        keys = cloud_keys(cfg)
+        with self.lock:
+            now = self.clock()
+            key = self.active.get(family) if self.active.get(family) in keys else (keys[0] if keys else None)
+            st = self._st(key, family) if key else None
+            others = [self._st(k, family) for k in keys if k != key]
+            out = {"keys": len(keys), "active": (keys.index(key) + 1) if key else 0, "daily": daily_quota(cfg),
+                   "remaining": st["remaining"] if st else None, "limit": st["limit"] if st else None,
+                   "reset_in": max(0.0, st["reset_at"] - now) if st and st["reset_at"] else None,
+                   "blocked_for": max(0.0, st["blocked_until"] - now) if st and st["blocked_until"] > now else 0.0,
+                   "used": st["used"] if st else 0,
+                   # suma de lo que queda en las demas claves (las que aun no se han usado cuentan como "sin dato")
+                   "others_remaining": sum(o["remaining"] for o in others if o["remaining"] is not None),
+                   "others_unknown": sum(1 for o in others if o["remaining"] is None)}
+        return out
+
+
 # ----------------------------------------------------------------------------- nube
 
 class CloudEngine:
-    def __init__(self, tmp_root):
+    def __init__(self, tmp_root, log=None, keys=None):
         self.tmp_root = tmp_root
+        self.keys = keys or KeyPool(log)
 
     @staticmethod
-    def endpoint(cfg):
+    def endpoint(cfg, key=None, model=None):
+        """(url, cabeceras, modelo). key: una clave concreta del KeyPool (por defecto la principal);
+        model: modelo distinto del configurado (el directo usa cloud.live_model)."""
         provider = cfg.get("provider", "groq")
-        key = (cfg.get("api_key") or "").strip()
+        key = (key or cfg.get("api_key") or "").strip()
         if not key:
             raise EngineError("Falta la API key de la nube (Ajustes ⚙).")
         if provider == "azure":
@@ -514,10 +685,20 @@ class CloudEngine:
             if not base.startswith(("http://", "https://")):
                 raise EngineError("Falta la URL base de la API (Ajustes ⚙), p. ej. https://api.groq.com/openai/v1")
             return base + "/audio/transcriptions", {"Authorization": f"Bearer {key}"}, \
-                (cfg.get("model") or "").strip() or "whisper-large-v3"
+                (model or cfg.get("model") or "").strip() or "whisper-large-v3"
         p = PROVIDERS.get(provider) or PROVIDERS["groq"]
-        model = cfg.get("model") or p["models"][0]
+        model = model or cfg.get("model") or p["models"][0]
         return p["url"], {"Authorization": f"Bearer {key}"}, model
+
+    @staticmethod
+    def live_model(cfg):
+        """Modelo del directo en la nube (cloud.live_model; en Groq, whisper-large-v3-turbo por defecto: mas rapido
+        por trozo). El repaso final y la cola siguen con cloud.model. En Azure el modelo lo fija el deployment."""
+        if cfg.get("provider", "groq") == "azure":
+            return None
+        if (cfg.get("live_model") or "").strip():
+            return cfg["live_model"].strip()
+        return LIVE_MODEL_DEFAULT if cfg.get("provider", "groq") == "groq" else None
 
     @staticmethod
     def _extract_parts(y, parts, work):
@@ -547,46 +728,57 @@ class CloudEngine:
             return None, build_prompt(STYLE_PROMPT["mix"], vocab, max_bytes=CLOUD_PROMPT_BYTES, context=context)[0]
         return language or None, build_prompt("", vocab, max_bytes=CLOUD_PROMPT_BYTES, context=context)[0]
 
-    def _post(self, cfg, chunk, language, prompt, report, cancelled, context=None):
+    @staticmethod
+    def _wait(secs, cancelled):
+        end = time.time() + secs
+        while time.time() < end:
+            if cancelled():
+                raise Cancelled()
+            time.sleep(min(0.25, max(0.0, end - time.time())))
+
+    def _post(self, cfg, chunk, language, prompt, report, cancelled, context=None, model=None, timeout=300):
+        """Una peticion de transcripcion. La clave la elige el KeyPool (rotacion), que tambien marca el ritmo
+        (>= 3 s entre peticiones de la misma clave) y aprende de las cabeceras de cupo de la respuesta."""
         import requests
-        url, headers, model = self.endpoint(cfg)
+        self.endpoint(cfg, model=model)  # valida la configuracion
         data = {"response_format": "verbose_json", "temperature": "0"}
-        if model:
-            data["model"] = model
         language, prompt = self.prompt_for(language, prompt, context)
         if language:
             data["language"] = language
         if prompt:
             data["prompt"] = prompt
-        last = None
+        last, family = None, "whisper"
         for attempt in range(6):
             if cancelled():
                 raise Cancelled()
+            key = self.keys.pick(cfg, family)
+            url, headers, mdl = self.endpoint(cfg, key=key, model=model)
+            if mdl:
+                data["model"] = mdl
+            self._wait(self.keys.reserve(key, family), cancelled)
             try:
                 with open(chunk, "rb") as fh:
                     mime = "audio/wav" if chunk.lower().endswith(".wav") else "audio/flac"
-                    r = requests.post(url, headers=headers, data=data, timeout=300,
+                    r = requests.post(url, headers=headers, data=data, timeout=timeout,
                                       files={"file": (os.path.basename(chunk), fh, mime)})
             except requests.RequestException as e:
                 last = f"sin conexión con el servicio ({e.__class__.__name__})"
                 wait = 2 ** attempt
             else:
+                self.keys.note(key, family, r.status_code, r.headers)
                 if r.status_code == 200:
                     return r.json()
                 last = api_error(r)
                 if r.status_code not in (408, 409, 429, 500, 502, 503, 504):
                     raise EngineError(last)
-                try:
-                    wait = float(r.headers.get("retry-after", ""))
-                except ValueError:
-                    wait = 3 * 2 ** attempt
+                wait = _duration_s(r.headers.get("retry-after", "")) or 3 * 2 ** attempt
+                if r.status_code == 429 and self.keys.blocked(key, family) and len(cloud_keys(cfg)) > 1 \
+                        and self.keys.pick(cfg, family) != key:
+                    report(stage="Esa cuenta de Groq ha agotado su cupo: se sigue con la siguiente clave…")
+                    continue  # otra clave disponible: sin esperar
             wait = min(max(wait, 1.0), 120.0)
             report(stage=f"La API pide esperar ({last}). Reintento en {wait:.0f} s…")
-            end = time.time() + wait
-            while time.time() < end:
-                if cancelled():
-                    raise Cancelled()
-                time.sleep(0.25)
+            self._wait(wait, cancelled)
         raise EngineError(last or "la API no respondió")
 
     def transcribe(self, path, duration, cfg, language, prompt, job_id, report, cancelled, start=0.0):
@@ -643,13 +835,17 @@ class CloudEngine:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
-    def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None):
-        """Un trozo ya en memoria (16 kHz mono), para el modo en directo. context: lo ultimo que se dijo."""
+    def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
+                         model=None):
+        """Un trozo ya en memoria (16 kHz mono), para el modo en directo. context: lo ultimo que se dijo;
+        model: el del directo (cloud.live_model), distinto del de la cola y el repaso final."""
         os.makedirs(tmp_dir, exist_ok=True)
         f = os.path.join(tmp_dir, f"live_{job_id}.wav")
         write_wav16(f, audio)
         try:
-            res = self._post(cfg, f, language, prompt, lambda **k: stage(k.get("stage", "")), cancelled, context)
+            # trozos de pocos segundos: si la red se atasca mas de 60 s, mejor fallar y seguir con el siguiente
+            res = self._post(cfg, f, language, prompt, lambda **k: stage(k.get("stage", "")), cancelled, context,
+                             model=model, timeout=60)
         finally:
             try:
                 os.remove(f)
@@ -709,15 +905,24 @@ def chat_url(cfg):
 
 
 def _duration_s(v):
-    """'6.08s', '2m59.5s', '1h2m' (cabeceras de limites de Groq) -> segundos."""
-    total, num = 0.0, ""
-    for ch in str(v or ""):
+    """'6.08s', '2m59.5s', '1h2m', '750ms' (cabeceras de limites de Groq) o '120' (retry-after) -> segundos."""
+    s = str(v or "").strip().lower()
+    total, num, i = 0.0, "", 0
+    while i < len(s):
+        ch = s[i]
         if ch.isdigit() or ch == ".":
             num += ch
+        elif ch == "m" and s[i:i + 2] == "ms" and num:
+            total += float(num) / 1000
+            num, i = "", i + 1
         elif ch in "hms" and num:
             total += float(num) * {"h": 3600, "m": 60, "s": 1}[ch]
             num = ""
-    return total + (float(num) if num else 0.0)
+        i += 1
+    try:
+        return total + (float(num) if num else 0.0)
+    except ValueError:
+        return total
 
 
 def _stamp(t):
@@ -734,9 +939,11 @@ class Summarizer:
 
     CHUNK_CHARS = 11000    # ~3K tokens por trozo + respuesta: cabe en 8K por minuto
     SINGLE_CHARS = 15000   # reuniones cortas: una sola llamada
+    TRANSLATE_MODEL = "openai/gpt-oss-20b"  # traduccion del directo: rapido y barato en cupo
 
-    def __init__(self):
+    def __init__(self, keys=None):
         self.remaining, self.reset_at = None, 0.0
+        self.keys = keys or KeyPool()  # compartido con CloudEngine: la rotacion de claves es la misma
 
     @staticmethod
     def lines(segments, width=260):
@@ -761,19 +968,20 @@ class Summarizer:
             flush()
         return out
 
-    def _chat(self, cfg, system, user, max_tokens, report, cancelled):
+    def _chat(self, cfg, system, user, max_tokens, report, cancelled, model=None, temperature=0.2, timeout=180):
         import requests
         provider = cfg.get("provider", "groq")
         url = chat_url(cfg)
-        key = (cfg.get("api_key") or "").strip()
-        if not url or not key:
+        if not url or not cloud_keys(cfg):
             raise EngineError("El resumen necesita una API key de Groq (o OpenAI) en Ajustes ⚙.")
-        model = cfg.get("summary_model") or (SUMMARY_MODELS[0] if provider in ("groq", "custom") else "gpt-4o-mini")
-        body = {"model": model, "temperature": 0.2, "max_completion_tokens": max_tokens,
+        model = model or cfg.get("summary_model") or (SUMMARY_MODELS[0] if provider in ("groq", "custom")
+                                                      else "gpt-4o-mini")
+        body = {"model": model, "temperature": temperature, "max_completion_tokens": max_tokens,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         if model.startswith("openai/gpt-oss"):
             body["reasoning_effort"] = "low"  # razona poco: gasta menos cupo y tarda menos
         need = (len(system) + len(user)) // 3 + max_tokens
+        family = "chat"
         for attempt in range(8):
             if cancelled():
                 raise Cancelled()
@@ -782,12 +990,15 @@ class Summarizer:
                 wait = self.reset_at - time.time() + 1
                 report(stage=f"Esperando al límite por minuto de Groq ({wait:.0f} s)…")
                 self._sleep(wait, cancelled)
+            key = self.keys.pick(cfg, family)
+            self._sleep(self.keys.reserve(key, family), cancelled)
             try:
-                r = requests.post(url, json=body, timeout=180, headers={"Authorization": f"Bearer {key}"})
+                r = requests.post(url, json=body, timeout=timeout, headers={"Authorization": f"Bearer {key}"})
             except requests.RequestException as e:
                 report(stage=f"Sin conexión con {provider} ({e.__class__.__name__}), reintentando…")
                 self._sleep(3 * 2 ** attempt, cancelled)
                 continue
+            self.keys.note(key, family, r.status_code, r.headers)
             if "x-ratelimit-remaining-tokens" in r.headers:
                 try:
                     self.remaining = int(r.headers["x-ratelimit-remaining-tokens"])
@@ -802,6 +1013,9 @@ class Summarizer:
                 raise EngineError("El modelo devolvió una respuesta vacía.")
             if r.status_code == 429:
                 wait = _duration_s(r.headers.get("retry-after", "")) or 20
+                if self.keys.blocked(key, family) and len(cloud_keys(cfg)) > 1 and self.keys.pick(cfg, family) != key:
+                    report(stage="Esa cuenta de Groq ha agotado su cupo: se sigue con la siguiente clave…")
+                    continue
                 if wait > 300:  # limite diario de tokens: no tiene sentido esperar aqui
                     raise EngineError(f"Límite diario de Groq alcanzado (se libera en ~{wait / 3600:.1f} h). "
                                       "Vuelve a pulsar «Resumir» más tarde.")
@@ -824,7 +1038,26 @@ class Summarizer:
         while time.time() < end:
             if cancelled():
                 raise Cancelled()
-            time.sleep(0.25)
+            time.sleep(min(0.25, max(0.0, end - time.time())))
+
+    TRANSLATE_SYSTEM = (
+        "Eres un traductor simultáneo de reuniones de trabajo. Traduce al español, con fidelidad y sin resumir, "
+        "comentar ni completar, el fragmento de transcripción que te pasen (suele venir en portugués o inglés; "
+        "si una frase ya está en español, cópiala tal cual). Conserva nombres propios, siglas, cifras, fechas y "
+        "términos técnicos. El fragmento puede empezar o acabar a mitad de frase: tradúcelo igual, sin inventar "
+        "el resto. Devuelve solo la traducción, sin comillas ni notas.")
+
+    def translate(self, cfg, text, report, cancelled, model=None):
+        """Traduce al espanol un trozo del directo con un modelo de chat rapido (gpt-oss-20b en Groq).
+        Devuelve (texto, modelo). Comparte claves y rotacion con la transcripcion."""
+        text = " ".join((text or "").split())
+        if not text:
+            return "", model or self.TRANSLATE_MODEL
+        provider = cfg.get("provider", "groq")
+        model = model or (self.TRANSLATE_MODEL if provider in ("groq", "custom") else "gpt-4o-mini")
+        max_tokens = min(1200, 120 + len(text) // 2)  # el espanol ocupa ~1 token por 3-4 caracteres; con margen
+        return self._chat(cfg, self.TRANSLATE_SYSTEM, text, max_tokens, report, cancelled, model=model,
+                          temperature=0.1, timeout=60)
 
     def summarize(self, segments, meta, cfg, report, cancelled):
         """meta: title, date, duration, participants, notes, lang, extra. Devuelve (markdown, modelo)."""
