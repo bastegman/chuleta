@@ -133,9 +133,11 @@ class TemplatesTests(unittest.TestCase):
         """La app es agnóstica: nada de clientes, empresas ni personas en ningún fichero del repo (código, tests,
         scripts, workflows, CHANGELOG, README y LEEME)."""
         # La lista es privada (los clientes de cada usuario) y nunca se escribe en el repo: expresiones regulares
-        # separadas por comas (o una por línea) en la variable de entorno NOTAS_PALABRAS_VETADAS; sin ella, el test
-        # se salta. En la CI la pone tests.yml desde el secreto de Actions del mismo nombre, solo en el paso de este
-        # test. En local, con la lista en un fichero fuera del repo (escrita en la orden quedaría en el historial):
+        # separadas por comas (o una por línea) en la variable de entorno NOTAS_PALABRAS_VETADAS, sin distinguir
+        # mayúsculas y con ^ y $ en cada línea. Sin ella, el test se salta, salvo con NOTAS_EXIGIR_VETADAS=true, que
+        # lo hace fallar. En la CI, tests.yml pone las dos solo en el paso de este test: la lista, desde el secreto de
+        # Actions del mismo nombre, y la exigencia, en los push del repo propio, donde el secreto tiene que estar. En
+        # local, con la lista en un fichero fuera del repo (escrita en la orden quedaría en el historial):
         #   macOS/Linux:  NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py
         #   Windows (PowerShell, desde la raíz del repo):
         #     $env:NOTAS_PALABRAS_VETADAS = Get-Content -Raw "$HOME\chuleta-vetadas.txt"; python tests\run.py
@@ -144,13 +146,17 @@ class TemplatesTests(unittest.TestCase):
         # el log de la CI de un repo público es público.
         patrones = palabras_vetadas()
         if not patrones:
+            if vetadas_exigidas():
+                self.fail("NOTAS_PALABRAS_VETADAS falta o está vacía y NOTAS_EXIGIR_VETADAS la exige: en la CI, crea "
+                          "el secreto de Actions NOTAS_PALABRAS_VETADAS con la lista (sin ella no se revisa nada)")
             self.skipTest("NOTAS_PALABRAS_VETADAS sin definir")
         hits = buscar_palabras(patrones, ficheros_del_repo())
         if hits:
             lineas = [f"  {rel}:{n} (patrón {k})" for rel, n, k in hits[:50]]
             if len(hits) > 50:
                 lineas.append(f"  … y {len(hits) - 50} más")
-            self.fail(f"{len(hits)} coincidencias con NOTAS_PALABRAS_VETADAS (sin el texto):\n" + "\n".join(lineas))
+            cuantas = "1 coincidencia" if len(hits) == 1 else f"{len(hits)} coincidencias"
+            self.fail(f"{cuantas} con NOTAS_PALABRAS_VETADAS (sin el texto):\n" + "\n".join(lineas))
 
     def test_agnosticismo_mira_todo_el_repo_y_calla_lo_que_encuentra(self):
         """El test de agnosticismo revisa también CHANGELOG, tests, scripts y workflows, y al fallar no repite el texto
@@ -201,10 +207,49 @@ class TemplatesTests(unittest.TestCase):
         self.assertNotIn("sin cerrar", str(cm.exception))
         self.assertIn("patrón 2", str(cm.exception))
 
+    def test_agnosticismo_exigido_sin_lista_falla(self):
+        """Con NOTAS_EXIGIR_VETADAS (la CI, en los push del repo propio) una lista que falta o está vacía hace fallar el
+        test en vez de saltarlo: borrar el secreto, o vaciarlo al rotarlo, no deja la CI en verde sin revisar nada."""
+        casos = (({"NOTAS_EXIGIR_VETADAS": "true"}, "falla"),
+                 ({"NOTAS_EXIGIR_VETADAS": "1", "NOTAS_PALABRAS_VETADAS": " , \n "}, "falla"),
+                 ({"NOTAS_EXIGIR_VETADAS": "false", "NOTAS_PALABRAS_VETADAS": ""}, "salta"),  # pull request, fork, bot
+                 ({}, "salta"))  # en local, sin la lista
+        for env, esperado in casos:
+            with self.subTest(env=env):
+                entorno = {k: v for k, v in os.environ.items()
+                           if k not in ("NOTAS_EXIGIR_VETADAS", "NOTAS_PALABRAS_VETADAS")}
+                entorno.update(env)
+                resultado = unittest.TestResult()
+                with mock.patch.dict(os.environ, entorno, clear=True):
+                    TemplatesTests("test_sin_rastro_de_clientes").run(resultado)
+                self.assertEqual((resultado.testsRun, resultado.errors), (1, []))
+                if esperado == "falla":
+                    self.assertEqual((len(resultado.failures), resultado.skipped), (1, []))
+                    self.assertIn("NOTAS_EXIGIR_VETADAS", resultado.failures[0][1])
+                else:
+                    self.assertEqual((resultado.failures, len(resultado.skipped)), ([], 1))
+
+    def test_agnosticismo_ancla_por_linea(self):
+        """^ y $ de un patrón marcan el principio y el fin de cada línea, no solo los del fichero, también en los
+        ficheros con CRLF (.bat, .ps1 y LEEME.txt)."""
+        root = tempfile.mkdtemp(prefix="chuleta-agnostico-")
+        rels = ["a.txt", "b.bat", "c.md"]
+        for rel, datos in zip(rels, (b"uno\nmarca\n", b"uno\r\nmarca\r\nfin\r\n", b"no marca\n")):
+            with open(os.path.join(root, rel), "wb") as f:
+                f.write(datos)
+        self.assertEqual(buscar_palabras(["^marca$"], rels, root), [("a.txt", 2, 1), ("b.bat", 2, 1)])
+        self.assertEqual(buscar_palabras(["marca$"], rels, root), [("a.txt", 2, 1), ("b.bat", 2, 1), ("c.md", 1, 1)])
+
 
 def palabras_vetadas():
     """La lista privada de NOTAS_PALABRAS_VETADAS: expresiones regulares separadas por comas o por saltos de línea."""
     return [p.strip() for p in re.split(r"[,\n]", os.environ.get("NOTAS_PALABRAS_VETADAS", "")) if p.strip()]
+
+
+def vetadas_exigidas():
+    """NOTAS_EXIGIR_VETADAS («true» o «1»): sin lista, el test de agnosticismo falla en vez de saltarse. tests.yml la
+    pone en los push del repo propio, donde el secreto tiene que estar."""
+    return os.environ.get("NOTAS_EXIGIR_VETADAS", "").strip().lower() in ("true", "1")
 
 
 _RAIZ_SIN_GIT = ("CHANGELOG.md", "README.md", "LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat",
@@ -233,13 +278,14 @@ def ficheros_del_repo(root=REPO):
 
 
 def buscar_palabras(patrones, rels, root=REPO):
-    """[(fichero, línea, n.º de patrón)] de cada línea donde casa un patrón (sin distinguir mayúsculas), saltando los
-    binarios. Nunca devuelve el texto encontrado: es justo lo que no puede acabar en un log público."""
+    """[(fichero, línea, n.º de patrón)] de cada línea donde empieza una coincidencia de un patrón (sin distinguir
+    mayúsculas; ^ y $ son el principio y el fin de cada línea), saltando los binarios. Nunca devuelve el texto
+    encontrado: es justo lo que no puede acabar en un log público."""
     import bisect
     regs = []
     for k, p in enumerate(patrones, 1):
         try:
-            regs.append(re.compile(p, re.I))
+            regs.append(re.compile(p, re.I | re.M))
         except re.error:
             raise ValueError(f"el patrón {k} de NOTAS_PALABRAS_VETADAS no es una expresión regular válida") from None
     hits = []
@@ -251,7 +297,7 @@ def buscar_palabras(patrones, rels, root=REPO):
             data = f.read()
         if b"\0" in data[:8192]:
             continue  # binario (iconos, imágenes)
-        text = data.decode("utf-8-sig", "replace")
+        text = data.decode("utf-8-sig", "replace").replace("\r\n", "\n")  # con CRLF, el \r no deja casar $
         saltos = None
         for k, rx in enumerate(regs, 1):
             inicios = [m.start() for m in rx.finditer(text)]

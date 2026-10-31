@@ -270,6 +270,30 @@ class WorkflowsWindowsTests(unittest.TestCase):
         self.assertIn("test_package.TemplatesTests.test_sin_rastro_de_clientes", pasos[0]["run"])
         self.assertEqual(pasos[0].get("working-directory"), "tests")
 
+    def test_agnosticismo_falla_sin_el_secreto_en_los_push_del_repo_propio(self):
+        """P2-39: en los push del repo propio el secreto tiene que estar. Si falta, o se borra o se vacía al rotarlo, el
+        test falla en vez de saltarse en verde. En los demás casos, sin el secreto, se salta con un aviso: los
+        pull_request (los de un fork no reciben secretos y los de una rama del repo ya pasan por el push de esa rama),
+        los forks y Dependabot."""
+        wf = workflow("tests.yml")
+        self.assertIn("push", eventos(wf["on"]))
+        pares = [(job, p) for job in wf["jobs"].values() for p in job["steps"]
+                 if "NOTAS_PALABRAS_VETADAS" in (p.get("env") or {})]
+        self.assertEqual(len(pares), 1)
+        job, paso = pares[0]
+        self.assertEqual(paso["env"].get("NOTAS_EXIGIR_VETADAS"),
+                         "${{ github.event_name == 'push' && !github.event.repository.fork"
+                         " && github.actor != 'dependabot[bot]' }}")
+        for d in (job, paso):  # nada que lo deje en verde aunque falle ni que lo salte en un push
+            self.assertNotIn("continue-on-error", d)
+            self.assertNotIn("if", d)
+        run = paso["run"]
+        self.assertIn('[ "$NOTAS_EXIGIR_VETADAS" = "true" ]', run)  # el ::error, solo donde se exige
+        self.assertIn("::error title=Agnosticismo::", run)
+        self.assertNotIn("|| true", run)
+        self.assertNotIn("exit 0", run)
+        self.assertTrue(run.rstrip().endswith("test_package.TemplatesTests.test_sin_rastro_de_clientes"))
+
 
 if __name__ == "__main__":
     unittest.main()
