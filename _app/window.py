@@ -129,10 +129,14 @@ class Window:
 
     def _ask_page_then_hide(self):
         time.sleep(0.05)
+        js = 'typeof onWindowClosing === "function" ? onWindowClosing() : "no"'
         try:
-            r = self.w.evaluate_js('typeof onWindowClosing === "function" ? onWindowClosing() : "no"')
+            r = self.w.evaluate_js(js)
         except Exception:
-            r = None
+            try:  # evaluate_js envuelve el script en un eval() que la CSP de la pagina puede bloquear; run_js no
+                r = self.w.run_js(js)
+            except Exception:
+                r = None
         if r != "handled":
             self._hide()
 

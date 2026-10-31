@@ -16,7 +16,8 @@ const CONSENT_TEXT = 'Aviso: voy a grabar y transcribir esta reunión para tomar
   + 'Aviso: vou gravar e transcrever esta reunião para tomar notas. Se alguém preferir que não, digam-me.';
 
 const titleOf = a => nfc((a && a.props && a.props.titulo) || '');
-const iconOf = a => (a && a.props && a.props.icono) || '';
+// el icono viene del .md (que puede estar en una carpeta compartida) y se pinta como HTML: siempre escapado (P0-2)
+const iconOf = a => esc((a && a.props && a.props.icono) || '');
 const pageTitle = a => titleOf(a) || longTitle(a);
 const fIcon = f => (S.config && S.config.folder_icons && S.config.folder_icons[f.path]) || (f.linked ? '🔗' : '');
 const aDay = a => { const d = aDate(a) || new Date(a.mtime * 1000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };

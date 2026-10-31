@@ -282,11 +282,13 @@ def make_variant(kind, base):
     return os.path.join(app, "server.py")
 
 
-def wait_ping(timeout=40):
+def wait_ping(data, timeout=40):
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            with urllib.request.urlopen(URL + "api/ping", timeout=2) as r:
+        try:  # la API exige el token de la sesion, que el servidor deja en <data>/sesion.token al arrancar
+            with open(os.path.join(data, "sesion.token"), encoding="utf-8") as f:
+                req = urllib.request.Request(URL + "api/ping", headers={"X-Chuleta-Token": f.read().strip()})
+            with urllib.request.urlopen(req, timeout=2) as r:
                 if json.load(r).get("app") == "audios":
                     return True
         except Exception:
@@ -307,7 +309,7 @@ def measure_variant(kind, base, out_dir, edge):
     srv = subprocess.Popen([sys.executable, server_py, "--no-browser", "--port", str(PORT), "--data", data],
                            stdout=log, stderr=subprocess.STDOUT)
     try:
-        if not wait_ping():
+        if not wait_ping(data):
             rec["notes"].append("el servidor no respondió al ping en 40 s")
             return rec
         with urllib.request.urlopen(URL, timeout=5) as r:

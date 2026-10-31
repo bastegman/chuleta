@@ -502,18 +502,20 @@ class RutaTests(unittest.TestCase):
     def setUpClass(cls):
         cls.srv = server.Server(("127.0.0.1", 0), server.Handler)
         cls.port = cls.srv.server_address[1]
-        cls._app, cls._port = server.Handler.app, server.PORT
+        cls._app, cls._port, cls._token = server.Handler.app, server.PORT, server.Handler.token
         server.Handler.app, server.PORT = StubApp(), cls.port
+        server.Handler.token = "prueba-reunion"  # el token de sesion que exige la API (P1-02)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
         cls.srv.server_close()
-        server.Handler.app, server.PORT = cls._app, cls._port
+        server.Handler.app, server.PORT, server.Handler.token = cls._app, cls._port, cls._token
 
     def get(self, path, host=None):
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
+                                     headers={server.TOKEN_HEADER: server.Handler.token})
         if host:
             req.add_header("Host", host)
         with urllib.request.urlopen(req, timeout=5) as r:
