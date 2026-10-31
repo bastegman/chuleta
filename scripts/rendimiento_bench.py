@@ -225,8 +225,7 @@ class FakeCloud:
         self.sent = []
         self.eng._post = self._post
 
-    def _post(self, cfg, chunk, language, prompt, report, cancelled, context=None, model=None, timeout=300,
-              timing=None):
+    def _post(self, cfg, chunk, language, prompt, report, cancelled, **kw):
         self.sent.append((time.perf_counter(), os.path.getsize(chunk)))
         time.sleep(self.api_s)
         return {"text": "x", "segments": [{"start": 0, "end": 1, "text": "x"}], "language": "es"}

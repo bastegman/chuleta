@@ -14,12 +14,16 @@ from unittest import mock
 
 from support import TempTree, FakeJob, bare_jobs, engines, live, server, wav_bytes  # noqa: E402
 
-import requests  # noqa: E402  (requirements-dev: la app lo usa de verdad; aqui se le monta un adaptador falso)
+try:  # la app lo usa de verdad (requirements.txt); los tests de sesion se saltan donde no este instalado
+    import requests
+    _Adapter = requests.adapters.BaseAdapter
+except ImportError:  # pragma: no cover
+    requests, _Adapter = None, object
 
 CFG = {"provider": "groq", "api_key": "gsk_test_1234567890"}
 
 
-class FakeAdapter(requests.adapters.BaseAdapter):
+class FakeAdapter(_Adapter):
     """Adaptador montado en la sesion del hilo: cuenta las peticiones que pasan por ella y guarda sus timeouts."""
 
     def __init__(self, body=None, headers=None):
@@ -38,6 +42,7 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         pass
 
 
+@unittest.skipUnless(requests, "requests no instalado")
 class HttpSessionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="notas-rend-")
