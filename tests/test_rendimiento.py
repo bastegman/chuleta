@@ -266,7 +266,7 @@ class LibraryCacheTests(TempTree):
         lib, clock = self.lib()
         lib.refresh()
         d1 = lib.find("Reuniones/2026-10-30 12-00-00.wav")["duration"]
-        self.assertIn(p, lib.watch)
+        self.assertIn(os.path.normpath(p), {os.path.normpath(k) for k in lib.watch})  # en Windows, scandir da "\\"
         with open(p, "ab") as f:  # OBS sigue escribiendo: cambia el fichero, no la carpeta
             f.write(b"\0" * (48000 * 4 * 5))
         clock[0] += 6
