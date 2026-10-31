@@ -283,8 +283,12 @@ $ilog3 = Tail-Log "instalar.log" 120
 Check "g.exitcode_0_en_ventana" ($rc3 -eq 0) $rc3 $false
 Check "g.error_proxy_mostrado" ($ilog3 -match "X No se han podido descargar") (($ilog3 -split "`n" | Select-String "^X " | Select-Object -First 1) -join "") $false
 Check "g.autocierre" ($ilog3 -match "autocierre tras 20") "" $false
+# la tabla TCP puede ensenar unos segundos un LISTEN huerfano del servidor de f ya muerto: lo que cuenta es que no haya
+# ningun proceso de Python ejecutando server.py
+Start-Sleep -Seconds 3
+$servidores = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^pythonw?\.exe$" -and $_.CommandLine -like "*server.py*" })
 $lisg = @(Get-Listener)
-Check "g.no_lanza_la_app" ($lisg.Count -eq 0) ("listeners=" + $lisg.Count + " " + (Describe-Listeners)) $false
+Check "g.no_lanza_la_app" ($servidores.Count -eq 0) ("procesos server.py=" + $servidores.Count + " listeners=" + $lisg.Count + " " + (Describe-Listeners)) $false
 Note "g.server_log_cola" ((Tail-Log "server.log" 6) -replace "`n", " | ")
 
 # ---- h) cierre: no dejar ningun servidor vivo en el runner
