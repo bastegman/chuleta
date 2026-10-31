@@ -282,7 +282,8 @@ class ServidorHttpTests(unittest.TestCase):
         self.assertTrue(t.startswith(f"{common.APP_NAME} · versión {server.VERSION}\n"), t.splitlines()[0])
         self.assertIn("Python " + sys.version.split()[0], t)
         self.assertIn("nube (groq) · modelo whisper-large-v3", t)
-        self.assertIn(f"Datos: {tmp}", t)
+        self.assertIn("Datos: <datos>", t)  # la ruta (con el usuario de Windows) va como marcador
+        self.assertNotIn(tmp, t)
         self.assertNotIn(key, t)
         self.assertNotIn(extra, t)
         self.assertNotIn("gsk_QQQQ", t)

@@ -1813,6 +1813,7 @@ function openSettings() {
   const ac = S.config.acerca || {};
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
+    ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
     <fieldset><legend>${I.nube}Transcripción en la nube</legend>
       <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
@@ -1836,10 +1837,12 @@ function openSettings() {
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
     </fieldset>
     <fieldset><legend>${I.spark}Resumen con IA</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir en la nube (reuniones de los últimos 3 días)</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAutoLocal" ${S.config.summary?.local ? 'checked' : ''}> Resumir también las reuniones transcritas en local (envía el texto a ${esc(provName())})</label>
+      <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>El texto de la transcripción, tus notas, el contexto y los participantes confirmados de cada reunión que transcribas en este PC se enviarán a <b>${esc(provName())}</b> para hacer el resumen (el audio no). Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
       <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
       <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
     <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
@@ -1866,7 +1869,8 @@ function openSettings() {
       <div class="help" style="margin-top:0"><b>${esc(APP_NAME)}</b> · versión ${esc(S.config.version || '')}${ac.licencia ? ` · licencia ${esc(ac.licencia)}` : ''}<br>
         Código, novedades y ayuda: <a href="${esc(ac.repo || '#')}" id="aRepo">${esc((ac.repo || '').replace(/^https?:\/\//, ''))}</a><br>
         Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code></div>
-      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro, sin claves: para pedir ayuda</span></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
+      <div class="help">Sin claves, y los nombres de reuniones, carpetas, proyectos, temas y personas y tu usuario de Windows van cambiados por marcadores (&lt;reunión 1&gt;, &lt;usuario&gt;…). Aun así, revísalo antes de pegarlo y no lo publiques en un sitio público.</div>
     </fieldset>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
@@ -1875,7 +1879,7 @@ function openSettings() {
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
     $('#aDiag', d).onclick = async () => {
-      try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: pégalo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
+      try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
     };
     const fields = () => {
       const p = $('#cProv', d).value, info = P[p];
@@ -1898,6 +1902,7 @@ function openSettings() {
     };
     fields();
     $('#cProv', d).onchange = fields;
+    $('#sAutoLocal', d).onchange = e => { $('#sAutoLocalAviso', d).hidden = !e.target.checked; if (e.target.checked) localStorage.setItem('sumOk', '1'); };
     bindVocesSettings(d);
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     window.bindReunionSettings?.(d);
@@ -1916,7 +1921,7 @@ function openSettings() {
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
-        summary: { auto: $('#sAuto', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
+        summary: { auto: $('#sAuto', d).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
     };
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
@@ -2024,6 +2029,14 @@ function toast(html, kind = '', onclick) {
 }
 
 /* ---------------------------------------------------------------- arranque */
+/* settings.json no se pudo leer al arrancar (server.py, Store): se copió como settings.json.roto-<fecha> y se rescató
+   lo que se pudo. Se avisa al abrir la app y arriba en Ajustes. */
+function settingsBrokenHtml(b) {
+  const rec = (b.recuperado || []).length ? `Se han recuperado ${esc(b.recuperado.join(', '))}; lo demás vuelve a los valores por defecto.` : 'Tus ajustes vuelven a los valores por defecto.';
+  return `${I.info}No se han podido leer tus ajustes: settings.json estaba dañado. ${b.copia
+    ? `Hay una copia tal como estaba, <b>${esc(b.copia)}</b>, en la carpeta de datos (Ajustes → Acerca de → Abrir).`
+    : 'No se ha podido hacer una copia, así que en esta sesión los cambios de Ajustes no se guardan en disco.'} ${rec} Revisa Ajustes.`;
+}
 function setConfig(c) {
   S.config = c;
   if (c.app_name) APP_NAME = c.app_name;
@@ -2046,6 +2059,7 @@ async function refreshTree(force) {
 async function init() {
   try {
     setConfig(await api('/api/config'));
+    if (S.config.settings_broken) toast(settingsBrokenHtml(S.config.settings_broken), 'err', openSettings);
     const r = await api('/api/tree');
     S.version = r.version;
     indexTree(r.tree);

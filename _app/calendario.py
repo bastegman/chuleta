@@ -5,7 +5,9 @@ Dos niveles, los dos locales y de solo lectura:
   1. El título de la ventana de REUNIÓN de Teams (EnumWindows): no activa nada y vale en cualquier PC.
   2. Outlook clásico de escritorio por COM (pywin32, opcional): la cita del calendario que coincide con «ahora»
      (asunto, horas, organizador, asistentes, categorías). Solo si se enciende en Ajustes («Leer mi calendario»).
-Nada sale del PC: los nombres de los asistentes van, como mucho, a la cabecera del .md de la grabación.
+La lectura no sale del PC. Los asistentes sugeridos van a la cabecera del .md de la grabación con su origen
+(participantes_origen) y, mientras el usuario no los confirma o los edita, tampoco salen de ahí: ni al resumen con IA
+(que va a la nube) ni a los destinos de salida (server.participantes_confirmados). Confirmados, sí.
 
 Fuera de Windows (y en los tests) cada lectura devuelve None con su motivo; la lógica pura (parse_title,
 pick_meeting_window, elegir_cita, suggest, decidir_aviso) se prueba con dobles.
