@@ -170,6 +170,75 @@ class InstaladorEmpresaTests(unittest.TestCase):
         self.assertLess(j, k)
 
 
+def run_ps_functions(ps1, names, body):
+    """Ejecuta `body` con solo las funciones `names` de `ps1` (sacadas por AST: el script entero no se ejecuta)."""
+    quoted = ", ".join("'" + n + "'" for n in names)
+    script = ("$ast = [System.Management.Automation.Language.Parser]::ParseFile('" + ps1.replace("'", "''") +
+              "', [ref]$null, [ref]$null); "
+              "foreach ($d in $ast.FindAll({ param($a) $a -is "
+              "[System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { "
+              "if (@(" + quoted + ") -contains $d.Name) { . ([scriptblock]::Create($d.Extent.Text)) } }; " + body)
+    r = subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    return r.stdout + r.stderr
+
+
+@unittest.skipUnless(powershell(), "sin PowerShell (CHULETA_PWSH, powershell.exe o pwsh)")
+class CarpetaNuevaTests(unittest.TestCase):
+    """Get-CarpetaNueva / Test-CarpetaLibre de instalar.ps1, de verdad, sobre un perfil de usuario temporal."""
+
+    def nueva(self, prepare):
+        home = os.path.realpath(tempfile.mkdtemp(prefix="chuleta-home-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        prepare(home)
+        out = run_ps_functions(INSTALAR, ["Test-Instalacion", "Test-CarpetaLibre", "Get-CarpetaNueva"],
+                               "$FolderName = 'Chuleta'; $script:UserHome = '" + home.replace("'", "''") + "'; "
+                               "Write-Output ('R=' + (Get-CarpetaNueva))")
+        m = re.search(r"R=(.*)", out)
+        self.assertTrue(m, out)
+        return os.path.basename(m.group(1).strip())
+
+    @staticmethod
+    def write(path, data="x"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+
+    def test_perfil_sin_chuleta(self):
+        self.assertEqual(self.nueva(lambda h: None), "Chuleta")
+
+    def test_carpeta_vacia(self):
+        self.assertEqual(self.nueva(lambda h: os.makedirs(os.path.join(h, "Chuleta"))), "Chuleta")
+
+    def test_carpeta_ajena(self):
+        # «chuleta» es una palabra corriente: una carpeta con apuntes no es de la app y no se usa
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta", "apuntes.txt"))), "Chuleta (2)")
+
+    def test_dos_ajenas(self):
+        def prep(h):
+            self.write(os.path.join(h, "Chuleta", "apuntes.txt"))
+            self.write(os.path.join(h, "Chuleta (2)", "otra.txt"))
+        self.assertEqual(self.nueva(prep), "Chuleta (3)")
+
+    def test_un_fichero_con_ese_nombre(self):
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta"))), "Chuleta (2)")
+
+    def test_desinstalada_con_reuniones(self):
+        # lo que deja el desinstalador: LEEME.txt de Chuleta y las reuniones -> se vuelve a la misma carpeta
+        def prep(h):
+            self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "\ufeffCHULETA · grabar, transcribir y resumir")
+            self.write(os.path.join(h, "Chuleta", "Proyecto Alfa", "reunion.wav"))
+        self.assertEqual(self.nueva(prep), "Chuleta")
+
+    def test_leeme_ajeno(self):
+        def prep(h):
+            self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "Mis chuletas de examen")
+        self.assertEqual(self.nueva(prep), "Chuleta (2)")
+
+    def test_instalada(self):
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta", "_app", "server.py"))), "Chuleta")
+
+
 class DesinstaladorTextoTests(unittest.TestCase):
     def setUp(self):
         self.ps1 = ps_text(DESINSTALAR)
