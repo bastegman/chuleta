@@ -520,7 +520,6 @@ function Register-App($appDir, $rootDir, $version) {
     # HKCU, sin administrador. Nombres de los valores: los de la clave Uninstall de Windows (learn.microsoft.com,
     # "Uninstall Registry Key"); EstimatedSize en KB (ARPSIZE). Si una politica lo impide, la app funciona igual.
     try {
-        if (-not (Test-Path -LiteralPath $UninstallKey)) { New-Item -Path $UninstallKey -ErrorAction Stop | Out-Null }
         if (-not $version) { $version = Get-Date -Format "yyyy-MM-dd" }
         $bytes = (Get-ChildItem -LiteralPath $appDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
         $kb = [int][Math]::Ceiling([double]$bytes / 1024)
@@ -532,9 +531,15 @@ function Register-App($appDir, $rootDir, $version) {
             NoModify = @(1, "DWord"); NoRepair = @(1, "DWord"); URLInfoAbout = @($RepoUrl, "String")
             UninstallString = @($cmd, "String"); QuietUninstallString = @("$cmd -Silencioso", "String")
         }
-        foreach ($n in $values.Keys) {
-            New-ItemProperty -LiteralPath $UninstallKey -Name $n -Value $values[$n][0] -PropertyType $values[$n][1] -Force -ErrorAction Stop | Out-Null
-        }
+        # CreateSubKey crea tambien ...\Uninstall si en este perfil aun no existe (un perfil nuevo no lo trae: New-Item
+        # fallaba con "The registry key at the specified path does not exist") y abre la clave sin borrar nada
+        $rk = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey(($UninstallKey -replace '^HKCU:\\', ''))
+        try {
+            foreach ($n in $values.Keys) {
+                if ($values[$n][1] -eq "DWord") { $rk.SetValue($n, [int]$values[$n][0], [Microsoft.Win32.RegistryValueKind]::DWord) }
+                else { $rk.SetValue($n, [string]$values[$n][0], [Microsoft.Win32.RegistryValueKind]::String) }
+            }
+        } finally { $rk.Close() }
         Say "    $AppName $version, en Aplicaciones instaladas (para quitarla: Configuración > Aplicaciones > $AppName > Desinstalar)" Green
         return $true
     } catch {

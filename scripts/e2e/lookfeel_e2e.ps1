@@ -46,10 +46,18 @@ function Api-Headers($post) {
     return $h
 }
 function Wait-Http($url, $seconds) {
-    $end = (Get-Date).AddSeconds($seconds)
+    # cada intento espera hasta 30 s: en los runs 1 y 2, con la reunion falsa creada, la API tardaba mas de 3 s en
+    # contestar en Windows (en macOS, sin ventana, 20 ms). Lo que tarda queda en $script:ultimaEspera
+    $t0 = Get-Date
+    $end = $t0.AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
-        try { return Invoke-RestMethod $url -Headers (Api-Headers $false) -TimeoutSec 3 } catch { Start-Sleep -Milliseconds 500 }
+        try {
+            $r = Invoke-RestMethod $url -Headers (Api-Headers $false) -TimeoutSec 30
+            $script:ultimaEspera = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+            return $r
+        } catch { Start-Sleep -Milliseconds 500 }
     }
+    $script:ultimaEspera = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
     return $null
 }
 function Get-Listener {
@@ -195,7 +203,7 @@ function Wait-Tree($text, $seconds) {
     $end = (Get-Date).AddSeconds($seconds)
     $json = ""
     while ((Get-Date) -lt $end) {
-        try { $json = Invoke-RestMethod "$Base/api/tree" -Headers (Api-Headers $false) -TimeoutSec 10 | ConvertTo-Json -Depth 30 -Compress } catch { $json = "" }
+        try { $json = Invoke-RestMethod "$Base/api/tree" -Headers (Api-Headers $false) -TimeoutSec 30 | ConvertTo-Json -Depth 30 -Compress } catch { $json = "" }
         if ($json -match [regex]::Escape($text)) { return $json }
         Start-Sleep -Seconds 1
     }
@@ -371,6 +379,7 @@ Check "d.sin_zombis" ($zombis.Count -eq 0) (($zombis | ForEach-Object { "$($_.Na
 
 # ---- e) la app lanzada por el instalador
 $cfg = Wait-Http "$Base/api/config" 90
+Note "e.api_tarda_s" $script:ultimaEspera
 Check "e.api_config" ($null -ne $cfg) $(if ($cfg) { "app_name=$($cfg.app_name) window=$($cfg.window) version=$($cfg.version)" } else { "sin respuesta en 90 s" })
 Check "e.config_window_true" ($cfg -and $cfg.window -eq $true) "$($cfg.window)"
 Check "e.config_app_name" ($cfg -and $cfg.app_name -eq $App) "$($cfg.app_name)"
@@ -466,7 +475,8 @@ Check "f.paquete_sin_marca" (-not (Get-Item -LiteralPath (Join-Path $inst "_app\
 Check "f.reunion_conserva_marca" ($null -ne (Get-Item -LiteralPath $wav -Stream Zone.Identifier -ErrorAction SilentlyContinue)) $wav
 $regf = Get-Registro
 Check "f.registro_misma_carpeta" ($regf -and $regf["InstallLocation"].valor -ieq $inst -and $regf["DisplayVersion"].valor -eq $verZip) $(if ($regf) { "$($regf['InstallLocation'].valor) $($regf['DisplayVersion'].valor)" } else { "sin clave" })
-$cfg2 = Wait-Http "$Base/api/config" 90
+$cfg2 = Wait-Http "$Base/api/config" 150
+Note "f.api_tarda_s" $script:ultimaEspera
 Check "f.app_arranca_desde_la_instalada" ($cfg2 -and $cfg2.root -ieq $inst) "root=$($cfg2.root)"
 Check "f.app_version_nueva" ($cfg2 -and $cfg2.version -eq $verZip) "$($cfg2.version)"
 $tree = Wait-Tree "Reunion de prueba" 40
@@ -475,8 +485,8 @@ Start-Sleep -Seconds 4
 $lisf = @(Get-Listener)
 if ($lisf.Count -ge 1) {
     $pidf = $lisf[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
-    Check "f.apagar" (Wait-Process-Gone $pidf 5) "pid $pidf"
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
+    Check "f.apagar" (Wait-Process-Gone $pidf 20) "pid $pidf"
 }
 
 # ---- fn) tercera instalacion, de una version anterior al registro y al renombrado: sin entrada de "Aplicaciones
@@ -511,7 +521,8 @@ Check "fn.listo_con_version" ($ilog2 -match ("Listo \(versi.n " + [regex]::Escap
 $regn = Get-Registro
 Check "fn.registro_creado" ($regn -and $regn["InstallLocation"].valor -ieq $inst) $(if ($regn) { $regn["InstallLocation"].valor } else { "sin clave" })
 Check "fn.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
-$cfg2 = Wait-Http "$Base/api/config" 90
+$cfg2 = Wait-Http "$Base/api/config" 150
+Note "fn.api_tarda_s" $script:ultimaEspera
 Check "fn.app_arranca_desde_la_vieja" ($cfg2 -and $cfg2.root -ieq $inst) "root=$($cfg2.root)"
 Start-Sleep -Seconds 6
 $wf = Ventana "icons" "actualizada"
@@ -519,8 +530,8 @@ Check "fn.titulo" ($wf.hwnd -and $wf.title -eq $App) "$($wf.title) visible=$($wf
 $lisf = @(Get-Listener)
 if ($lisf.Count -ge 1) {
     $pidf = $lisf[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
-    Check "fn.apagar" (Wait-Process-Gone $pidf 5) "pid $pidf"
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
+    Check "fn.apagar" (Wait-Process-Gone $pidf 20) "pid $pidf"
 }
 
 # ---- f2) tercera instalacion con los DOS accesos directos (Chuleta.lnk y un Notas.lnk que el usuario conserva):
@@ -538,13 +549,14 @@ Check "f2.conserva_notas_lnk" ((Test-Path -LiteralPath $desk) -and (Test-Path -L
 Check "f2.conserva_avisado" ($ilog22 -match "Se conserva el acceso directo antiguo") (($ilog22 -split "`n" | Select-String "Se conserva" | Select-Object -First 1) -join "")
 Check "f2.no_renombra" (-not ($ilog22 -match "pasa a llamarse")) ""
 Check "f2.inicio_sin_antiguo" (-not (Test-Path -LiteralPath $progLegacy)) ""
-$cfg22 = Wait-Http "$Base/api/config" 90
+$cfg22 = Wait-Http "$Base/api/config" 150
+Note "f2.api_tarda_s" $script:ultimaEspera
 Check "f2.app_arranca" ($cfg22 -and $cfg22.root -ieq $inst) "root=$($cfg22.root)"
 $lisf2 = @(Get-Listener)
 if ($lisf2.Count -ge 1) {
     $pidf2 = $lisf2[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 5 } catch {}
-    Check "f2.apagar" (Wait-Process-Gone $pidf2 5) "pid $pidf2"
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
+    Check "f2.apagar" (Wait-Process-Gone $pidf2 20) "pid $pidf2"
 }
 
 # ---- g) modo fallo: pip simulado que falla (pantalla de error con «Copiar el detalle»)
@@ -607,7 +619,8 @@ Start-Sleep -Seconds 2
 # directos, entrada y _app; la reunion, el LEEME y AudiosApp se quedan
 $l = Get-Lnk $desk
 $null = Start-Process -FilePath $l.TargetPath -ArgumentList $l.Arguments -WorkingDirectory $l.WorkingDirectory -PassThru
-$cfgu = Wait-Http "$Base/api/config" 90
+$cfgu = Wait-Http "$Base/api/config" 150
+Note "u2.api_tarda_s" $script:ultimaEspera
 Check "u2.app_abierta" ($cfgu -and $cfgu.root -ieq $inst) "root=$($cfgu.root)"
 Start-Sleep -Seconds 5
 $rcu2 = Run-Orden $ordenSilencio "u2.silencioso" 180
@@ -642,7 +655,8 @@ $ilog3i = Last-Run-Log 400
 Check "u3.exitcode_0" ($rc3i -eq 0) $rc3i
 Check "u3.misma_carpeta" ($ilog3i -match ("Instalando en " + [regex]::Escape($inst) + "\.\.\.") -and -not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "$App (2)"))) (($ilog3i -split "`n" | Select-String "Instalando en" | Select-Object -First 1) -join "")
 Check "u3.registro" (Test-Path -LiteralPath $UninstallKey) ""
-$cfg3 = Wait-Http "$Base/api/config" 90
+$cfg3 = Wait-Http "$Base/api/config" 150
+Note "u3.api_tarda_s" $script:ultimaEspera
 $tree = Wait-Tree "Reunion de prueba" 40
 Check "u3.app_ve_la_reunion" ($cfg3 -and $cfg3.root -ieq $inst -and $tree -match "Reunion de prueba") "root=$($cfg3.root)"
 Check "u3.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""

@@ -424,6 +424,68 @@ class DesinstaladorTextoTests(unittest.TestCase):
         self.assertIn("Remove-Item -LiteralPath $self", function_body(self.ps1, "Remove-Desinstalador"))
 
 
+@unittest.skipUnless(WINDOWS and shutil.which("powershell.exe"), "solo en Windows (PowerShell 5.1)")
+class RegistroWindowsTests(unittest.TestCase):
+    """Register-App de verdad, en una clave de prueba cuyo padre no existe (como ...\\Uninstall en un perfil nuevo:
+    el E2E lo vio fallar con New-Item). Se lee con winreg y se borra al terminar."""
+
+    def test_crea_la_clave_y_sus_tipos(self):
+        import winreg
+        base = "Software\\ChuletaTest-%d" % os.getpid()
+        key = base + "\\Uninstall\\Chuleta"
+
+        def borrar(path):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as k:
+                    while True:
+                        try:
+                            sub = winreg.EnumKey(k, 0)
+                        except OSError:
+                            break
+                        borrar(path + "\\" + sub)
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+            except FileNotFoundError:
+                pass
+        self.addCleanup(borrar, base)
+        root = os.path.realpath(tempfile.mkdtemp(prefix="chuleta-reg-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        app = os.path.join(root, "_app")
+        os.makedirs(app)
+        with open(os.path.join(app, "server.py"), "wb") as f:
+            f.write(b"x" * 5000)
+        q = lambda s: "'" + s.replace("'", "''") + "'"  # noqa: E731
+        out = run_ps_functions(INSTALAR, ["Register-App"],
+                               "$UninstallKey = " + q("HKCU:\\" + key) + "; $AppName = 'Chuleta'; "
+                               "$Publisher = 'Bernardo Stegmaier'; $RepoUrl = 'https://github.com/bastegman/chuleta'; "
+                               "function Say($t, $c) { Write-Output ('SAY ' + $t) }; "
+                               "Write-Output ('R=' + (Register-App " + q(app) + " " + q(root) +
+                               " '2026-10-31 abc1234'))")
+        self.assertIn("R=True", out, out)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            got = {}
+            i = 0
+            while True:
+                try:
+                    name, value, kind = winreg.EnumValue(k, i)
+                except OSError:
+                    break
+                got[name] = (value, kind)
+                i += 1
+        sz, dw = winreg.REG_SZ, winreg.REG_DWORD
+        cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s"' % os.path.join(
+            app, "desinstalar.ps1")
+        esperado = {"DisplayName": ("Chuleta", sz), "DisplayVersion": ("2026-10-31 abc1234", sz),
+                    "Publisher": ("Bernardo Stegmaier", sz), "InstallLocation": (root, sz),
+                    "DisplayIcon": (os.path.join(app, "static", "chuleta.ico"), sz), "NoModify": (1, dw),
+                    "NoRepair": (1, dw), "URLInfoAbout": ("https://github.com/bastegman/chuleta", sz),
+                    "UninstallString": (cmd, sz), "QuietUninstallString": (cmd + " -Silencioso", sz),
+                    "EstimatedSize": (5, dw)}
+        for name, val in esperado.items():
+            self.assertEqual(got.get(name), val, name)
+        self.assertRegex(got["InstallDate"][0], r"^\d{8}$")
+        self.assertEqual(got["InstallDate"][1], sz)
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
