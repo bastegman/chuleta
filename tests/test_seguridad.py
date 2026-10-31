@@ -4,6 +4,10 @@ otras webs (P0-1), el icono de una reunión pintado sin escapar y la CSP (P0-2),
 del sistema en las llamadas a 127.0.0.1 y la segunda copia que creaba App() antes de abrir el puerto (P1-13), y la
 caché del audio (P2-13). Con el servidor HTTP de verdad en un puerto libre y dobles: sin red y sin Windows (salvo el
 parseo de los .ps1, que solo corre allí)."""
+import contextlib
+import ctypes
+import importlib
+import io
 import json
 import os
 import re
@@ -14,8 +18,10 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -655,6 +661,119 @@ class ScriptsTests(unittest.TestCase):
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True,
                                text=True, timeout=120, env=dict(os.environ, PS1=p))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+# ----------------------------------------------------------------------------- sondas del workflow lookfeel-spike
+
+SONDAS = ("lookfeel_spike", "lookfeel_webview_probe")
+
+
+def import_sondas():
+    """scripts/lookfeel_spike.py y lookfeel_webview_probe.py (solo Windows: miden la ventana en el runner). Al
+    importarse preparan funciones de ctypes.windll: aquí con uno de mentira, también en Windows, porque los tests no
+    hacen ninguna llamada Win32 y así no cambian los argtypes de las de verdad para el resto de la suite."""
+    with mock.patch.object(ctypes, "windll", mock.MagicMock(), create=True), \
+            mock.patch.object(ctypes, "WINFUNCTYPE", mock.MagicMock(), create=True), \
+            mock.patch.object(sys, "path", [os.path.join(REPO, "scripts")] + sys.path):
+        for name in SONDAS:
+            sys.modules.pop(name, None)
+        try:
+            return importlib.import_module(SONDAS[0]), importlib.import_module(SONDAS[1])
+        finally:
+            for name in SONDAS:
+                sys.modules.pop(name, None)  # llevan los dobles dentro: que no los reutilice otro import
+
+
+class SondasTests(ServidorBase):
+    """Las sondas con el servidor de verdad: el ping manda el token de <data>/sesion.token y la interfaz se abre con
+    ?t=<token>, la dirección con la que la abre la app (server.ui_url). La sonda de WebView2 llamaba a wait_ping(40)
+    (el 40 hacía de carpeta de datos) y acababa siempre en «sin ping en 40 s», y las dos abrían la interfaz sin el
+    token: la página que medían recibía 403 en toda la API."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.spike, cls.probe = import_sondas()  # antes de arrancar el servidor (el windll de mentira es global)
+        super().setUpClass()
+
+    def setUp(self):
+        super().setUp()
+        self.url = f"http://127.0.0.1:{self.port}/"
+        self.out = tempfile.mkdtemp(prefix="chuleta-sonda-")
+        self.addCleanup(shutil.rmtree, self.out, True)
+
+    def assert_abre_la_interfaz(self, url):
+        """La misma dirección que abre la app, y con ella el servidor entrega la cookie de la sesión."""
+        self.assertEqual(url, server.ui_url())
+        parts = urllib.parse.urlsplit(url)
+        code, headers, _ = self.call("GET", f"{parts.path}?{parts.query}")
+        self.assertEqual((code, headers["Location"]), (303, "/"))
+        self.assertTrue((headers["Set-Cookie"] or "").startswith(f"audios_sesion_{self.port}={TOKEN};"),
+                        headers["Set-Cookie"])
+
+    def test_la_sonda_usa_el_mismo_modulo_del_spike(self):
+        self.assertIs(self.probe.spike, self.spike)
+
+    def test_wait_ping_manda_el_token_de_la_carpeta_de_datos(self):
+        """Reintenta lo que pasa mientras el servidor arranca: aún sin sesion.token, o con el de un arranque anterior
+        (403). Con el token bueno contesta en cuanto el servidor responde."""
+        data = os.path.join(self.out, "data")
+        with mock.patch.object(self.spike, "URL", self.url):
+            self.assertFalse(self.spike.wait_ping(data, timeout=1))
+            write_token_file(data, "token-de-un-arranque-anterior")
+            self.assertFalse(self.spike.wait_ping(data, timeout=1))
+            write_token_file(data, TOKEN)
+            self.assertTrue(self.spike.wait_ping(data, timeout=5))
+
+    def test_wait_ping_mal_llamado_falla_al_momento(self):
+        """Un error de programación (como aquel wait_ping(40)) sale en vez de dar vueltas hasta agotar el tiempo: el
+        except Exception se lo tragaba y la sonda solo decía «sin ping»."""
+        with mock.patch.object(self.spike, "URL", self.url):
+            t0 = time.time()
+            with self.assertRaises(TypeError):
+                self.spike.wait_ping(40, timeout=3)
+            self.assertLess(time.time() - t0, 1)
+
+    def test_spike_abre_edge_con_la_url_de_la_app(self):
+        base = os.path.join(self.out, "base")
+        write_token_file(os.path.join(base, "ico", "data"), TOKEN)  # lo que deja el servidor de la variante
+        reloj = types.SimpleNamespace(time=time.time, sleep=mock.Mock())  # sin las esperas de 6 y 4 s
+        ventana = (101, "Chuleta", "Chrome_WidgetWin_1", 4321)
+        with mock.patch.object(self.spike, "URL", self.url), \
+                mock.patch.object(self.spike, "make_variant", return_value="server.py"), \
+                mock.patch.object(self.spike, "subprocess") as sp, mock.patch.object(self.spike, "time", reloj), \
+                mock.patch.object(self.spike, "windows", return_value=[ventana]), \
+                mock.patch.object(self.spike, "aumid", return_value="AUMID"), \
+                mock.patch.object(self.spike, "window_icons", return_value={}), \
+                mock.patch.object(self.spike, "appusermodel_props", return_value={}), \
+                mock.patch.object(self.spike, "kill_edge"):
+            rec = self.spike.measure_variant("ico", base, self.out, "msedge.exe")
+        self.assertEqual((rec["notes"], rec.get("hwnd")), ([], 101))
+        edge = [c.args[0] for c in sp.Popen.call_args_list if c.args[0][0] == "msedge.exe"]
+        self.assertEqual(len(edge), 1)
+        app = [a for a in edge[0] if a.startswith("--app=")]
+        self.assertEqual(len(app), 1, edge[0])
+        self.assert_abre_la_interfaz(app[0][len("--app="):])
+
+    def test_webview_probe_ve_el_servidor_y_abre_la_interfaz_con_token(self):
+        write_token_file(os.path.join(self.out, "webview-data"), TOKEN)  # lo que deja el servidor al arrancar
+        webview = types.ModuleType("webview")
+        webview.create_window = mock.Mock(return_value=mock.Mock())
+        webview.start = mock.Mock()  # no llama a on_start: sin ventana que medir
+        # threading de mentira: el vigilante de la sonda haría os._exit(3) a los 120 s, con la suite en marcha
+        with mock.patch.dict(sys.modules, {"webview": webview}), \
+                mock.patch("importlib.metadata.version", return_value="0-prueba"), \
+                mock.patch.dict(os.environ, {"NOTAS_PROBE_NETFX": "0"}), \
+                mock.patch.object(self.probe, "URL", self.url), mock.patch.object(self.spike, "URL", self.spike.URL), \
+                mock.patch.object(self.probe, "subprocess"), mock.patch.object(self.probe, "shell32"), \
+                mock.patch.object(self.probe, "threading") as hilos, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.probe.main(["sonda", self.out]), 0)
+        with open(os.path.join(self.out, "webview.json"), encoding="utf-8") as f:
+            steps = {s["step"]: s for s in json.load(f)["steps"]}
+        self.assertEqual(steps["servidor"], {"step": "servidor", "ok": True, "url": self.url})
+        webview.create_window.assert_called_once()
+        self.assert_abre_la_interfaz(webview.create_window.call_args.args[1])
+        webview.start.assert_called_once()
+        hilos.Thread.assert_called_once()  # el vigilante iba por el threading de mentira
 
 
 if __name__ == "__main__":

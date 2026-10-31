@@ -5,8 +5,9 @@ ventana `--app=` de la app según lo que sirva la página como favicon.
     python scripts/lookfeel_spike.py SALIDA
 
 Para cada variante copia `_app` a una carpeta temporal, ajusta `static/index.html`, arranca `server.py --no-browser`
-en el puerto 8765, abre `msedge --app=http://127.0.0.1:8765 --window-size=1200,800` con un perfil nuevo, espera la
-ventana titulada como la app (common.APP_NAME) y vuelca a SALIDA/report.json y SALIDA/report.md:
+en el puerto 8765, abre `msedge --app=http://127.0.0.1:8765/?t=<token> --window-size=1200,800` (la dirección con
+la que la abre la app: con el token de la sesión) con un perfil nuevo, espera la ventana titulada como la app
+(common.APP_NAME) y vuelca a SALIDA/report.json y SALIDA/report.md:
   (a) el AppUserModelID de la ventana (SHGetPropertyStoreForWindow + PKEY_AppUserModel_ID);
   (b) el tamaño en píxeles de los iconos WM_GETICON (ICON_SMALL, ICON_BIG, ICON_SMALL2) y de los de la clase
       (GCLP_HICON, GCLP_HICONSM), que guarda además como PNG para verlos.
@@ -16,6 +17,7 @@ manifest.webmanifest con iconos 192/512 enlazado desde index.html.
 No instala nada ni toca el repo. Solo la librería estándar (y Pillow, si está, para los PNG de 192/512).
 """
 import ctypes
+import http.client
 import json
 import os
 import shutil
@@ -282,17 +284,35 @@ def make_variant(kind, base):
     return os.path.join(app, "server.py")
 
 
+def session_token(data):
+    """El token de la sesión, que el servidor deja en <data>/sesion.token al arrancar ("" si aún no está)."""
+    try:
+        with open(os.path.join(data, "sesion.token"), encoding="utf-8") as f:
+            return f.read().strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def ui_url(data):
+    """La dirección con la que la app abre su interfaz (server.ui_url): con ?t=<token> el servidor entrega la cookie
+    de la sesión y redirige a "/". Sin el token, la página medida recibiría 403 en toda la API."""
+    return URL + "?t=" + session_token(data)
+
+
 def wait_ping(data, timeout=40):
+    """True en cuanto el servidor de <data> contesta al ping con el token de su sesión. Solo se reintenta lo que pasa
+    mientras arranca (aún sin sesion.token, sin conexión, 403 con el token de un arranque anterior): un error de
+    programación, como llamarla sin `data`, sale al momento en vez de dar vueltas hasta agotar el tiempo."""
     end = time.time() + timeout
     while time.time() < end:
-        try:  # la API exige el token de la sesion, que el servidor deja en <data>/sesion.token al arrancar
-            with open(os.path.join(data, "sesion.token"), encoding="utf-8") as f:
-                req = urllib.request.Request(URL + "api/ping", headers={"X-Chuleta-Token": f.read().strip()})
+        try:  # la API exige el token de la sesión (cabecera X-Chuleta-Token)
+            req = urllib.request.Request(URL + "api/ping", headers={"X-Chuleta-Token": session_token(data)})
             with urllib.request.urlopen(req, timeout=2) as r:
                 if json.load(r).get("app") == "audios":
                     return True
-        except Exception:
-            time.sleep(0.5)
+        except (OSError, ValueError, http.client.HTTPException):
+            pass
+        time.sleep(0.5)
     return False
 
 
@@ -319,7 +339,7 @@ def measure_variant(kind, base, out_dir, edge):
         # sufijo de perfil con el perfil Default del user-data-dir por defecto); las demas, un perfil propio
         udd = [] if kind == "ico" else [f"--user-data-dir={os.path.join(base, kind, 'edge-profile')}"]
         rec["user_data_dir"] = udd[0] if udd else "(por defecto)"
-        edge_p = subprocess.Popen([edge, f"--app={URL.rstrip('/')}", "--window-size=1200,800", *udd,
+        edge_p = subprocess.Popen([edge, f"--app={ui_url(data)}", "--window-size=1200,800", *udd,
                                    "--no-first-run", "--no-default-browser-check", "--disable-sync",
                                    "--disable-features=msEdgeFirstRunExperience,msImplicitSignin"])
         rec["edge_pid"] = edge_p.pid

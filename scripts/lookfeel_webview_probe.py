@@ -5,10 +5,11 @@ con pywebview (WebView2) en vez de `msedge --app`, y qué AUMID e iconos lleva e
     python scripts/lookfeel_webview_probe.py SALIDA
 
 Arranca `_app/server.py --no-browser` en el puerto 8767, fija SetCurrentProcessExplicitAppUserModelID("Bernardo.Notas"),
-abre `webview.create_window("Notas", URL)`, localiza su HWND (mismo pid, título «Notas»), mide el AUMID y los iconos
-WM_GETICON/GCLP_HICON antes y después de ponerle `static/notas.ico` con WM_SETICON (ctypes), guarda los iconos como
-PNG, cierra la ventana y escribe SALIDA/webview.json y SALIDA/webview.md. Cualquier excepción queda anotada con su
-texto exacto: si la ventana no se puede crear, eso es el resultado.
+abre `webview.create_window("Notas", URL + "?t=<token>")` (con el token de la sesión, como la app), localiza su HWND
+(mismo pid, título «Notas»), mide el AUMID y los iconos WM_GETICON/GCLP_HICON antes y después de ponerle
+`static/notas.ico` con WM_SETICON (ctypes), guarda los iconos como PNG, cierra la ventana y escribe SALIDA/webview.json
+y SALIDA/webview.md. Cualquier excepción queda anotada con su texto exacto: si la ventana no se puede crear, eso es el
+resultado.
 """
 import ctypes
 import json
@@ -113,8 +114,8 @@ def main(argv):
     srv = subprocess.Popen([sys.executable, os.path.join(REPO, "_app", "server.py"), "--no-browser",
                             "--port", str(PORT), "--data", data], stdout=log, stderr=subprocess.STDOUT)
     try:
-        spike.URL = URL  # wait_ping del spike mira esta URL
-        if not spike.wait_ping(40):
+        spike.URL = URL  # wait_ping y ui_url del spike miran esta URL
+        if not spike.wait_ping(data, 40):
             step("servidor", ok=False, error="sin ping en 40 s")
             return finish(rec, out_dir)
         step("servidor", ok=True, url=URL)
@@ -177,7 +178,7 @@ def main(argv):
         threading.Thread(target=watchdog, daemon=True).start()
         t0 = time.time()
         try:
-            window = webview.create_window("Notas", URL, width=1200, height=800)
+            window = webview.create_window("Notas", spike.ui_url(data), width=1200, height=800)
             webview.start(on_start, window)  # en Windows elige WebView2 (edgechromium) si esta; si no, mshtml
             step("webview.start", ok=True, seconds=round(time.time() - t0, 1),
                  gui=str(getattr(webview, "guilib", None)), renderer=str(getattr(webview, "renderer", None)))
