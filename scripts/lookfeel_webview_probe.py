@@ -19,7 +19,6 @@ import sys
 import threading
 import time
 import traceback
-import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -72,9 +71,30 @@ def main(argv):
         rec["steps"].append({"step": name, **kw})
         print(f"-- {name}: {json.dumps(kw, ensure_ascii=False, default=str)}", flush=True)
 
+    rec["env"] = {k: os.environ.get(k) for k in ("PYTHONNET_RUNTIME", "DOTNET_ROOT", "NOTAS_PROBE_NETFX")}
+    if os.environ.get("NOTAS_PROBE_NETFX") == "1":  # hipotesis: pythonnet carga coreclr en vez de .NET Framework
+        try:
+            import pythonnet
+            pythonnet.load("netfx")
+            step("pythonnet.load('netfx')", ok=True)
+        except Exception as e:
+            step("pythonnet.load('netfx')", ok=False, error=repr(e))
+    try:
+        import clr  # noqa: F401
+        from System import Environment
+        from System.Runtime.InteropServices import RuntimeInformation
+        step("runtime .NET", version=str(Environment.Version), framework=str(RuntimeInformation.FrameworkDescription))
+    except Exception as e:
+        step("runtime .NET", ok=False, error=repr(e))
+    try:
+        import pythonnet
+        step("pythonnet.get_runtime_info", info=str(pythonnet.get_runtime_info()))
+    except Exception as e:
+        step("pythonnet.get_runtime_info", ok=False, error=repr(e))
     try:
         import webview
-        rec["pywebview"] = getattr(webview, "__version__", "?")
+        from importlib.metadata import version as _v
+        rec["pywebview"] = _v("pywebview")
         step("import webview", ok=True, version=rec["pywebview"])
     except Exception as e:
         step("import webview", ok=False, error=repr(e), trace=traceback.format_exc())
@@ -90,8 +110,8 @@ def main(argv):
 
     data = os.path.join(out_dir, "webview-data")
     log = open(os.path.join(out_dir, "webview-server.log"), "wb")
-    srv = subprocess.Popen([sys.executable, os.path.join(REPO, "_app", "server.py"), "--no-browser", "--port", str(PORT),
-                            "--data", data], stdout=log, stderr=subprocess.STDOUT)
+    srv = subprocess.Popen([sys.executable, os.path.join(REPO, "_app", "server.py"), "--no-browser",
+                            "--port", str(PORT), "--data", data], stdout=log, stderr=subprocess.STDOUT)
     try:
         spike.URL = URL  # wait_ping del spike mira esta URL
         if not spike.wait_ping(40):
@@ -112,6 +132,7 @@ def main(argv):
                     return
                 time.sleep(4)  # que WebView2 cargue la página
                 result["aumid"] = spike.aumid(hwnd)
+                result["appusermodel"] = spike.appusermodel_props(hwnd)
                 result["icons_default"] = spike.window_icons(hwnd, out_dir, "webview-default")
                 native = getattr(window, "native", None)
                 result["native_type"] = type(native).__name__ if native is not None else None
@@ -119,8 +140,7 @@ def main(argv):
                 time.sleep(1)
                 result["icons_after_seticon"] = spike.window_icons(hwnd, out_dir, "webview-seticon")
                 result["aumid_after"] = spike.aumid(hwnd)
-                try:  # la via "oficial" del backend WinForms: window.native.Icon (pythonnet)
-                    import clr  # noqa: F401
+                try:  # la via "oficial" del backend WinForms: window.native.Icon (pythonnet, clr ya cargado)
                     from System.Drawing import Icon
                     native.Icon = Icon(ICO)
                     time.sleep(1)

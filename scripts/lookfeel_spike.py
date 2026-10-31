@@ -116,8 +116,13 @@ def windows():
     return out
 
 
-def aumid(hwnd):
-    """System.AppUserModel.ID de la ventana, o None (sin propiedad) o "error: ...". """
+PKEY_APPUSERMODEL = "{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}"
+# pid 2 RelaunchCommand, 3 RelaunchIconResource, 4 RelaunchDisplayNameResource, 5 ID (System.AppUserModel.*)
+APPUSERMODEL_PIDS = {"RelaunchCommand": 2, "RelaunchIconResource": 3, "RelaunchDisplayNameResource": 4, "ID": 5}
+
+
+def window_prop(hwnd, pid):
+    """Propiedad System.AppUserModel.<pid> de la ventana: None (sin valor) o "error: ...". """
     ps = ctypes.c_void_p()
     hr = shell32.SHGetPropertyStoreForWindow(hwnd, ctypes.byref(guid("{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}")),
                                              ctypes.byref(ps))
@@ -127,7 +132,7 @@ def aumid(hwnd):
     get_value = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(PROPERTYKEY),
                                    ctypes.POINTER(PROPVARIANT))(vtbl[5])
     release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl[2])
-    key = PROPERTYKEY(guid("{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}"), 5)
+    key = PROPERTYKEY(guid(PKEY_APPUSERMODEL), pid)
     pv = PROPVARIANT()
     try:
         hr = get_value(ps, ctypes.byref(key), ctypes.byref(pv))
@@ -141,6 +146,15 @@ def aumid(hwnd):
     finally:
         ole32.PropVariantClear(ctypes.byref(pv))
         release(ps)
+
+
+def aumid(hwnd):
+    """System.AppUserModel.ID de la ventana, o None (sin propiedad) o "error: ...". """
+    return window_prop(hwnd, 5)
+
+
+def appusermodel_props(hwnd):
+    return {name: window_prop(hwnd, pid) for name, pid in APPUSERMODEL_PIDS.items()}
 
 
 def png_bytes(w, h, rgba):
@@ -327,6 +341,7 @@ def measure_variant(kind, base, out_dir, edge):
         time.sleep(4)  # segunda lectura: por si el icono cambia al terminar de cargar
         rec["icons_after_10s"] = window_icons(hwnd, out_dir, kind + "-t10")
         rec["aumid"] = aumid(hwnd)
+        rec["appusermodel"] = appusermodel_props(hwnd)  # relanzado: icono y comando que la barra puede preferir
         rec["windows"] = [{"hwnd": h, "title": t, "class": c, "pid": p, "aumid": aumid(h)}
                           for h, t, c, p in windows() if c.startswith("Chrome_WidgetWin")]
         return rec
@@ -371,6 +386,7 @@ def main(argv):
         lines.append(f"## {v.get('variant')}")
         lines.append(f"- perfil: {v.get('user_data_dir')}")
         lines.append(f"- AUMID: {v.get('aumid')!r} (primera lectura {v.get('aumid_first')!r})")
+        lines.append(f"- System.AppUserModel.*: {v.get('appusermodel')}")
         for w in v.get("windows") or []:
             lines.append(f"- ventana {w.get('hwnd')} «{w.get('title')}» {w.get('class')} pid {w.get('pid')} "
                          f"AUMID {w.get('aumid')!r}")
