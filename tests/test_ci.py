@@ -7,6 +7,11 @@ para que un workflow escrito de otra forma haga fallar el test en vez de leerse 
 import glob
 import os
 import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # sin importar support: aquí no hace falta la app
@@ -183,6 +188,38 @@ def como_lista(v):
     return [v] if isinstance(v, str) else list(v or [])
 
 
+_TERMINO = re.compile(r"(!?)([A-Za-z_][\w.-]*)(?:\s*(==|!=)\s*'((?:[^']|'')*)')?")
+
+
+def evaluar_condicion(expr, ctx):
+    """Valor de una expresión `${{ … }}` de Actions hecha solo de términos unidos con && (`contexto == 'literal'`,
+    `contexto != 'literal'` o `!contexto`), con los valores de `ctx`. Da ValueError con lo demás (||, paréntesis,
+    funciones), para que un cambio de forma haga fallar el test en vez de evaluarse mal, y KeyError con un contexto que
+    `ctx` no trae. Como Actions, compara las cadenas sin distinguir mayúsculas."""
+    m = re.fullmatch(r"\$\{\{(.*)\}\}", expr.strip())
+    if not m:
+        raise ValueError(f"no es una expresión ${{{{ … }}}}: {expr!r}")
+    valores = []
+    for termino in m.group(1).split("&&"):
+        t = _TERMINO.fullmatch(termino.strip())
+        if not t or (t.group(1) and t.group(3)):
+            raise ValueError(f"término no soportado: {termino.strip()!r}")
+        neg, nombre, op, literal = t.groups()
+        v = ctx[nombre]  # todos, aunque uno anterior ya sea falso: un contexto que falta en el test se ve siempre
+        if op:
+            iguales = str(v).lower() == literal.replace("''", "'").lower()
+            valores.append(iguales if op == "==" else not iguales)
+        else:
+            valores.append(not v if neg else bool(v))
+    return all(valores)
+
+
+# Contexto de Actions de un push a main del repo propio, hecho por una persona; los demás casos cambian una clave.
+_PUSH_MAIN = {"github.event_name": "push", "github.ref": "refs/heads/main", "github.event.repository.fork": False,
+              "github.actor": "octocat"}
+_PUSH_RAMA = {**_PUSH_MAIN, "github.ref": "refs/heads/fix-seguridad"}
+
+
 class CargarYamlTests(unittest.TestCase):
     def test_subconjunto(self):
         texto = ("name: x  # comentario\non:\n  workflow_dispatch:\n  push:\n    branches: [main, 'a b', \"c\"]\n"
@@ -209,6 +246,23 @@ class CargarYamlTests(unittest.TestCase):
                 self.assertTrue(wf["name"] and wf["on"] and wf["jobs"])
                 for job in wf["jobs"].values():  # sin tope, un cuelgue gasta los 360 min por defecto del runner
                     self.assertGreater(int(job["timeout-minutes"]), 0)
+
+
+class EvaluarCondicionTests(unittest.TestCase):
+    def test_subconjunto(self):
+        ctx = {"a": "push", "b": False, "c": "X", "d.e": "dependabot[bot]"}
+        self.assertIs(evaluar_condicion("${{ a == 'PUSH' && !b && c != 'y' }}", ctx), True)  # sin mayúsculas
+        self.assertIs(evaluar_condicion("${{ a == 'push' && b }}", ctx), False)
+        self.assertIs(evaluar_condicion("${{ c != 'x' }}", ctx), False)
+        self.assertIs(evaluar_condicion("${{ d.e != 'dependabot[bot]' }}", ctx), False)
+
+    def test_lo_que_no_sabe_evaluar_falla(self):
+        for expr in ("a == 'push'", "${{ a == 'push' || b }}", "${{ (a == 'push') }}", "${{ !a == 'push' }}",
+                     "${{ startsWith(a, 'p') }}", "${{ a == push }}"):
+            with self.subTest(expr), self.assertRaises(ValueError):
+                evaluar_condicion(expr, {"a": "push", "b": True})
+        with self.assertRaises(KeyError):  # también tras un término falso: el test tiene que dar todos los contextos
+            evaluar_condicion("${{ a == 'otro' && z }}", {"a": "push"})
 
 
 class WorkflowsWindowsTests(unittest.TestCase):
@@ -257,42 +311,94 @@ class WorkflowsWindowsTests(unittest.TestCase):
         self.assertLess(job["steps"].index(next(p for p in job["steps"] if p.get("run") == "python tests/run.py")),
                         job["steps"].index(paso))
 
-    def test_agnosticismo_con_el_secreto_solo_en_su_paso(self):
-        """P2-39: la lista privada llega del secreto de Actions solo al paso que ejecuta el test de agnosticismo."""
-        wf = workflow("tests.yml")
-        self.assertNotIn("env", wf)
-        pasos = []
-        for job in wf["jobs"].values():
-            self.assertNotIn("NOTAS_PALABRAS_VETADAS", job.get("env") or {})
-            pasos += [p for p in job["steps"] if "NOTAS_PALABRAS_VETADAS" in (p.get("env") or {})]
-        self.assertEqual(len(pasos), 1)
-        self.assertEqual(pasos[0]["env"]["NOTAS_PALABRAS_VETADAS"], "${{ secrets.NOTAS_PALABRAS_VETADAS }}")
-        self.assertIn("test_package.TemplatesTests.test_sin_rastro_de_clientes", pasos[0]["run"])
-        self.assertEqual(pasos[0].get("working-directory"), "tests")
 
-    def test_agnosticismo_falla_sin_el_secreto_en_los_push_del_repo_propio(self):
-        """P2-39: en los push del repo propio el secreto tiene que estar. Si falta, o se borra o se vacía al rotarlo, el
-        test falla en vez de saltarse en verde. En los demás casos, sin el secreto, se salta con un aviso: los
-        pull_request (los de un fork no reciben secretos y los de una rama del repo ya pasan por el push de esa rama),
-        los forks y Dependabot."""
-        wf = workflow("tests.yml")
-        self.assertIn("push", eventos(wf["on"]))
-        pares = [(job, p) for job in wf["jobs"].values() for p in job["steps"]
+class AgnosticismoCITests(unittest.TestCase):
+    """P2-39: el test de agnosticismo corre en la CI con la lista privada (el secreto NOTAS_PALABRAS_VETADAS) y, si
+    falta en un push a main, falla en vez de saltarse; en las demás ramas, sin el secreto, se salta con un aviso."""
+
+    def paso(self):
+        """(job, paso) de tests.yml que recibe la lista; tiene que haber exactamente uno."""
+        pares = [(job, p) for job in workflow("tests.yml")["jobs"].values() for p in job["steps"]
                  if "NOTAS_PALABRAS_VETADAS" in (p.get("env") or {})]
         self.assertEqual(len(pares), 1)
-        job, paso = pares[0]
-        self.assertEqual(paso["env"].get("NOTAS_EXIGIR_VETADAS"),
-                         "${{ github.event_name == 'push' && !github.event.repository.fork"
-                         " && github.actor != 'dependabot[bot]' }}")
+        return pares[0]
+
+    def test_agnosticismo_con_el_secreto_solo_en_su_paso(self):
+        """La lista privada llega del secreto de Actions solo al paso que ejecuta el test de agnosticismo."""
+        wf = workflow("tests.yml")
+        self.assertNotIn("env", wf)
+        for job in wf["jobs"].values():
+            self.assertNotIn("NOTAS_PALABRAS_VETADAS", job.get("env") or {})
+        _, paso = self.paso()
+        self.assertEqual(paso["env"]["NOTAS_PALABRAS_VETADAS"], "${{ secrets.NOTAS_PALABRAS_VETADAS }}")
+        self.assertIn("test_package.TemplatesTests.test_sin_rastro_de_clientes", paso["run"])
+        self.assertEqual(paso.get("working-directory"), "tests")
+
+    def test_agnosticismo_obligatorio_solo_en_los_push_a_main(self):
+        """Sin el secreto, el paso solo falla en los push a main del repo propio: ahí, si falta, o se borra o se vacía
+        al rotarlo, el test falla en vez de saltarse en verde. En las demás ramas (también las que se rebasan sobre
+        main mientras el secreto no existe), en los pull_request, en los forks y con Dependabot, que no recibe los
+        secretos de Actions, se salta con un aviso: un rojo en cada push de cada rama acostumbraría a ignorar la CI."""
+        self.assertIn("push", eventos(workflow("tests.yml")["on"]))
+        job, paso = self.paso()
+        exigir = paso["env"].get("NOTAS_EXIGIR_VETADAS", "")
+        for caso, ctx, esperado in (
+                ("push a main", _PUSH_MAIN, True),
+                ("push a otra rama, también una rebasada sobre main", _PUSH_RAMA, False),
+                ("pull request", {**_PUSH_MAIN, "github.event_name": "pull_request", "github.ref": "refs/pull/7/merge"},
+                 False),
+                ("push a main de un fork", {**_PUSH_MAIN, "github.event.repository.fork": True}, False),
+                ("push de Dependabot", {**_PUSH_MAIN, "github.actor": "dependabot[bot]"}, False)):
+            with self.subTest(caso):
+                self.assertIs(evaluar_condicion(exigir, ctx), esperado)
         for d in (job, paso):  # nada que lo deje en verde aunque falle ni que lo salte en un push
             self.assertNotIn("continue-on-error", d)
             self.assertNotIn("if", d)
         run = paso["run"]
         self.assertIn('[ "$NOTAS_EXIGIR_VETADAS" = "true" ]', run)  # el ::error, solo donde se exige
         self.assertIn("::error title=Agnosticismo::", run)
+        self.assertIn("::warning title=Agnosticismo::", run)  # donde no se exige, el salto se ve en el resumen del run
         self.assertNotIn("|| true", run)
         self.assertNotIn("exit 0", run)
         self.assertTrue(run.rstrip().endswith("test_package.TemplatesTests.test_sin_rastro_de_clientes"))
+
+    @unittest.skipIf(os.name == "nt" or not shutil.which("bash"), "el paso corre con bash, en ubuntu-latest")
+    def test_paso_de_agnosticismo_en_bash(self):
+        """El `run` del paso, con `bash -e` como en el runner y NOTAS_EXIGIR_VETADAS calculada para cada caso: sin el
+        secreto, rojo en un push a main y verde con aviso en otra rama; con él, el test se ejecuta (no se salta) en las
+        dos y pasa si nada casa."""
+        _, paso = self.paso()
+        exigir = paso["env"]["NOTAS_EXIGIR_VETADAS"]
+        tmp = tempfile.mkdtemp(prefix="chuleta-ci-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        python = os.path.join(tmp, "python")  # el `python` del runner: un script y no un enlace, para no salir del venv
+        with open(python, "w", encoding="utf-8") as f:
+            f.write(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        os.chmod(python, 0o755)
+        script = os.path.join(tmp, "paso.sh")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(paso["run"])
+        base = {k: v for k, v in os.environ.items() if not k.startswith(("NOTAS_", "GIT_"))}
+        base["PATH"] = tmp + os.pathsep + base.get("PATH", "")
+        nada = "(?!)"  # una lista que no casa con nada, tampoco con este fichero
+        for caso, ctx, lista, esperado in (("push a main sin el secreto", _PUSH_MAIN, "", "rojo"),
+                                           ("push a otra rama sin el secreto", _PUSH_RAMA, "", "aviso"),
+                                           ("push a main con el secreto", _PUSH_MAIN, nada, "revisado"),
+                                           ("push a otra rama con el secreto", _PUSH_RAMA, nada, "revisado")):
+            with self.subTest(caso):
+                env = dict(base, NOTAS_PALABRAS_VETADAS=lista,
+                           NOTAS_EXIGIR_VETADAS="true" if evaluar_condicion(exigir, ctx) else "false")
+                r = subprocess.run(["bash", "-e", script], cwd=os.path.join(REPO, "tests"), env=env,
+                                   capture_output=True, encoding="utf-8", errors="replace", timeout=300)
+                salida = (r.stdout + r.stderr).replace("::", ": :")  # que un fallo no deje anotaciones en el run
+                if esperado == "rojo":
+                    self.assertNotEqual(r.returncode, 0, salida)
+                    self.assertIn("::error title=Agnosticismo::", r.stdout, salida)
+                    continue
+                self.assertEqual(r.returncode, 0, salida)
+                self.assertNotIn("::error", r.stdout, salida)
+                self.assertEqual("::warning title=Agnosticismo::" in r.stdout, esperado == "aviso", salida)
+                self.assertRegex(r.stderr, r"\.\.\. skipped " if esperado == "aviso" else r"(?m)\.\.\. ok$", salida)
 
 
 if __name__ == "__main__":

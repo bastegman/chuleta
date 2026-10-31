@@ -80,23 +80,25 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Agnosticismo con la lista privada (en los push del repo propio, sin el secreto NOTAS_PALABRAS_VETADAS falla)
+      - name: Agnosticismo con la lista privada (en los push a main, sin el secreto NOTAS_PALABRAS_VETADAS falla)
         # Solo este paso recibe la lista: expresiones regulares separadas por comas o una por línea, en Settings ->
         # Secrets and variables -> Actions -> New repository secret. Al fallar dice fichero y línea, nunca la palabra
-        # (el log de un repo público es público). NOTAS_EXIGIR_VETADAS vale true en los push del repo propio: ahí el
-        # secreto tiene que estar y, si falta o está vacío, el test falla en vez de saltarse. En los demás casos, sin el
-        # secreto, se salta con un aviso: los pull_request (los de un fork no reciben secretos y los de una rama del
-        # repo ya pasan por el push de esa rama), los forks y Dependabot (sin los secretos de Actions).
+        # (el log de un repo público es público). Con el secreto, se revisa en cada push y en los pull_request de ramas
+        # del repo. Sin él, decide NOTAS_EXIGIR_VETADAS: vale true solo en los push a main del repo propio (la rama por
+        # defecto, la que baja quien descarga el repo), y ahí el test falla en vez de saltarse. En las demás ramas, en
+        # los pull_request de un fork, en los forks y con Dependabot (sin los secretos de Actions) se salta con un
+        # aviso: así, mientras el secreto no exista, no sale en rojo cada push de cada rama (un rojo constante
+        # acostumbra a ignorar la CI), solo los de main.
         env:
           NOTAS_PALABRAS_VETADAS: ${{ secrets.NOTAS_PALABRAS_VETADAS }}
-          NOTAS_EXIGIR_VETADAS: ${{ github.event_name == 'push' && !github.event.repository.fork && github.actor != 'dependabot[bot]' }}
+          NOTAS_EXIGIR_VETADAS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork && github.actor != 'dependabot[bot]' }}
         working-directory: tests
         run: |
           if [ -z "$NOTAS_PALABRAS_VETADAS" ]; then
             if [ "$NOTAS_EXIGIR_VETADAS" = "true" ]; then
-              echo "::error title=Agnosticismo::falta el secreto NOTAS_PALABRAS_VETADAS (Settings -> Secrets and variables -> Actions): sin él no se revisa nada"
+              echo "::error title=Agnosticismo::falta el secreto NOTAS_PALABRAS_VETADAS (Settings -> Secrets and variables -> Actions): en los push a main es obligatorio y sin él no se revisa nada"
             else
-              echo "::notice title=Agnosticismo::sin el secreto NOTAS_PALABRAS_VETADAS (pull request, fork o Dependabot) el test de agnosticismo se salta"
+              echo "::warning title=Agnosticismo::sin el secreto NOTAS_PALABRAS_VETADAS el test de agnosticismo se salta y aquí no se revisa nada (solo es obligatorio en los push a main)"
             fi
           fi
           python -m unittest -v test_package.TemplatesTests.test_sin_rastro_de_clientes
