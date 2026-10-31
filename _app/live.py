@@ -383,12 +383,13 @@ def run(job, path, opts, write, log):
         if not hasattr(job, "translation"):
             return
         tr = list(job.translation)
-        job.directo = {"cloud": bool(keys), "quota": keys.public(cfg) if keys else None,
+        on_cloud = bool(keys) and (engines.PRESETS_BY_ID.get(job.preset) or {}).get("engine") == "cloud"
+        job.directo = {"cloud": on_cloud, "quota": keys.public(cfg) if on_cloud else None,
                        "pace": list(pace) if pace else None, "paused": bool(paused), "latency": latency.stats(),
                        "translate": bool(getattr(job, "translate", False)), "translation": tr[-TRANSLATION_PUBLIC:],
                        "translation_n": len(tr), "translate_error": translator.error if translator else None,
                        "translating": bool(translator and translator.busy),
-                       "live_model": engines.CloudEngine.live_model(cfg) if keys else None}
+                       "live_model": engines.CloudEngine.live_model(cfg) if on_cloud else None}
 
     def transcribe(window, offset):
         nonlocal lang

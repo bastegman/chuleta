@@ -4,6 +4,7 @@ rotacion de claves, cabeceras de Groq, dedupe del solape, latencia, traduccion y
 un reloj falso y una grabacion que crece. Todo con dobles: sin red, sin faster-whisper (la VAD es por energia)."""
 import json
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -287,6 +288,7 @@ class FakeRequests(types.ModuleType):
 class CloudPostTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="notas-directo-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.chunk = os.path.join(self.tmp, "t.wav")
         with open(self.chunk, "wb") as f:
             f.write(wav_bytes(0.2, rate=16000, channels=1))
@@ -609,17 +611,35 @@ class FakeCloud:
         return [(0.0, secs, f"trozo {len(self.calls)} de {secs:.1f} s")], "spanish"
 
 
+class FakeWorker:
+    """WorkerClient de mentira para el directo en local: devuelve una frase por ventana."""
+
+    def __init__(self, rec):
+        self.rec, self.calls = rec, []
+
+    def ensure(self, model, threads, on_progress=None, cancelled=None):
+        return False
+
+    def request(self, req, audio=None, on_progress=None, timeout=None, idle_timeout=None, cancelled=None):
+        secs = len(audio) / SR
+        self.calls.append(secs)
+        self.rec.sleep(2.0)
+        return {"language": "es", "segments": [(0.0, secs, f"local {len(self.calls)}")], "prompt": None}
+
+
 class RunDirectoTests(unittest.TestCase):
-    def run_live(self, spans, total, latency=0.8, remaining=None, translate=False, fail_on=()):
+    def run_live(self, spans, total, latency=0.8, remaining=None, translate=False, fail_on=(), preset="nube"):
         tmp = tempfile.mkdtemp(prefix="notas-run-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         path = os.path.join(tmp, "reunion.wav")
         rec = FakeRecorder(path, synth(spans, total))
         cloud = FakeCloud(rec, latency, remaining, fail_on)
-        job = DirectoJob(preset="nube")
+        job = DirectoJob(preset=preset)
         job.translate = translate
         summ = FakeSummarizer()
-        opts = {"preset": "nube", "language": None, "prompt": None, "threads": 1, "worker": None, "cloud": cloud,
-                "cloud_cfg": {"provider": "groq", "api_key": "k1"}, "tmp_dir": tmp, "resume": [], "summarizer": summ}
+        opts = {"preset": preset, "language": None, "prompt": None, "threads": 1, "worker": FakeWorker(rec),
+                "cloud": cloud, "cloud_cfg": {"provider": "groq", "api_key": "k1"}, "tmp_dir": tmp, "resume": [],
+                "summarizer": summ}
         writes, logs = [], []
         fake_time = types.SimpleNamespace(time=rec.time, sleep=rec.sleep)
         with mock.patch.object(live, "time", fake_time), mock.patch.object(live, "speech", energy_vad):
@@ -675,6 +695,16 @@ class RunDirectoTests(unittest.TestCase):
         self.assertEqual(len(segs), 2)  # el segundo se salto; el directo siguio
         self.assertTrue(any("trozo sin transcribir" in l and "HTTP 500" in l for l in logs))
         self.assertTrue(any("Sin respuesta de la nube" in s for s in job.stages))
+
+    def test_el_directo_en_local_no_cambia_ni_ensena_cupo(self):
+        spans = [(0.0, 3.4), (4.0, 7.6), (8.2, 11.3), (11.9, 21.9), (22.6, 24.0)]
+        segs, lang, cloud, job, _, _, _ = self.run_live(spans, 26.0, preset="medium")
+        self.assertEqual(cloud.calls, [])  # ni una peticion a la nube
+        self.assertGreaterEqual(len(segs), 1)
+        self.assertEqual(lang, "es")
+        self.assertFalse(job.directo["cloud"])  # la interfaz no ensena cupo ni latencia en local
+        self.assertIsNone(job.directo["quota"])
+        self.assertIsNone(job.directo["pace"])
 
     def test_traduccion_al_final_de_la_sesion(self):
         segs, _, cloud, job, _, _, summ = self.run_live([(0.0, 3.4), (4.0, 7.0)], 9.0, translate=True)
