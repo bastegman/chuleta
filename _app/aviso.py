@@ -27,6 +27,13 @@ C = {"fondo": "#1c1b1f", "texto": "#ebe8e5", "suave": "#a09a95", "boton": "#be12
      "boton_texto": "#ffffff", "rojo": "#fb7185", "ok": "#4ade80", "err": "#f87171"}
 
 
+def limpiar_texto(s, limite=200):
+    """Texto apto para una etiqueta de Tk: sin caracteres fuera del BMP (emoji de los títulos de Teams, que Tk
+    puede rechazar con TclError), sin saltos de línea ni controles, y acotado."""
+    s = "".join(ch for ch in str(s or "") if ord(ch) <= 0xFFFF and (ch.isprintable() or ch == " "))
+    return " ".join(s.split())[:limite]
+
+
 def dpi_aware():
     """Antes de crear la ventana: nítida en pantallas con escala (per-monitor v1; si no, system aware)."""
     if not WINDOWS:
@@ -92,6 +99,25 @@ def estilo_windows(root, x, y):
     return {"hwnd": int(hwnd), "exstyle": u.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF}
 
 
+def devolver_foco(anterior, propio):
+    """Tk activa la ventana al mostrarla aunque lleve WS_EX_NOACTIVATE (ShowWindow(SW_SHOWNORMAL) no respeta ese
+    estilo, que solo evita la activación por clic). Si nos hemos quedado con el foco, se devuelve a la ventana que lo
+    tenía (la llamada en la que estabas): en ese instante somos el proceso activo y Windows lo permite."""
+    if not WINDOWS or not anterior or not propio:
+        return None
+    import ctypes
+    u = ctypes.windll.user32
+    u.GetForegroundWindow.restype = ctypes.c_void_p
+    u.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+    u.IsWindow.argtypes = [ctypes.c_void_p]
+    if int(u.GetForegroundWindow() or 0) != int(propio):
+        return True  # no la hemos robado
+    if not u.IsWindow(ctypes.c_void_p(anterior)):
+        return False
+    u.SetForegroundWindow(ctypes.c_void_p(anterior))
+    return int(u.GetForegroundWindow() or 0) == int(anterior)
+
+
 class Aviso:
     def __init__(self, args, activa_antes=0):
         import tkinter as tk
@@ -140,9 +166,9 @@ class Aviso:
         self.l_sub = tk.Label(textos, fg=C["suave"], bg=C["fondo"], font=f_sub, anchor="w")
         self.l_sub.pack(fill="x")
         ancho_txt = int((ANCHO - 14 * 2 - 12 - 9 - 92 - 8 - 4 - 28) * s)  # lo que queda para el texto
-        self.l_tit.configure(text=self._encajar(f_tit, args.titulo or "Llamada en curso", ancho_txt))
-        self.sub(self._encajar(f_sub, ("Tema: " + args.tema) if args.tema else "Pulsa Grabar para tomar notas",
-                               ancho_txt))
+        titulo, tema = limpiar_texto(args.titulo), limpiar_texto(args.tema)
+        self.l_tit.configure(text=self._encajar(f_tit, titulo or "Llamada en curso", ancho_txt))
+        self.sub(self._encajar(f_sub, ("Tema: " + tema) if tema else "Pulsa Grabar para tomar notas", ancho_txt))
         for w in [self.grabar_btn] + partes:
             w.bind("<Button-1>", lambda e: self.grabar())
             w.bind("<Enter>", lambda e: self._hover(True))
@@ -213,7 +239,7 @@ class Aviso:
 
     def _error(self, msg):
         self.resultado, self.datos = "error", {"error": msg}
-        self.sub(self._encajar(self.f_sub, msg, int(220 * self.s)), C["err"])
+        self.sub(self._encajar(self.f_sub, limpiar_texto(msg), int(220 * self.s)), C["err"])
         self.root.after(5000, lambda: self.cerrar("error"))
 
     def sondear(self):
@@ -263,6 +289,7 @@ class Aviso:
         root.deiconify()
         root.update_idletasks()
         self.info = estilo_windows(root, self.x, self.y) or self.info  # por si Tk rehízo el marco al mostrarla
+        self.info["foco_devuelto"] = devolver_foco(self.activa_antes, self.info.get("hwnd"))
         root.after(max(1, int(a.segundos * 1000)), lambda: self.cerrar("tiempo"))
         root.after(2000, self.sondear)
         if a.auto_grabar_ms:

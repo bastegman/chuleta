@@ -282,11 +282,21 @@ class AvisoTests(unittest.TestCase):
             json.dump({"estado": e, "resultado": res, "posts": posts}, f, ensure_ascii=False, indent=1)
 
     def test_clic_real_en_grabar(self):
+        trabajo = VentanaDeTrabajo()
         p, est = self.abrir("clic")
         e = self.estado(est)
         time.sleep(0.5)
+        activa_antes_del_clic = ventana_activa()
         clic(*e["botones"]["grabar"])
+        time.sleep(0.4)
+        activa_tras_el_clic = ventana_activa()  # pulsar el aviso no debe quitarle el foco a la llamada
         posts = self.espera_post(5)
+        foco = {"ventana_trabajo": trabajo.hwnd, "trabajo_en_primer_plano_antes": trabajo.en_primer_plano,
+                "activa_antes_del_clic": activa_antes_del_clic, "activa_tras_el_clic": activa_tras_el_clic,
+                "hwnd_aviso": e.get("hwnd"), "foco_devuelto": e.get("foco_devuelto")}
+        with open(os.path.join(ART, "foco_clic.json"), "w", encoding="utf-8") as f:
+            json.dump(foco, f, indent=1)
+        trabajo.cerrar()
         if not posts:
             p.kill()
             self.skipTest("el clic sintético no llegó a la ventana en este escritorio "
@@ -294,6 +304,8 @@ class AvisoTests(unittest.TestCase):
         res = self.resultado(p)
         self.assertEqual(res["resultado"], "grabar", res)
         self.assertEqual(posts[0]["body"]["start_only"], True)
+        if trabajo.en_primer_plano:
+            self.assertEqual(activa_tras_el_clic, trabajo.hwnd, foco)
 
     def test_clic_real_en_cerrar(self):
         p, est = self.abrir("cerrar")

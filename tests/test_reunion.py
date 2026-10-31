@@ -16,6 +16,7 @@ import urllib.request
 from datetime import datetime, timedelta
 
 from support import server  # noqa: F401  (prepara sys.path con _app)
+import aviso  # noqa: E402  (solo sus funciones puras: tkinter se importa dentro de la clase)
 import calendario  # noqa: E402
 
 
@@ -554,6 +555,14 @@ STATIC = os.path.join(os.path.dirname(calendario.__file__), "static")
 def static(name):
     with open(os.path.join(STATIC, name), encoding="utf-8") as f:
         return f.read()
+
+
+class AvisoTextoTests(unittest.TestCase):
+    def test_limpiar_texto_para_tk(self):
+        self.assertEqual(aviso.limpiar_texto("Reunión \U0001F680 Q4\n  (Alfa)\t"), "Reunión Q4 (Alfa)")
+        self.assertEqual(aviso.limpiar_texto(None), "")
+        self.assertEqual(len(aviso.limpiar_texto("x" * 500)), 200)
+        self.assertEqual(aviso.limpiar_texto("Comité · Alfa"), "Comité · Alfa")  # el BMP se queda tal cual
 
 
 class ReunionFrontendTests(unittest.TestCase):
