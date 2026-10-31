@@ -42,6 +42,11 @@ USO DIARIO
     grabar con o sin micro, y con o sin transcripción en directo.
   - Si estás en una llamada de Teams y no estás grabando, arriba aparece
     "📞 Teams en llamada · ● Tomar Notas".
+  - Al detectar la llamada, abajo en el centro aparece un aviso pequeño con el nombre de la reunión y
+    "● Grabar": púlsalo para empezar sin salir de Teams (se cierra solo a los 20 s o con ✕).
+  - Al grabar, la app propone el nombre, el tema y los participantes a partir de la ventana de la
+    reunión de Teams y, si lo activas en Ajustes > Reuniones, de tu calendario de Outlook (clásico).
+    Todo se lee en tu PC; los participantes solo van a las notas de esa reunión.
   - Al parar, termina de transcribir y hace el resumen solo. Cada reunión tiene pestañas
     Resumen / Transcripción / Notas; la transcripción se puede corregir en la propia página.
   - Ctrl+P busca en todas las reuniones. Puedes arrastrar a la ventana audios que ya tengas
