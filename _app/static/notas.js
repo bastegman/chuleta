@@ -397,7 +397,7 @@ main.addEventListener('click', e => {
 /* ---------------------------------------------------------------- editor de notas (bloques) */
 const BLOCKS = [['p', 'Texto', 'T'], ['h1', 'Título 1', 'H1'], ['h2', 'Título 2', 'H2'], ['h3', 'Título 3', 'H3'],
   ['ul', 'Lista', '•'], ['ol', 'Lista numerada', '1.'], ['todo', 'Tarea', '☐'], ['quote', 'Cita', '❝'],
-  ['hr', 'Separador', '—'], ['time', 'Marca de tiempo (minuto actual)', '⏱']];
+  ['hr', 'Separador', '—'], ['time', 'Marca de tiempo (minuto actual)', '◔']];
 const LISTS = ['ul', 'ol', 'todo'];
 
 function mdToBlocks(md) {

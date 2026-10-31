@@ -162,7 +162,7 @@ function bindVocesSettings(d) {
     if (!m || !p) return;
     if (!st.enabled) { m.innerHTML = ''; return; }
     if (st.available === false) m.innerHTML = `<span style="color:var(--err)">✖ La librería de voces (sherpa-onnx) no carga en este PC: vuelve a ejecutar INSTALAR.bat. ${esc(st.why || '')}</span>`;
-    else if (st.models.downloading) m.innerHTML = `⏳ ${esc(st.models.stage || 'Descargando modelos…')} ${Math.round((st.models.frac || 0) * 100)} %`;
+    else if (st.models.downloading) m.innerHTML = `${esc(st.models.stage || 'Descargando modelos…')} ${Math.round((st.models.frac || 0) * 100)} %`;
     else if (st.models.error) m.innerHTML = `<span style="color:var(--err)">✖ No se pudieron descargar los modelos: ${esc(st.models.error)}</span> <button class="btn ghost sm" type="button" id="vzRetry">Reintentar</button>`;
     else if (st.models.ready) m.innerHTML = `<span style="color:var(--ok)">✓ Modelos listos</span> · se guardan en %LOCALAPPDATA%\\AudiosApp\\models\\voces`;
     else m.innerHTML = 'Modelos pendientes de descarga.';

@@ -586,7 +586,7 @@ function renderTree() {
   const loose = root.audios.filter(a => matchA(a, q) && !isLive(a));
   if (loose.length || !q) {
     html.push(`<div class="tsec" data-drop="">Sin clasificar ${loose.length ? `· ${loose.length}` : ''}</div>`);
-    html.push(loose.length ? loose.map(a => audioRow(a, 0)).join('') : '<div class="trow muted" data-drop="" style="padding-left:16px;cursor:default">Nada suelto 👌</div>');
+    html.push(loose.length ? loose.map(a => audioRow(a, 0)).join('') : '<div class="trow muted" data-drop="" style="padding-left:16px;cursor:default">Nada suelto</div>');
   }
   const folders = root.folders.map(f => folderNode(f, 0, q)).join('');
   if (folders) html.push('<div class="tsec">Carpetas</div>' + folders);
