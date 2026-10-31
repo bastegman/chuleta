@@ -226,6 +226,15 @@ class NombresUnicosTests(TempTree):
             with open(p, encoding="utf-8") as f:
                 self.assertIn(txt, f.read())
         self.assertEqual(self.reg.rel_of(pa), "Alfa/Kickoff.m4a")
+        # sin registro (otro PC, reinstalacion) cada una sigue encontrando el suyo, tambien en .docx (sin `origen:`)
+        reg2 = salidas.Registro(os.path.join(self.data_dir, "otro.json"))
+        self.assertEqual(salidas.write_all(dict(b, notes="Beta 2"), self.dest, reg2)[0], (pb, "igual"))
+        self.assertEqual(salidas.write_all(dict(a, notes="Alfa 2"), self.dest, reg2)[0], (pa, "igual"))
+        dx = [{"path": self.d, "format": "docx"}]
+        qa, qb = (salidas.write_all(m, dx, self.reg)[0][0] for m in (a, b))
+        self.assertNotEqual(qa, qb)
+        reg3 = salidas.Registro(os.path.join(self.data_dir, "tercero.json"))
+        self.assertEqual(salidas.write_all(b, dx, reg3)[0], (qb, "igual"))
         # aunque el de Alfa desaparezca, Beta se queda con su nombre (estable)
         os.remove(pa)
         self.assertEqual(salidas.write_all(dict(b, notes="Beta 3"), self.dest, self.reg)[0], (pb, "escrito"))

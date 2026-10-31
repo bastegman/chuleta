@@ -557,6 +557,8 @@ def dest_path(destino, doc, registro=None):
     for cand in (plain, alt):
         if os.path.normcase(cand) in mine and os.path.isfile(cand):
             return folder, cand
+    if os.path.isfile(alt) and is_ours(alt, fmt):
+        return folder, alt  # su nombre propio ya esta ahi aunque el registro no lo sepa (otro PC, reinstalacion)
     if not os.path.isfile(plain):
         return folder, plain
     owner = registro.rel_of(plain)
