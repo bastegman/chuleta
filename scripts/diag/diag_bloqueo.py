@@ -188,6 +188,7 @@ def main():
     ap.add_argument("--seconds", type=float, default=180)
     ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args()
+    a.app, a.out = os.path.abspath(a.app), os.path.abspath(a.out)  # el servidor arranca con otro cwd
     os.makedirs(a.out, exist_ok=True)
     logf = open(os.path.join(a.out, "diag.log"), "a", encoding="utf-8")
 
