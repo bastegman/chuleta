@@ -167,7 +167,7 @@ Note "b.primera_captura" ((Get-ChildItem $capDir -Filter *.png -ErrorAction Sile
 if (Test-Path -LiteralPath (Join-Path $logDir "instalar.log")) { Remove-Item -LiteralPath (Join-Path $logDir "instalar.log") -Force }
 $env:NOTAS_INSTALADOR_AUTOCERRAR = "15"
 $env:NOTAS_INSTALADOR_SIMULAR_FALLO = ""
-$rc = Run-Installer $dir1 "c.instalador" 15
+$rc = Run-Installer $dir1 "c.instalador" 25  # pip real (faster-whisper, sherpa-onnx, pywebview, pywin32): 5-14 min segun el runner
 Copy-Logs "c"
 $ilog = Tail-Log "instalar.log" 400
 Check "c.exitcode_0" ($rc -eq 0) $rc
