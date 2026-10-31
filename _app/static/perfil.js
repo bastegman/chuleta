@@ -22,11 +22,12 @@ function perfilLangOptions(sel, def) {
     .concat(LANGS.filter(([v]) => v).map(([v, l]) => [v, l]));
   return opts.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
 }
-/* Idioma con el que se transcribe una reunión concreta (para preseleccionar la caja «Transcribir»). */
+/* Idioma con el que se transcribe una reunión concreta (para preseleccionar la caja «Transcribir»): el de su .md o,
+   si no lo fija, el del perfil. No el último elegido en otra caja: eso es de aquella reunión. */
 function perfilLangOf(a) {
   const v = (a && a.props && a.props.idioma) || '';
   if (v === 'auto') return '';
-  return v || (S.selLang ?? S.config.language ?? '');
+  return v || (S.config.language ?? '');
 }
 
 /* ---------------------------------------------------------------- precedencias */
@@ -111,7 +112,9 @@ function perfilCamposHtml(language, context) {
 }
 function perfilBindRec(d) {
   perfilBindTema(d);
-  if (S.config.perfil?.vocab != null) d.dataset.pfVocab = '1';  // tema fijo en el perfil: la sugerencia de Teams no lo pisa
+  // tema fijo en el perfil (y que siga existiendo): la sugerencia de Teams no lo pisa
+  const fijo = S.config.perfil?.vocab;
+  if (fijo != null && (fijo === '' || (S.vocab || []).some(v => v.id === fijo))) d.dataset.pfVocab = '1';
   const imp = $('#rVocabImport', d);
   if (imp) imp.onclick = () => perfilImportar($('#rProj', d)?.value || '', openRec);
   const save = $('#rPerfilSave', d);
@@ -202,7 +205,8 @@ function perfilFieldsetHtml() {
       <label>${I.copy}Destinos de salida <span class="muted" style="font-weight:400">· opcional: cada reunión, como documento, en otras carpetas</span></label>
       <div id="pfOuts">${perfilOutsHtml(p.outputs || [])}</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="pfOutAdd">${I.plus}Añadir carpeta…</button></div>
-      <div class="help">Un vault de Obsidian, la carpeta del proyecto en OneDrive, una biblioteca de SharePoint sincronizada… Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)}; uno ajeno, o uno nuestro que hayas cambiado allí, se deja como está.</div>
+      <div id="pfAvisos"></div>
+      <div class="help">Una carpeta fuera de ${esc(APP_NAME)}: un vault de Obsidian, una biblioteca de SharePoint sincronizada, la de documentos del proyecto en OneDrive… No vale la carpeta de ${esc(APP_NAME)}, una carpeta vinculada ni una con grabaciones: allí cada documento chocaría con las notas de su reunión. Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>; si ese nombre ya lo usa otra reunión o un fichero tuyo, como <code>&lt;fecha&gt; - &lt;nombre&gt; (código).md</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)} en este PC; uno ajeno, uno nuestro que hayas cambiado allí o uno de otro PC que no coincida se deja como está (abajo verás el aviso). Al borrar una reunión, sus documentos que nadie haya cambiado van también a la papelera.</div>
     </fieldset>`;
 }
 /* ---------------------------------------------------------------- destinos de salida (lista editable de Ajustes) */
@@ -232,13 +236,35 @@ function bindPerfilOuts(d) {
     try { path = (await api('/api/link/pick', { title: 'Carpeta donde guardar los documentos de las reuniones' })).path; }
     catch (err) { path = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta:`); }
     if (!path) return;
+    // se comprueba al momento (sin guardar): la carpeta de la app, una vinculada o una con grabaciones no valen
+    try { path = (await api('/api/perfil', { comprobar: true, outputs: [{ path, format: 'md' }] })).outputs[0].path; }
+    catch (err) { toast(esc(err.message), 'err'); return; }
     if (!perfilOuts.some(o => o.path === path && o.format === 'md')) perfilOuts.push({ path, format: 'md', by_project: false });
     draw();
   };
 }
+/* Lo que no se ha podido escribir en los destinos (GET /api/perfil → avisos), con qué hacer. */
+function perfilAvisoText(accion) {
+  const t = {
+    'cambiado': 'no se ha sobrescrito: lo has cambiado allí, o es de otro PC o de antes de reinstalar y no coincide. Bórralo allí para que se vuelva a escribir',
+    'junto-al-audio': 'no se escribe: chocaría con las notas de una grabación de esa carpeta. Elige otra carpeta para los documentos',
+    'dentro-de-la-app': `no se escribe: esa carpeta es de ${APP_NAME} o de una carpeta vinculada, donde están las grabaciones. Quita ese destino y elige otra carpeta`,
+    'ajeno': 'no se ha tocado: ya hay un fichero tuyo con ese nombre',
+    'sin-carpeta': 'la carpeta no está disponible ahora (¿sin VPN o con el disco desconectado?): se escribirá cuando vuelva a cambiar la reunión',
+  }[accion];
+  if (t) return t;
+  return String(accion || '').startsWith('error') ? 'no se ha podido escribir (¿abierto en Word?): se reintenta cuando vuelva a cambiar la reunión' : String(accion || '');
+}
+function perfilAvisosHtml(avisos) {
+  if (!avisos || !avisos.length) return '';
+  return `<div class="notice" style="margin-top:8px">Documentos sin escribir en los destinos:<ul style="margin:6px 0 0 18px;padding:0">${avisos.slice(0, 8).map(a =>
+    `<li><code title="${esc(a.path)}">${esc(a.path)}</code> · ${esc(perfilAvisoText(a.accion))}</li>`).join('')}</ul></div>`;
+}
 function bindPerfilSettings(d) {
   const fsel = $('#pfFolder', d);
   bindPerfilOuts(d);
+  const box = $('#pfAvisos', d);
+  if (box) api('/api/perfil').then(r => { if (document.body.contains(box)) box.innerHTML = perfilAvisosHtml(r.avisos); }).catch(() => { });
   if (fsel) {
     fsel.dataset.prev = fsel.value;
     fsel.onchange = async () => {

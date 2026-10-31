@@ -1,0 +1,816 @@
+# -*- coding: utf-8 -*-
+"""Arreglos de la auditoría final del 31/10/2026, grupo «perfil»: perfil de reunión, temas de vocabulario y destinos
+de salida. Cada clase dice qué hallazgo cubre (P1-10, P1-11/P2-01, P2-02…). Con dobles y carpetas temporales: sin red
+y sin Windows. Los de la interfaz se ejecutan con node si está instalado."""
+import json
+import os
+import re
+import shutil
+import subprocess
+import threading
+import types
+import unittest
+import zipfile
+from unittest import mock
+
+from support import TempTree, bare_jobs, engines, server, srt_text  # noqa: F401  (support prepara sys.path)
+import salidas  # noqa: E402
+from test_frontend import js_defs, read  # noqa: E402
+
+STEM = "2026-10-31 10-00-00 - Semanal"
+
+
+def settings_store(tmp, **extra):
+    st = server.Store(os.path.join(tmp, "settings.json"), server.DEFAULT_SETTINGS)
+    if extra:
+        st.update(lambda d: d.update(extra))
+    return st
+
+
+def doc(**kw):
+    d = {"stem": STEM, "title": "Semanal", "date": "2026-10-31 10:00", "duration": "45 min",
+         "props": {"proyecto": "Alfa"}, "source": "Alfa/" + STEM + ".wav", "summary": "", "summary_model": None,
+         "notes": "notas", "app_name": "Chuleta", "segments": [{"start": 0.0, "end": 2.0, "text": "Hola."}]}
+    d.update(kw)
+    return d
+
+
+def jobs_with(tmp, data_dir, outputs, library=None):
+    """Un Jobs sin hilos con ajustes (destinos de salida) y una biblioteca de mentira."""
+    j = bare_jobs([])
+    j.settings = settings_store(tmp, perfil={"outputs": outputs})
+    j.library = library or types.SimpleNamespace(find=lambda rel: {"date": "2026-10-31T10:00:00", "duration": 60.0},
+                                                 at=1)
+    j.voice_vectors = {}
+    return j
+
+
+def meeting(t, rel, notes="notas"):
+    """Una reunion con su transcripcion y sus notas en el ROOT temporal de `t` (un TempTree)."""
+    t.wav(rel)
+    base = os.path.splitext(rel)[0]
+    t.write(base + ".srt", srt_text([(0.0, 2.0, "Hola a todos.")]))
+    t.write(base + ".md", f"---\ntitulo: Semanal\n---\n\n{notes}\n")
+
+
+# ----------------------------------------------------------------------------- P1-10
+
+class IdiomaDelPerfilTests(TempTree):
+    """P1-10: transcribir una reunión con otro idioma no cambia el idioma por defecto del perfil."""
+
+    def test_transcribir_no_cambia_el_idioma_del_perfil(self):
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp, language="es", preset="rapido")
+        seen = []
+        a.jobs = types.SimpleNamespace(
+            submit=lambda paths, preset, language, resume=False: seen.append((paths, preset, language)) or ["j1"])
+        self.assertEqual(a.transcribe({"paths": ["x.wav"], "preset": "nube", "language": "pt"}), {"added": ["j1"]})
+        st = a.settings.get()
+        self.assertEqual(st["language"], "es")  # el del perfil sigue igual (antes pasaba a "pt")
+        self.assertEqual(st["preset"], "nube")  # el motor si se recuerda
+        self.assertEqual(seen, [(["x.wav"], "nube", "pt")])
+        a.transcribe({"paths": ["x.wav"], "preset": "rapido", "language": ""})  # «Detectar» tampoco lo cambia
+        self.assertEqual(a.settings.get()["language"], "es")
+
+
+# ----------------------------------------------------------------------------- P1-11 / P2-01
+
+class DestinosEnLaAppTests(TempTree):
+    """P1-11 (y P2-01): un destino no puede ser una carpeta de la app ni tener grabaciones, y nunca se escribe encima
+    del sidecar de una grabación aunque la validación falle."""
+
+    def setUp(self):
+        super().setUp()
+        self.ext = os.path.join(self.tmp, "OneDrive", "Proyecto")  # vinculada
+        os.makedirs(os.path.join(self.ext, "Docs"))
+        server.LINKS[server.link_id(self.ext)] = {"name": "Proyecto", "path": self.ext}
+        os.makedirs(os.path.join(self.root, "Alfa", "Docs"))
+        self.fuera = os.path.join(self.tmp, "Vault")
+        os.makedirs(self.fuera)
+
+    def test_check_perfil_rechaza_la_app_las_vinculadas_y_las_carpetas_con_grabaciones(self):
+        for bad in (self.root, os.path.join(self.root, "Alfa"), os.path.join(self.root, "Alfa", "Docs"), self.ext,
+                    os.path.join(self.ext, "Docs")):
+            with self.assertRaises(server.ApiError, msg=bad) as cm:
+                server.check_perfil({"outputs": [{"path": bad}]})
+            self.assertIn(server.APP_NAME, cm.exception.msg)
+            self.assertIn("grabaciones", cm.exception.msg)
+        obs = os.path.join(self.tmp, "OBS")
+        os.makedirs(obs)
+        with open(os.path.join(obs, STEM + ".mkv"), "wb") as f:
+            f.write(b"x")
+        with self.assertRaises(server.ApiError) as cm:
+            server.check_perfil({"outputs": [{"path": obs}]})
+        self.assertIn("tiene grabaciones", cm.exception.msg)
+        self.assertIn(STEM + ".mkv", cm.exception.msg)
+        ok = server.check_perfil({"outputs": [{"path": self.fuera, "format": "docx"}]})
+        self.assertEqual(ok["outputs"], [{"path": self.fuera, "format": "docx", "by_project": False}])
+        # una carpeta que solo empieza igual que _app no es la de la app
+        hermana = self.app_dir + "2"
+        os.makedirs(hermana)
+        self.assertEqual(salidas.check_destinos([{"path": hermana}], self.app_dir)[0]["path"], hermana)
+
+    def test_nunca_se_escribe_encima_de_un_sidecar(self):
+        """Validación saltada (un destino guardado con una versión anterior): ni las notas ni el .txt de la grabación
+        se tocan, y a un audio sin notas (OBS, importado) no se le crean."""
+        reg = salidas.Registro(os.path.join(self.data_dir, "salidas.json"))
+        d = os.path.join(self.tmp, "Grabaciones")
+        os.makedirs(d)
+        with open(os.path.join(d, STEM + ".wav"), "wb") as f:
+            f.write(b"RIFF")
+        notas = os.path.join(d, STEM + ".md")
+        with open(notas, "w", encoding="utf-8") as f:
+            f.write("---\ntitulo: mis notas\n---\n\nnotas de verdad\n")
+        for fmt in ("md", "txt"):
+            done = salidas.write_all(doc(), [{"path": d, "format": fmt}], reg)
+            self.assertEqual(done[0], (os.path.join(d, STEM + "." + fmt), "junto-al-audio"), fmt)
+        with open(notas, encoding="utf-8") as f:
+            self.assertIn("notas de verdad", f.read())
+        self.assertFalse(os.path.exists(os.path.join(d, STEM + ".txt")))
+        self.assertEqual(salidas.write_all(doc(), [{"path": d, "format": "docx"}], reg)[0][1], "escrito")  # no choca
+        self.assertEqual(salidas.sidecar_of(os.path.join(d, STEM + ".resumen.md")), os.path.join(d, STEM + ".wav"))
+        self.assertIsNone(salidas.sidecar_of(os.path.join(d, "otro.md")))
+
+    def test_las_listas_de_extensiones_siguen_a_las_del_servidor(self):
+        self.assertEqual(set(salidas.AUDIO_EXT), server.AUDIO_EXT)
+        self.assertTrue(set(server.SIDE_EXTS) <= set(salidas.SIDECAR_TAILS))
+
+    def test_un_destino_guardado_dentro_de_la_app_no_se_escribe_y_se_avisa(self):
+        meeting(self, "Alfa/" + STEM + ".wav")
+        dentro = os.path.join(self.root, "Alfa", "Docs")
+        j = jobs_with(self.tmp, self.data_dir, [{"path": dentro, "format": "md"}, {"path": self.fuera, "format": "md"}])
+        with mock.patch.object(server, "log"):
+            done = j.write_outputs("Alfa/" + STEM + ".wav")
+        self.assertEqual([k for _, k in done], ["dentro-de-la-app", "escrito"])
+        self.assertEqual(os.listdir(dentro), [])
+        self.assertTrue(os.path.isfile(os.path.join(self.fuera, STEM + ".md")))
+        avisos = j.outputs_warnings()
+        self.assertEqual([(a["accion"], a["reunion"]) for a in avisos], [("dentro-de-la-app", "Alfa/" + STEM + ".wav")])
+
+    def test_comprobar_un_destino_sin_guardar(self):
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp)
+        r = a.perfil_save({"comprobar": True, "outputs": [{"path": self.fuera + os.sep, "format": "md"}]})
+        self.assertEqual(r, {"outputs": [{"path": self.fuera, "format": "md", "by_project": False}]})
+        self.assertEqual(a.settings.get()["perfil"]["outputs"], [])  # no se ha guardado nada
+        with self.assertRaises(server.ApiError):
+            a.perfil_save({"comprobar": True, "outputs": [{"path": self.ext}]})
+        js = read("perfil.js")
+        self.assertIn("api('/api/perfil', { comprobar: true, outputs: [{ path, format: 'md' }] })", js)
+
+
+# ----------------------------------------------------------------------------- P2-02
+
+class SinRegistroTests(TempTree):
+    """P2-02: sin entrada en salidas.json (otro PC, reinstalación, JSON perdido), un documento con la marca es
+    «cambiado» salvo que diga lo mismo que lo que se va a escribir."""
+
+    def setUp(self):
+        super().setUp()
+        self.d = os.path.join(self.tmp, "vault")
+        os.makedirs(self.d)
+
+    def reg(self, name):
+        return salidas.Registro(os.path.join(self.data_dir, name))
+
+    def test_marcado_y_editado_no_se_pisa(self):
+        x = os.path.join(self.d, STEM + ".md")
+        with open(x, "wb") as f:
+            f.write(salidas.render(doc(), "md") + "editado a mano en el vault\n".encode("utf-8"))
+        self.assertEqual(salidas.write_all(doc(notes="nuevas"), [{"path": self.d, "format": "md"}], self.reg("a.json"))
+                         [0][1], "cambiado")
+        with open(x, encoding="utf-8") as f:
+            self.assertIn("editado a mano en el vault", f.read())
+
+    def test_lo_mismo_salvo_la_fecha_de_generacion_se_adopta(self):
+        for fmt in salidas.FORMATS:
+            x = os.path.join(self.d, f"{STEM}.{fmt}")
+            with open(x, "wb") as f:
+                f.write(salidas.render(doc(generated="2020-01-01 00:00"), fmt))
+            if fmt == "docx":  # otras fechas en docProps/core.xml
+                with zipfile.ZipFile(x) as z:
+                    self.assertIn(b"<dcterms:created", z.read("docProps/core.xml"))
+            reg = self.reg(fmt + ".json")
+            with mock.patch.object(salidas.time, "strftime", return_value="2030-12-31T23:59:59Z"):
+                done = salidas.write_all(doc(), [{"path": self.d, "format": fmt}], reg)
+            self.assertEqual(done[0][1], "igual", fmt)
+            self.assertEqual(reg.get(x), salidas.sha256_of(x))  # queda registrado: a partir de ahi se actualiza
+            self.assertEqual(salidas.write_all(doc(notes="otras"), [{"path": self.d, "format": fmt}], reg)[0][1],
+                             "escrito", fmt)
+
+
+# ----------------------------------------------------------------------------- P2-03
+
+class NombresUnicosTests(TempTree):
+    """P2-03: dos reuniones con el mismo nombre de fichero no se pisan el documento en el destino."""
+
+    def setUp(self):
+        super().setUp()
+        self.d = os.path.join(self.tmp, "vault")
+        os.makedirs(self.d)
+        self.reg = salidas.Registro(os.path.join(self.data_dir, "salidas.json"))
+        self.dest = [{"path": self.d, "format": "md"}]
+
+    def test_dos_reuniones_con_el_mismo_nombre(self):
+        a = doc(stem="Kickoff", source="Alfa/Kickoff.m4a", notes="las de Alfa")
+        b = doc(stem="Kickoff", source="Beta/Kickoff.m4a", notes="las de Beta")
+        pa = salidas.write_all(a, self.dest, self.reg)[0][0]
+        pb = salidas.write_all(b, self.dest, self.reg)[0][0]
+        self.assertEqual(pa, os.path.join(self.d, "Kickoff.md"))
+        self.assertEqual(pb, salidas.alt_name(self.d, "Kickoff", "Beta/Kickoff.m4a", "md"))
+        self.assertRegex(os.path.basename(pb), r"^Kickoff \([0-9a-f]{6}\)\.md$")
+        # cada una sigue escribiendo en el suyo
+        self.assertEqual(salidas.write_all(dict(a, notes="Alfa 2"), self.dest, self.reg)[0], (pa, "escrito"))
+        self.assertEqual(salidas.write_all(dict(b, notes="Beta 2"), self.dest, self.reg)[0], (pb, "escrito"))
+        for p, txt in ((pa, "Alfa 2"), (pb, "Beta 2")):
+            with open(p, encoding="utf-8") as f:
+                self.assertIn(txt, f.read())
+        self.assertEqual(self.reg.rel_of(pa), "Alfa/Kickoff.m4a")
+        # aunque el de Alfa desaparezca, Beta se queda con su nombre (estable)
+        os.remove(pa)
+        self.assertEqual(salidas.write_all(dict(b, notes="Beta 3"), self.dest, self.reg)[0], (pb, "escrito"))
+
+    def test_sin_registro_lo_dice_el_propio_documento(self):
+        """Un documento de otra reunión que no consta en este registro (otro PC): su `origen:` lo delata."""
+        with open(os.path.join(self.d, "Kickoff.md"), "wb") as f:
+            f.write(salidas.render(doc(stem="Kickoff", source="Otra/Kickoff.m4a"), "md"))
+        b = doc(stem="Kickoff", source="Beta/Kickoff.m4a")
+        self.assertEqual(salidas.origin_of(os.path.join(self.d, "Kickoff.md"), "md"), "Otra/Kickoff.m4a")
+        done = salidas.write_all(b, self.dest, self.reg)
+        self.assertEqual(done[0], (salidas.alt_name(self.d, "Kickoff", "Beta/Kickoff.m4a", "md"), "escrito"))
+        txt = os.path.join(self.d, "Kickoff.txt")
+        with open(txt, "wb") as f:
+            f.write(salidas.render(doc(stem="Kickoff", source="Otra/Kickoff.m4a"), "txt"))
+        self.assertEqual(salidas.origin_of(txt, "txt"), "Otra/Kickoff.m4a")
+
+    def test_registro_antiguo(self):
+        p = os.path.join(self.data_dir, "viejo.json")
+        x = os.path.join(self.d, STEM + ".md")
+        with open(x, "wb") as f:
+            f.write(salidas.render(doc(), "md"))
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({os.path.normcase(x): salidas.sha256_of(x)}, f)  # formato de antes: destino -> sha
+        reg = salidas.Registro(p)
+        self.assertEqual(reg.get(x), salidas.sha256_of(x))
+        self.assertEqual(salidas.write_all(doc(notes="n2"), self.dest, reg)[0], (x, "escrito"))
+        self.assertEqual(reg.rel_of(x), doc()["source"])
+        self.assertEqual(reg.moved("Alfa", "Gamma", folder=True), 1)
+        self.assertEqual(reg.rel_of(x), "Gamma/" + STEM + ".wav")
+
+
+# ----------------------------------------------------------------------------- P2-04 / P2-05
+
+class EscrituraSeguraTests(TempTree):
+    def setUp(self):
+        super().setUp()
+        self.d = os.path.join(self.tmp, "vault")
+        os.makedirs(self.d)
+        self.reg = salidas.Registro(os.path.join(self.data_dir, "salidas.json"))
+        self.dest = [{"path": self.d, "format": "docx"}]
+
+    def test_si_no_se_puede_sustituir_no_queda_el_tmp(self):
+        """P2-04: con el documento abierto en Word, os.replace falla: se reintenta y el .tmp no se queda."""
+        real = os.replace
+        with mock.patch.object(salidas.os, "replace", side_effect=PermissionError("en uso")), \
+                mock.patch.object(salidas.time, "sleep"):
+            done = salidas.write_all(doc(), self.dest, self.reg)
+        self.assertEqual(done[0][1], "error: PermissionError")
+        self.assertEqual(os.listdir(self.d), [])
+        fallos = [PermissionError("en uso")] * 3
+
+        def replace(a, b):
+            if fallos:
+                raise fallos.pop()
+            return real(a, b)
+        with mock.patch.object(salidas.os, "replace", side_effect=replace), mock.patch.object(salidas.time, "sleep"):
+            done = salidas.write_all(doc(), self.dest, self.reg)
+        self.assertEqual(done[0][1], "escrito")  # a la cuarta
+        self.assertEqual(os.listdir(self.d), [STEM + ".docx"])
+
+    def test_dos_escrituras_a_la_vez(self):
+        """P2-05: el temporizador de las notas y el trabajo que acaba de resumir escriben la misma reunión a la vez: el
+        documento sale entero, ninguna falla y el registro casa con lo que hay en disco."""
+        real = os.replace
+        barrera = threading.Barrier(2, timeout=1.0)
+
+        def replace(a, b):  # las dos llegan a la vez a poner su .tmp en su sitio (sin cerrojo, comparten el .tmp)
+            try:
+                barrera.wait()
+            except threading.BrokenBarrierError:
+                pass
+            return real(a, b)
+        res = []
+
+        def escribe(n):
+            res.extend(salidas.write_all(doc(notes=f"v{n}"), self.dest, self.reg))
+        with mock.patch.object(salidas.os, "replace", side_effect=replace):
+            ts = [threading.Thread(target=escribe, args=(n,)) for n in (1, 2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(10)
+        self.assertEqual(sorted(k for _, k in res), ["escrito", "escrito"], res)
+        p = os.path.join(self.d, STEM + ".docx")
+        with zipfile.ZipFile(p) as z:
+            self.assertIsNone(z.testzip())
+        self.assertEqual(self.reg.get(p), salidas.sha256_of(p))
+        self.assertEqual([n for n in os.listdir(self.d) if n.endswith(".tmp")], [])
+        self.assertEqual(salidas.write_all(doc(notes="v3"), self.dest, self.reg)[0][1], "escrito")  # no «cambiado»
+
+
+# ----------------------------------------------------------------------------- P2-06
+
+class DestinoNoDisponibleTests(TempTree):
+    """P2-06: un destino guardado que ahora no está (sin VPN, disco desconectado) no impide guardar los ajustes."""
+
+    def test_guardar_ajustes_con_un_destino_desconectado(self):
+        d = os.path.join(self.tmp, "SharePoint")
+        os.makedirs(d)
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp, perfil={"outputs": [{"path": d, "format": "md", "by_project": False}]})
+        a.config = lambda q: {}
+        shutil.rmtree(d)  # se desconecta
+        a.save_settings({"perfil": {"folder": None, "vocab": None, "context": "",
+                                    "outputs": [{"path": d, "format": "docx"}]}, "language": "pt"})
+        st = a.settings.get()
+        self.assertEqual((st["language"], st["perfil"]["outputs"][0]["format"]), ("pt", "docx"))
+        with self.assertRaises(server.ApiError):  # uno nuevo que no existe sigue sin valer
+            a.save_settings({"perfil": {"outputs": [{"path": d}, {"path": os.path.join(self.tmp, "no")}]}})
+        a.perfil_save({"outputs": [{"path": d, "format": "md"}]})  # y lo mismo por /api/perfil
+        self.assertEqual(a.settings.get()["perfil"]["outputs"][0]["format"], "md")
+
+
+# ----------------------------------------------------------------------------- P2-07
+
+class ApagarTests(TempTree):
+    """P2-07: al apagar, las reescrituras que esperaban su temporizador se hacen antes de terminar el proceso."""
+
+    def test_flush_outputs_escribe_lo_pendiente(self):
+        rel = "Alfa/" + STEM + ".wav"
+        meeting(self, rel)
+        dest = os.path.join(self.tmp, "vault")
+        os.makedirs(dest)
+        j = jobs_with(self.tmp, self.data_dir, [{"path": dest, "format": "md"}])
+        with mock.patch.object(server, "log"):
+            j.schedule_outputs(rel, delay=60)  # el temporizador no vencería antes de apagar
+            self.assertFalse(os.listdir(dest))
+            self.assertEqual(j.flush_outputs(), [rel])
+        self.assertEqual(os.listdir(dest), [STEM + ".md"])
+        self.assertEqual(j._salidas_timers, {})
+
+    def test_shutdown_prepare_vacia_los_destinos_antes_de_parar_los_trabajos(self):
+        a = server.App.__new__(server.App)
+        a.rec_lock, a.monitor, a.rec = threading.Lock(), None, None
+        calls = []
+        a.jobs = types.SimpleNamespace(flush_outputs=lambda: calls.append("flush"),
+                                       shutdown=lambda: calls.append("stop"))
+        a.shutdown_prepare()
+        self.assertEqual(calls, ["flush", "stop"])
+
+
+# ----------------------------------------------------------------------------- P2-08
+
+class ReescrituraTests(TempTree):
+    """P2-08: «Restaurar original», «Quién habla» y los cambios de hablantes reescriben el documento."""
+
+    def app(self):
+        a = server.App.__new__(server.App)
+        a.library = types.SimpleNamespace(at=1)
+        a.jobs = bare_jobs([])
+        a.jobs.scheduled = []
+        a.jobs.schedule_outputs = lambda rel, delay=4.0: a.jobs.scheduled.append(rel)
+        return a
+
+    def test_restaurar_el_original(self):
+        rel = "r.wav"
+        self.wav(rel)
+        self.write("r.srt", srt_text([(0.0, 1.0, "corregido")]))
+        bdir = server.backup_dir(rel)
+        os.makedirs(bdir)
+        with open(os.path.join(bdir, "original.srt"), "w", encoding="utf-8") as f:
+            f.write(srt_text([(0.0, 1.0, "original")]))
+        a = self.app()
+        with mock.patch.object(server, "log"):
+            a.restore_transcript({"path": rel})
+        self.assertEqual(a.jobs.scheduled, [rel])
+
+    def test_cambiar_un_hablante(self):
+        self.wav("r.wav")
+        self.write("r.hablantes.json", json.dumps({"version": 1, "tramos": [{"inicio": 0, "fin": 1, "h": "h1"}],
+                                                   "hablantes": {"h1": {"segundos": 1}}}))
+        a = self.app()
+        a._speaker_update(server.safe("r.wav"), "h1", lambda info, d: info.update(persona="p1"))
+        self.assertEqual(a.jobs.scheduled, ["r.wav"])
+
+    def test_las_personas_reescriben_sus_reuniones(self):
+        for n, persona in (("a", "p1"), ("b", "p2"), ("c", None)):
+            self.wav(n + ".wav")
+            self.write(n + ".hablantes.json", json.dumps(
+                {"version": 1, "tramos": [{"inicio": 0, "fin": 1, "h": "h1"}],
+                 "hablantes": {"h1": {"segundos": 1, **({"persona": persona} if persona else {})}}}))
+        j = jobs_with(self.tmp, self.data_dir, [{"path": self.tmp, "format": "md"}],
+                      library=server.Library(server.Durations(os.path.join(self.data_dir, "d.json"))))
+        seen = []
+        j.schedule_outputs = lambda rel, delay=4.0: seen.append(rel)
+        self.assertEqual(j.outputs_for_persona("p1"), 1)
+        self.assertEqual(seen, ["a.wav"])
+        self.assertEqual(j.outputs_for_persona(None), 2)  # olvidar todas: las de cualquier persona reconocida
+        j.settings.update(lambda d: d.update(perfil={"outputs": []}))
+        self.assertEqual(j.outputs_for_persona(None), 0)  # sin destinos no se recorre nada
+
+    def test_los_ganchos(self):
+        src = read_server()
+        voces = src[src.index("    def _run_voices"):src.index("    def cancel(self, job_id)")]
+        self.assertIn("self.schedule_outputs(job.path)", voces)
+        person = src[src.index("    def voices_person"):src.index("    def voices_merge")]
+        self.assertIn("self.jobs.outputs_for_persona(pid)", person)
+        merge = src[src.index("    def voices_merge"):src.index("    def voices_forget")]
+        self.assertIn('self.jobs.schedule_outputs(a["path"])', merge)
+        forget = src[src.index("    def voices_forget"):src.index("    def voices_reassign")]
+        self.assertIn("self.jobs.outputs_for_persona(None)", forget)
+        self.assertIn('self.jobs.outputs_for_persona(b.get("id"))', forget)
+
+
+def read_server():
+    with open(server.__file__, encoding="utf-8") as f:
+        return f.read()
+
+
+# ----------------------------------------------------------------------------- P2-10
+
+class BorrarTests(TempTree):
+    """P2-10: al borrar una reunión, sus documentos de los destinos que nadie ha cambiado van a la papelera."""
+
+    def test_borrar_lleva_las_copias_intactas(self):
+        rel = "Alfa/" + STEM + ".wav"
+        meeting(self, rel)
+        d1, d2 = os.path.join(self.tmp, "vault"), os.path.join(self.tmp, "sharepoint")
+        os.makedirs(d1)
+        os.makedirs(d2)
+        a = server.App.__new__(server.App)
+        a.library = server.Library(server.Durations(os.path.join(self.data_dir, "d.json")))
+        a.jobs = jobs_with(self.tmp, self.data_dir, [{"path": d1, "format": "md"}, {"path": d2, "format": "txt"}],
+                           library=a.library)
+        a.settings, a.rec = a.jobs.settings, None
+        with mock.patch.object(server, "log"):
+            done = a.jobs.write_outputs(rel)
+            self.assertEqual([k for _, k in done], ["escrito", "escrito"])
+            editado = done[1][0]
+            with open(editado, "a", encoding="utf-8") as f:
+                f.write("apunte\n")
+            r = a.delete({"path": rel})
+        self.assertEqual(r["copias"], 1)
+        self.assertFalse(os.path.exists(done[0][0]))  # a la papelera
+        self.assertTrue(os.path.isfile(editado))  # el que se cambio alli se queda
+        self.assertEqual(a.jobs.registro.entries(rel), [])
+        if not server.WINDOWS:  # fuera de Windows la «papelera» es DATA_DIR/papelera (en Windows, la de verdad)
+            papelera = os.path.join(self.data_dir, "papelera")
+            self.assertTrue(any(STEM + ".md" in fs for _, _, fs in os.walk(papelera)))
+
+    def test_el_dialogo_lo_dice(self):
+        js = read("notas.js")
+        dlg = js[js.index("async function deleteItem"):js.index("const dropFolder")]
+        self.assertIn("S.config.perfil?.outputs", dlg)
+        self.assertIn("destinos de salida que nadie haya cambiado", dlg)
+        self.assertIn("r.copias", dlg)
+
+
+# ----------------------------------------------------------------------------- P2-26
+
+class TemaPorIdTests(TempTree):
+    """P2-26: el tema de cada reunión se resuelve por id (y por la ruta de la reunión), no solo por nombre."""
+
+    def test_reuniones_grabadas_con_el_nombre_anterior_de_la_app(self):
+        self.write("Vocabulario/General.txt", "raíz, uno\n")
+        self.write("Beta/Vocabulario/General.txt", "beta, dos\n")
+        audio = self.wav("Reuniones/r.wav")
+        self.write("Reuniones/r.md", "---\nproyecto: Notas\nworkstream: General\n---\n")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "raíz, uno")
+
+    def test_nunca_la_lista_de_otro_proyecto(self):
+        self.write("Beta/Vocabulario/General.txt", "beta, dos\n")
+        audio = self.wav("Alfa/r.wav")
+        self.write("Alfa/r.md", "---\nproyecto: Alfa\nworkstream: General\n---\n")  # la lista de Alfa ya no existe
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")
+        self.assertIsNone(server.find_vocab("Alfa", "General"))
+        self.assertEqual(server.find_vocab("", "General")["project"], "Beta")  # sin proyecto, como antes
+
+    def links(self):
+        a, b = os.path.join(self.tmp, "A", "Proyecto"), os.path.join(self.tmp, "B", "Proyecto")
+        for p, t in ((a, "de A"), (b, "de B")):
+            os.makedirs(os.path.join(p, "Vocabulario"))
+            with open(os.path.join(p, "Vocabulario", "General.txt"), "w", encoding="utf-8") as f:
+                f.write(t + "\n")
+        server.LINKS[server.link_id(a)] = {"name": "Proyecto", "path": a}
+        server.LINKS[server.link_id(b)] = {"name": "Proyecto", "path": b}
+        return a, b
+
+    def test_dos_carpetas_vinculadas_que_se_llaman_igual(self):
+        a, b = self.links()
+        audio = os.path.join(b, "r.wav")
+        with open(audio, "wb") as f:
+            f.write(b"RIFF")
+        with open(os.path.join(b, "r.md"), "w", encoding="utf-8") as f:
+            f.write("---\nproyecto: Proyecto\nworkstream: General\n---\n")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "de B")  # antes, la primera: «de A»
+        fuera = self.wav("r.wav")  # fuera de las dos: no se adivina
+        self.write("r.md", "---\nproyecto: Proyecto\nworkstream: General\n---\n")
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "general")
+        bid = f":{server.link_id(b)}/Vocabulario/General.txt"
+        self.write("r.md", f"---\nproyecto: Proyecto\nworkstream: General\nvocabulario: {bid}\n---\n")
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "de B")  # con el id, sin dudas
+
+    def test_al_grabar_y_al_guardar_queda_el_id(self):
+        _, b = self.links()
+        bid = f":{server.link_id(b)}/Vocabulario/General.txt"
+        self.write("Vocabulario/General.txt", "raíz\n")
+        a = server.App.__new__(server.App)
+        a.settings, a.notes_lock = settings_store(self.tmp), threading.Lock()
+        a.library = types.SimpleNamespace(at=1)
+        a.jobs = types.SimpleNamespace(refresh_prompt=lambda rel: None, schedule_outputs=lambda rel, delay=4.0: None)
+        self.wav("r.wav")
+        a.notes_save({"path": "r.wav", "props": {"vocabulario": bid}})  # elegido por id
+        p = server.parse_notes(server.read_text(os.path.join(self.root, "r.md")))[0]
+        self.assertEqual((p["proyecto"], p["workstream"], p["vocabulario"]), ("Proyecto", "General", bid))
+        # una reunion de antes, con el nombre anterior de la app: al guardar cualquier cosa se migra
+        self.write("r.md", "---\nproyecto: Notas\nworkstream: General\n---\n\nnotas\n")
+        a.notes_save({"path": "r.wav", "props": {"estado": "Revisada"}})
+        p = server.parse_notes(server.read_text(os.path.join(self.root, "r.md")))[0]
+        self.assertEqual((p["proyecto"], p["vocabulario"], p["estado"]),
+                         (server.APP_NAME, "Vocabulario/General.txt", "Revisada"))
+        a.notes_save({"path": "r.wav", "props": {"proyecto": "", "workstream": ""}})  # sin tema: sin id
+        self.assertNotIn("vocabulario", server.parse_notes(server.read_text(os.path.join(self.root, "r.md")))[0])
+        src = read_server()
+        rec = src[src.index("    def rec_start"):src.index("    def rec_mic")]
+        self.assertIn('"vocabulario": v["id"]} if v else {}', rec)
+
+
+# ----------------------------------------------------------------------------- P2-27
+
+class PerfilSigueAlRenombrarTests(TempTree):
+    """P2-27: renombrar o borrar el tema o la carpeta fijos del perfil no deja a Ctrl+Alt+R sin vocabulario ni
+    grabando en la raíz."""
+
+    def app(self, **st):
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp, **st)
+        a.library = types.SimpleNamespace(at=1)
+        a.jobs = bare_jobs([])
+        a.jobs.voice_vectors = {}
+        a.rec = None
+        return a
+
+    def test_renombrar_y_borrar_el_tema(self):
+        self.write("Alfa/Vocabulario/General.txt", "API\n")
+        old = "Alfa/Vocabulario/General.txt"
+        a = self.app(rec_vocab=old, perfil={"vocab": old})
+        with mock.patch.object(server, "log"):
+            r = a.vocab_save({"id": old, "project": "Alfa", "name": "Comité", "terms": "API"})
+        st = a.settings.get()
+        self.assertEqual((st["perfil"]["vocab"], st["rec_vocab"]), (r["id"], r["id"]))
+        self.assertEqual(r["id"], "Alfa/Vocabulario/Comité.txt")
+        with mock.patch.object(server, "log"):
+            a.vocab_delete({"id": r["id"]})
+        st = a.settings.get()
+        self.assertIsNone(st["perfil"]["vocab"])  # vuelve a «automático», no a «sin vocabulario»
+        self.assertEqual(st["rec_vocab"], "")
+
+    def test_un_tema_fijo_que_ya_no_existe_es_automatico(self):
+        st = {"rec_vocab": "Beta/Vocabulario/X.txt", "perfil": {"vocab": "Alfa/Vocabulario/Borrada.txt"}}
+        self.write("Beta/Vocabulario/X.txt", "x\n")
+        self.assertEqual(server.perfil_vocab(st), "Beta/Vocabulario/X.txt")
+        self.assertEqual(server.perfil_vocab(st, "Beta/Vocabulario/X.txt"), "Beta/Vocabulario/X.txt")
+        self.assertEqual(server.resolve_perfil(st)["origen"]["vocab"], "ultimo")
+        self.assertEqual(server.perfil_vocab({"perfil": {"vocab": ""}}, "Beta/Vocabulario/X.txt"), "")  # fijo: ninguno
+
+    def test_renombrar_la_carpeta(self):
+        self.write("Alfa/Vocabulario/General.txt", "API\n")
+        os.makedirs(os.path.join(self.root, "Alfa", "Reuniones"))
+        a = self.app(rec_folder="Alfa/Reuniones", rec_vocab="Alfa/Vocabulario/General.txt",
+                     project_folders={"Alfa": "Alfa/Reuniones", "Beta": "Beta"},
+                     perfil={"folder": "Alfa/Reuniones", "vocab": "Alfa/Vocabulario/General.txt"})
+        self.assertEqual(a.rename_folder({"path": "Alfa", "name": "Alfa 2026"}), {"path": "Alfa 2026"})
+        st = a.settings.get()
+        self.assertEqual((st["perfil"]["folder"], st["perfil"]["vocab"]),
+                         ("Alfa 2026/Reuniones", "Alfa 2026/Vocabulario/General.txt"))
+        self.assertEqual((st["rec_folder"], st["rec_vocab"]),
+                         ("Alfa 2026/Reuniones", "Alfa 2026/Vocabulario/General.txt"))
+        self.assertEqual(st["project_folders"], {"Alfa 2026": "Alfa 2026/Reuniones", "Beta": "Beta"})
+        self.assertEqual(server.perfil_folder(st), "Alfa 2026/Reuniones")
+        self.assertEqual(server.perfil_vocab(st), "Alfa 2026/Vocabulario/General.txt")
+
+    def test_renombrar_una_vinculada_con_listas(self):
+        ext = os.path.join(self.tmp, "Ext")
+        os.makedirs(os.path.join(ext, "Vocabulario"))
+        lid = server.link_id(ext)
+        server.LINKS[lid] = {"name": "Externo", "path": ext}
+        a = self.app(project_folders={"Externo": ":" + lid})
+        a._save_links = lambda: None
+        a.rename_folder({"path": ":" + lid, "name": "Cliente"})
+        self.assertEqual(a.settings.get()["project_folders"], {"Cliente": ":" + lid})
+
+
+# ----------------------------------------------------------------------------- P2-28
+
+class FakeLocal:
+    def __init__(self):
+        self.langs = []
+
+    def transcribe(self, abs_path, preset, language, vocab, threads, report, cancel, start=0.0, about=None):
+        self.langs.append(language)
+        return [(0.0, 1.0, "hola")], language, 1.0
+
+
+class IdiomaDeCadaReunionTests(TempTree):
+    """P2-28: «Transcribir todos los pendientes» usa por defecto el idioma de cada reunión."""
+
+    def run_job(self, rel, language):
+        jobs = bare_jobs([])
+        jobs.settings = settings_store(self.tmp, language="es")
+        jobs.library = types.SimpleNamespace(find=lambda r: {"duration": 1.0}, at=1)
+        jobs.local, jobs.queues = FakeLocal(), {"local": types.SimpleNamespace(put=lambda j: None)}
+        jobs.voice_vectors = {}
+        with mock.patch.object(server, "log"):
+            jobs.submit([rel], "rapido", language)
+            job = jobs.list[-1]
+            jobs._run(job)
+        self.assertEqual(job.status, "done", job.error)
+        return jobs.local.langs[-1]
+
+    def test_cada_una_con_el_suyo(self):
+        self.wav("a.wav")
+        self.write("a.md", "---\nidioma: pt\n---\n")
+        self.wav("b.wav")  # sin idioma propio: el del perfil
+        self.wav("c.wav")
+        self.write("c.md", "---\nidioma: auto\n---\n")  # detectar
+        self.assertEqual(self.run_job("a.wav", None), "pt")
+        self.assertEqual(self.run_job("b.wav", None), "es")
+        self.assertIsNone(self.run_job("c.wav", None))
+        self.assertEqual(self.run_job("a.wav", "en"), "en")  # uno elegido para todas manda
+        self.assertIsNone(self.run_job("a.wav", ""))  # «Detectar» elegido a mano, también
+
+    def test_la_caja_en_lote(self):
+        app = read("app.js")
+        self.assertIn("const TX_EACH = '__cada';", app)
+        self.assertIn("[[TX_EACH, 'El de cada reunión (o el del perfil)']].concat(LANGS)", app)
+        self.assertIn("lang === TX_EACH ? null : lang", app)
+        self.assertNotIn("S.selLang = sel ? sel.value : '';", app)  # lo elegido en una caja no vale para las demás
+
+
+# ----------------------------------------------------------------------------- P2-29
+
+class CabeceraTolerante(unittest.TestCase):
+    """P2-29: una clave que no conocemos (de una versión más nueva) no entierra la cabecera en las notas."""
+
+    def test_claves_desconocidas_se_conservan(self):
+        text = "---\ntitulo: Kick-off\nclave_nueva: algo: con dos puntos\nidioma: pt\n---\n\nnotas\n"
+        props, body = server.parse_notes(text)
+        self.assertEqual(props, {"titulo": "Kick-off", "clave_nueva": "algo: con dos puntos", "idioma": "pt"})
+        self.assertEqual(body, "notas\n")
+        out = server.dump_notes(dict(props, estado="Hecha"), body)
+        self.assertEqual(out, "---\ntitulo: Kick-off\nestado: Hecha\nidioma: pt\nclave_nueva: algo: con dos puntos\n"
+                              "---\n\nnotas\n")
+        # lo que no es una cabecera sigue siendo texto
+        for sep in ("---\nfoo: bar\n---\ntexto", "---\nUna frase: con dos puntos\n---\n", "---\nsin dos puntos\n---\n"):
+            self.assertEqual(server.parse_notes(sep), ({}, sep), sep)
+
+
+# ----------------------------------------------------------------------------- P2-31
+
+class RenombrarCarpetaTests(TempTree):
+    """P2-31: renombrar una carpeta no deja huérfanas las copias del original ni pierde «completa», las huellas en
+    memoria ni los documentos de los destinos."""
+
+    def test_todo_sigue_a_la_carpeta(self):
+        self.wav("Alfa/Sub/r.wav")
+        old_b = server.backup_dir("Alfa/Sub/r.wav")
+        os.makedirs(old_b)
+        server.COMPLETE.set("Alfa/Sub/r.wav")
+        server.COMPLETE.set("Otra/r.wav")
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp)
+        a.library = types.SimpleNamespace(at=1)
+        a.jobs = bare_jobs([])
+        a.jobs.voice_vectors = {"Alfa/Sub/r.wav": {"h1": [1.0]}}
+        a.rec = None
+        x = os.path.join(self.tmp, "vault", "r.md")
+        a.jobs.registro.set(x, "sha", "Alfa/Sub/r.wav")
+        a.rename_folder({"path": "Alfa", "name": "Gamma"})
+        self.assertFalse(os.path.exists(old_b))
+        self.assertTrue(os.path.isdir(server.backup_dir("Gamma/Sub/r.wav")))
+        self.assertIn("Gamma/Sub/r.wav", server.COMPLETE)
+        self.assertNotIn("Alfa/Sub/r.wav", server.COMPLETE)
+        self.assertIn("Otra/r.wav", server.COMPLETE)
+        self.assertEqual(a.jobs.voice_vectors, {"Gamma/Sub/r.wav": {"h1": [1.0]}})
+        self.assertEqual(a.jobs.registro.rel_of(x), "Gamma/Sub/r.wav")
+
+
+# ----------------------------------------------------------------------------- P2-33 / P2-34
+
+class TextosTests(unittest.TestCase):
+    def test_el_atajo_usa_el_perfil(self):
+        """P2-33: el diálogo Grabar no dice que Ctrl+Alt+R use «esta misma configuración»."""
+        app = read("app.js")
+        self.assertNotIn("con esta misma configuración", app)
+        self.assertIn("con el perfil de reunión por defecto (carpeta, idioma, tema y contexto)", app)
+
+    def test_la_carpeta_de_la_app_no_se_llama_audios(self):
+        """P2-34: la interfaz nombra la carpeta de la app con APP_NAME, no «Audios»."""
+        app = read("app.js")
+        for s in ("Otra carpeta (fuera de Audios)", "Carpetas fuera de Audios", "dentro de la carpeta Audios"):
+            self.assertNotIn(s, app)
+        self.assertIn("Otra carpeta (fuera de ${esc(APP_NAME)})…", app)
+        self.assertIn("Carpetas fuera de ${esc(APP_NAME)}", app)
+
+
+# ----------------------------------------------------------------------------- interfaz con node
+
+def js_function(src, name):
+    """Una función (también async) de un fichero JS, hasta su llave de cierre en la columna 0."""
+    m = re.search(rf"^(async )?function {name}\(", src, re.M)
+    assert m, name
+    return src[m.start():src.index("\n}\n", m.start()) + 3]
+
+
+@unittest.skipUnless(shutil.which("node"), "node no instalado")
+class InterfazNodeTests(unittest.TestCase):
+    def node(self, code):
+        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip().splitlines()
+
+    def test_idioma_de_la_caja_sin_lo_ultimo_elegido(self):
+        """P1-10: la caja «Transcribir» de una reunión sin idioma propio ofrece el del perfil, no el último elegido."""
+        defs = js_function(read("perfil.js"), "perfilLangOf")
+        out = self.node(defs + "\nconst S = {selLang: 'pt', config: {language: 'es'}};\n"
+                        "console.log(perfilLangOf({props: {}}), perfilLangOf({props: {idioma: 'en'}}),"
+                        " JSON.stringify(perfilLangOf({props: {idioma: 'auto'}})));")
+        self.assertEqual(out, ['es en ""'])
+
+    def test_avisos_de_los_destinos(self):
+        """P1-11: Ajustes enseña lo que no se ha escrito y qué hacer."""
+        js = read("perfil.js")
+        defs = js_defs(read("app.js"), ["esc"]) + "\nconst APP_NAME = 'Chuleta';\n"
+        defs += js_function(js, "perfilAvisoText") + js_function(js, "perfilAvisosHtml")
+        out = self.node(defs + """
+console.log(JSON.stringify(perfilAvisosHtml([])));
+const h = perfilAvisosHtml([{path: 'C:\\\\Vault\\\\a<b>.md', accion: 'cambiado'},
+  {path: 'x.md', accion: 'dentro-de-la-app'}, {path: 'y.docx', accion: 'error: PermissionError'}]);
+console.log((h.match(/<li>/g) || []).length, h.includes('a&lt;b&gt;.md'), h.includes('Bórralo allí'),
+  h.includes('de Chuleta o de una carpeta vinculada'), h.includes('abierto en Word'));""")
+        self.assertEqual(out, ['""', "3 true true true true"])
+
+    def test_la_sugerencia_no_pisa_lo_que_eliges(self):
+        """P2-30: si mientras se consulta la reunión en curso eliges tú el tema o la carpeta, la sugerencia de
+        Teams/Outlook no los cambia."""
+        fake = r"""
+class El {
+  constructor(id, value = '') { this.id = id; this.value = value; this.dataset = {}; this.ls = []; this.options = []; }
+  q() { return new El('x'); }
+  addEventListener(t, f) { if (t === 'change') this.ls.push(f); }
+  dispatchEvent(e) { if (this.onchange) this.onchange(e); this.ls.forEach(f => f(e)); return true; }
+  closest() { return null; }
+  after() { }
+}
+const document = { body: { contains: () => true }, createElement: () => new El('nota') };
+const esc = s => String(s);
+let S = { route: { kind: 'home' } };
+let pendiente;
+const api = () => new Promise(r => { pendiente = r; });
+function dialogo() {
+  const els = { rName: new El('rName'), rVocab: new El('rVocab', ''), rProj: new El('rProj', ''),
+                rFolder: new El('rFolder', 'Raiz'), rForm: new El('rForm') };
+  els.rVocab.options = [{ value: '' }, { value: 'A/Vocabulario/G.txt' }, { value: 'B/Vocabulario/X.txt' }];
+  els.rVocab.onchange = () => { els.rFolder.value = 'Carpeta de ' + els.rVocab.value; };  // applyVocab de app.js
+  const d = new El('d');
+  d.q = sel => els[sel.replace('#', '')] || null;
+  return [d, els];
+}
+const $ = (sel, root) => root.q(sel);
+const sug = { sugerencia: { source: 'teams', name: 'Comité', vocab: 'B/Vocabulario/X.txt', vocab_label: 'B · X',
+                            participants: [] } };
+const usuario = (el, v) => { el.value = v; el.dispatchEvent({ type: 'change', isTrusted: true }); };
+(async () => {
+  let [d, e] = dialogo();                                  // 1. nadie toca nada: se aplica la sugerencia
+  let p = reunionPrefill(d); pendiente(sug); await p;
+  console.log(e.rVocab.value, e.rFolder.value, e.rName.value);
+  [d, e] = dialogo();                                      // 2. eliges tú el tema mientras se consulta
+  p = reunionPrefill(d); usuario(e.rVocab, 'A/Vocabulario/G.txt'); pendiente(sug); await p;
+  console.log(e.rVocab.value, e.rFolder.value);
+  [d, e] = dialogo();                                      // 3. eliges tú la carpeta: el tema sí, la carpeta no
+  p = reunionPrefill(d); usuario(e.rFolder, 'Mía'); pendiente(sug); await p;
+  console.log(e.rVocab.value, e.rFolder.value);
+  [d, e] = dialogo(); S = { route: { kind: 'f' } };        // 4. abierto desde una carpeta: esa se queda
+  p = reunionPrefill(d); pendiente(sug); await p;
+  console.log(e.rVocab.value, e.rFolder.value);
+})();
+"""
+        out = self.node(fake + js_function(read("reunion.js"), "reunionPrefill"))
+        self.assertEqual(out, ["B/Vocabulario/X.txt Carpeta de B/Vocabulario/X.txt Comité",
+                               "A/Vocabulario/G.txt Carpeta de A/Vocabulario/G.txt",
+                               "B/Vocabulario/X.txt Mía",
+                               "B/Vocabulario/X.txt Raiz"])
+
+
+if __name__ == "__main__":
+    unittest.main()

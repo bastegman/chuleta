@@ -151,6 +151,12 @@ def in_app_dir(p):
     return os.path.normcase(p) == a or os.path.normcase(p).startswith(a + os.sep)
 
 
+def in_app_tree(p):
+    """p esta en una carpeta de la app: la de su codigo, su raiz o una carpeta vinculada (donde viven las grabaciones).
+    Ahi no se escriben documentos de los destinos de salida."""
+    return in_app_dir(p) or _inside(p, ROOT) or any(_inside(p, l["path"]) for l in LINKS.values())
+
+
 # ----------------------------------------------------------------------------- paquete para otra persona
 
 EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR CHULETA.bat y LEEME.txt (van a la raiz)
@@ -797,9 +803,12 @@ def public_transcript(data):
 # y debajo las notas en Markdown. Se mueve con el audio igual que el .txt y el .srt.
 # idioma: codigo ("es", "pt", "es-en"…) o "auto" (detectar); sin la clave, el idioma del perfil (Ajustes).
 # contexto: una o dos frases (de que va, quien participa) que reciben Whisper, tras el vocabulario, y el resumen.
+# vocabulario: id de la lista del tema (<proyecto>/Vocabulario/<tema>.txt, como en list_vocab): proyecto y workstream
+# son los nombres que se ven; con el id el tema se encuentra aunque otro proyecto se llame igual (find_vocab).
 NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
-             "contexto")
+             "contexto", "vocabulario")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
+NOTE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*$")  # una clave de la cabecera (las que no conocemos se conservan)
 
 
 def parse_notes(text):
@@ -807,20 +816,26 @@ def parse_notes(text):
     props, body = {}, text
     if lines and lines[0].strip() == "---":
         end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-        # solo es cabecera si todo lo de dentro es "clave: valor" conocido (si no, era un separador)
-        if end and all(not l.strip() or l.partition(":")[0].strip().lower() in NOTE_KEYS for l in lines[1:end]):
+        # es cabecera si todo lo de dentro es "clave: valor" y alguna clave es nuestra (si no, era un separador). Las
+        # claves que no conocemos (las de una version mas nueva) se conservan tal cual: asi esta version no entierra
+        # en las notas la cabecera que escriba otra
+        keys = [l.partition(":")[0].strip().lower() for l in lines[1:end] if l.strip()] if end else []
+        if end and all(":" in l for l in lines[1:end] if l.strip()) and all(NOTE_KEY_RE.match(k) for k in keys) \
+                and (not keys or any(k in NOTE_KEYS for k in keys)):
             for line in lines[1:end]:
                 k, _, v = line.partition(":")
                 k, v = k.strip().lower(), v.strip()
                 if k in NOTE_KEYS and v:
                     props[k] = [t.strip() for t in v.strip("[]").split(",") if t.strip()] if k == "etiquetas" else v
+                elif v and k not in NOTE_KEYS:  # de una version mas nueva: se conserva tal cual (dump_notes la escribe)
+                    props[k] = v
             body = "\n".join(lines[end + 1:]).lstrip("\n")
     return props, body
 
 
 def dump_notes(props, body):
     head = []
-    for k in NOTE_KEYS:
+    for k in list(NOTE_KEYS) + [k for k in props if k not in NOTE_KEYS and NOTE_KEY_RE.match(str(k))]:
         v = props.get(k)
         if v:
             v = "[" + ", ".join(v) + "]" if k == "etiquetas" else " ".join(str(v).split())
@@ -879,14 +894,75 @@ def list_vocab():
     return out
 
 
-def find_vocab(project, name, id_=None):
+def _project_dir(v):
+    """La carpeta del proyecto de una lista: la que contiene su carpeta Vocabulario."""
+    return os.path.dirname(os.path.dirname(v["_abs"]))
+
+
+def find_vocab(project, name, id_=None, near=None):
+    """La lista de un tema. Por id (la ruta interna de la lista: estable aunque otro proyecto se llame igual); si no,
+    por nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus nombres antiguos). Si dos
+    proyectos se llaman igual, `near` (la ruta del audio de la reunion) elige la del proyecto que la contiene; si sigue
+    sin estar claro, ninguna. Con proyecto nunca se toma la lista de otro proyecto (antes, si solo habia un tema con
+    ese nombre, se usaba aunque fuera de otro cliente)."""
+    from common import APP_FORMER_NAMES  # nombres anteriores de la app: alias del proyecto de las listas de la raiz
     vs = list_vocab()
     if id_:
-        return next((v for v in vs if v["id"] == id_), None)
+        hit = next((v for v in vs if v["id"] == id_), None)
+        if hit and (not name or fold(hit["name"]) == fold(name)):
+            return hit
+        if not name:
+            return None
     if not name:
         return None
     same = [v for v in vs if fold(v["name"]) == fold(name)]
-    return next((v for v in same if fold(v["project"]) == fold(project or "")), same[0] if len(same) == 1 else None)
+    if not project:
+        return same[0] if len(same) == 1 else None
+    root = os.path.normcase(os.path.normpath(ROOT))
+    alias = fold(project) in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME,)}
+    named = [v for v in same if fold(v["project"]) == fold(project)
+             or (alias and os.path.normcase(os.path.normpath(_project_dir(v))) == root)]
+    if len(named) <= 1:
+        return named[0] if named else None
+    if near:  # varios proyectos con ese nombre: el que contiene la reunion (el mas cercano)
+        mine = sorted((v for v in named if _inside(os.path.dirname(near), _project_dir(v))),
+                      key=lambda v: -len(os.path.normpath(_project_dir(v))))
+        if mine and (len(mine) == 1 or len(os.path.normpath(_project_dir(mine[0])))
+                     > len(os.path.normpath(_project_dir(mine[1])))):
+            return mine[0]
+    return None
+
+
+def theme_vocab(props, abs_audio, changed=()):
+    """Deja en `props` (la cabecera del .md de una reunion) el id de la lista de su tema: `vocabulario`. Si se acaba de
+    elegir por id, proyecto y tema salen de esa lista; si se eligio por nombres (proyecto + tema, como hace la pagina
+    de la reunion) o el .md solo trae nombres (reuniones de antes), se busca con find_vocab y, si se encuentra, se
+    guarda el id y el nombre actual del proyecto (p. ej. «Notas» pasa a ser el de la raiz). Sin tema, sin id.
+    `changed`: las claves que trae la peticion (las demas vienen del propio .md)."""
+    by_names = bool({"proyecto", "workstream"} & set(changed))
+    try:
+        if "vocabulario" in changed:  # elegido por id: proyecto y tema salen de esa lista ("" = sin tema)
+            v = find_vocab(None, None, props.get("vocabulario")) if props.get("vocabulario") else None
+            if v or not props.get("vocabulario"):
+                for k in ("proyecto", "workstream", "vocabulario"):
+                    props.pop(k, None)
+                if v:
+                    props.update(proyecto=v["project"], workstream=v["name"], vocabulario=v["id"])
+                return
+            props.pop("vocabulario", None)  # un id que no existe: como si no hubiera venido
+        if not props.get("workstream"):
+            props.pop("vocabulario", None)
+            return
+        if props.get("vocabulario") and not by_names:
+            return  # ya lleva el id de su lista (si dejara de existir, find_vocab vuelve a los nombres)
+        v = find_vocab(props.get("proyecto"), props["workstream"], None if by_names else props.get("vocabulario"),
+                       near=abs_audio)
+    except OSError:
+        return
+    if v:
+        props.update(proyecto=v["project"], workstream=v["name"], vocabulario=v["id"])
+    else:
+        props.pop("vocabulario", None)
 
 
 def vocab_info(v, language):
@@ -922,7 +998,7 @@ def vocab_for(abs_audio, st, props=None):
     """Vocabulario para Whisper: el del tema de la reunion o, si no tiene, el general de Ajustes."""
     props = md_props(abs_audio) if props is None else props
     try:
-        v = find_vocab(props.get("proyecto"), props.get("workstream"))
+        v = find_vocab(props.get("proyecto"), props.get("workstream"), props.get("vocabulario"), near=abs_audio)
         if v:
             return ", ".join(read_vocab(v["_abs"])[1])
     except OSError:
@@ -960,10 +1036,23 @@ def perfil_folder(st):
     return rel
 
 
+def perfil_vocab_fijo(st):
+    """Tema fijo del perfil ("" = sin vocabulario, tambien fijo) si su lista sigue existiendo; None si el perfil esta
+    en automatico o la lista ya no esta (borrada o renombrada fuera de la app): entonces vale lo automatico, como con
+    la carpeta (perfil_folder), y no una grabacion sin vocabulario."""
+    vid = perfil_de(st)["vocab"]
+    if not vid:
+        return vid
+    try:
+        return vid if find_vocab(None, None, vid) else None
+    except OSError:
+        return None
+
+
 def perfil_vocab(st, sugerido=None):
     """Tema de una grabacion nueva: el fijo del perfil (puede ser "" = sin vocabulario); si el perfil lo deja en
     automatico, el que sugiera la reunion en curso y, si no, el ultimo elegido."""
-    fijo = perfil_de(st)["vocab"]
+    fijo = perfil_vocab_fijo(st)
     return fijo if fijo is not None else (sugerido or st.get("rec_vocab") or "")
 
 
@@ -998,7 +1087,8 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
                 out[key], origen[key] = val, origin
                 return
 
-    pick("vocab", ("elegido", elegido.get("vocab")), ("perfil", p["vocab"]), ("reunion", sug.get("vocab") or None),
+    pick("vocab", ("elegido", elegido.get("vocab")), ("perfil", perfil_vocab_fijo(st)),
+         ("reunion", sug.get("vocab") or None),
          ("ultimo", st.get("rec_vocab") or ""))
     pick("folder", ("elegido", elegido.get("folder")), ("perfil", perfil_folder(st)),
          ("ultimo", auto_folder(out["vocab"]) or ""))
@@ -1010,8 +1100,9 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     return dict(out, origen=origen)
 
 
-def check_perfil(b):
-    """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado."""
+def check_perfil(b, known=None):
+    """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado. `known`: los destinos
+    de salida ya guardados (se aceptan aunque ahora no esten disponibles; los nuevos tienen que existir)."""
     out = {}
     if "folder" in b:
         rel = b["folder"]
@@ -1031,7 +1122,9 @@ def check_perfil(b):
     if "context" in b:
         out["context"] = " ".join(str(b["context"] or "").split())[:engines.ABOUT_CHARS]
     if "outputs" in b:
-        out["outputs"] = salidas.check_destinos(b["outputs"], APP_DIR)
+        roots = [ROOT] + [l["path"] for l in LINKS.values()]  # donde viven las grabaciones: ahi no van documentos
+        out["outputs"] = salidas.check_destinos(b["outputs"], APP_DIR, roots,
+                                                [d["path"] for d in salidas.destinos_de(known)])
     if "language" in b:
         lang = str(b["language"] or "").strip().lower()
         if lang and not IDIOMA_RE.match(lang):
@@ -1049,6 +1142,50 @@ def update_perfil(d, cambios):
     d["perfil"] = perfil
     if "language" in cambios:
         d["language"] = cambios["language"]
+
+
+def moved_rel(p, old, new, folder=False):
+    """La ruta interna `p` despues de que `old` pase a ser `new` (con folder, tambien lo que hay dentro); None si no le
+    afecta."""
+    if not isinstance(p, str) or not old:
+        return None
+    if p == old:
+        return new
+    if folder and p.startswith(old + "/"):
+        return new + p[len(old):]
+    return None
+
+
+def settings_moved(d, old, new, folder=False, project=None):
+    """Los ajustes que guardan rutas internas siguen a una carpeta o a un tema renombrados: carpeta y tema fijos del
+    perfil, ultima carpeta y ultimo tema al grabar y la carpeta de cada proyecto. Si no, Ctrl+Alt+R se quedaba sin
+    vocabulario y grabando en la raiz. project=(nombre viejo, nuevo): el proyecto tambien cambia de nombre."""
+    perfil = dict(d.get("perfil") or {})
+    for k in ("folder", "vocab"):
+        m = moved_rel(perfil.get(k), old, new, folder)
+        if m is not None:
+            perfil[k] = m
+    if d.get("perfil") is not None or perfil:
+        d["perfil"] = perfil
+    for k in ("rec_folder", "rec_vocab"):
+        m = moved_rel(d.get(k), old, new, folder)
+        if m is not None:
+            d[k] = m
+    pf = {}
+    for name, rel in (d.get("project_folders") or {}).items():
+        m = moved_rel(rel, old, new, folder)
+        pf[name] = rel if m is None else m
+    if project and project[0] in pf and project[1] not in pf:
+        pf[project[1]] = pf.pop(project[0])
+    d["project_folders"] = pf
+
+
+def has_vocab_dir(folder):
+    """La carpeta es la de un proyecto: tiene una carpeta Vocabulario (sus listas toman de ella el nombre)."""
+    try:
+        return any(e.is_dir() and fold(e.name) == VOCAB_FOLDER for e in os.scandir(folder))
+    except OSError:
+        return False
 
 
 # ----------------------------------------------------------------------------- importar listas de vocabulario
@@ -1504,7 +1641,9 @@ class Jobs:
             self.library.at = 0
 
     def submit(self, paths, preset, language, resume=False):
-        """resume: las que se quedaron a medias se continuan desde donde acaba el texto (el resto, enteras)."""
+        """resume: las que se quedaron a medias se continuan desde donde acaba el texto (el resto, enteras).
+        language: "" = detectar, un codigo = ese idioma para todas, None = el de cada reunion (el de su .md o, si no
+        lo fija, el del perfil; «Transcribir todos los pendientes»): lo decide _run con meeting_setup."""
         if preset not in engines.PRESETS_BY_ID:
             raise ApiError("Velocidad desconocida: " + str(preset))
         if engines.PRESETS_BY_ID[preset]["engine"] == "cloud":
@@ -1518,6 +1657,7 @@ class Jobs:
             if a and a.get("recording"):
                 raise ApiError("Se está grabando todavía: usa «Transcribir en directo».")
             job = Job(rel, os.path.basename(rel), preset, language or None)
+            job.per_meeting = language is None
             if resume and a and a.get("partial"):
                 job.resume_from = a["tx_end"]
             with self.lock:
@@ -1665,9 +1805,18 @@ class Jobs:
                 "duration": f"{round(d / 60)} min" if d else "", "props": props, "source": rel, "summary": summary,
                 "summary_model": model, "notes": notes, "segments": segments, "app_name": APP_NAME}
 
+    @property
+    def registro(self):
+        """salidas.json: que documento de cada destino es de que reunion (y su hash). Se abre al primer uso."""
+        if getattr(self, "_registro", None) is None:
+            self._registro = salidas.Registro(os.path.join(DATA_DIR, "salidas.json"))
+        return self._registro
+
     def write_outputs(self, rel):
         """Escribe la reunion en los destinos de salida del perfil (si hay y la reunion ya tiene transcripcion).
-        Nunca mueve ni toca el original; solo sobrescribe los documentos que genero la propia app (salidas.py)."""
+        Nunca mueve ni toca el original; solo sobrescribe los documentos que genero la propia app (salidas.py). En una
+        carpeta de la app (su raiz o una vinculada, donde viven las grabaciones) no se escribe nunca: un destino
+        guardado antes de que eso se comprobara, o que haya quedado dentro al vincular una carpeta, solo da un aviso."""
         try:
             destinos = perfil_de(self.settings.get())["outputs"]
             if not destinos:
@@ -1675,12 +1824,120 @@ class Jobs:
             base = os.path.splitext(safe(rel, "file"))[0]
             if not any(os.path.isfile(base + e) for e in (".srt", ".txt")):
                 return []
-            if getattr(self, "_registro", None) is None:
-                self._registro = salidas.Registro(os.path.join(DATA_DIR, "salidas.json"))
-            return salidas.write_all(self.document_for(rel), destinos, self._registro, log)
+            done = salidas.write_all(self.document_for(rel), destinos, self.registro, log, blocked=in_app_tree)
+            self._note_outputs(rel, done)
+            return done
         except Exception:
             log_exc()
             return []
+
+    def _note_outputs(self, rel, done):
+        """Lo que no se ha podido escribir queda como aviso para Ajustes (GET /api/perfil): los de esta reunion se
+        sustituyen por los de esta escritura (que cubre todos los destinos), y se guardan como mucho 30."""
+        with _SALIDAS_LOCK:
+            avisos = getattr(self, "_salidas_avisos", None)
+            if avisos is None:
+                avisos = self._salidas_avisos = {}
+            for key in [k for k, a in avisos.items() if a["reunion"] == rel]:
+                del avisos[key]
+            for path, accion in done:
+                if accion not in ("escrito", "igual"):
+                    avisos[os.path.normcase(path)] = {"path": path, "accion": accion, "reunion": rel, "at": time.time()}
+            for key in sorted(avisos, key=lambda k: avisos[k]["at"])[:-30]:
+                del avisos[key]
+
+    def outputs_warnings(self):
+        """Avisos de los destinos de salida, el mas reciente primero (solo de los destinos que siguen en el perfil)."""
+        destinos = perfil_de(self.settings.get())["outputs"]
+        with _SALIDAS_LOCK:
+            avisos = list((getattr(self, "_salidas_avisos", None) or {}).values())
+        avisos = [a for a in avisos if any(salidas.inside(a["path"], d["path"]) for d in destinos)]
+        return sorted(avisos, key=lambda a: -a["at"])
+
+    def flush_outputs(self, budget=15.0):
+        """Al apagar: las reescrituras que esperaban su temporizador (schedule_outputs, 4 s) se hacen ya, y se espera a
+        las que estan en marcha; si no, el ultimo cambio de las notas o de la transcripcion no llegaria a los destinos.
+        Con un tope de `budget` segundos en total. Devuelve las reuniones escritas."""
+        with _SALIDAS_LOCK:
+            timers = getattr(self, "_salidas_timers", None) or {}
+            pending = list(timers.items())
+            timers.clear()
+        t0, done = time.time(), []
+        for rel, t in pending:
+            t.cancel()
+            if time.time() - t0 > budget:
+                log(f"   destinos de salida: no ha dado tiempo a escribir {rel} al apagar")
+                continue
+            self.write_outputs(rel)
+            done.append(rel)
+        for t in threading.enumerate():  # las que ya vencieron y estan escribiendo
+            if getattr(t, "salidas", False) and t is not threading.current_thread():
+                t.join(max(0.0, budget - (time.time() - t0)))
+        return done
+
+    def outputs_moved(self, old, new, folder=False):
+        """Una reunion (o una carpeta entera) cambia de ruta: sus documentos siguen siendo suyos en el registro y la
+        reescritura que estuviera pendiente se hace con la ruta nueva."""
+        try:
+            self.registro.moved(old, new, folder)
+        except OSError:
+            log_exc()
+        with _SALIDAS_LOCK:
+            timers = getattr(self, "_salidas_timers", None) or {}
+            moved = [(r, m) for r in list(timers) for m in [moved_rel(r, old, new, folder)] if m is not None]
+            for r, _ in moved:
+                timers.pop(r).cancel()
+        for _, m in moved:
+            self.schedule_outputs(m)
+
+    def forget_outputs(self, rel):
+        """La reunion se ha borrado: sus documentos de los destinos del perfil que siguen tal cual se escribieron van
+        a la papelera; los que se cambiaron alli (o los de una carpeta que ya no es destino) se quedan. Devuelve cuantos
+        se han mandado a la papelera."""
+        with _SALIDAS_LOCK:
+            t = (getattr(self, "_salidas_timers", None) or {}).pop(rel, None)
+        if t:
+            t.cancel()
+        try:
+            entries = self.registro.entries(rel)
+        except OSError:
+            return 0
+        if not entries:
+            return 0
+        destinos = perfil_de(self.settings.get())["outputs"]
+        intact = []
+        for path, sha in entries:
+            try:
+                if any(salidas.inside(path, d["path"]) for d in destinos) and os.path.isfile(path) \
+                        and salidas.sha256_of(path) == sha:
+                    intact.append(path)
+            except OSError:
+                pass
+        n = 0
+        if intact:
+            try:
+                to_recycle_bin(intact)
+                n = len(intact)
+            except (ApiError, OSError) as e:
+                log(f"   no se pudieron mandar a la papelera los documentos de {rel}: {getattr(e, 'msg', e)}")
+                intact = []
+        self.registro.forget([p for p, _ in entries])  # la reunion ya no existe: ninguno es de nadie
+        return n
+
+    def outputs_for_persona(self, pid=None):
+        """Quien habla cambia de nombre (o se fusiona u olvida): los documentos de las reuniones donde sale (con None,
+        las de cualquier persona reconocida) se reescriben, que llevan los nombres."""
+        if not perfil_de(self.settings.get())["outputs"]:
+            return 0
+        self.library.refresh(max_age=5)
+        n = 0
+        for a in list(self.library.flat):
+            data = voices.read_sidecar(a["_spk"]) if a.get("_spk") else None
+            if data and any(i.get("persona") and (pid is None or i.get("persona") == pid)
+                            for i in (data.get("hablantes") or {}).values()):
+                self.schedule_outputs(a["path"])
+                n += 1
+        return n
 
     def schedule_outputs(self, rel, delay=4.0):
         """Reescritura al guardar cambios en las notas o la transcripcion: agrupada (se guarda mientras se escribe)."""
@@ -1696,7 +1953,7 @@ class Jobs:
             if old:
                 old.cancel()
             t = threading.Timer(delay, lambda: self._fire_outputs(rel, t))
-            t.daemon = True
+            t.daemon, t.salidas = True, True  # flush_outputs las encuentra al apagar
             timers[rel] = t
         t.start()
 
@@ -1902,6 +2159,7 @@ class Jobs:
             job.stage = (f"Voces: {len(real)} {'persona' if len(real) == 1 else 'personas'} · {known} "
                          f"reconocida{'s' if known != 1 else ''}")
             log(f"✔ {job.name}  {job.stage.lower()} ({time.time() - job.started:.0f} s)")
+            self.schedule_outputs(job.path)  # destinos de salida: el documento con quien habla (y participantes)
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Cancelado"
             log(f"■ {job.name}  voces canceladas")
@@ -1984,7 +2242,9 @@ class Jobs:
                 log(f"   continuando desde {start / 60:.1f} min")
             ms = meeting_setup(abs_path, st)  # vocabulario del tema (o el general), contexto libre e idioma del .md
             vocab, about = ms["prompt"], ms["about"]
-            if job.final_pass:  # el repaso final usa el idioma que tenga la reunion al terminar (pudo cambiarse)
+            # el repaso final usa el idioma que tenga la reunion al terminar (pudo cambiarse); en lote, «el de cada
+            # reunion»: el de su .md o el del perfil
+            if job.final_pass or getattr(job, "per_meeting", False):
                 job.language = ms["language"] or None
             if preset["engine"] == "local":
                 segs, lang, dur = self.local.transcribe(abs_path, preset, job.language, vocab,
@@ -2220,7 +2480,7 @@ class App:
                     raise ApiError("La grabadora no ha podido arrancar (ver %LOCALAPPDATA%\\AudiosApp\\recorder.log).")
                 preset = b.get("preset") or self.settings.get().get("live_preset") or "medium"
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
-                props = {"proyecto": v["project"], "workstream": v["name"]} if v else {}
+                props = {"proyecto": v["project"], "workstream": v["name"], "vocabulario": v["id"]} if v else {}
                 if b.get("participantes"):  # sugeridos por Teams/Outlook: solo a la cabecera del .md, en este PC
                     props["participantes"] = " ".join(str(b["participantes"]).split())[:500]
                 # perfil de la reunion, a la cabecera del .md: idioma y contexto (el directo, la cola y el resumen
@@ -2302,6 +2562,10 @@ class App:
                     except Exception:
                         log_exc()
             self.monitor = self.rec = None
+        try:  # destinos de salida: las reescrituras pendientes (4 s) no se pierden al apagar
+            self.jobs.flush_outputs()
+        except Exception:
+            log_exc()
         self.jobs.shutdown()
 
     def apagar(self, b):
@@ -2453,6 +2717,7 @@ class App:
                     elif k == "contexto":
                         v = " ".join(str(v or "").split())[:engines.ABOUT_CHARS]
                     props[k] = v
+            theme_vocab(props, abs_path, b.get("props") or {})  # el id de la lista del tema (y migra los nombres)
             if "body" in b:
                 body = b.get("body") or ""
             text = dump_notes(props, body)
@@ -2460,7 +2725,7 @@ class App:
                 save_text(md, text, "utf-8")
             elif os.path.isfile(md):
                 os.remove(md)  # sin notas ni propiedades: no se deja un archivo vacio
-        if {"proyecto", "workstream", "idioma", "contexto"} & set(b.get("props") or {}):
+        if {"proyecto", "workstream", "idioma", "contexto", "vocabulario"} & set(b.get("props") or {}):
             self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
         self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento con las notas nuevas
         self.library.at = 0
@@ -2594,6 +2859,8 @@ class App:
         save_text(path, (f"# {desc}\n" if desc else "") + ", ".join(terms) + "\n", "utf-8")
         if moved:  # se ha renombrado (o cambiado de proyecto): fuera el archivo anterior
             os.remove(old["_abs"])
+            # el perfil y el ultimo tema elegido lo siguen (si no, Ctrl+Alt+R se quedaba sin vocabulario)
+            self.settings.update(lambda d: settings_moved(d, old["id"], rel_of(path)))
         self.library.at = 0
         log(f"🔤 vocabulario guardado: {project} · {name} ({len(terms)} términos)")
         return {"id": rel_of(path)}
@@ -2607,16 +2874,22 @@ class App:
     # --- perfil de reunion
     def perfil_get(self, q):
         """GET /api/perfil: el perfil por defecto y lo que se aplicaria ahora mismo a una grabacion (con la reunion
-        en curso, si la hay)."""
+        en curso, si la hay), y los avisos de los destinos de salida (documentos que no se han podido escribir)."""
         st = self.settings.get()
         sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
         auto = lambda vid: self.rec_folder_for(find_vocab(None, None, vid) if vid else None, st)  # noqa: E731
-        return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto)}
+        avisos = getattr(getattr(self, "jobs", None), "outputs_warnings", None)  # sin cola (tests): ninguno
+        return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto),
+                "avisos": avisos() if avisos else []}
 
     def perfil_save(self, b):
         """POST /api/perfil: guarda el perfil por defecto (solo las claves que vengan: folder, vocab, context,
-        outputs, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar."""
-        cambios = check_perfil(b)
+        outputs, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar.
+        Con "comprobar": solo valida los destinos de salida que vengan (Ajustes, al anadir una carpeta) y los devuelve
+        normalizados, sin guardar nada: asi la interfaz rechaza al momento una carpeta que no vale."""
+        if b.get("comprobar"):
+            return {"outputs": check_perfil({"outputs": b.get("outputs") or []})["outputs"]}
+        cambios = check_perfil(b, perfil_de(self.settings.get())["outputs"])
         self.settings.update(lambda d: update_perfil(d, cambios))
         log("   perfil de reunión guardado: " + ", ".join(sorted(cambios)))
         return {"perfil": perfil_de(self.settings.get())}
@@ -2626,8 +2899,12 @@ class App:
         if not v:
             raise ApiError("Ese tema ya no existe.")
         to_recycle_bin([v["_abs"]])  # a la papelera: se puede recuperar
-        self.settings.update(lambda d: d.update(rec_vocab="" if d.get("rec_vocab") == v["id"]
-                                                else d.get("rec_vocab", "")))
+
+        def upd(d):  # el ultimo tema elegido y el fijo del perfil, si eran este: el perfil vuelve a «automatico»
+            d["rec_vocab"] = "" if d.get("rec_vocab") == v["id"] else d.get("rec_vocab", "")
+            if (d.get("perfil") or {}).get("vocab") == v["id"]:
+                d["perfil"] = dict(d["perfil"], vocab=None)
+        self.settings.update(upd)
         self.library.at = 0
         log(f"🗑 vocabulario a la papelera: {v['project']} · {v['name']}")
         return {"ok": True}
@@ -2700,9 +2977,16 @@ class App:
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
         self.jobs.voice_vectors.pop(rel, None)
         self.settings.update(lambda d: d.update(favorites=[f for f in d.get("favorites", []) if f["path"] != rel]))
+        copias = 0
+        if ext.lower() in AUDIO_EXT:  # sus documentos de los destinos de salida que nadie ha cambiado, tambien
+            try:
+                copias = self.jobs.forget_outputs(rel)
+            except Exception:
+                log_exc()
         self.library.at = 0
-        log(f"🗑 {rel} → papelera ({len(group)} archivos)")
-        return {"ok": True, "count": len(group)}
+        log(f"🗑 {rel} → papelera ({len(group)} archivos" + (f" y {copias} documentos de los destinos" if copias else "")
+            + ")")
+        return {"ok": True, "count": len(group), "copias": copias}
 
     def import_file(self, handler, q):
         """Subir un audio (o .txt/.md) arrastrandolo a la ventana: se copia a la carpeta indicada."""
@@ -2840,6 +3124,7 @@ class App:
                     write_bytes(base + ext, f.read())
         shutil.rmtree(bdir, ignore_errors=True)
         self.library.at = 0
+        self.jobs.schedule_outputs(rel)  # destinos de salida: el documento vuelve a la transcripcion original
         log(f"↺ {rel}: transcripción original restaurada")
         return {"ok": True}
 
@@ -2908,7 +3193,8 @@ class App:
         paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
         preset = b.get("preset") or self.settings.get()["preset"]
         ids = self.jobs.submit(paths, preset, b.get("language"), resume=bool(b.get("resume")))
-        self.settings.update(lambda d: d.update(preset=preset, language=b.get("language") or ""))
+        # el idioma elegido es de estas reuniones: el del perfil (Ajustes) no cambia, como al grabar
+        self.settings.update(lambda d: d.update(preset=preset))
         return {"added": ids}
 
     def cancel(self, b):
@@ -2979,6 +3265,7 @@ class App:
         if rel_of(src) in self.jobs.voice_vectors:
             self.jobs.voice_vectors[rel_of(moves[0][1])] = self.jobs.voice_vectors.pop(rel_of(src))
         self._rename_refs(rel_of(src), rel_of(moves[0][1]))
+        self.jobs.outputs_moved(rel_of(src), rel_of(moves[0][1]))  # sus documentos de los destinos siguen siendo suyos
         old_b, new_b = backup_dir(rel_of(src)), backup_dir(rel_of(moves[0][1]))
         if os.path.isdir(old_b) and not os.path.exists(new_b):  # la copia del original viaja con el audio
             os.replace(old_b, new_b)
@@ -2999,8 +3286,11 @@ class App:
             lid = b["path"].strip("/")[len(LINK):]
             if lid not in LINKS:
                 raise ApiError("Esa carpeta ya no está vinculada.")
-            LINKS[lid]["name"] = clean_name(b.get("name"))
+            old_name, new_name = LINKS[lid]["name"], clean_name(b.get("name"))
+            LINKS[lid]["name"] = new_name
             self._save_links()
+            if has_vocab_dir(LINKS[lid]["path"]):  # sus listas toman el nombre de la carpeta vinculada
+                self.settings.update(lambda d: settings_moved(d, "", "", project=(old_name, new_name)))
             return {"path": b["path"].strip("/")}
         src = safe(b.get("path"), "dir")
         if os.path.normcase(src) == os.path.normcase(ROOT) or in_app_dir(src):
@@ -3015,8 +3305,38 @@ class App:
             raise ApiError("Ya existe una carpeta con ese nombre")
         os.rename(src, dst)
         self._rename_refs(rel_of(src), rel_of(dst), folder=True)
+        try:  # la carpeta ya esta renombrada: si algo de esto falla se anota, pero no se devuelve error
+            self._folder_moved(rel_of(src), rel_of(dst), (os.path.basename(src), os.path.basename(dst))
+                               if has_vocab_dir(dst) else None)
+        except Exception:
+            log_exc()
         self.library.at = 0
         return {"path": rel_of(dst)}
+
+    def _folder_moved(self, old, new, project=None):
+        """Una carpeta renombrada: lo que la app guarda por ruta interna la sigue, como al mover una reunion (move):
+        la copia del original de cada transcripcion corregida, el estado «completa», las huellas de voz en memoria, los
+        documentos de los destinos de salida y los ajustes (carpeta y tema del perfil, ultima carpeta y ultimo tema,
+        carpeta de cada proyecto; con `project`, el proyecto tambien cambia de nombre)."""
+        dst = safe(new, "dir")
+        for d, _, files in os.walk(dst):
+            for n in files:
+                if os.path.splitext(n)[1].lower() not in AUDIO_EXT:
+                    continue
+                r_new = rel_of(os.path.join(d, n))
+                r_old = moved_rel(r_new, new, old, folder=True)
+                if r_old is None:
+                    continue
+                old_b, new_b = backup_dir(r_old), backup_dir(r_new)
+                if os.path.isdir(old_b) and not os.path.exists(new_b):
+                    os.replace(old_b, new_b)
+        for r in [r for r in list(COMPLETE.data) if moved_rel(r, old, new, folder=True)]:
+            COMPLETE.moved(r, moved_rel(r, old, new, folder=True))
+        vv = self.jobs.voice_vectors
+        for r in [r for r in list(vv) if moved_rel(r, old, new, folder=True)]:
+            vv[moved_rel(r, old, new, folder=True)] = vv.pop(r)
+        self.jobs.outputs_moved(old, new, folder=True)
+        self.settings.update(lambda d: settings_moved(d, old, new, folder=True, project=project))
 
     def reveal(self, b):
         p = safe(b.get("path", ""))
@@ -3045,7 +3365,8 @@ class App:
         return {"ok": True}
 
     def save_settings(self, b):
-        perfil = check_perfil(b["perfil"]) if isinstance(b.get("perfil"), dict) else {}  # valida antes de guardar
+        perfil = (check_perfil(b["perfil"], perfil_de(self.settings.get())["outputs"])  # valida antes de guardar
+                  if isinstance(b.get("perfil"), dict) else {})
 
         def upd(d):
             for k in ("preset", "language", "prompt"):
@@ -3180,6 +3501,7 @@ class App:
         fn(data["hablantes"][h], data)
         voices.write_sidecar(side, data)
         self.library.at = 0
+        self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento lleva quien habla
         return data
 
     def voices_person(self, b):
@@ -3199,10 +3521,15 @@ class App:
             when = time.strftime("%Y-%m-%dT%H:%M:%S") if consent else None
             pid = v.create(nombre or "Yo", bool(b.get("es_usuario")), when)["id"]
         else:
+            renamed = False
             if nombre and nombre != v.find(pid)["nombre"]:
                 v.rename(pid, nombre)
+                renamed = True
             if b.get("es_usuario") is not None:
                 v.set_user(pid, bool(b.get("es_usuario")))
+                renamed = True
+            if renamed:  # destinos de salida: el nombre sale en los documentos de todas sus reuniones
+                self.jobs.outputs_for_persona(pid)
         if abs_path and h:
             self._speaker_update(abs_path, h, lambda info, d: info.update(persona=pid, provisional=False))
         remembered = None
@@ -3238,6 +3565,7 @@ class App:
                     if i.get("persona") == removed:
                         i["persona"] = keep
                 voices.write_sidecar(a["_spk"], data)
+                self.jobs.schedule_outputs(a["path"])  # destinos de salida: el documento con el nombre que queda
                 n += 1
         self.library.at = 0
         log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
@@ -3248,12 +3576,14 @@ class App:
         if b.get("all"):
             v.forget_all()
             log("🗣 todas las huellas olvidadas")
+            self.jobs.outputs_for_persona(None)  # destinos de salida: los documentos ya no llevan esos nombres
         else:
             try:
                 v.forget(b.get("id"))
             except KeyError:
                 raise ApiError("Esa persona ya no existe.")
             log("🗣 persona olvidada")
+            self.jobs.outputs_for_persona(b.get("id"))
         self.library.at = 0
         return {"personas": v.public()}
 

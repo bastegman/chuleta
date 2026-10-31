@@ -18,6 +18,9 @@ WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y
 # compatibilidad con las instalaciones y los datos existentes: la carpeta _app, DATA_DIR (AudiosApp), la cabecera
 # X-Audios, las claves de los .md y la pestana «Notas» (que es la funcion de tomar notas, no la marca).
 APP_NAME = "Chuleta"
+# nombres que tuvo la app: las listas de vocabulario de la raiz se llamaban asi como proyecto, y las reuniones grabadas
+# entonces lo llevan en la cabecera de su .md (server.find_vocab los acepta como alias de la raiz)
+APP_FORMER_NAMES = ("Notas",)
 # AppUserModelID: identifica la ventana en la barra de tareas (agrupa, icono, anclar). La misma cadena va en el
 # acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. Si cambiara,
 # los anclajes hechos dejarian de agrupar la ventana.
