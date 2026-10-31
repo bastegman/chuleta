@@ -10,10 +10,25 @@
 # common.APP_NAME); las carpetas y los .bat no cambian.
 # Con escritorio abre su propia ventana (WinForms: pasos, barra y detalle) y esconde la consola; -Consola, -NoShortcut o
 # -NoLaunch (pruebas, CI) lo dejan como consola de siempre.
+# Solo para CI: -AutoCerrar N (o la variable NOTAS_INSTALADOR_AUTOCERRAR=N) cierra la ventana sola N segundos despues de
+# terminar, bien o mal; si termino bien, como si se hubiera pulsado "Abrir". NOTAS_INSTALADOR_SIMULAR_FALLO=pip ensaya la
+# pantalla de error sin tocar la red. Ninguna de las dos se usa en un PC normal.
 param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Notas",
-      [switch]$Consola)
+      [switch]$Consola, [int]$AutoCerrar = 0)
 
 $ErrorActionPreference = "Continue"
+if ($AutoCerrar -le 0 -and $env:NOTAS_INSTALADOR_AUTOCERRAR) { try { $AutoCerrar = [int]$env:NOTAS_INSTALADOR_AUTOCERRAR } catch {} }
+# todo lo que se escribe (consola y ventana) queda tambien en %LOCALAPPDATA%\AudiosApp\instalar.log, junto a server.log
+$script:logFile = $null
+try {
+    $d = Join-Path $env:LOCALAPPDATA "AudiosApp"
+    New-Item -ItemType Directory -Force $d | Out-Null
+    $script:logFile = Join-Path $d "instalar.log"
+    Add-Content -LiteralPath $script:logFile -Value ("==== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " instalar.ps1 desde " + $PSScriptRoot) -Encoding UTF8
+} catch { $script:logFile = $null }
+function Log-File($text) {
+    if ($script:logFile) { try { Add-Content -LiteralPath $script:logFile -Value ("$text" -replace "`r", "") -Encoding UTF8 } catch {} }
+}
 trap {
     # error inesperado (no un Fail): en modo ventana se ensena ahi, porque la consola esta escondida; en consola se propaga
     if ($script:ui -and -not $script:ui.done) { Finish-Ui $false "Error inesperado: $($_.Exception.Message)"; exit 0 }
@@ -25,7 +40,7 @@ $packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststo
 # opcionales: se instalan una a una y aparte del resto; si alguna falla, solo se avisa (la app funciona sin ella)
 $optional = @("sherpa-onnx==2.0.1", "pywin32==312")  # quien habla / calendario de Outlook
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
-$AppId = "Bernardo.Notas"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
+$AppId = "Bernardo.Chuleta"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
 
 # --- presentacion: consola y, si hay ventana ($script:ui), tambien la ventana. La logica de instalacion no depende de esto.
 $script:ui = $null
@@ -34,9 +49,11 @@ function Ui-Log($text) {
     $script:ui.log.AppendText((("$text" -replace "`r", "").TrimEnd()) + "`r`n")
     [System.Windows.Forms.Application]::DoEvents()
 }
-function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color; Ui-Log $text }
+function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color; Ui-Log $text; Log-File $text }
 function Step($text) {
     Write-Host ""; Write-Host "  > $text" -ForegroundColor Cyan
+    Log-File ""
+    Log-File "> $text"
     if ($script:ui) {
         $ui = $script:ui
         if ($ui.current) { $ui.current.Text = [string][char]0x2713 + " " + $ui.current.Tag; $ui.current.ForeColor = $ui.verde }
@@ -71,11 +88,21 @@ function Finish-Ui($ok, $text) {
     $ui.done = $true
     Ui-Log $(if ($ok) { "Listo." } else { "X $text" })
     $ui.btnClose.Focus() | Out-Null
-    while ($ui.form.Visible) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+    $t0 = Get-Date
+    while ($ui.form.Visible) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 50
+        if ($AutoCerrar -gt 0 -and ((Get-Date) - $t0).TotalSeconds -ge $AutoCerrar) {  # solo CI
+            if ($ok) { $ui.abrir = -not $NoLaunch }
+            Log-File "autocierre tras $AutoCerrar s"
+            $ui.form.Close()
+        }
+    }
 }
 function Fail($text) {
     Write-Host ""
     Write-Host "  X  $text" -ForegroundColor Red
+    Log-File "X $text"
     if ($script:ui) { Finish-Ui $false $text; exit 0 }  # el error ya se ha visto en la ventana: el .bat no tiene que parar
     exit 1
 }
@@ -261,6 +288,7 @@ function Find-Python {
 
 $Gui = $false
 if (-not ($Consola -or $NoShortcut -or $NoLaunch) -and [Environment]::UserInteractive) { $Gui = New-InstallerWindow }
+Log-File ("modo: " + $(if ($Gui) { "ventana" } else { "consola" }) + " · AutoCerrar=$AutoCerrar · PowerShell $($PSVersionTable.PSVersion)")
 
 Write-Host ""
 Write-Host "  ==========================================================" -ForegroundColor DarkCyan
@@ -382,6 +410,11 @@ if ($LASTEXITCODE -ne 0) { & $py -m ensurepip --upgrade 2>&1 | ForEach-Object { 
 function Pip-Install($extra, $list) {
     # pip escribe los errores por stderr: se ensenan y se guardan para distinguir despues que ha fallado
     $script:pipOut = @()
+    if ($env:NOTAS_INSTALADOR_SIMULAR_FALLO -eq "pip") {  # solo CI: la pantalla de error, sin tocar la red
+        $script:pipOut = @("ERROR: ProxyError: fallo simulado (NOTAS_INSTALADOR_SIMULAR_FALLO=pip)")
+        Say "    $($script:pipOut[0])" Yellow
+        return 1
+    }
     if (-not $extra) { $extra = @() }
     if (-not $list) { $list = $packages }
     & $py -m pip install @extra --disable-pip-version-check --no-warn-script-location @list 2>&1 |
@@ -397,6 +430,7 @@ if ($rc -ne 0) {
 }
 $v = & $py -c "import faster_whisper, soundcard, requests, av, numpy; print('    faster-whisper', faster_whisper.__version__, '| PyAV', av.__version__)" 2>&1
 $coreOk = ($LASTEXITCODE -eq 0)
+if ($env:NOTAS_INSTALADOR_SIMULAR_FALLO -eq "pip") { $coreOk = $false }  # solo CI
 if ($coreOk) { Say ($v -join "`n") Green } else { Say ($v -join "`n") Yellow }
 # sherpa-onnx es opcional (quien habla): se instala aparte para que un fallo suyo no deje sin librerias al resto,
 # y si no importa solo se avisa: la app sigue funcionando sin esa opcion

@@ -10,6 +10,7 @@ ventana mas de Edge. Si pywebview no esta instalado o no puede crear la ventana,
 """
 import os
 import threading
+import time
 
 from common import APP_ID, APP_NAME, WINDOWS, log, log_exc
 
@@ -118,18 +119,37 @@ class Window:
             log_exc()
 
     def _on_closing(self):
-        """Cerrar = ocultar: devolver False cancela el cierre. Solo destroy() (apagar) deja cerrar."""
+        """Cerrar = ocultar: devolver False cancela el cierre. Solo destroy() (apagar) deja cerrar. Antes de ocultar se
+        le pregunta a la pagina (onWindowClosing): la primera vez avisa de que la app sigue en segundo plano y es ella
+        quien pide POST /api/ocultar al cerrar el aviso."""
         if self.quitting:
             return True
-        threading.Timer(0.05, self._hide).start()  # fuera del propio evento de cierre
+        threading.Thread(target=self._ask_page_then_hide, daemon=True).start()  # fuera del propio evento de cierre
         return False
+
+    def _ask_page_then_hide(self):
+        time.sleep(0.05)
+        try:
+            r = self.w.evaluate_js('typeof onWindowClosing === "function" ? onWindowClosing() : "no"')
+        except Exception:
+            r = None
+        if r != "handled":
+            self._hide()
+
+    def hide(self):
+        """Oculta la ventana (POST /api/ocultar, desde la pagina). False si no hay ventana."""
+        if not (self.alive and self.w):
+            return False
+        return self._hide()
 
     def _hide(self):
         try:
             self.w.hide()
             log("ventana oculta: la app sigue en segundo plano (el acceso directo la vuelve a abrir)")
+            return True
         except Exception:
             log_exc()
+            return False
 
     def _find_hwnd(self):
         try:

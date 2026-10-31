@@ -1970,6 +1970,26 @@ async function confirmShutdown() {
   try { await api('/api/apagar', {}); shutdownScreen(); }
   catch (err) { toast(esc(err.message), 'err'); }
 }
+/* La ventana propia (window.py) llama a esto al pulsar la X: la app sigue en segundo plano. Devuelve 'handled' si la
+   pagina se encarga de pedir /api/ocultar (tras el aviso, la primera vez); si no, window.py oculta por su cuenta. */
+function onWindowClosing() {
+  if (S.off) return 'no';
+  const hide = () => api('/api/ocultar', {}).catch(() => { });
+  if (localStorage.getItem('bgNotice') === 'off') { hide(); return 'handled'; }
+  openModal(`<h3>${esc(APP_NAME)} sigue en segundo plano</h3>
+    <p>Al cerrar la ventana la app <b>no se apaga</b>: las grabaciones y el atajo <b>Ctrl+Alt+R</b> siguen funcionando, y el acceso directo del escritorio vuelve a abrir esta ventana.</p>
+    <p>Para apagarla del todo: Ajustes ⚙ → <b>⏻ Apagar ${esc(APP_NAME)}</b>.</p>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="bgNoMore"> No volver a avisar</label>
+    <div class="btns"><button class="btn" data-m="off" type="button">Apagar ahora</button><button class="btn primary" data-m="ok" type="button" autofocus>Entendido</button></div>`, d => {
+    d.addEventListener('click', e => {
+      const b = e.target.closest('[data-m]');
+      if (!b) return;
+      if ($('#bgNoMore', d).checked) localStorage.setItem('bgNotice', 'off');
+      closeModal(b.dataset.m);
+    });
+  }).then(v => { if (v === 'off') confirmShutdown(); else hide(); });  // 'ok', o cerrado haciendo clic fuera: se oculta
+  return 'handled';
+}
 function shutdownScreen() {
   S.off = true;  // los sondeos paran: el servidor ya no contesta
   clearTimeout(recTimer); clearTimeout(jobsTimer);

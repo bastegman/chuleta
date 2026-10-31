@@ -72,6 +72,14 @@ class NombreCentralizadoTests(unittest.TestCase):
                   "se ha apagado</h2>", "if (S.off) return;"):
             self.assertIn(s, app, s)
 
+    def test_aviso_sigue_en_segundo_plano(self):
+        """La primera vez que se cierra la ventana propia: aviso con «No volver a avisar» y /api/ocultar al cerrarlo."""
+        app = read("static", "app.js")
+        for s in ("function onWindowClosing()", "sigue en segundo plano</h3>", "No volver a avisar",
+                  "localStorage.getItem('bgNotice') === 'off'", "api('/api/ocultar', {})", "return 'handled';",
+                  "Apagar ahora"):
+            self.assertIn(s, app, s)
+
 
 class ServidorHttpTests(unittest.TestCase):
     """El servidor de verdad en un puerto libre con un App minimo: cabeceras, rutas y respuestas tal cual."""
@@ -165,6 +173,17 @@ class ServidorHttpTests(unittest.TestCase):
         self.assertEqual((code, body), (200, {"ok": True}))
         win.show.assert_called_once()
         open_ui.assert_not_called()
+
+    def test_ocultar(self):
+        win = mock.Mock()
+        win.hide.return_value = True
+        server.WINDOW = win
+        try:
+            self.assertEqual(self.call("/api/ocultar", {}), (200, {"ok": True}))
+        finally:
+            server.WINDOW = None
+        win.hide.assert_called_once()
+        self.assertEqual(self.call("/api/ocultar", {}), (200, {"ok": False}))  # sin ventana propia
 
     def test_ask_running_to_show_usa_la_ruta(self):
         win = mock.Mock()
@@ -280,7 +299,8 @@ class InstaladorTests(unittest.TestCase):
         ps1 = self.read_repo("_app", "instalar.ps1").decode("utf-8-sig")
         for s in ("[switch]$Consola", "pythonw.exe", "Set-ShortcutAppId", "/api/apagar", "System.Windows.Forms",
                   "GetConsoleWindow", "New-InstallerWindow", "Finish-Ui", '"pywebview==6.2.1"', "Abrir $AppName",
-                  "Copiar el detalle", "$sc.WorkingDirectory", "[string]$AppName"):
+                  "Copiar el detalle", "$sc.WorkingDirectory", "[string]$AppName", "[int]$AutoCerrar",
+                  "NOTAS_INSTALADOR_AUTOCERRAR", "NOTAS_INSTALADOR_SIMULAR_FALLO", "instalar.log"):
             self.assertIn(s, ps1, s)
         m = re.search(r'\$AppId = "([^"]+)"', ps1)
         self.assertEqual(m.group(1), common.APP_ID)  # el .lnk y el proceso llevan el mismo AppUserModelID
@@ -313,6 +333,11 @@ class FakeWin:
         self.events.closing, self.events.shown = FakeEvent(), FakeEvent()
         self.calls = []
         self.native = None
+        self.js_result = "no"  # lo que contesta la pagina a onWindowClosing(): "handled" = ella pide /api/ocultar
+
+    def evaluate_js(self, script):
+        self.calls.append("js:" + script[:40])
+        return self.js_result
 
     def hide(self):
         self.calls.append("hide")
@@ -381,6 +406,20 @@ class VentanaPropiaTests(unittest.TestCase):
         self.assertTrue(w.quitting)
         self.assertIn("destroy", w.w.calls)
         self.assertTrue(w._on_closing())  # apagando: ahora si se deja cerrar
+
+    def test_cerrar_pregunta_a_la_pagina(self):
+        wv = FakeWebview()
+        w = self.make(wv)
+        w.w, w.alive = FakeWin("t", "u"), True
+        w.w.js_result = "handled"  # la pagina ensena el aviso y pedira /api/ocultar
+        self.assertIs(w._on_closing(), False)
+        time.sleep(0.3)
+        self.assertNotIn("hide", w.w.calls)
+        self.assertTrue(any(c.startswith("js:") for c in w.w.calls))
+        self.assertTrue(w.hide())  # lo que hace /api/ocultar
+        self.assertIn("hide", w.w.calls)
+        w.alive = False
+        self.assertFalse(w.hide())
 
     def test_sin_pywebview(self):
         with mock.patch.object(window, "import_webview", return_value=None):

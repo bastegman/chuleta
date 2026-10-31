@@ -34,9 +34,9 @@ import calendario
 import engines
 import live
 import voices
-from common import (APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS, alert,  # noqa: F401 (re-exportados)
-                    clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key, parse_srt,
-                    protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
+from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS,  # noqa: F401 (re-exportados)
+                    alert, clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key,
+                    parse_srt, protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
 from window import Window, set_app_id
 
@@ -1833,6 +1833,10 @@ class App:
         schedule_shutdown("Ajustes > Apagar")
         return {"ok": True, "activos": activos}
 
+    def ocultar(self, b):
+        """La pagina, tras el aviso de «sigue en segundo plano» (o sin el), pide ocultar la ventana propia."""
+        return {"ok": bool(WINDOW is not None and WINDOW.hide())}
+
     def mostrar(self, b):
         """El acceso directo, al ver que la app ya corre, pide la ventana: la propia si existe; si no, Edge."""
         if WINDOW is not None and WINDOW.show():
@@ -2798,7 +2802,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
                   "/api/voces/exportar": a.voices_export,
-                  "/api/apagar": a.apagar, "/api/mostrar": a.mostrar}
+                  "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar}
         try:
             u = urlparse(self.path)
             if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos
@@ -2992,7 +2996,8 @@ def main():
         truststore.inject_into_ssl()
     except Exception:
         pass
-    set_app_id()  # antes de cualquier ventana (la propia, el selector de carpetas o un aviso)
+    # antes de cualquier ventana (la propia, el selector de carpetas o un aviso): la barra de tareas agrupa por este id
+    log(f"AppUserModelID {APP_ID}: {'fijado' if set_app_id() else 'no disponible'}")
     try:
         Handler.app = App()
     except Exception as e:
