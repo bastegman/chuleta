@@ -1,9 +1,9 @@
 @echo off
-rem Lanzador de Notas (lo usa el acceso directo "Notas" del escritorio).
+rem Lanzador de Chuleta con consola (modo diagnostico; el acceso directo "Chuleta" usa pythonw.exe, sin consola).
 chcp 65001 >nul
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
-title Notas - servidor (cierra esta ventana para apagar la app)
+title Chuleta - servidor (cierra esta ventana para apagar la app)
 cd /d "%~dp0"
 rem python.txt lo escribe INSTALAR.bat: el Python en el que se instalaron las librerias
 set "PY="

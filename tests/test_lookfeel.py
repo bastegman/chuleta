@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Aspecto y arranque sin consola (31/10/2026): nombre de la app centralizado (common.APP_NAME), /api/apagar y
-/api/mostrar sobre el servidor HTTP real, apagado ordenado, log sin consola (pythonw.exe) y la ventana propia
-(window.py) con un pywebview de mentira."""
+"""Aspecto y arranque sin consola (31/10/2026): nombre de la app centralizado (common.APP_NAME, «Chuleta» desde el
+renombrado), /api/apagar y /api/mostrar sobre el servidor HTTP real, apagado ordenado, log sin consola (pythonw.exe),
+la ventana propia (window.py) con un pywebview de mentira, la versión (_app/version.txt) y Ajustes > Acerca de."""
 import ast
 import json
 import logging
@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from support import APP, FakeJob, bare_jobs, server
+from support import APP, FakeJob, bare_jobs, patched_paths, server
 
 import common  # noqa: E402
 import window  # noqa: E402
@@ -31,12 +31,17 @@ def read(*parts):
 
 class NombreCentralizadoTests(unittest.TestCase):
     def test_constantes(self):
-        self.assertEqual(common.APP_NAME, "Notas")
+        self.assertEqual(common.APP_NAME, "Chuleta")
+        self.assertEqual(common.APP_ID, "Bernardo.Chuleta")  # no cambia con el nombre: los anclajes hechos lo llevan
         self.assertRegex(common.APP_ID, r"^[A-Za-z0-9._-]{1,128}$")  # AppUserModelID: sin espacios, <= 128
         self.assertIs(server.APP_NAME, common.APP_NAME)
+        self.assertEqual(server.PKG_ROOT, "Chuleta")  # raíz del zip instalable
+        self.assertEqual(server.Handler.server_version, "Chuleta/1.0")
+        self.assertEqual(server.REPO_URL, "https://github.com/bastegman/chuleta")
 
     def test_server_sin_literales_sueltos(self):
-        """Solo quedan "Notas/..." (la carpeta raiz del zip, que no se renombra) y las docstrings."""
+        """Ni «Notas» (nombre anterior) ni «Chuleta» como literal en server.py: el nombre sale de common.APP_NAME.
+        Solo se permiten en docstrings."""
         tree = ast.parse(read("server.py"))
         docs = set()
         for node in ast.walk(tree):
@@ -46,25 +51,59 @@ class NombreCentralizadoTests(unittest.TestCase):
                     docs.add(id(body[0].value))
         sueltos = []
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str) and "Notas" in node.value:
-                if id(node) in docs or node.value.startswith("Notas/"):
-                    continue
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)) or id(node) in docs:
+                continue
+            if re.search(r"Notas|Chuleta", node.value):
                 sueltos.append((node.lineno, node.value))
         self.assertEqual(sueltos, [])
+
+    def test_lo_que_no_cambia_con_el_nombre(self):
+        """Compatibilidad con las instalaciones y los datos existentes: DATA_DIR (AudiosApp), la cabecera X-Audios,
+        /api/ping ("audios") y la pestaña «Notas» de cada reunión (es la función, no la marca)."""
+        self.assertTrue(server.DATA_DIR.endswith("AudiosApp"))
+        src = read("server.py")
+        self.assertIn('self.headers.get("X-Audios") != "1"', src)
+        self.assertIn('{"app": "audios"}', src)
+        notas = read("static", "notas.js")
+        self.assertIn("${I.notes}Notas", notas)  # la pestaña
+        self.assertIn("Tomar Notas", notas)
+        self.assertNotIn("Notas separará", read("static", "voces.js"))
 
     def test_js_y_html_usan_app_name(self):
         app = read("static", "app.js")
         self.assertIn("let APP_NAME = document.title;", app)
         self.assertIn("if (c.app_name) APP_NAME = c.app_name;", app)
-        # literales con el nombre de la app en app.js: ninguno (los textos usan ${APP_NAME})
-        self.assertEqual(re.findall(r"""['"][^'"\n]*\bNotas\b[^'"\n]*['"]""", app), [])
+        # literales con el nombre de la app en app.js: ninguno (los textos usan ${APP_NAME}), ni el nuevo ni el anterior
+        self.assertEqual(re.findall(r"""['"][^'"\n]*\b(?:Notas|Chuleta)\b[^'"\n]*['"]""", app), [])
         self.assertNotIn("Notas · versión", app)
+        self.assertNotIn("Quitarla de Notas", app)
         self.assertNotIn("Bienvenido a Notas", read("static", "notas.js"))
         self.assertNotIn("Notas separará", read("static", "voces.js"))
         html = read("static", "index.html")
         self.assertIn("<title>{{APP_NAME}}</title>", html)
         self.assertIn('alt="">{{APP_NAME}}</a>', html)
+        self.assertIn('title="{{APP_NAME}} ha detectado', html)
         self.assertNotIn("<title>Notas", html)
+        self.assertNotIn("Notas ", html)
+        self.assertIn('href="/chuleta.ico"', html)
+        self.assertIn('href="/chuleta.png"', html)
+        self.assertNotIn("notas.ico", html)
+        for n in ("chuleta.ico", "chuleta.png", "notas.js"):
+            self.assertTrue(os.path.isfile(os.path.join(STATIC, n)), n)
+        self.assertNotIn("notas.ico", read("server.py"))
+
+    def test_acerca_de_en_ajustes(self):
+        """Al final de Ajustes: nombre, versión, licencia, repositorio, carpeta de datos con «Abrir» y «Copiar
+        diagnóstico» (sin emojis: iconos I.*)."""
+        app = read("static", "app.js")
+        for s in ("${I.info}Acerca de</legend>", "versión ${esc(S.config.version || '')}",
+                  "licencia ${esc(ac.licencia)}", 'id="aRepo"', 'id="aDatos"', 'id="aDiag"',
+                  "api('/api/acerca/abrir', { que: 'datos' })",
+                  "api('/api/acerca/abrir', { que: 'repo' })", "api('/api/diagnostico')", "copy(r.texto,",
+                  "const ac = S.config.acerca || {};", "${esc(ac.datos || '')}"):
+            self.assertIn(s, app, s)
+        self.assertIn("info: '<svg", app)
+        self.assertNotIn("versión del ${", app)
 
     def test_boton_apagar_en_ajustes(self):
         app = read("static", "app.js")
@@ -196,9 +235,103 @@ class ServidorHttpTests(unittest.TestCase):
         win.show.assert_called_once()
 
     def test_config_lleva_app_name(self):
-        """/api/config es el camino por el que app.js recibe el nombre (y si hay ventana propia)."""
+        """/api/config es el camino por el que app.js recibe el nombre (y si hay ventana propia) y los datos de
+        «Acerca de»."""
         src = read("server.py")
         self.assertIn('"app_name": APP_NAME, "window": WINDOW is not None', src)
+        self.assertIn('"acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR}', src)
+
+    def test_acerca_abrir(self):
+        with mock.patch.object(server, "open_dir") as open_dir, mock.patch.object(server.webbrowser, "open") as wb:
+            self.assertEqual(self.call("/api/acerca/abrir", {"que": "datos"}), (200, {"ok": True}))
+            open_dir.assert_called_once_with(server.DATA_DIR)
+            self.assertEqual(self.call("/api/acerca/abrir", {"que": "repo"}), (200, {"ok": True}))
+            wb.assert_called_once_with(server.REPO_URL)
+            code, body = self.call("/api/acerca/abrir", {"que": "otra"})
+        self.assertEqual(code, 400)
+        self.assertEqual(self.call("/api/acerca/abrir", {"que": "datos"}, header=False)[0], 403)
+
+    def test_diagnostico_enmascara_claves(self):
+        """Versión, Python, sistema, motor y las últimas 30 líneas de server.log sin la API key ni las adicionales."""
+        tmp = tempfile.mkdtemp(prefix="chuleta-diag-")
+        key, extra = "gsk_" + "a1b2c3d4e5f6g7h8i9j0" * 2, "sk-proj-ZZZZYYYYXXXXWWWWVVVV"
+        with open(os.path.join(tmp, "server.log"), "w", encoding="utf-8") as f:
+            for i in range(40):
+                f.write(f"2026-10-31 02:00:{i:02d} I línea {i}\n")
+            f.write(f"2026-10-31 02:01:00 I petición con {key} y {extra} y otra gsk_QQQQQQQQQQQQQQQQQQQQ\n")
+        settings = mock.Mock()
+        settings.get.return_value = {"preset": "nube", "live_preset": "nube",
+                                     "cloud": {"provider": "groq", "model": "whisper-large-v3", "api_key": key,
+                                               "extra_keys": [extra]}}
+        self.app.settings = settings
+        try:
+            with patched_paths(DATA_DIR=tmp):
+                code, body = self.call("/api/diagnostico")
+        finally:
+            del self.app.settings
+        self.assertEqual(code, 200)
+        t = body["texto"]
+        self.assertTrue(t.startswith(f"{common.APP_NAME} · versión {server.VERSION}\n"), t.splitlines()[0])
+        self.assertIn("Python " + sys.version.split()[0], t)
+        self.assertIn("nube (groq) · modelo whisper-large-v3", t)
+        self.assertIn(f"Datos: {tmp}", t)
+        self.assertNotIn(key, t)
+        self.assertNotIn(extra, t)
+        self.assertNotIn("gsk_QQQQ", t)
+        self.assertIn(server.masked(key), t)
+        self.assertIn("línea 39", t)
+        self.assertNotIn("línea 10", t)  # solo las últimas 30
+        self.assertIn("server.log (últimas 30 líneas):", t)
+
+    def test_diagnostico_sin_log(self):
+        settings = mock.Mock()
+        settings.get.return_value = {"preset": "rapido", "cloud": {}}
+        self.app.settings = settings
+        try:
+            with patched_paths(DATA_DIR=tempfile.mkdtemp(prefix="chuleta-diag-vacio-")):
+                code, body = self.call("/api/diagnostico")
+        finally:
+            del self.app.settings
+        self.assertEqual(code, 200)
+        self.assertIn("(no hay server.log)", body["texto"])
+        self.assertIn("local (rapido)", body["texto"])
+
+
+class VersionYLicenciaTests(unittest.TestCase):
+    def test_version_file_y_fallback(self):
+        tmp = tempfile.mkdtemp(prefix="chuleta-ver-")
+        vf = os.path.join(tmp, "version.txt")
+        with patched_paths(VERSION_FILE=vf):
+            self.assertIsNone(server.version_file())  # no existe
+            self.assertRegex(server.read_version(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")  # fecha y hora del código
+            with open(vf, "w", encoding="utf-8") as f:
+                f.write("\n")
+            self.assertIsNone(server.version_file())  # vacío
+            with open(vf, "w", encoding="utf-8-sig") as f:
+                f.write("2026-10-31 · abc1234\r\nlo que sea\r\n")  # con BOM y CRLF también
+            self.assertEqual(server.version_file(), "2026-10-31 · abc1234")
+            self.assertEqual(server.read_version(), "2026-10-31 · abc1234")
+            self.assertEqual(server.package_version(), "2026-10-31 · abc1234")
+        self.assertIsInstance(server.VERSION, str)
+        self.assertRegex(server.BUILD, r"^[0-9a-f]+$")  # la recarga automática sigue por mtime
+
+    def test_license_name(self):
+        self.assertEqual(server.license_name(), "MIT")  # el LICENSE del repo
+        tmp = tempfile.mkdtemp(prefix="chuleta-lic-")
+        with patched_paths(ROOT=tmp):
+            self.assertEqual(server.license_name(), "")
+            with open(os.path.join(tmp, "LICENSE"), "w", encoding="utf-8") as f:
+                f.write("\nApache License\nVersion 2.0\n")
+            self.assertEqual(server.license_name(), "Apache")
+            with open(os.path.join(tmp, "LICENSE"), "w", encoding="utf-8") as f:
+                f.write("GNU GENERAL PUBLIC LICENSE\n")
+            self.assertEqual(server.license_name(), "GNU GENERAL PUBLIC")
+
+    def test_scrub(self):
+        self.assertEqual(server.scrub("sin claves"), "sin claves")
+        self.assertEqual(server.scrub("x gsk_abcdefghijklmnopqrst y", []), "x gsk_…qrst y")
+        self.assertEqual(server.scrub("clave CORTA12", ["CORTA12"]), "clave ••••")
+        self.assertEqual(server.scrub("k=1234567890ABCDEFG", ["1234567890ABCDEFG", ""]), "k=1234…DEFG")
 
 
 class ApagadoTests(unittest.TestCase):
@@ -299,12 +432,32 @@ class InstaladorTests(unittest.TestCase):
         ps1 = self.read_repo("_app", "instalar.ps1").decode("utf-8-sig")
         for s in ("[switch]$Consola", "pythonw.exe", "Set-ShortcutAppId", "/api/apagar", "System.Windows.Forms",
                   "GetConsoleWindow", "New-InstallerWindow", "Finish-Ui", '"pywebview==6.2.1"', "Abrir $AppName",
-                  "Copiar el detalle", "$sc.WorkingDirectory", "[string]$AppName", "[int]$AutoCerrar",
-                  "NOTAS_INSTALADOR_AUTOCERRAR", "NOTAS_INSTALADOR_SIMULAR_FALLO", "instalar.log"):
+                  "Copiar el detalle", "$sc.WorkingDirectory", '[string]$AppName = "Chuleta"', "[int]$AutoCerrar",
+                  "NOTAS_INSTALADOR_AUTOCERRAR", "NOTAS_INSTALADOR_SIMULAR_FALLO", "instalar.log",
+                  'static\\chuleta.ico', 'static\\chuleta.png', 'Join-Path $app "Chuleta.bat"',
+                  "instalación (sin permisos de administrador)", "Espera a que termine la instalación",
+                  "Transcripción en la nube", "(versión $ver)", "Join-Path $app 'version.txt'", "-Encoding UTF8"):
             self.assertIn(s, ps1, s)
         m = re.search(r'\$AppId = "([^"]+)"', ps1)
         self.assertEqual(m.group(1), common.APP_ID)  # el .lnk y el proceso llevan el mismo AppUserModelID
         self.assertNotIn("Write-Host \"    $s\"", ps1)  # la salida de pip pasa por Say (consola + ventana)
+        for s in ("instalacion (", "Transcripcion en", "notas.ico", "notas.png", '"Notas.bat"', "ABRIR NOTAS.bat)"):
+            self.assertNotIn(s, ps1, s)
+        self.assertTrue(ps1.endswith("\n") and "\r\n" in ps1)  # CRLF (PowerShell 5.1)
+
+    def test_instalador_migra_el_acceso_directo_antiguo(self):
+        """Notas.lnk (nombre anterior) sirve para encontrar la instalación anterior y pasa a llamarse Chuleta.lnk:
+        se renombra, nunca se borra; si ya existe el nuevo se conserva el viejo y se dice en el detalle."""
+        ps1 = self.read_repo("_app", "instalar.ps1").decode("utf-8-sig")
+        for s in ('$LegacyName = "Notas"', 'foreach ($name in @("$AppName.lnk", "$LegacyName.lnk"))',
+                  '$legacy = Join-Path $dir "$LegacyName.lnk"',
+                  'Rename-Item -LiteralPath $legacy -NewName "$AppName.lnk"',
+                  "Se conserva el acceso directo antiguo '$LegacyName'", "pasa a llamarse '$AppName'",
+                  '-like "*$LegacyName.bat*"', '@("ABRIR NOTAS.bat", "_app\\Notas.bat")', "ya no hacen falta",
+                  '(Join-Path $app "version.txt")', '"ABRIR CHULETA.bat"'):
+            self.assertIn(s, ps1, s)
+        self.assertNotIn("Remove-Item", ps1)  # el instalador no borra nada del usuario
+        self.assertNotIn("NotasLnk", ps1)
 
     def test_instalar_bat_solo_para_si_falla(self):
         for parts in (("INSTALAR.bat",), ("_app", "export", "INSTALAR.bat")):
@@ -368,7 +521,7 @@ class FakeWebview:
 class VentanaPropiaTests(unittest.TestCase):
     def make(self, wv):
         self.tmp = tempfile.mkdtemp(prefix="notas-win-")
-        return window.Window("http://127.0.0.1:8765/", self.tmp, os.path.join(STATIC, "notas.ico"), webview=wv)
+        return window.Window("http://127.0.0.1:8765/", self.tmp, os.path.join(STATIC, "chuleta.ico"), webview=wv)
 
     def test_run_configura_la_ventana(self):
         wv = FakeWebview()
@@ -381,7 +534,7 @@ class VentanaPropiaTests(unittest.TestCase):
         kw = wv.started[0]
         self.assertFalse(kw["private_mode"])
         self.assertEqual(kw["storage_path"], os.path.join(self.tmp, "webview"))
-        self.assertTrue(kw["icon"].endswith("notas.ico"))
+        self.assertTrue(kw["icon"].endswith("chuleta.ico"))
         # cerrar = ocultar: el evento closing devuelve False y hide() llega poco despues (Timer)
         self.assertEqual(wv.closing_results, [False])
         time.sleep(0.3)

@@ -5,6 +5,8 @@ __pycache__/
 venv/
 # lo escribe el instalador (ruta del Python de cada PC)
 _app/python.txt
+# lo escribe scripts/build_zip.py (fecha del commit · sha) y viaja en el zip; en una copia de trabajo manda el mtime
+_app/version.txt
 # grabaciones y sidecars de reuniones (nunca al repo); los tests generan sus ficheros en carpetas temporales
 *.wav
 *.m4a

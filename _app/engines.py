@@ -327,7 +327,7 @@ def clean_segments(segs, prompt=None, language=None):
     return out
 
 
-# --- audio sin ffmpeg: PyAV ya viene con faster-whisper, asi Notas no necesita instalar nada mas
+# --- audio sin ffmpeg: PyAV ya viene con faster-whisper, asi la app no necesita instalar nada mas
 
 def media_duration(path):
     """Duracion de cualquier audio o video (segundos), leyendo solo la cabecera."""

@@ -131,7 +131,7 @@ class VocabTests(TempTree):
         self.write("Vocabulario/General.txt", "raíz\n")
         vs = server.list_vocab()
         self.assertEqual([(v["project"], v["name"]) for v in vs],
-                         [("Alfa", "General"), ("Alfa", "Legal"), ("Notas", "General")])
+                         [("Alfa", "General"), ("Alfa", "Legal"), (server.APP_NAME, "General")])
         v = server.find_vocab("Alfa", "legal")
         self.assertEqual(v["id"], "Alfa/Vocabulario/Legal.txt")
         self.assertEqual(server.read_vocab(v["_abs"]), ("", ["Contrato marco", "SLA"]))

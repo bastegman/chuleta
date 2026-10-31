@@ -714,7 +714,7 @@ def export_text(segs, who, data, names):
 # ----------------------------------------------------------------------------- CLI (subproceso)
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Diarizacion en local para Notas (subproceso)")
+    ap = argparse.ArgumentParser(description="Diarizacion en local (subproceso de la app)")
     ap.add_argument("--diarize", required=True, metavar="AUDIO")
     ap.add_argument("--out", required=True, metavar="SIDECAR")
     ap.add_argument("--niveles", metavar="FICHERO", help="JSON {paso, activo} de la linea de tiempo del micro")

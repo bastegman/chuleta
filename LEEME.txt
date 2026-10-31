@@ -1,8 +1,8 @@
-﻿NOTAS · grabar, transcribir y resumir reuniones                 (versión del 30/10/2026)
+﻿CHULETA · grabar, transcribir y resumir reuniones              (versión 2026-10-31)
 ==================================================================================
 
 Qué es
-  Una app que funciona en tu propio PC, en una ventana de Edge. Graba las reuniones (tu micro y el
+  Una app que funciona en tu propio PC, en su propia ventana. Graba las reuniones (tu micro y el
   sonido del ordenador: Teams, Zoom…), las transcribe mientras se habla o al terminar, te deja
   corregir la transcripción y tomar notas al estilo Notion, y saca un resumen con IA con las
   decisiones, las tareas y los riesgos.
@@ -10,15 +10,15 @@ Qué es
 
 INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 ----------------------------------------------------------------------------------
-  1. Descomprime el .zip y deja la carpeta "Notas" donde quieras tenerla (Documentos, Escritorio,
+  1. Descomprime el .zip y deja la carpeta "Chuleta" donde quieras tenerla (Documentos, Escritorio,
      OneDrive…). Las grabaciones, transcripciones y notas se guardan dentro de esa carpeta.
 
   2. Doble clic en INSTALAR.bat
        - Si no tienes Python, lo instala (solo para tu usuario).
-       - Instala las librerías y crea el acceso directo "Notas" en el escritorio y en el menú Inicio.
+       - Instala las librerías y crea el acceso directo "Chuleta" en el escritorio y en el menú Inicio.
        - Si Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas formas".
 
-  3. Se abre Notas. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
+  3. Se abre Chuleta. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
        - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y deja el modelo
          whisper-large-v3 (el más preciso; whisper-large-v3-turbo es más rápido y algo menos fino).
        - Pasarela o API interna de la empresa: elige "Otra (compatible con OpenAI)" y pon su URL
@@ -29,16 +29,18 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 
 ACTUALIZAR A UNA VERSIÓN NUEVA
 ----------------------------------------------------------------------------------
-  Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Notas, el instalador
-  la cierra (salvo que esté grabando) y actualiza la de siempre, en su carpeta, con tus grabaciones;
-  la carpeta recién descomprimida ya no hace falta. La versión instalada se ve al final de Ajustes.
+  Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Chuleta (o la versión
+  anterior, que se llamaba Notas), el instalador la cierra (salvo que esté grabando) y actualiza la de
+  siempre, en su carpeta, con tus grabaciones; la carpeta recién descomprimida ya no hace falta. El
+  acceso directo "Notas" pasa a llamarse "Chuleta" (no se borra nada). La versión instalada se ve al
+  final de Ajustes, en "Acerca de".
 
 
 USO DIARIO
 ----------------------------------------------------------------------------------
-  - Abre con el acceso directo "Notas" (ya sin ventana negra). Si cierras la ventana de Notas, la
-    app sigue en segundo plano (Ctrl+Alt+R sigue funcionando) y el acceso directo la vuelve a
-    abrir. Para apagarla del todo: ⚙ Ajustes > Apagar Notas.
+  - Abre con el acceso directo "Chuleta" (ya sin ventana negra). Si cierras la ventana de Chuleta,
+    la app sigue en segundo plano (Ctrl+Alt+R sigue funcionando) y el acceso directo la vuelve a
+    abrir. Para apagarla del todo: ⚙ Ajustes > Apagar Chuleta.
   - ● Grabar (o Ctrl+Alt+R desde cualquier programa) empieza y para la grabación. Puedes elegir
     grabar con o sin micro, y con o sin transcripción en directo.
   - Si estás en una llamada de Teams y no estás grabando, arriba aparece
@@ -52,7 +54,7 @@ USO DIARIO
     Resumen / Transcripción / Notas; la transcripción se puede corregir en la propia página.
   - Ctrl+P busca en todas las reuniones. Puedes arrastrar a la ventana audios que ya tengas
     (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
-  - Si grabas con OBS, configúralo para que guarde en la carpeta Notas: la app lo detecta y
+  - Si grabas con OBS, configúralo para que guarde en la carpeta Chuleta: la app lo detecta y
     transcribe en directo mientras graba.
   - Perfil de reunión (⚙ Ajustes > Perfil de reunión): la carpeta donde se guarda, el idioma
     (por defecto se detecta solo; "Español + inglés", "Español + portugués" e "Inglés + portugués"
@@ -96,7 +98,7 @@ QUIÉN HABLA (opcional)
 
 PRIVACIDAD
 ----------------------------------------------------------------------------------
-  - Grabaciones, transcripciones y notas: en la carpeta Notas, en tu PC.
+  - Grabaciones, transcripciones y notas: en la carpeta Chuleta, en tu PC.
   - Ajustes y API key: en %LOCALAPPDATA%\AudiosApp (fuera de OneDrive; no viajan con la carpeta).
     La API key se guarda cifrada con tu cuenta de Windows (DPAPI): otro usuario u otro PC no la lee.
   - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que
@@ -115,8 +117,10 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
 SI ALGO FALLA
 ----------------------------------------------------------------------------------
   - INSTALAR.bat se puede volver a ejecutar sin problema.
-  - Si el acceso directo no abre nada, ABRIR NOTAS.bat arranca la app con una ventana de consola
+  - Si el acceso directo no abre nada, ABRIR CHULETA.bat arranca la app con una ventana de consola
     donde se ven los mensajes (ciérrala para apagar).
+  - Para pedir ayuda: ⚙ Ajustes > Acerca de > "Copiar diagnóstico" copia la versión, el sistema y las
+    últimas líneas del registro (sin tus claves) para pegarlas en un correo o en un issue.
   - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
     (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.
   - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log, recorder.log, voces.log).

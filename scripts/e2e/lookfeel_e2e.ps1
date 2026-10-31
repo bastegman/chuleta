@@ -1,9 +1,11 @@
 # E2E del instalador y del arranque en un runner windows-latest (PowerShell 5.1, el mismo que lanza INSTALAR.bat).
 # Lo mismo que hara una persona: zip -> descomprimir -> INSTALAR.bat (modo ventana, con autocierre) -> la app abre su
-# ventana -> acceso directo otra vez -> Apagar; despues una segunda instalacion desde otra carpeta (actualiza la
-# primera) y una instalacion que falla a proposito (pantalla de error). Capturas de pantalla cada 5 s en paralelo.
+# ventana -> acceso directo otra vez -> Apagar; despues una segunda instalacion desde otra carpeta sobre una copia
+# "antigua" con el acceso directo del nombre anterior (Notas.lnk: la detecta, la actualiza y lo renombra a
+# Chuleta.lnk), una tercera con los dos accesos directos (conserva Notas.lnk) y una instalacion que falla a proposito
+# (pantalla de error). Capturas de pantalla cada 5 s en paralelo.
 # Deja en -Out: capturas/, server.log, instalar.log, iconos del HWND y resumen.json (comprobacion -> ok/valor).
-# Sale con 1 si falla alguna comprobacion de las fases d-f.
+# Sale con 1 si falla alguna comprobacion de las fases d-f2.
 param([string]$Repo = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), [string]$Out = "")
 
 $ErrorActionPreference = "Continue"
@@ -13,6 +15,8 @@ $script:checks = New-Object System.Collections.Specialized.OrderedDictionary
 $script:gated = @{}
 $Port = 8765
 $Base = "http://127.0.0.1:$Port"
+$App = "Chuleta"      # common.APP_NAME: titulo de la ventana, carpeta raiz del zip, accesos directos
+$Legacy = "Notas"     # nombre anterior: el instalador reconoce y renombra su acceso directo
 $python = (Get-Command python).Source
 $logDir = Join-Path $env:LOCALAPPDATA "AudiosApp"
 
@@ -87,7 +91,7 @@ function Get-Lnk($path) {
               IconLocation = $sc.IconLocation; Description = $sc.Description; AppUserModelID = $aumid }
 }
 function Ventana($cmd, $tag) {
-    $argv = @((Join-Path $Repo "scripts\e2e\ventana.py"), $cmd, "Notas")
+    $argv = @((Join-Path $Repo "scripts\e2e\ventana.py"), $cmd, $App)
     if ($cmd -eq "icons") { $argv += @((Join-Path $Out "iconos"), $tag) }
     $raw = & $python @argv 2>&1
     try { return ($raw | Out-String | ConvertFrom-Json) } catch { return @{ hwnd = $null; error = ($raw | Out-String) } }
@@ -148,13 +152,18 @@ Note "entorno.interactivo" ([Environment]::UserInteractive)
 Note "entorno.py_launcher" ([bool](Get-Command py -ErrorAction SilentlyContinue))
 
 # ---- a) zip y carpeta de prueba
-$zip = Join-Path $Out "Notas - instalador.zip"
-& $python (Join-Path $Repo "scripts\build_zip.py") $zip
-Check "a.zip" (Test-Path -LiteralPath $zip) $zip
+$zip = Join-Path $Out "$App - instalador.zip"
+$buildOut = & $python (Join-Path $Repo "scripts\build_zip.py") $zip 2>&1
+Check "a.zip" (Test-Path -LiteralPath $zip) ($buildOut -join " ")
 $test1 = Join-Path $env:USERPROFILE "Descargas-test"
 Expand-Archive -LiteralPath $zip -DestinationPath $test1 -Force
-$dir1 = Join-Path $test1 "Notas"
+$dir1 = Join-Path $test1 $App
 Check "a.extraido" (Test-Path -LiteralPath (Join-Path $dir1 "INSTALAR.bat")) $dir1
+Check "a.sin_nombre_anterior" (-not (Test-Path -LiteralPath (Join-Path $test1 $Legacy)) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "ABRIR NOTAS.bat")) -and (Test-Path -LiteralPath (Join-Path $dir1 "ABRIR CHULETA.bat")) -and (Test-Path -LiteralPath (Join-Path $dir1 "_app\Chuleta.bat"))) ""
+$verTxt = Join-Path $dir1 "_app\version.txt"
+$verZip = $(if (Test-Path -LiteralPath $verTxt) { (Get-Content -LiteralPath $verTxt -Encoding UTF8 -Raw).Trim() } else { "" })
+Check "a.version_txt" ($verZip -match "^\d{4}-\d{2}-\d{2} . [0-9a-f]{7,}$") $verZip
+Check "a.leeme_lleva_version" ((Get-Content -LiteralPath (Join-Path $dir1 "LEEME.txt") -TotalCount 1) -like "*$verZip*") ((Get-Content -LiteralPath (Join-Path $dir1 "LEEME.txt") -TotalCount 1))
 
 # ---- b) capturas en paralelo
 $capDir = Join-Path $Out "capturas"
@@ -174,11 +183,15 @@ Check "c.exitcode_0" ($rc -eq 0) $rc
 Check "c.modo_ventana" ($ilog -match "modo: ventana") (($ilog -split "`n" | Select-String "modo:") -join "; ")
 Check "c.sin_winget" (-not ($ilog -match "winget install")) ($ilog -match "No hay Python")
 Check "c.listo" ($ilog -match "Listo") (($ilog -split "`n" | Select-String "Listo" | Select-Object -First 1) -join "")
+Check "c.listo_con_version" ($ilog -match "Listo \(versi.n \d{4}-\d{2}-\d{2} . [0-9a-f]{7,}\)") ""
+Check "c.sin_notas_lnk_que_migrar" (-not ($ilog -match "pasa a llamarse")) ""
 Check "c.autocierre" ($ilog -match "autocierre tras") ""
 
 # ---- d) accesos directos, python.txt, librerias, zombis
-$desk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Notas.lnk"
-$prog = Join-Path ([Environment]::GetFolderPath("Programs")) "Notas.lnk"
+$desk = Join-Path ([Environment]::GetFolderPath("Desktop")) "$App.lnk"
+$prog = Join-Path ([Environment]::GetFolderPath("Programs")) "$App.lnk"
+$deskLegacy = Join-Path ([Environment]::GetFolderPath("Desktop")) "$Legacy.lnk"
+$progLegacy = Join-Path ([Environment]::GetFolderPath("Programs")) "$Legacy.lnk"
 $pyTxt = Join-Path $dir1 "_app\python.txt"
 Check "d.python_txt" (Test-Path -LiteralPath $pyTxt) $(if (Test-Path -LiteralPath $pyTxt) { Get-Content -LiteralPath $pyTxt -Raw } else { "" })
 $pyApp = $(if (Test-Path -LiteralPath $pyTxt) { (Get-Content -LiteralPath $pyTxt -Raw).Trim() } else { $python })
@@ -191,9 +204,11 @@ foreach ($pair in @(@("escritorio", $desk), @("programas", $prog))) {
     Check "d.lnk.$label.target_pythonw" ($l.TargetPath -ieq $pyw) $l.TargetPath
     Check "d.lnk.$label.arguments" ($l.Arguments -like "*server.py*") $l.Arguments
     Check "d.lnk.$label.workdir" ($l.WorkingDirectory -ieq (Join-Path $dir1 "_app")) $l.WorkingDirectory
-    Check "d.lnk.$label.icon" ($l.IconLocation -like "*static\notas.ico*") $l.IconLocation
+    Check "d.lnk.$label.icon" ($l.IconLocation -like "*static\chuleta.ico*") $l.IconLocation
+    Check "d.lnk.$label.description" ($l.Description -eq "${App}: grabar, transcribir y resumir reuniones") $l.Description
     Check "d.lnk.$label.aumid" ($l.AppUserModelID -eq "Bernardo.Chuleta") $l.AppUserModelID
 }
+Check "d.sin_lnk_antiguo" (-not (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $progLegacy)) ""
 $imp = & $pyApp -c "import webview, faster_whisper, soundcard, requests, truststore; from importlib.metadata import version; print('pywebview', version('pywebview'), 'faster-whisper', faster_whisper.__version__)" 2>&1
 Check "d.import_librerias" ($LASTEXITCODE -eq 0) ($imp -join " ")
 $zombis = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*instalar.ps1*" -or $_.CommandLine -like "*INSTALAR.bat*" })
@@ -203,6 +218,12 @@ Check "d.sin_zombis" ($zombis.Count -eq 0) (($zombis | ForEach-Object { "$($_.Na
 $cfg = Wait-Http "$Base/api/config" 90
 Check "e.api_config" ($null -ne $cfg) $(if ($cfg) { "app_name=$($cfg.app_name) window=$($cfg.window) version=$($cfg.version)" } else { "sin respuesta en 90 s" })
 Check "e.config_window_true" ($cfg -and $cfg.window -eq $true) "$($cfg.window)"
+Check "e.config_app_name" ($cfg -and $cfg.app_name -eq $App) "$($cfg.app_name)"
+Check "e.config_version_del_zip" ($cfg -and $cfg.version -eq $verZip) "$($cfg.version) vs $verZip"
+Check "e.config_acerca" ($cfg -and $cfg.acerca.repo -eq "https://github.com/bastegman/chuleta" -and $cfg.acerca.licencia -eq "MIT" -and $cfg.acerca.datos -ieq $logDir) ("repo=$($cfg.acerca.repo) licencia=$($cfg.acerca.licencia) datos=$($cfg.acerca.datos)")
+try { $diag = Invoke-RestMethod "$Base/api/diagnostico" -TimeoutSec 10 } catch { $diag = $null }
+Check "e.diagnostico" ($diag -and $diag.texto -match "^$App . versi.n " -and $diag.texto -match "server\.log") $(if ($diag) { ($diag.texto -split "`n" | Select-Object -First 3) -join " | " } else { "sin respuesta" })
+Check "e.server_header" (((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -TimeoutSec 5).Headers["Server"]) -like "$App/*") ((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -TimeoutSec 5).Headers["Server"])
 Start-Sleep -Seconds 6  # que la ventana termine de pintar (y una captura mas)
 $lis = @(Get-Listener)
 Check "e.un_servidor" ($lis.Count -eq 1) ("listeners en ${Port}: " + $lis.Count)
@@ -211,7 +232,7 @@ $proc = $(if ($appPid) { Get-Process -Id $appPid -ErrorAction SilentlyContinue }
 Check "e.proceso_pythonw" ($proc -and $proc.Name -ieq "pythonw") $(if ($proc) { "$($proc.Name) pid $appPid" } else { "sin proceso" })
 $w = Ventana "icons" "app"
 Check "e.ventana_visible" ($w.hwnd -and $w.visible) ("hwnd=$($w.hwnd) clase=$($w.class) visible=$($w.visible) pid=$($w.pid)")
-Check "e.titulo" ($w.title -eq "Notas") "$($w.title)"
+Check "e.titulo" ($w.title -eq $App) "$($w.title)"
 Check "e.pid_ventana_es_el_servidor" ($w.pid -eq $appPid) "$($w.pid) vs $appPid"
 Note "e.iconos_hwnd" ($(if ($w.icons) { ($w.icons.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value.px)" }) -join " " } else { "" }))
 Check "e.icon_big_256" ($w.icons -and $w.icons.ICON_BIG.px -eq "256x256") "$($w.icons.ICON_BIG.px)"
@@ -245,24 +266,49 @@ $slog = Tail-Log "server.log" 60
 Check "e.log_apagado" ($slog -match "(?m)^.*\bapagado$") (($slog -split "`n" | Select-String "apag") -join " | ")
 Copy-Logs "e"
 
-# ---- f) segunda instalacion desde otra carpeta: actualiza la primera
+# ---- f) segunda instalacion desde otra carpeta sobre una copia "antigua": la primera, disfrazada de instalacion
+# anterior al renombrado (accesos directos Notas.lnk en el escritorio y en Inicio apuntando a ella, y los .bat del
+# nombre anterior). Debe detectarla por Notas.lnk, actualizarla, renombrar Notas.lnk -> Chuleta.lnk y arrancar la app
+# desde la vieja con el titulo nuevo.
 $test2 = Join-Path $env:USERPROFILE "Otra-carpeta"
 Expand-Archive -LiteralPath $zip -DestinationPath $test2 -Force
-$dir2 = Join-Path $test2 "Notas"
+$dir2 = Join-Path $test2 $App
 Set-Content -LiteralPath (Join-Path $dir1 "LEEME.txt") -Value "VIEJO" -Encoding UTF8  # marca: la actualizacion debe pisarlo
 Set-Content -LiteralPath (Join-Path $dir1 "_app\static\marca-vieja.txt") -Value "x" -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $dir1 "_app\version.txt") -Value "2000-01-01 · 0000000" -Encoding UTF8  # version vieja: debe pisarse
+Set-Content -LiteralPath (Join-Path $dir1 "ABRIR NOTAS.bat") -Value "@echo off" -Encoding Ascii       # restos del nombre anterior
+Set-Content -LiteralPath (Join-Path $dir1 "_app\Notas.bat") -Value "@echo off" -Encoding Ascii
+Rename-Item -LiteralPath $desk -NewName "$Legacy.lnk"
+Rename-Item -LiteralPath $prog -NewName "$Legacy.lnk"
+Check "f.preparado_lnk_antiguo" ((Test-Path -LiteralPath $deskLegacy) -and (Test-Path -LiteralPath $progLegacy) -and -not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog)) ""
 $rc2 = Run-Installer $dir2 "f.instalador" 15
 Copy-Logs "f"
 $ilog2 = Tail-Log "instalar.log" 200
 Check "f.exitcode_0" ($rc2 -eq 0) $rc2
-Check "f.detecta_anterior" ($ilog2 -match "Ya ten") (($ilog2 -split "`n" | Select-String "Ya ten" | Select-Object -First 1) -join "")
+Check "f.detecta_anterior_por_notas_lnk" ($ilog2 -match "Ya ten") (($ilog2 -split "`n" | Select-String "Ya ten" | Select-Object -First 1) -join "")
+Check "f.actualiza_la_vieja" ($ilog2 -match [regex]::Escape($dir1)) ""
 Check "f.leeme_actualizado" ((Get-Content -LiteralPath (Join-Path $dir1 "LEEME.txt") -Raw) -notmatch "^VIEJO") ""
+Check "f.version_txt_actualizado" (((Get-Content -LiteralPath (Join-Path $dir1 "_app\version.txt") -Encoding UTF8 -Raw).Trim()) -eq $verZip) ((Get-Content -LiteralPath (Join-Path $dir1 "_app\version.txt") -Encoding UTF8 -Raw).Trim())
 Check "f.sin_python_txt_en_nueva" (-not (Test-Path -LiteralPath (Join-Path $dir2 "_app\python.txt"))) ""
 Check "f.window_py_copiado" ((Get-FileHash (Join-Path $dir1 "_app\window.py")).Hash -eq (Get-FileHash (Join-Path $dir2 "_app\window.py")).Hash) ""
+Check "f.abrir_chuleta_bat_copiado" ((Get-FileHash (Join-Path $dir1 "ABRIR CHULETA.bat")).Hash -eq (Get-FileHash (Join-Path $dir2 "ABRIR CHULETA.bat")).Hash) ""
+Check "f.restos_no_se_borran" ((Test-Path -LiteralPath (Join-Path $dir1 "ABRIR NOTAS.bat")) -and (Test-Path -LiteralPath (Join-Path $dir1 "_app\Notas.bat"))) ""
+Check "f.restos_avisados" ($ilog2 -match "ya no hacen falta") (($ilog2 -split "`n" | Select-String "ya no hacen falta" | Select-Object -First 1) -join "")
+Check "f.lnk_renombrado_log" ($ilog2 -match "pasa a llamarse") (($ilog2 -split "`n" | Select-String "pasa a llamarse") -join " | ")
+Check "f.lnk_chuleta_escritorio" (Test-Path -LiteralPath $desk) $desk
+Check "f.lnk_chuleta_inicio" (Test-Path -LiteralPath $prog) $prog
+Check "f.lnk_notas_ya_no_esta" (-not (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $progLegacy)) ""
 $l2 = Get-Lnk $desk
 Check "f.lnk_sigue_en_la_vieja" ($l2.WorkingDirectory -ieq (Join-Path $dir1 "_app")) $l2.WorkingDirectory
+Check "f.lnk_icono_nuevo" ($l2.IconLocation -like "*static\chuleta.ico*") $l2.IconLocation
+Check "f.lnk_aumid" ($l2.AppUserModelID -eq "Bernardo.Chuleta") $l2.AppUserModelID
+Check "f.listo_con_version" ($ilog2 -match ("Listo \(versi.n " + [regex]::Escape($verZip) + "\)")) (($ilog2 -split "`n" | Select-String "Listo" | Select-Object -First 1) -join "")
 $cfg2 = Wait-Http "$Base/api/config" 90
 Check "f.app_arranca_desde_la_vieja" ($cfg2 -and $cfg2.root -ieq $dir1) "root=$($cfg2.root)"
+Check "f.app_version_nueva" ($cfg2 -and $cfg2.version -eq $verZip) "$($cfg2.version)"
+Start-Sleep -Seconds 6
+$wf = Ventana "icons" "actualizada"
+Check "f.titulo" ($wf.hwnd -and $wf.title -eq $App) "$($wf.title) visible=$($wf.visible)"
 $lisf = @(Get-Listener)
 if ($lisf.Count -ge 1) {
     $pidf = $lisf[0].OwningProcess
@@ -270,10 +316,31 @@ if ($lisf.Count -ge 1) {
     Check "f.apagar" (Wait-Process-Gone $pidf 5) "pid $pidf"
 }
 
+# ---- f2) tercera instalacion con los DOS accesos directos (Chuleta.lnk y un Notas.lnk que el usuario conserva):
+# el antiguo no se toca y se dice en el detalle
+Copy-Item -LiteralPath $desk -Destination $deskLegacy -Force
+Check "f2.preparado_los_dos" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
+$rc22 = Run-Installer $dir2 "f2.instalador" 15
+Copy-Logs "f2"
+$ilog22 = Tail-Log "instalar.log" 200
+Check "f2.exitcode_0" ($rc22 -eq 0) $rc22
+Check "f2.conserva_notas_lnk" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
+Check "f2.conserva_avisado" ($ilog22 -match "Se conserva el acceso directo antiguo") (($ilog22 -split "`n" | Select-String "Se conserva" | Select-Object -First 1) -join "")
+Check "f2.no_renombra" (-not ($ilog22 -match "pasa a llamarse")) ""
+Check "f2.inicio_sin_antiguo" (-not (Test-Path -LiteralPath $progLegacy)) ""
+$cfg22 = Wait-Http "$Base/api/config" 90
+Check "f2.app_arranca" ($cfg22 -and $cfg22.root -ieq $dir1) "root=$($cfg22.root)"
+$lisf2 = @(Get-Listener)
+if ($lisf2.Count -ge 1) {
+    $pidf2 = $lisf2[0].OwningProcess
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    Check "f2.apagar" (Wait-Process-Gone $pidf2 5) "pid $pidf2"
+}
+
 # ---- g) modo fallo: pip simulado que falla (pantalla de error con «Copiar el detalle»)
 $test3 = Join-Path $env:USERPROFILE "Fallo-test"
 Expand-Archive -LiteralPath $zip -DestinationPath $test3 -Force
-$dir3 = Join-Path $test3 "Notas"
+$dir3 = Join-Path $test3 $App
 $env:NOTAS_INSTALADOR_SIMULAR_FALLO = "pip"
 $env:NOTAS_INSTALADOR_AUTOCERRAR = "20"
 $rc3 = Run-Installer $dir3 "g.instalador" 10

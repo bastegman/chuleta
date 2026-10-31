@@ -61,16 +61,16 @@ class Defecto3PaqueteConExport(unittest.TestCase):
         server.build_package(dest)
         with zipfile.ZipFile(dest) as z:
             names = set(z.namelist())
-            for n in ("INSTALAR.bat", "ABRIR NOTAS.bat", "LEEME.txt"):
-                self.assertIn("Notas/_app/export/" + n, names)
-            tpl = z.read("Notas/_app/export/LEEME.txt")
+            for n in ("INSTALAR.bat", "ABRIR CHULETA.bat", "LEEME.txt"):
+                self.assertIn("Chuleta/_app/export/" + n, names)
+            tpl = z.read("Chuleta/_app/export/LEEME.txt")
             self.assertIn(b"{FECHA}", tpl)  # la plantilla conserva el marcador
             self.assertTrue(tpl.startswith("\ufeff".encode("utf-8")))
-            self.assertNotIn(b"{FECHA}", z.read("Notas/LEEME.txt"))
+            self.assertNotIn(b"{FECHA}", z.read("Chuleta/LEEME.txt"))
             code = {n for n in os.listdir(os.path.join(REPO, "_app")) if n.endswith((".py", ".bat", ".ps1"))}
             self.assertTrue(code >= {"server.py", "engines.py", "worker.py", "live.py", "recorder.py"})
-            in_app = {n[len("Notas/_app/"):] for n in names if n.count("/") == 2 and n.startswith("Notas/_app/")}
-            self.assertEqual(in_app, code)
+            in_app = {n[len("Chuleta/_app/"):] for n in names if n.count("/") == 2 and n.startswith("Chuleta/_app/")}
+            self.assertEqual(in_app, code | {"version.txt"})  # version.txt lo escribe build_package
         self.assertEqual(sorted(server.export_code()), sorted(code))
 
 

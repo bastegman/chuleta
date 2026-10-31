@@ -13,12 +13,14 @@ import traceback
 import unicodedata
 
 WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y Explorador son solo de Windows
-# Nombre visible de la app: titulo de la ventana, mensajes, nombre del zip instalable. Centralizado aqui para poder
-# renombrarla sin tocar rutas: la carpeta _app, DATA_DIR (AudiosApp), los .bat y la carpeta raiz del zip NO cambian.
-APP_NAME = "Notas"
+# Nombre visible de la app (antes «Notas»; renombrada a Chuleta el 31/10/2026): titulo de la ventana, mensajes,
+# carpeta raiz y nombre del zip instalable, accesos directos. Centralizado aqui. Lo que NO cambia con el, por
+# compatibilidad con las instalaciones y los datos existentes: la carpeta _app, DATA_DIR (AudiosApp), la cabecera
+# X-Audios, las claves de los .md y la pestana «Notas» (que es la funcion de tomar notas, no la marca).
+APP_NAME = "Chuleta"
 # AppUserModelID: identifica la ventana en la barra de tareas (agrupa, icono, anclar). La misma cadena va en el
-# acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. Lleva ya el
-# nombre definitivo (Chuleta): si cambiara despues, los anclajes hechos dejarian de agrupar la ventana.
+# acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. Si cambiara,
+# los anclajes hechos dejarian de agrupar la ventana.
 APP_ID = "Bernardo.Chuleta"
 BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
@@ -233,7 +235,7 @@ def _dpapi(data, encrypt):
     out = DATA_BLOB()
     flags = 0x1  # CRYPTPROTECT_UI_FORBIDDEN: nunca un dialogo (es un servidor sin ventana); ambito usuario
     if encrypt:
-        ok = crypt32.CryptProtectData(ctypes.byref(inp), "Notas", None, None, None, flags, ctypes.byref(out))
+        ok = crypt32.CryptProtectData(ctypes.byref(inp), APP_NAME, None, None, None, flags, ctypes.byref(out))
     else:
         ok = crypt32.CryptUnprotectData(ctypes.byref(inp), None, None, None, None, flags, ctypes.byref(out))
     if not ok:

@@ -1,10 +1,12 @@
-﻿# Instalador de Notas (lo lanza INSTALAR.bat). No necesita permisos de administrador:
+﻿# Instalador de Chuleta (lo lanza INSTALAR.bat). No necesita permisos de administrador:
 #   1. Python de 3.10 a 3.13 (si no hay, instala 3.13 con winget solo para este usuario)
 #   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests,
 #      pywebview (la ventana de la app sobre WebView2; sin ella se abre en Edge),
 #      sherpa-onnx (quien habla) y pywin32 (calendario de Outlook), opcionales: si no cargan, la app funciona igual
-#   3. Accesos directos "Notas" en el escritorio y en el menu Inicio: apuntan a pythonw.exe (sin ventana de consola)
-#      y llevan el AppUserModelID de la app, para que la barra de tareas agrupe y ancle la ventana como algo propio
+#   3. Accesos directos "Chuleta" en el escritorio y en el menu Inicio: apuntan a pythonw.exe (sin ventana de consola)
+#      y llevan el AppUserModelID de la app, para que la barra de tareas agrupe y ancle la ventana como algo propio.
+#      Si hay un acceso directo "Notas" (nombre anterior de la app), sirve para encontrar la instalacion anterior y pasa
+#      a llamarse "Chuleta" (se renombra; no se borra nada).
 # Se puede repetir sin problema. Para probarlo sin tocar nada: -NoShortcut / -NoLaunch, y -Port / -Desktop
 # (otro puerto y otra carpeta de escritorio, como si fuera otro PC). -AppName cambia el nombre visible (el de
 # common.APP_NAME); las carpetas y los .bat no cambian.
@@ -13,7 +15,7 @@
 # Solo para CI: -AutoCerrar N (o la variable NOTAS_INSTALADOR_AUTOCERRAR=N) cierra la ventana sola N segundos despues de
 # terminar, bien o mal; si termino bien, como si se hubiera pulsado "Abrir". NOTAS_INSTALADOR_SIMULAR_FALLO=pip ensaya la
 # pantalla de error sin tocar la red. Ninguna de las dos se usa en un PC normal.
-param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Notas",
+param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Chuleta",
       [switch]$Consola, [int]$AutoCerrar = 0)
 
 $ErrorActionPreference = "Continue"
@@ -41,6 +43,7 @@ $packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststo
 $optional = @("sherpa-onnx==2.0.1", "pywin32==312")  # quien habla / calendario de Outlook
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
 $AppId = "Bernardo.Chuleta"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
+$LegacyName = "Notas"  # nombre anterior de la app: sus accesos directos se reconocen y pasan a llamarse $AppName
 
 # --- presentacion: consola y, si hay ventana ($script:ui), tambien la ventana. La logica de instalacion no depende de esto.
 $script:ui = $null
@@ -109,11 +112,11 @@ function Fail($text) {
 function Hide-Console {
     # la consola de INSTALAR.bat se esconde mientras la ventana esta abierta (INSTALAR.bat solo hace pause si fallamos)
     try {
-        if (-not ("NotasLnk.Win" -as [type])) {
-            Add-Type -Namespace NotasLnk -Name Win -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);'
+        if (-not ("ChuletaLnk.Win" -as [type])) {
+            Add-Type -Namespace ChuletaLnk -Name Win -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);'
         }
-        $h = [NotasLnk.Win]::GetConsoleWindow()
-        if ($h -ne [IntPtr]::Zero) { [NotasLnk.Win]::ShowWindow($h, 0) | Out-Null }
+        $h = [ChuletaLnk.Win]::GetConsoleWindow()
+        if ($h -ne [IntPtr]::Zero) { [ChuletaLnk.Win]::ShowWindow($h, 0) | Out-Null }
     } catch {}
 }
 function New-InstallerWindow {
@@ -131,19 +134,19 @@ function New-InstallerWindow {
         $f.ClientSize = New-Object System.Drawing.Size(760, 600)
         $f.Font = New-Object System.Drawing.Font("Segoe UI", 10)
         $f.BackColor = [System.Drawing.Color]::White
-        try { $f.Icon = New-Object System.Drawing.Icon((Join-Path $app "static\notas.ico")) } catch {}
+        try { $f.Icon = New-Object System.Drawing.Icon((Join-Path $app "static\chuleta.ico")) } catch {}
         $logo = New-Object System.Windows.Forms.PictureBox
         $logo.Location = New-Object System.Drawing.Point(24, 20)
         $logo.Size = New-Object System.Drawing.Size(64, 64)
         $logo.SizeMode = "Zoom"
-        try { $logo.Image = [System.Drawing.Image]::FromFile((Join-Path $app "static\notas.png")) } catch {}
+        try { $logo.Image = [System.Drawing.Image]::FromFile((Join-Path $app "static\chuleta.png")) } catch {}
         $title = New-Object System.Windows.Forms.Label
         $title.Text = $AppName
         $title.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold)
         $title.Location = New-Object System.Drawing.Point(100, 18)
         $title.AutoSize = $true
         $sub = New-Object System.Windows.Forms.Label
-        $sub.Text = "grabar, transcribir y resumir reuniones  -  instalacion (sin permisos de administrador)"
+        $sub.Text = "grabar, transcribir y resumir reuniones  -  instalación (sin permisos de administrador)"
         $sub.ForeColor = [System.Drawing.Color]::DimGray
         $sub.Location = New-Object System.Drawing.Point(104, 58)
         $sub.AutoSize = $true
@@ -189,7 +192,7 @@ function New-InstallerWindow {
         $btnClose.Add_Click({ $script:ui.form.Close() })
         $btnCopy.Add_Click({ try { [System.Windows.Forms.Clipboard]::SetText($script:ui.log.Text) } catch {} })
         $btnOpen.Add_Click({ $script:ui.abrir = $true; $script:ui.form.Close() })
-        $f.Add_FormClosing({ param($s, $e) if (-not $script:ui.done) { $e.Cancel = $true; $script:ui.status.Text = "Espera a que termine la instalacion..." } })
+        $f.Add_FormClosing({ param($s, $e) if (-not $script:ui.done) { $e.Cancel = $true; $script:ui.status.Text = "Espera a que termine la instalación..." } })
         $script:ui = @{ form = $f; steps = $steps; log = $log; bar = $bar; status = $status; btnOpen = $btnOpen; btnClose = $btnClose
                         btnCopy = $btnCopy; current = $null; n = 0; total = 6; done = $false; abrir = $false
                         verde = [System.Drawing.Color]::FromArgb(22, 128, 61); rojo = [System.Drawing.Color]::FromArgb(185, 28, 28)
@@ -211,11 +214,11 @@ function Set-ShortcutAppId($path, $id) {
     # Windows agrupa la ventana bajo este acceso directo y "Anclar a la barra de tareas" ancla el acceso directo
     # (icono y argumentos) y no pythonw.exe a secas. Si falla, el acceso directo funciona igual.
     try {
-        if (-not ("NotasLnk.PropertyStore" -as [type])) {
+        if (-not ("ChuletaLnk.PropertyStore" -as [type])) {
             Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-namespace NotasLnk {
+namespace ChuletaLnk {
   [StructLayout(LayoutKind.Sequential, Pack = 4)]
   public struct PropertyKey { public Guid fmtid; public uint pid; public PropertyKey(Guid f, uint p) { fmtid = f; pid = p; } }
   [StructLayout(LayoutKind.Explicit)]
@@ -251,7 +254,7 @@ namespace NotasLnk {
 }
 "@
         }
-        [NotasLnk.PropertyStore]::SetAppId($path, $id)
+        [ChuletaLnk.PropertyStore]::SetAppId($path, $id)
         return $true
     } catch {
         Say "    (el acceso directo no lleva AppUserModelID: $($_.Exception.Message))" Yellow
@@ -280,7 +283,7 @@ function Find-Python {
         if ($v -gt $MaxPy -and -not $newer) { $newer = $out[0].Trim() }
     }
     if ($newer) {
-        Say "    Solo hay un Python mas nuevo que 3.$($MaxPy - 300) ($newer): si fallan las librerias, instala Python 3.13." Yellow
+        Say "    Solo hay un Python más nuevo que 3.$($MaxPy - 300) ($newer): si fallan las librerías, instala Python 3.13." Yellow
         return $newer
     }
     return $null
@@ -300,7 +303,7 @@ Say "    Carpeta: $root"
 Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
 
 # --- si la app esta abierta se cierra: si no, al terminar se volveria a ver la version vieja (sigue en marcha)
-Step "Comprobando si $AppName está abierto..."
+Step "Comprobando si $AppName está abierta..."
 $running = $null
 try { $running = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 2 } catch {}
 if ($running -and $running.app -eq "audios") {
@@ -323,20 +326,20 @@ if ($running -and $running.app -eq "audios") {
         $m = netstat -ano -p tcp | Select-String ":$Port\s+\S+\s+LISTENING\s+(\d+)" | Select-Object -First 1
         if ($m) { $owner = [int]$m.Matches[0].Groups[1].Value }
     }
-    if (-not $owner) { Fail "$AppName está abierto y no he podido cerrarlo: ciérralo (Ajustes > Apagar, o su ventana de consola) y vuelve a abrir INSTALAR.bat." }
+    if (-not $owner) { Fail "$AppName está abierta y no he podido cerrarla: ciérrala (Ajustes > Apagar, o su ventana de consola) y vuelve a abrir INSTALAR.bat." }
     if ($owner -gt 0) {
         $ids = @($owner)
         $p = Get-CimInstance Win32_Process -Filter "ProcessId=$owner"
         for ($k = 0; $k -lt 2 -and $p; $k++) {  # tambien el "py" y la ventana de consola que lo lanzaron (instalaciones antiguas)
             $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)"
-            if ($p -and ($p.Name -eq "py.exe" -or ($p.Name -eq "cmd.exe" -and $p.CommandLine -like "*Notas.bat*"))) { $ids += $p.ProcessId }
+            if ($p -and ($p.Name -eq "py.exe" -or ($p.Name -eq "cmd.exe" -and ($p.CommandLine -like "*$AppName.bat*" -or $p.CommandLine -like "*$LegacyName.bat*")))) { $ids += $p.ProcessId }
         }
         $ids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 1
     }
     Say "    Cerrada la versión que estaba abierta (al terminar se abre la nueva)" Green
 } else {
-    Say "    No estaba abierto"
+    Say "    No estaba abierta"
 }
 
 # --- si ya estaba instalado en otra carpeta (p. ej. el zip nuevo se ha descomprimido en Descargas),
@@ -344,15 +347,23 @@ if ($running -and $running.app -eq "audios") {
 if (-not $NoShortcut -or $Desktop) {
     $old = $null
     try {
-        $lnkPath = Join-Path $(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }) "$AppName.lnk"
-        if (Test-Path -LiteralPath $lnkPath) {
-            $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
-            # el acceso directo apunta a pythonw.exe (desde el 31/10/2026) o a Notas.bat: la carpeta de la app es
-            # WorkingDirectory en los dos casos (y la del destino, en los antiguos)
-            $oldApp = $sc.WorkingDirectory
-            if (-not $oldApp -or -not (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) { $oldApp = Split-Path -Parent $sc.TargetPath }
-            if ($oldApp -and (Test-Path -LiteralPath (Join-Path $oldApp "server.py")) -and
-                ((Resolve-Path -LiteralPath $oldApp).Path -ne (Resolve-Path -LiteralPath $app).Path)) { $old = $oldApp }
+        # el acceso directo de la app ("Chuleta.lnk") o el del nombre anterior ("Notas.lnk"), en el escritorio y, si
+        # alli no hay ninguno, en el menu Inicio
+        $dirs = @($(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }))
+        if (-not $Desktop) { $dirs += [Environment]::GetFolderPath("Programs") }
+        foreach ($dir in $dirs) {
+            foreach ($name in @("$AppName.lnk", "$LegacyName.lnk")) {
+                $lnkPath = Join-Path $dir $name
+                if (-not (Test-Path -LiteralPath $lnkPath)) { continue }
+                $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
+                # el acceso directo apunta a pythonw.exe (desde el 31/10/2026) o a Notas.bat: la carpeta de la app es
+                # WorkingDirectory en los dos casos (y la del destino, en los antiguos)
+                $oldApp = $sc.WorkingDirectory
+                if (-not $oldApp -or -not (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) { $oldApp = Split-Path -Parent $sc.TargetPath }
+                if ($oldApp -and (Test-Path -LiteralPath (Join-Path $oldApp "server.py")) -and
+                    ((Resolve-Path -LiteralPath $oldApp).Path -ne (Resolve-Path -LiteralPath $app).Path)) { $old = $oldApp; break }
+            }
+            if ($old) { break }
         }
     } catch {}
     if ($old) {
@@ -360,17 +371,21 @@ if (-not $NoShortcut -or $Desktop) {
         Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..."
         Get-ChildItem -LiteralPath $app -File | Where-Object { $_.Extension -in ".py", ".bat", ".ps1" } |
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $old -Force }
-        foreach ($sub in @("static", "export")) {  # export: plantillas del instalador (para "Compartir Notas")
+        foreach ($sub in @("static", "export")) {  # export: plantillas del instalador (para "Compartir $AppName")
             New-Item -ItemType Directory -Force (Join-Path $old $sub) | Out-Null
             Get-ChildItem -LiteralPath (Join-Path $app $sub) -File -ErrorAction SilentlyContinue |
                 ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $old $sub) -Force }
         }
-        # el manual y los .bat de la raiz tambien se renuevan en la carpeta de siempre
-        foreach ($n in @("LEEME.txt", "INSTALAR.bat", "ABRIR NOTAS.bat")) {
+        # la version del paquete (la ensena Ajustes > Acerca de), el manual y los .bat de la raiz tambien se renuevan
+        if (Test-Path -LiteralPath (Join-Path $app "version.txt")) { Copy-Item -LiteralPath (Join-Path $app "version.txt") -Destination $old -Force }
+        foreach ($n in @("LEEME.txt", "INSTALAR.bat", "ABRIR CHULETA.bat")) {
             if (Test-Path -LiteralPath (Join-Path $root $n)) {
                 Copy-Item -LiteralPath (Join-Path $root $n) -Destination (Join-Path $oldRoot $n) -Force
             }
         }
+        # lo que queda del nombre anterior no se borra (sigue funcionando), solo se dice
+        $sobrantes = @("ABRIR NOTAS.bat", "_app\Notas.bat") | Where-Object { Test-Path -LiteralPath (Join-Path $oldRoot $_) }
+        if ($sobrantes) { Say "    De la versión anterior quedan $($sobrantes -join ' y ') en $oldRoot : ya no hacen falta (puedes borrarlos)." }
         # listas de vocabulario que traiga el paquete, sin pisar las que ya tengas
         Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq "Vocabulario" -and $_.FullName -notlike "$app*" } | ForEach-Object {
@@ -398,13 +413,13 @@ if (-not $py) {
     }
     if (-not $py) {
         Start-Process "https://www.python.org/downloads/windows/"
-        Fail ("No he podido instalar Python automaticamente. Instala la ultima version desde la pagina que se acaba de abrir " +
+        Fail ("No he podido instalar Python automáticamente. Instala la última versión desde la página que se acaba de abrir " +
               "(marca 'Add python.exe to PATH') y vuelve a abrir INSTALAR.bat.")
     }
 }
 Say "    $py" Green
 
-Step "Instalando librerias (la primera vez tarda unos minutos)..."
+Step "Instalando librerías (la primera vez tarda unos minutos)..."
 & $py -m pip --version *> $null
 if ($LASTEXITCODE -ne 0) { & $py -m ensurepip --upgrade 2>&1 | ForEach-Object { Say "    $_" } }
 function Pip-Install($extra, $list) {
@@ -435,29 +450,29 @@ if ($coreOk) { Say ($v -join "`n") Green } else { Say ($v -join "`n") Yellow }
 # sherpa-onnx es opcional (quien habla): se instala aparte para que un fallo suyo no deje sin librerias al resto,
 # y si no importa solo se avisa: la app sigue funcionando sin esa opcion
 if ($coreOk) {
-    Step "Instalando las librerias opcionales (quien habla, calendario de Outlook)..."
+    Step "Instalando las librerías opcionales (quién habla, calendario de Outlook)..."
     foreach ($opt in $optional) { $null = Pip-Install $userMode @($opt) }
 }
 $v = & $py -c "import sherpa_onnx; print('    sherpa-onnx', sherpa_onnx.__version__, '(quien habla: disponible)')" 2>$null
-if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    sherpa-onnx no esta disponible: la opcion Voces (quien habla) no se podra activar en este PC" Yellow }
+if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    sherpa-onnx no está disponible: la opción Voces (quién habla) no se podrá activar en este PC" Yellow }
 $v = & $py -c "import win32com.client; print('    pywin32 (calendario de Outlook: disponible)')" 2>$null
-if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    pywin32 no esta disponible: no se podra leer el calendario de Outlook (el resto funciona)" Yellow }
+if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    pywin32 no está disponible: no se podrá leer el calendario de Outlook (el resto funciona)" Yellow }
 # la ventana propia tampoco bloquea: sin pywebview (o sin WebView2) la app se abre en Edge como siempre
 $v = & $py -c "import webview; from importlib.metadata import version; print('    pywebview', version('pywebview'), '(ventana propia: disponible)')" 2>$null
-if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    pywebview no esta disponible: la app se abrira en una ventana de Edge" Yellow }
+if ($LASTEXITCODE -eq 0) { Say ($v -join "`n") } else { Say "    pywebview no está disponible: la app se abrirá en una ventana de Edge" Yellow }
 if (-not $coreOk) {
     $log = ($script:pipOut -join "`n")
     $pyVer = & $py -c "import sys; print('%d.%d' % sys.version_info[:2])"
     if ($log -match "No matching distribution|Could not find a version that satisfies|is not a supported wheel") {
-        Fail ("Alguna libreria (faster-whisper / ctranslate2) todavia no esta publicada para Python $pyVer. " +
+        Fail ("Alguna librería (faster-whisper / ctranslate2) todavía no está publicada para Python $pyVer. " +
               "Instala Python 3.13 (winget install -e --id Python.Python.3.13 --scope user, o desde python.org) " +
               "y vuelve a abrir INSTALAR.bat.")
     }
     if ($log -match "ProxyError|SSLError|CERTIFICATE_VERIFY|Could not fetch URL|Temporary failure|timed out|Max retries exceeded|Network is unreachable|Connection (refused|reset|aborted)") {
-        Fail ("No se han podido descargar las librerias: parece la red o el proxy de la empresa. Prueba con otra red " +
-              "(p. ej. compartiendo datos del movil) o pide a IT acceso a pypi.org, y vuelve a abrir INSTALAR.bat.")
+        Fail ("No se han podido descargar las librerías: parece la red o el proxy de la empresa. Prueba con otra red " +
+              "(p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org, y vuelve a abrir INSTALAR.bat.")
     }
-    Fail ("No se han podido instalar las librerias (Python $pyVer). Revisa los mensajes de arriba: en la red de la " +
+    Fail ("No se han podido instalar las librerías (Python $pyVer). Revisa los mensajes de arriba: en la red de la " +
           "empresa puede ser el proxy; con un Python muy nuevo, instala Python 3.13 y vuelve a abrir INSTALAR.bat.")
 }
 # el lanzador usa este Python (si hay varios instalados, el de las librerias)
@@ -465,7 +480,7 @@ if (-not $coreOk) {
 # pythonw.exe (junto a python.exe): el mismo interprete sin ventana de consola; el log completo queda en server.log
 $pyw = Join-Path (Split-Path -Parent $py) "pythonw.exe"
 $sinConsola = Test-Path -LiteralPath $pyw
-if (-not $sinConsola) { Say "    No hay pythonw.exe junto a $py : el acceso directo abrirá una ventana de consola (Notas.bat)" Yellow }
+if (-not $sinConsola) { Say "    No hay pythonw.exe junto a $py : el acceso directo abrirá una ventana de consola (Chuleta.bat)" Yellow }
 
 if (-not $NoShortcut) {
     Step "Creando el acceso directo '$AppName'..."
@@ -474,43 +489,60 @@ if (-not $NoShortcut) {
     foreach ($dir in $places) {
         try {
             $lnkPath = Join-Path $dir "$AppName.lnk"
+            # el acceso directo del nombre anterior pasa a llamarse como la app: se renombra (nada se borra) y despues
+            # se actualiza como los demas; si ya hay uno con el nombre nuevo, el antiguo se deja donde esta y se avisa
+            $legacy = Join-Path $dir "$LegacyName.lnk"
+            if ($AppName -ne $LegacyName -and (Test-Path -LiteralPath $legacy)) {
+                if (Test-Path -LiteralPath $lnkPath) {
+                    Say "    Se conserva el acceso directo antiguo '$LegacyName' en $dir (ya había uno '$AppName')." Yellow
+                } else {
+                    try { Rename-Item -LiteralPath $legacy -NewName "$AppName.lnk" -ErrorAction Stop; Say "    El acceso directo '$LegacyName' pasa a llamarse '$AppName' ($dir)." }
+                    catch { Say "    No se pudo renombrar '$LegacyName.lnk' en $dir ($($_.Exception.Message)): se deja y se crea '$AppName'." Yellow }
+                }
+            }
             $lnk = $ws.CreateShortcut($lnkPath)
             if ($sinConsola) {
                 $lnk.TargetPath = $pyw
                 $lnk.Arguments = '"' + (Join-Path $app "server.py") + '"'
                 $lnk.WindowStyle = 1
             } else {
-                $lnk.TargetPath = Join-Path $app "Notas.bat"
+                $lnk.TargetPath = Join-Path $app "Chuleta.bat"
                 $lnk.Arguments = ""
                 $lnk.WindowStyle = 7  # la ventana de consola, minimizada
             }
             $lnk.WorkingDirectory = $app
-            $lnk.IconLocation = (Join-Path $app "static\notas.ico") + ",0"
+            $lnk.IconLocation = (Join-Path $app "static\chuleta.ico") + ",0"
             $lnk.Description = "$AppName`: grabar, transcribir y resumir reuniones"
             $lnk.Save()
             $null = Set-ShortcutAppId $lnkPath $AppId
             Say "    $lnkPath" Green
         } catch {
-            Say "    No se pudo crear en $dir (usa ABRIR NOTAS.bat)" Yellow
+            Say "    No se pudo crear en $dir (usa ABRIR CHULETA.bat)" Yellow
         }
     }
 }
 
 Write-Host ""
-$ver = "$(Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\LEEME.txt') -TotalCount 1 -ErrorAction SilentlyContinue)"
-$ver = if ($ver -match '\((vers[^)]*)\)') { " ($($Matches[1]))" } else { "" }
+# la version instalada: _app/version.txt (la escribe scripts/build_zip.py: fecha del commit · sha) o, si no, el LEEME
+$ver = ""
+try { $ver = "$(Get-Content -LiteralPath (Join-Path $app 'version.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)".Trim() } catch {}
+if (-not $ver) {
+    $l1 = "$(Get-Content -LiteralPath (Join-Path $root 'LEEME.txt') -TotalCount 1 -ErrorAction SilentlyContinue)"
+    if ($l1 -match '\(versi[^ )]*\s*(?:del\s+)?([^)]+)\)') { $ver = $Matches[1].Trim() }
+}
+$ver = if ($ver) { " (versión $ver)" } else { "" }
 Say "  Listo$ver." Green
-Say "  Si es la primera vez: Ajustes (rueda dentada) > Transcripcion en la nube > tu API key (Groq u otro proveedor)." Green
+Say "  Si es la primera vez: Ajustes (rueda dentada) > Transcripción en la nube > tu API key (Groq u otro proveedor)." Green
 Say "  Para apagar $AppName del todo: Ajustes > Apagar $AppName (cerrar la ventana la deja en segundo plano)." Green
 Say "  Instrucciones completas en LEEME.txt" Green
 $abrir = -not $NoLaunch
 if ($Gui) {
-    Finish-Ui $true "Listo$ver. Si es la primera vez: Ajustes > Transcripcion en la nube > tu API key. Para apagar $AppName del todo: Ajustes > Apagar $AppName."
+    Finish-Ui $true "Listo$ver. Si es la primera vez: Ajustes > Transcripción en la nube > tu API key. Para apagar $AppName del todo: Ajustes > Apagar $AppName."
     $abrir = $script:ui.abrir
 }
 if ($abrir) {
     if ($sinConsola) { Start-Process -FilePath $pyw -ArgumentList "server.py" -WorkingDirectory $app }
-    else { Start-Process -FilePath (Join-Path $app "Notas.bat") -WorkingDirectory $app -WindowStyle Minimized }
+    else { Start-Process -FilePath (Join-Path $app "Chuleta.bat") -WorkingDirectory $app -WindowStyle Minimized }
 }
 if (-not $Gui -and -not ($NoShortcut -or $NoLaunch) -and [Environment]::UserInteractive) {
     Write-Host ""

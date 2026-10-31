@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Notas: app local para ordenar, escuchar, leer y transcribir las grabaciones de reuniones.
+Chuleta: app local para ordenar, escuchar, leer y transcribir las grabaciones de reuniones.
 
   - Servidor HTTP de la libreria estandar en http://127.0.0.1:8765 (solo accesible desde este PC)
   - Interfaz en _app/static (HTML + JS sin compilar)
   - Transcripcion local (faster-whisper) o en la nube (engines.py)
   - Las transcripciones se guardan como siempre: <audio>.txt y <audio>.srt junto al audio
 
-Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Notas.bat lo arranca con consola
+Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Chuleta.bat lo arranca con consola
 para ver los mensajes). La interfaz se abre en una ventana propia (window.py, WebView2) o, si no se puede, en Edge.
 """
 import copy
@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import queue
 import re
 import shutil
@@ -64,6 +65,11 @@ LIVE_PRESETS = tuple(p["id"] for p in engines.PRESETS)  # en directo: por lotes 
 DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _-](\d{2})-(\d{2})-(\d{2})")
 
 
+VERSION_FILE = os.path.join(APP_DIR, "version.txt")  # lo escribe scripts/build_zip.py: «AAAA-MM-DD · sha corto»
+REPO_URL = "https://github.com/bastegman/chuleta"
+PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Chuleta/INSTALAR.bat, Chuleta/_app/...)
+
+
 def code_mtime():
     """Fecha del codigo: cambia si se actualiza la app (la ventana abierta lo ve y se recarga sola)."""
     files = [os.path.join(APP_DIR, n) for n in os.listdir(APP_DIR) if n.endswith(".py")]
@@ -71,14 +77,29 @@ def code_mtime():
     return max(os.path.getmtime(f) for f in files)
 
 
-BUILD = format(int(code_mtime()), "x")
-VERSION = time.strftime("%d/%m/%Y %H:%M", time.localtime(code_mtime()))  # se ve en Ajustes
+def version_file():
+    """Primera linea de _app/version.txt («2026-10-31 · abc1234», la escribe scripts/build_zip.py y viaja en el zip),
+    o None si esta copia no la tiene (una copia de trabajo del repositorio)."""
+    try:
+        v = read_text(VERSION_FILE).strip().splitlines()[0].strip()
+        return v or None
+    except (OSError, IndexError):
+        return None
+
+
+def read_version():
+    """La version que se ensena en Ajustes > Acerca de: la del zip si existe; si no, fecha y hora del codigo."""
+    return version_file() or time.strftime("%Y-%m-%d %H:%M", time.localtime(code_mtime()))
+
+
+BUILD = format(int(code_mtime()), "x")  # recarga automatica de la ventana al actualizar: sigue basada en el mtime
+VERSION = read_version()
 
 
 # ----------------------------------------------------------------------------- utilidades
 
 # Carpetas vinculadas: cualquier carpeta del PC (p. ej. la del proyecto en OneDrive) que se usa como
-# si estuviera dentro de Notas. Sus rutas internas empiezan por ":<id>" (":" no puede ir en un nombre
+# si estuviera dentro de la carpeta de la app. Sus rutas internas empiezan por ":<id>" (":" no puede ir en un nombre
 # de archivo de Windows, asi que nunca choca con una carpeta de verdad).
 LINK = ":"
 LINKS = {}  # id -> {"name", "path"} (se cargan de los ajustes al arrancar)
@@ -132,7 +153,7 @@ def in_app_dir(p):
 
 # ----------------------------------------------------------------------------- paquete para otra persona
 
-EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR NOTAS.bat y LEEME.txt (van a la raiz)
+EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR CHULETA.bat y LEEME.txt (van a la raiz)
 
 
 def export_code():
@@ -150,37 +171,48 @@ def desktop_dir():
     return os.path.join(os.path.expanduser("~"), "Desktop")
 
 
-def build_package(dest, extra=()):
-    """Zip con la app lista para instalar en otro PC. Lleva solo el codigo, el instalador, el LEEME y la licencia:
-    ni grabaciones, ni notas, ni ajustes, ni la API key (eso vive en DATA_DIR, que no se toca).
-    extra: [(archivo, ruta en el zip)] opcional, p. ej. las listas de vocabulario por workstream."""
+def package_version():
+    """La version que lleva un zip generado desde esta copia: la de su _app/version.txt si lo tiene (una copia
+    instalada que vuelve a exportar conserva la suya); si no, la fecha de hoy. scripts/build_zip.py la calcula del
+    commit y la pasa explicitamente."""
+    return version_file() or time.strftime("%Y-%m-%d")
+
+
+def build_package(dest, extra=(), version=None):
+    """Zip con la app lista para instalar en otro PC. Lleva solo el codigo, el instalador, el LEEME, la licencia y
+    _app/version.txt: ni grabaciones, ni notas, ni ajustes, ni la API key (eso vive en DATA_DIR, que no se toca).
+    extra: [(archivo, ruta en el zip)] opcional, p. ej. las listas de vocabulario por workstream.
+    version: la cadena de _app/version.txt («AAAA-MM-DD · sha»), que sustituye tambien al {FECHA} del LEEME."""
     import zipfile
+    version = (version or "").strip() or package_version()
+    root = PKG_ROOT + "/"
 
     def text(path, keep_marker=False):  # .bat/.ps1 con CRLF; BOM en .ps1 (PowerShell 5 lo leeria como ANSI) y .txt
         t = read_text(path).replace("\r\n", "\n").replace("\n", "\r\n")
         if not keep_marker:
-            t = t.replace("{FECHA}", time.strftime("%d/%m/%Y"))
+            t = t.replace("{FECHA}", version)
         return (("\ufeff" if path.endswith((".ps1", ".txt")) else "") + t).encode("utf-8")
 
-    files = [(os.path.join(APP_DIR, n), "Notas/_app/" + n) for n in export_code()]
-    files += [(e.path, "Notas/_app/static/" + e.name) for e in os.scandir(STATIC_DIR) if e.is_file()]
+    files = [(os.path.join(APP_DIR, n), root + "_app/" + n) for n in export_code()]
+    files += [(e.path, root + "_app/static/" + e.name) for e in os.scandir(STATIC_DIR) if e.is_file()]
     templates = [e for e in os.scandir(EXPORT_DIR) if e.is_file()]
-    files += [(e.path, "Notas/" + e.name) for e in templates]
+    files += [(e.path, root + e.name) for e in templates]
     # las plantillas van tambien dentro de _app/export (con su {FECHA}): la copia instalada podra volver a exportar
-    files += [(e.path, "Notas/_app/export/" + e.name) for e in templates]
+    files += [(e.path, root + "_app/export/" + e.name) for e in templates]
     lic = os.path.join(os.path.dirname(APP_DIR), "LICENSE")  # MIT: el aviso acompana a cada copia
     if os.path.isfile(lic):
-        files.append((lic, "Notas/LICENSE"))
+        files.append((lic, root + "LICENSE"))
     files += list(extra)
     tmp = dest + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for src, arc in sorted(files, key=lambda f: f[1]):
             if src.endswith((".bat", ".ps1", ".txt")):
-                z.writestr(arc, text(src, keep_marker=arc.startswith("Notas/_app/export/")))
+                z.writestr(arc, text(src, keep_marker=arc.startswith(root + "_app/export/")))
             else:
                 z.write(src, arc)
+        z.writestr(root + "_app/version.txt", (version + "\r\n").encode("utf-8"))  # server.py lo ensena en Ajustes
     os.replace(tmp, dest)
-    return len(files)
+    return len(files) + 1
 
 
 # ----------------------------------------------------------------------------- estado persistente
@@ -2002,6 +2034,34 @@ def masked(key):
     return (key[:4] + "…" + key[-4:]) if key and len(key) > 12 else ("••••" if key else "")
 
 
+KEY_LIKE = re.compile(r"\b(?:gsk|sk)[-_][A-Za-z0-9_-]{12,}")  # Groq (gsk_...) y OpenAI (sk-...)
+
+
+def scrub(text, keys=()):
+    """Enmascara claves en un texto: las conocidas (la API key y las adicionales) y cualquier token con pinta de
+    API key. Para el diagnostico que se copia desde Acerca de."""
+    for k in sorted({k for k in keys if k}, key=len, reverse=True):
+        text = text.replace(k, masked(k))
+    return KEY_LIKE.sub(lambda m: masked(m.group(0)), text)
+
+
+def license_name():
+    """Nombre de la licencia segun la primera linea de LICENSE («MIT License» -> «MIT»); vacio si no hay fichero."""
+    try:
+        first = read_text(os.path.join(ROOT, "LICENSE")).strip().splitlines()[0].strip()
+    except (OSError, IndexError):
+        return ""
+    return re.sub(r"\s+licen[cs]e$", "", first, flags=re.I)
+
+
+def open_dir(path):
+    """Abre una carpeta en el Explorador (o el Finder / el gestor de archivos)."""
+    if WINDOWS:
+        subprocess.Popen(["explorer", path])
+    else:
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
+
+
 class App:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -2253,6 +2313,41 @@ class App:
         open_ui()
         return {"ok": True, "browser": True}
 
+    def acerca_abrir(self, b):
+        """Ajustes > Acerca de: abre la carpeta de datos (DATA_DIR: ajustes, API key cifrada, registros) en el
+        Explorador, o el repositorio en el navegador."""
+        que = b.get("que")
+        if que == "datos":
+            os.makedirs(DATA_DIR, exist_ok=True)
+            open_dir(DATA_DIR)
+        elif que == "repo":
+            webbrowser.open(REPO_URL)
+        else:
+            raise ApiError("No sé qué abrir")
+        return {"ok": True}
+
+    def diagnostico(self, q):
+        """Texto para pedir ayuda (Acerca de > Copiar diagnostico): version, Python, sistema, motor y modelo, carpetas
+        y las ultimas 30 lineas de server.log con las claves enmascaradas."""
+        st = self.settings.get()
+        cloud = st.get("cloud") or {}
+        preset = next((p for p in engines.PRESETS if p["id"] == st.get("preset")), None)
+        if preset and preset["engine"] == "cloud":
+            motor = f"nube ({cloud.get('provider') or '?'}) · modelo {cloud.get('model') or '?'}"
+        else:
+            motor = f"local ({st.get('preset')}) · modelo {preset['model'] if preset else '?'}"
+        try:
+            lines = read_text(os.path.join(DATA_DIR, "server.log")).splitlines()[-30:]
+        except OSError:
+            lines = ["(no hay server.log)"]
+        keys = [cloud.get("api_key"), *(cloud.get("extra_keys") or [])]
+        info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
+                f"Transcripción: {motor} · directo: {st.get('live_preset') or 'medium'}",
+                f"Carpeta: {ROOT}", f"Datos: {DATA_DIR}", "", "server.log (últimas 30 líneas):",
+                scrub("\n".join(lines), keys)]
+        texto = "\n".join(info)
+        return {"texto": texto}
+
     # --- GET
     def config(self, q):
         st = self.settings.get()
@@ -2268,6 +2363,7 @@ class App:
         cloud["extra_keys"] = [masked(k) for k in (cloud.get("extra_keys") or []) if k]  # nunca en claro
         cloud["quota"] = self.jobs.cloud.keys.public(st["cloud"]) if cloud["has_key"] else None
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
+                "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "preset": st["preset"], "language": st["language"], "threads": st["threads"],
                 "prompt": st["prompt"], "cpu_count": os.cpu_count(),
@@ -2416,7 +2512,7 @@ class App:
         return {"rel": LINK + lid, "name": LINKS[lid]["name"]}
 
     def link_remove(self, b):
-        """Deja de mostrarla en Notas. No borra ni mueve nada de la carpeta."""
+        """Deja de mostrarla en la app. No borra ni mueve nada de la carpeta."""
         rel = b.get("path") or ""
         lid = rel[len(LINK):].split("/")[0] if rel.startswith(LINK) else ""
         if lid not in LINKS:
@@ -2475,7 +2571,7 @@ class App:
         desc = " ".join((b.get("desc") or "").split())
         old = find_vocab(None, None, b["id"]) if b.get("id") else None
         same = next((v for v in list_vocab() if fold(v["project"]) == fold(project)), None)
-        # proyecto que ya existe: en su carpeta de vocabulario; si es nuevo, Notas/<proyecto>/Vocabulario
+        # proyecto que ya existe: en su carpeta de vocabulario; si es nuevo, <raiz>/<proyecto>/Vocabulario
         vdir = os.path.dirname(same["_abs"]) if same else os.path.join(ROOT, project, "Vocabulario")
         path = os.path.join(vdir, name + ".txt")
         moved = old and os.path.normcase(old["_abs"]) != os.path.normcase(path)
@@ -2886,7 +2982,7 @@ class App:
         return {"path": rel_of(p)}
 
     def rename_folder(self, b):
-        if is_link_root(b.get("path")):  # carpeta vinculada: solo cambia el nombre que se ve en Notas
+        if is_link_root(b.get("path")):  # carpeta vinculada: solo cambia el nombre que se ve en la app
             lid = b["path"].strip("/")[len(LINK):]
             if lid not in LINKS:
                 raise ApiError("Esa carpeta ya no está vinculada.")
@@ -3170,9 +3266,10 @@ class App:
     def export_package(self, b):
         dest = os.path.join(desktop_dir(), f"{APP_NAME} - instalador.zip")
         vocab = []
-        if b.get("vocab"):  # las de carpetas vinculadas (":id/…") van como Notas/<proyecto>/Vocabulario/<tema>.txt
-            vocab = [(v["_abs"], "Notas/" + (v["id"] if not v["id"].startswith(LINK)
-                                             else f"{v['project']}/Vocabulario/{v['name']}.txt")) for v in list_vocab()]
+        if b.get("vocab"):  # las de carpetas vinculadas (":id/…") van como <raiz>/<proyecto>/Vocabulario/<tema>.txt
+            vocab = [(v["_abs"], PKG_ROOT + "/" + (v["id"] if not v["id"].startswith(LINK)
+                                                   else f"{v['project']}/Vocabulario/{v['name']}.txt"))
+                     for v in list_vocab()]
         try:
             n = build_package(dest, vocab)
         except OSError as e:
@@ -3220,7 +3317,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
-                  "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get}
+                  "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get,
+                  "/api/diagnostico": a.diagnostico}
         try:
             if u.path in routes:
                 return self._json(routes[u.path](q))
@@ -3259,7 +3357,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
                   "/api/voces/exportar": a.voices_export,
-                  "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar}
+                  "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
+                  "/api/acerca/abrir": a.acerca_abrir}
         try:
             u = urlparse(self.path)
             if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos
@@ -3474,7 +3573,7 @@ def main():
                  f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).", "=" * 64):
         log(line)
     log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]}")
-    WINDOW = None if no_browser else Window(URL, DATA_DIR, os.path.join(STATIC_DIR, "notas.ico"))
+    WINDOW = None if no_browser else Window(URL, DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
     if WINDOW is not None and WINDOW.available:
         # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar
         threading.Thread(target=srv.serve_forever, daemon=True, name="http").start()

@@ -1,5 +1,5 @@
 'use strict';
-/* Notas: interfaz (vanilla JS, sin dependencias). Habla con server.py en /api/* */
+/* Chuleta: interfaz (vanilla JS, sin dependencias). Habla con server.py en /api/* */
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -78,6 +78,7 @@ const I = {
   stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>',
   power: '<svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>',
   face: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 10h.01M15 10h.01"/></svg>',
+  info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
 };
 /* iconos de los presets de transcripcion por id; el emoji que manda engines.py queda solo de reserva */
 const PRESET_ICONS = { rapido: 'bolt', turbo: 'scale', medium: 'gauge', calidad: 'target', nube: 'nube' };
@@ -398,7 +399,7 @@ async function stopRec() {
     pollRec(); refreshTree(true); pollJobs(true);
   } catch (err) { S.recLocal = false; toast(esc(err.message), 'err'); }
 }
-/* carpetas donde grabar: las de Notas, las vinculadas y "otra carpeta…" (se vincula al elegirla) */
+/* carpetas donde grabar: las de la app, las vinculadas y "otra carpeta…" (se vincula al elegirla) */
 const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulario')
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
   + '<option value="__pick">Otra carpeta (fuera de Audios)…</option>';
@@ -1809,6 +1810,7 @@ $('#btnNewFolder').onclick = () => openNewFolder(S.route.kind === 'f' ? S.route.
 
 function openSettings() {
   const c = S.config.cloud, P = S.config.providers;
+  const ac = S.config.acerca || {};
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
     <fieldset><legend>${I.nube}Transcripción en la nube</legend>
@@ -1843,7 +1845,7 @@ function openSettings() {
     <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
       <div id="sLinks"></div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
-      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de Notas no borra nada.</div>
+      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
     </fieldset>
     <fieldset><legend>${I.book}Vocabulario</legend>
       <label>Por tema <span class="muted" style="font-weight:400">· se elige al grabar o en cada reunión</span></label>
@@ -1860,11 +1862,21 @@ function openSettings() {
         <b>Para actualizar a alguien que ya lo tiene</b>: mándale el zip nuevo y que ejecute su INSTALAR.bat. El instalador cierra la versión abierta y actualiza la que ya tenía, en su carpeta de siempre (con sus grabaciones).</div>
     </fieldset>
     <div class="help" style="margin-top:16px"><b>Atajos:</b> Ctrl+Alt+R empezar/parar grabación (desde cualquier programa) · Espacio reproducir/pausa · ← → 5 s · Shift + ← → 15 s · [ ] velocidad · Ctrl K buscar en todas las transcripciones · Ctrl P ir a una reunión · Ctrl F buscar en la transcripción</div>
-    <div class="help" style="margin-top:6px">${esc(APP_NAME)} · versión del ${esc(S.config.version || '')}</div>
+    <fieldset style="margin-top:14px"><legend>${I.info}Acerca de</legend>
+      <div class="help" style="margin-top:0"><b>${esc(APP_NAME)}</b> · versión ${esc(S.config.version || '')}${ac.licencia ? ` · licencia ${esc(ac.licencia)}` : ''}<br>
+        Código, novedades y ayuda: <a href="${esc(ac.repo || '#')}" id="aRepo">${esc((ac.repo || '').replace(/^https?:\/\//, ''))}</a><br>
+        Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro, sin claves: para pedir ayuda</span></div>
+    </fieldset>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
+    $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
+    $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
+    $('#aDiag', d).onclick = async () => {
+      try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: pégalo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
+    };
     const fields = () => {
       const p = $('#cProv', d).value, info = P[p];
       if (p === 'azure') {

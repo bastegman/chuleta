@@ -5,7 +5,7 @@ Genera los iconos de la app a partir de los SVG:
     _app/static/logo.svg     maestro (cabecera de la app y tamaños >= 24 px)
     design/logo-small.svg    variante simplificada para 16 y 20 px (sin anillas, renglones de 1 px)
 
-y escribe _app/static/notas.ico (9 tamaños, todos en BMP) y _app/static/notas.png (256 px).
+y escribe _app/static/chuleta.ico (9 tamaños, todos en BMP) y _app/static/chuleta.png (256 px).
 Todos los tamaños van en BMP porque Windows no siempre pinta bien un .ico cuyas entradas pequeñas son PNG
 (la recomendación de Microsoft es PNG solo para 256 px). Rasteriza con Chrome o Edge headless (fiel al SVG,
 incluidos degradados) y monta el .ico con Pillow. Herramienta de desarrollo: no viaja en el zip.
@@ -67,10 +67,10 @@ def main(master, small, out_dir):
         sys.exit("Hace falta Chrome o Edge para rasterizar el SVG.")
     work = tempfile.mkdtemp(prefix="icons-")
     frames = {s: render(small if s in SMALL else master, s, work) for s in SIZES}
-    ico = os.path.join(out_dir, "notas.ico")
+    ico = os.path.join(out_dir, "chuleta.ico")
     frames[256].save(ico, format="ICO", bitmap_format="bmp", sizes=[(s, s) for s in SIZES],
                      append_images=[frames[s] for s in SIZES if s != 256])
-    frames[256].save(os.path.join(out_dir, "notas.png"), format="PNG", optimize=True)
+    frames[256].save(os.path.join(out_dir, "chuleta.png"), format="PNG", optimize=True)
     got = check(ico)
     assert sorted(g[0] for g in got) == sorted(SIZES) and all(g[1] == 32 and g[2] == "bmp" for g in got), got
     print(f"{ico}: {os.path.getsize(ico)} bytes, {len(got)} tamaños en BMP: {[g[0] for g in got]}")

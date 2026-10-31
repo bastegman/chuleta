@@ -18,7 +18,7 @@ from common import WINDOWS, log
 
 
 class GlobalHotkey(threading.Thread):
-    """Ctrl+Alt+R en todo Windows (aunque Notas este en segundo plano o estes en Teams).
+    """Ctrl+Alt+R en todo Windows (aunque la app este en segundo plano o estes en Teams).
     RegisterHotKey exige que el registro y el bucle de mensajes vayan en el mismo hilo."""
 
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_R, WM_HOTKEY = 0x1, 0x2, 0x4000, 0x52, 0x0312
@@ -77,7 +77,7 @@ def cue(kind):
 
 
 def notify(title, body):
-    """Notificacion de Windows (por si la ventana de Notas no esta a la vista)."""
+    """Notificacion de Windows (por si la ventana de la app no esta a la vista)."""
     if not WINDOWS:
         log(f"   aviso: {title} — {body}")
         return

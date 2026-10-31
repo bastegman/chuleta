@@ -1,12 +1,14 @@
 name: lookfeel-e2e
 
-# E2E real en Windows (rama look-and-feel): zip -> INSTALAR.bat en modo ventana (PowerShell 5.1, como en el PC del
-# usuario) -> la app abre su ventana -> acceso directo -> Apagar -> segunda instalacion que actualiza -> instalacion que
-# falla a proposito. Capturas de pantalla cada 5 s. Solo lee el repo; deja todo como artefacto.
+# E2E real en Windows (rama renombrado-chuleta): zip -> INSTALAR.bat en modo ventana (PowerShell 5.1, como en el PC
+# del usuario) -> la app abre su ventana con el titulo «Chuleta» -> acceso directo -> Apagar -> segunda instalacion
+# sobre una copia con el acceso directo antiguo «Notas» (lo detecta, actualiza y renombra) -> tercera con los dos
+# accesos directos (conserva el antiguo) -> instalacion que falla a proposito. Capturas de pantalla cada 5 s. Solo lee
+# el repo; deja todo como artefacto.
 on:
   workflow_dispatch:
   push:
-    branches: [look-and-feel]
+    branches: [renombrado-chuleta]
 
 permissions:
   contents: read
@@ -14,7 +16,7 @@ permissions:
 jobs:
   e2e:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0

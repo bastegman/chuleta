@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Aviso flotante «● Grabar / ✕» que Notas abre, en un proceso aparte (como el selector de carpetas), al detectar
+"""Aviso flotante «● Grabar / ✕» que la app abre, en un proceso aparte (como el selector de carpetas), al detectar
 una llamada. Ventana sin borde, siempre visible, abajo en el centro del monitor principal (respetando la barra de
 tareas), que NO roba el foco (WS_EX_NOACTIVATE: puedes seguir escribiendo en la llamada). Se cierra sola a los
 20 s, al pulsar ✕, al empezar a grabar (también con Ctrl+Alt+R) o si la app se cierra.
@@ -301,7 +301,7 @@ class Aviso:
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Aviso flotante de Notas al detectar una llamada")
+    p = argparse.ArgumentParser(description="Aviso flotante de la app al detectar una llamada")
     p.add_argument("--puerto", type=int, default=8765)
     p.add_argument("--titulo", default="")
     p.add_argument("--nombre", default="")
