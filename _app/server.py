@@ -7,11 +7,13 @@ Notas: app local para ordenar, escuchar, leer y transcribir las grabaciones de r
   - Transcripcion local (faster-whisper) o en la nube (engines.py)
   - Las transcripciones se guardan como siempre: <audio>.txt y <audio>.srt junto al audio
 
-Arranque: acceso directo Notas del escritorio (lanza _app/Notas.bat).
+Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Notas.bat lo arranca con consola
+para ver los mensajes). La interfaz se abre en una ventana propia (window.py, WebView2) o, si no se puede, en Edge.
 """
 import copy
 import hashlib
 import json
+import logging
 import os
 import queue
 import re
@@ -32,10 +34,11 @@ import calendario
 import engines
 import live
 import voices
-from common import (ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS, clean_name,  # noqa: F401 (re-exportados)
-                    default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key, parse_srt, protect,
-                    read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
+from common import (APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS, alert,  # noqa: F401 (re-exportados)
+                    clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key, parse_srt,
+                    protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
+from window import Window, set_app_id
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
@@ -43,6 +46,7 @@ ROOT = os.path.dirname(APP_DIR)
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
 HOST, PORT = "127.0.0.1", 8765
 URL = f"http://{HOST}:{PORT}/"
+SERVER, WINDOW = None, None  # los pone main(): el servidor HTTP y la ventana propia (None si se abre en Edge)
 
 AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm"}
 TEXT_EXT = {".txt", ".md", ".srt"}
@@ -108,11 +112,11 @@ def safe(rel, must=None):
     if rel.startswith(LINK):
         lid, _, rel = rel[len(LINK):].partition("/")
         if lid not in LINKS:
-            raise ApiError("Esa carpeta ya no está vinculada a Notas", 404)
+            raise ApiError(f"Esa carpeta ya no está vinculada a {APP_NAME}", 404)
         base = LINKS[lid]["path"]
     p = os.path.normpath(os.path.join(base, rel))
     if not _inside(p, base):
-        raise ApiError("Ruta fuera de las carpetas de Notas", 403)
+        raise ApiError(f"Ruta fuera de las carpetas de {APP_NAME}", 403)
     if must == "file" and not os.path.isfile(p):
         raise ApiError("No existe el archivo: " + rel, 404)
     if must == "dir" and not os.path.isdir(p):
@@ -340,7 +344,7 @@ def scan():
     flat = []
 
     def walk(abs_dir, rel, depth=0, max_depth=99):
-        node = {"name": os.path.basename(abs_dir) if rel else "Notas", "path": rel,
+        node = {"name": os.path.basename(abs_dir) if rel else APP_NAME, "path": rel,
                 "folders": [], "audios": [], "docs": []}
         try:
             entries = list(os.scandir(abs_dir))
@@ -727,7 +731,7 @@ def list_vocab():
     def norm(p):
         return os.path.normcase(os.path.normpath(p))
 
-    top_names = {norm(ROOT): "Notas", **{norm(l["path"]): l["name"] for l in LINKS.values()}}
+    top_names = {norm(ROOT): APP_NAME, **{norm(l["path"]): l["name"] for l in LINKS.values()}}
 
     def walk(d, depth):
         try:
@@ -957,6 +961,22 @@ class Jobs:
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
+
+    def shutdown(self):
+        """Apagar: lo que esta en cola se cancela, lo que corre recibe la senal de cancelar y los procesos de Whisper
+        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan."""
+        with self.lock:
+            for j in self.list:
+                if j.status == "queued":
+                    j.status = "cancelled"
+                elif j.status == "running":
+                    j.cancel = True
+        for w in (getattr(self.local, "worker", None), self.live_worker):
+            try:
+                if w is not None:
+                    w.kill()
+            except Exception:
+                log_exc()
 
     @property
     def voices(self):
@@ -1629,7 +1649,7 @@ class App:
                                     "vocab": v["id"] if v else "", "name": b.get("name") or sug.get("name") or "",
                                     "participantes": b.get("participantes")
                                     or ", ".join(sug.get("participants") or [])})
-                notify("● Grabando en Notas", (f"{r['workstream']} · " if r.get("workstream") else "")
+                notify(f"● Grabando en {APP_NAME}", (f"{r['workstream']} · " if r.get("workstream") else "")
                        + "Pulsa Ctrl+Alt+R otra vez para parar")
                 return dict(r, recording=True)
             except ApiError as e:
@@ -1790,6 +1810,36 @@ class App:
         log(f"■ Grabación parada: {rel_of(r.path)} ({secs / 60:.1f} min)")
         return {"path": rel_of(r.path), "seconds": secs}
 
+    def shutdown_prepare(self):
+        """Antes de terminar el proceso: medidor y grabadora (si quedara alguna) y los trabajos."""
+        with self.rec_lock:
+            for p in (self.monitor, self.rec):
+                if p and p.alive():
+                    try:
+                        p.stop(timeout=3)
+                    except Exception:
+                        log_exc()
+            self.monitor = self.rec = None
+        self.jobs.shutdown()
+
+    def apagar(self, b):
+        """Ajustes > Apagar: la unica salida explicita cuando no hay consola. Con una grabacion en curso se niega;
+        si no, responde y el proceso termina al cabo de 0,5 s (schedule_shutdown)."""
+        if self.rec and self.rec.alive():
+            raise ApiError(f"Hay una grabación en curso. Para la grabación antes de apagar {APP_NAME}.", 409)
+        with self.jobs.lock:
+            activos = sum(1 for j in self.jobs.list if j.status in ("queued", "running"))
+        log(f"apagar pedido desde la interfaz ({activos} trabajos en cola o en marcha)")
+        schedule_shutdown("Ajustes > Apagar")
+        return {"ok": True, "activos": activos}
+
+    def mostrar(self, b):
+        """El acceso directo, al ver que la app ya corre, pide la ventana: la propia si existe; si no, Edge."""
+        if WINDOW is not None and WINDOW.show():
+            return {"ok": True}
+        open_ui()
+        return {"ok": True, "browser": True}
+
     # --- GET
     def config(self, q):
         st = self.settings.get()
@@ -1804,7 +1854,8 @@ class App:
         cloud["api_key"] = masked(cloud.get("api_key"))
         cloud["extra_keys"] = [masked(k) for k in (cloud.get("extra_keys") or []) if k]  # nunca en claro
         cloud["quota"] = self.jobs.cloud.keys.public(st["cloud"]) if cloud["has_key"] else None
-        return {"root": ROOT, "version": VERSION, "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
+        return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
+                "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "preset": st["preset"], "language": st["language"], "threads": st["threads"],
                 "prompt": st["prompt"], "cpu_count": os.cpu_count(),
                 "live_auto": bool(st.get("live_auto")), "live_preset": st.get("live_preset") or "medium",
@@ -1926,9 +1977,9 @@ class App:
         if os.path.splitdrive(path)[1] in ("", os.sep):
             raise ApiError("Elige una carpeta, no una unidad entera.")
         if _inside(path, ROOT):
-            raise ApiError("Esa carpeta ya está dentro de Notas: no hace falta vincularla.")
+            raise ApiError(f"Esa carpeta ya está dentro de {APP_NAME}: no hace falta vincularla.")
         if _inside(ROOT, path) or _inside(os.path.expanduser("~"), path):
-            raise ApiError("Esa carpeta es demasiado grande (contiene la de Notas o tu usuario): "
+            raise ApiError(f"Esa carpeta es demasiado grande (contiene la de {APP_NAME} o tu usuario): "
                            "elige una más concreta.")
         lid = link_id(path)
         for other, l in LINKS.items():
@@ -2657,7 +2708,7 @@ class App:
         return {"path": rel_of(out), "ext": ".hablantes.txt"}
 
     def export_package(self, b):
-        dest = os.path.join(desktop_dir(), "Notas - instalador.zip")
+        dest = os.path.join(desktop_dir(), f"{APP_NAME} - instalador.zip")
         vocab = []
         if b.get("vocab"):  # las de carpetas vinculadas (":id/…") van como Notas/<proyecto>/Vocabulario/<tema>.txt
             vocab = [(v["_abs"], "Notas/" + (v["id"] if not v["id"].startswith(LINK)
@@ -2675,7 +2726,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "Notas/1.0"
+    server_version = f"{APP_NAME}/1.0"
     app = None
 
     def log_message(self, fmt, *args):
@@ -2746,7 +2797,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/activar": a.voices_toggle, "/api/voces/identificar": a.voices_identify,
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
-                  "/api/voces/exportar": a.voices_export}
+                  "/api/voces/exportar": a.voices_export,
+                  "/api/apagar": a.apagar, "/api/mostrar": a.mostrar}
         try:
             u = urlparse(self.path)
             if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos
@@ -2772,6 +2824,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, b"not found", "text/plain")
         with open(p, "rb") as f:
             body = f.read()
+        if name == "index.html":  # <title> y marca: el nombre de la app vive en common.APP_NAME
+            body = body.replace(b"{{APP_NAME}}", APP_NAME.encode("utf-8"))
         self._send(200, body, MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
 
     def _media(self, p):
@@ -2839,6 +2893,8 @@ class Server(ThreadingHTTPServer):
 
 
 def open_ui():
+    """La interfaz en Edge (modo app, sin barra de direcciones) o, sin Edge, en el navegador por defecto. Es el
+    camino de siempre y el de reserva cuando no hay ventana propia (window.py)."""
     for exe in (r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
                 r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"):
         exe = os.path.expandvars(exe)
@@ -2856,6 +2912,51 @@ def already_running():
         return False
 
 
+def ask_running_to_show():
+    """Pide a la copia que ya corre que ensene su ventana (POST /api/mostrar). False si no contesta que si (una
+    version anterior sin esa ruta): entonces se abre Edge como antes."""
+    try:
+        req = urllib.request.Request(URL + "api/mostrar", data=b"{}", method="POST",
+                                     headers={"X-Audios": "1", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return bool(json.load(r).get("ok"))
+    except Exception:
+        return False
+
+
+def shutdown(reason, exit_fn=os._exit):
+    """Apagado ordenado (Ajustes > Apagar): medidor/grabadora, trabajos y procesos de Whisper, servidor HTTP, ventana
+    y fin del proceso. recorder.py, worker.py y voices.py mueren solos al quedarse sin padre. No llamarlo desde el
+    hilo que ejecuta serve_forever (SERVER.shutdown esperaria a si mismo)."""
+    log(f"apagando ({reason})")
+    try:
+        if Handler.app is not None:
+            Handler.app.shutdown_prepare()
+    except Exception:
+        log_exc()
+    log("apagado")
+    logging.shutdown()  # antes de parar el servidor: en cuanto serve_forever vuelve, el hilo principal sale solo
+    try:
+        if WINDOW is not None:
+            WINDOW.destroy()
+    except Exception:
+        pass
+    try:
+        if SERVER is not None:
+            SERVER.shutdown()
+    except Exception:
+        pass
+    exit_fn(0)
+
+
+def schedule_shutdown(reason, delay=0.5):
+    """Termina el proceso al cabo de `delay` s: tiempo para que la respuesta de /api/apagar llegue a la pagina."""
+    t = threading.Timer(delay, shutdown, args=(reason,))
+    t.daemon = True
+    t.start()
+    return t
+
+
 def arg(name, default=None):
     """--port 8766 / --data C:\\ruta (para probar una segunda copia sin tocar la principal)."""
     if name in sys.argv[:-1]:
@@ -2863,8 +2964,14 @@ def arg(name, default=None):
     return default
 
 
+def fatal(text):
+    """Error de arranque: al log, a la consola si la hay y, sin consola (pythonw.exe), un aviso de Windows."""
+    alert(f"{APP_NAME} no ha podido arrancar", text)
+    sys.exit(1)
+
+
 def main():
-    global PORT, URL, DATA_DIR
+    global PORT, URL, DATA_DIR, SERVER, WINDOW
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -2876,8 +2983,8 @@ def main():
     setup_logging(DATA_DIR)
     no_browser = "--no-browser" in sys.argv
     if already_running():
-        print("La app ya estaba abierta; abriendo ventana…")
-        if not no_browser:
+        log("la app ya estaba abierta: se ensena su ventana")
+        if not no_browser and not ask_running_to_show():
             open_ui()
         return
     try:
@@ -2885,16 +2992,43 @@ def main():
         truststore.inject_into_ssl()
     except Exception:
         pass
-    Handler.app = App()
+    set_app_id()  # antes de cualquier ventana (la propia, el selector de carpetas o un aviso)
+    try:
+        Handler.app = App()
+    except Exception as e:
+        log_exc()
+        fatal(f"Error al iniciar: {e.__class__.__name__}: {e}\n\nDetalle en {os.path.join(DATA_DIR, 'server.log')}")
     Handler.app.library.refresh()
     threading.Thread(target=Handler.app.transcripts.warm, args=(Handler.app.library,), daemon=True).start()
-    srv = Server((HOST, PORT), Handler)
-    print("=" * 64)
-    print("  NOTAS  ·  " + URL)
-    print("  Carpeta: " + ROOT)
-    print("  Deja esta ventana abierta mientras uses la app (ciérrala para apagarla).")
-    print("=" * 64, flush=True)
+    try:
+        SERVER = srv = Server((HOST, PORT), Handler)
+    except OSError as e:
+        log_exc()
+        fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({e}).\n\nCierra ese programa (o arranca "
+              f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
+    for line in ("=" * 64, f"  {APP_NAME.upper()}  ·  {URL}", f"  Carpeta: {ROOT}",
+                 f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).", "=" * 64):
+        log(line)
     log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]}")
+    WINDOW = None if no_browser else Window(URL, DATA_DIR, os.path.join(STATIC_DIR, "notas.ico"))
+    if WINDOW is not None and WINDOW.available:
+        # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar
+        threading.Thread(target=srv.serve_forever, daemon=True, name="http").start()
+        if WINDOW.run():
+            if WINDOW.quitting:
+                return  # apagando: shutdown() termina el proceso
+            log("la ventana se ha cerrado sin apagar: la app sigue en segundo plano")
+        else:
+            log("no se pudo abrir la ventana propia (detalle arriba): se abre en Edge")
+            WINDOW = None
+            open_ui()
+        try:
+            while True:  # el servidor sigue en su hilo; con consola, Ctrl+C sale
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        return
+    WINDOW = None
     if not no_browser:
         threading.Timer(0.3, open_ui).start()
     try:

@@ -1,7 +1,7 @@
 # Notas
 
-App local de Windows para grabar reuniones, transcribirlas y resumirlas. Funciona en tu propio PC, en una
-ventana de Edge, sin instalar nada más que Python y unas librerías. Todo lo tuyo (grabaciones, transcripciones,
+App local de Windows para grabar reuniones, transcribirlas y resumirlas. Funciona en tu propio PC, en su propia
+ventana (WebView2, el motor de Edge que trae Windows), sin instalar nada más que Python y unas librerías. Todo lo tuyo (grabaciones, transcripciones,
 notas) se queda en la carpeta donde descomprimas la app.
 
 - **Grabar** el micrófono y el sonido del ordenador (Teams, Zoom, el navegador…) a la vez, con `Ctrl+Alt+R`
@@ -31,6 +31,8 @@ notas) se queda en la carpeta donde descomprimas la app.
    crea el acceso directo «Notas» en el escritorio y en el menú Inicio.
 3. Se abre Notas. Para transcribir en la nube: ⚙ Ajustes → Transcripción en la nube → tu API key.
    Sin nube también funciona (transcribe en el propio PC, más lento).
+4. Cerrar la ventana deja Notas en segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando); el acceso directo la
+   vuelve a abrir. Para apagarla del todo: ⚙ Ajustes → Apagar Notas.
 
 El manual completo está en `LEEME.txt`.
 
@@ -60,9 +62,10 @@ El manual completo está en `LEEME.txt`.
 ## Desarrollo
 
 El servidor es Python 3.10–3.13 con la librería estándar más `faster-whisper`, `soundcard`, `requests`,
-`truststore`, y `sherpa-onnx` y `pywin32` (opcionales, importación perezosa); la interfaz es HTML/JS sin compilar
-(`_app/static`). No hay paso de build: `_app/Notas.bat`
-lanza `python server.py`.
+`truststore`, `pywebview` (la ventana, sobre WebView2; sin ella la interfaz se abre en Edge en modo app), y
+`sherpa-onnx` y `pywin32` (opcionales, importación perezosa); la interfaz es HTML/JS sin compilar (`_app/static`). No
+hay paso de build: el acceso directo lanza `pythonw.exe server.py` (sin consola) y `_app/Notas.bat` lo mismo con
+consola. El nombre visible de la app es `common.APP_NAME` (y `-AppName` en el instalador); las carpetas no cambian con él.
 
 En macOS/Linux el servidor arranca para desarrollar la interfaz y la lógica (la grabadora, el atajo global,
 la papelera y los avisos son solo de Windows):
@@ -79,7 +82,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/flake8                       # configuración en setup.cfg
 ```
 
-Los tests no necesitan Windows ni `faster-whisper`: cubren la lógica pura (SRT, notas, árbol de carpetas,
+Los tests no necesitan Windows, `faster-whisper` ni `pywebview` (la ventana se prueba con un doble): cubren la lógica pura (SRT, notas, árbol de carpetas,
 cola, paquete instalable, prompts, grabadora, voces) con dobles y ficheros temporales. La prueba de integración de
 voces (`tests/test_voices_integration.py`) solo corre si hay `sherpa-onnx`, `say` (macOS) y `NOTAS_VOCES_DATA`
 apunta a una carpeta de datos con los modelos en `models/voces/`. Los tests de escritorio de Windows

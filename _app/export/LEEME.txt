@@ -36,8 +36,9 @@ ACTUALIZAR A UNA VERSIÓN NUEVA
 
 USO DIARIO
 ----------------------------------------------------------------------------------
-  - Abre con el acceso directo "Notas". La ventana negra que queda minimizada es el motor de la
-    app: si la cierras, Notas se apaga.
+  - Abre con el acceso directo "Notas" (ya sin ventana negra). Si cierras la ventana de Notas, la
+    app sigue en segundo plano (Ctrl+Alt+R sigue funcionando) y el acceso directo la vuelve a
+    abrir. Para apagarla del todo: ⚙ Ajustes > Apagar Notas.
   - ● Grabar (o Ctrl+Alt+R desde cualquier programa) empieza y para la grabación. Puedes elegir
     grabar con o sin micro, y con o sin transcripción en directo.
   - Si estás en una llamada de Teams y no estás grabando, arriba aparece
@@ -102,6 +103,8 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
 SI ALGO FALLA
 ----------------------------------------------------------------------------------
   - INSTALAR.bat se puede volver a ejecutar sin problema.
+  - Si el acceso directo no abre nada, ABRIR NOTAS.bat arranca la app con una ventana de consola
+    donde se ven los mensajes (ciérrala para apagar).
   - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
     (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.
   - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log, recorder.log, voces.log).

@@ -12,6 +12,26 @@ nada de ningún proyecto concreto.
   formulario (los iconos que elige el usuario para carpetas y reuniones siguen siendo emojis, y los avisos
   emergentes no cambian); etiquetas de hablante con un color estable por persona; botones, chips, diálogos y
   tablas con radios, sombras y estados de foco coherentes. Los demás textos «Notas» se cambian en el renombrado.
+- **Ventana propia** (`_app/window.py`, pywebview sobre WebView2, el motor de Edge que trae Windows) en vez de
+  `msedge --app`: la barra de tareas ve un proceso nuestro con nuestro icono (256 px por `WM_SETICON`) y el
+  AppUserModelID `Bernardo.Notas`, no una ventana más de Edge. Cerrar la ventana la **oculta**: la app sigue en
+  segundo plano (Ctrl+Alt+R y las grabaciones siguen) y el acceso directo la vuelve a enseñar (`POST /api/mostrar`).
+  Si pywebview no está o no puede abrir la ventana, se abre Edge como antes. Medido en `windows-latest` (Python 3.10
+  y 3.13): con `msedge --app` la ventana lleva el AUMID `MSEdge.127.0.0.1_/` (con `--user-data-dir` propio,
+  `MSEdge.127.0.0.1_/.<carpeta>.Default`) e iconos de 16/32 px sacados del favicon; con la ventana propia, 16 y 256.
+- **Sin ventana de consola**: el acceso directo apunta a `pythonw.exe server.py` (el mismo Python de `python.txt`),
+  con el icono y el `System.AppUserModel.ID` del .lnk, para que «Anclar a la barra de tareas» ancle el acceso
+  directo y no `pythonw.exe` a secas. `ABRIR NOTAS.bat` / `_app/Notas.bat` siguen arrancando con consola (modo
+  diagnóstico). Sin consola, `print` se pierde: el arranque y el apagado hablan solo por `server.log`, y un error de
+  arranque (puerto ocupado por otro programa, excepción al iniciar) se anota ahí y sale en un aviso de Windows.
+- **Ajustes → ⏻ Apagar Notas** (`POST /api/apagar`): la salida explícita ahora que no hay consola. Se niega si hay
+  una grabación en curso; si no, cancela la cola, mata los procesos de Whisper, cierra el servidor y la ventana y
+  termina el proceso al cabo de 0,5 s; la página muestra «Notas se ha apagado». El instalador lo usa para cerrar la
+  copia abierta antes de recurrir a matar procesos.
+- El nombre visible de la app sale de `common.APP_NAME` (título de la ventana y de la pestaña, raíz del árbol,
+  mensajes, nombre del zip instalable); `app.js` lo recibe por `/api/config` (`app_name`) y `instalar.ps1` por
+  `-AppName`. Rutas, carpetas (`_app`, `AudiosApp`, la raíz `Notas/` del zip) y `.bat` no cambian. Prepara el
+  renombrado pendiente.
 - La app es agnóstica: ejemplos, placeholders, avisos y el manual ya no nombran a ningún cliente, empresa ni
   persona. Los avisos de privacidad hablan de «la política de tu empresa y el acuerdo con tu cliente, si lo hay».
 - La etiqueta «Workstream» de la interfaz pasa a «Tema». Los ficheros `.md` siguen usando las claves `proyecto`
@@ -107,6 +127,12 @@ nada de ningún proyecto concreto.
   solo se avisa). Tests con dobles (`tests/test_reunion.py`) y de escritorio en Windows
   (`tests/test_reunion_windows.py`, workflow `reunion-windows`: ventana de Teams simulada, aviso con captura de
   pantalla y pulsación de «Grabar»).
+- `pywebview==6.2.1` en `requirements.txt` y en el instalador (arrastra `pythonnet`, `clr-loader`, `proxy_tools` y
+  `bottle`; `proxy_tools` solo publica sdist, Python puro, se instala sin compilador). Si no importa, el instalador
+  solo avisa.
+- `scripts/lookfeel_spike.py` y `scripts/lookfeel_webview_probe.py` con el workflow `lookfeel-spike.yml`: miden en un
+  runner de Windows el AUMID y los iconos del HWND de la ventana (Edge `--app` en cuatro variantes y la ventana
+  propia). Son herramientas de medición; no forman parte de la app.
 - **Quién habla** (opcional, apagado por defecto): diarización en local con `sherpa-onnx` 2.0.1 (segmentación
   pyannote 3.0 + huellas TitaNet small, ≈47 MB de modelos que se descargan al activar la opción, sha256 anclado)
   en un subproceso de prioridad baja al terminar cada transcripción (`_app/voices.py`). Sidecar
@@ -137,6 +163,10 @@ nada de ningún proyecto concreto.
   estado compartido (ROOT, LINKS, COMPLETE, DATA_DIR cambian en tiempo de ejecución) y se deja para otra entrega.
 
 ### Conocido, sin cambiar
+- La ventana propia, el acceso directo a `pythonw.exe`, el AUMID del .lnk y «Apagar» están probados en el runner
+  `windows-latest` (ventana, hide/show, iconos, HTTP) y con dobles en los tests, pero aún no a mano en un Windows con
+  barra de tareas: ver la lista de comprobación del informe del 31/10/2026.
+- El instalador sigue siendo una consola de PowerShell (la ventana WinForms propia queda pendiente).
 - «Quién habla» y el cifrado con DPAPI se han probado en macOS (sherpa-onnx real; DPAPI con un doble); DPAPI real,
   en el job `windows-latest` de GitHub Actions. El instalador, la grabadora y la interfaz de voces aún no se han
   ejecutado a mano en Windows.

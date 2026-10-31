@@ -185,7 +185,7 @@ function bindVocesSettings(d) {
     const on = e.target.checked;
     if (on) {
       e.target.checked = false;
-      const ok = await ask('Reconocer quién habla', `<p>Notas separará las voces de cada reunión <b>en este PC</b> (nada sale a internet) y, cuando tú lo pidas, guardará una <b>huella de voz</b> por persona para reconocerla en las próximas reuniones.</p>
+      const ok = await ask('Reconocer quién habla', `<p>${APP_NAME} separará las voces de cada reunión <b>en este PC</b> (nada sale a internet) y, cuando tú lo pidas, guardará una <b>huella de voz</b> por persona para reconocerla en las próximas reuniones.</p>
         <ul><li>Se descargan dos modelos (≈47 MB, una sola vez) a <code>%LOCALAPPDATA%\\AudiosApp\\models\\voces</code>.</li>
         <li>Las huellas van a <code>%LOCALAPPDATA%\\AudiosApp\\voces.json</code>, cifrado con tu cuenta de Windows, fuera de OneDrive, y se pueden olvidar en cualquier momento.</li>
         <li>Una huella de voz es un <b>dato biométrico</b>: solo se guarda si marcas que tienes el consentimiento de esa persona. Ese consentimiento es responsabilidad tuya.</li></ul>`, 'Activar');

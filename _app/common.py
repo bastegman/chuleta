@@ -13,6 +13,12 @@ import traceback
 import unicodedata
 
 WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y Explorador son solo de Windows
+# Nombre visible de la app: titulo de la ventana, mensajes, nombre del zip instalable. Centralizado aqui para poder
+# renombrarla sin tocar rutas: la carpeta _app, DATA_DIR (AudiosApp), los .bat y la carpeta raiz del zip NO cambian.
+APP_NAME = "Notas"
+# AppUserModelID: identifica la ventana en la barra de tareas (agrupa, icono, anclar). La misma cadena va en el
+# acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla.
+APP_ID = "Bernardo.Notas"
 BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
 
@@ -128,21 +134,28 @@ def wav_duration(path, size):
 LOGGER = logging.getLogger("notas")
 
 
+def has_console():
+    """False con pythonw.exe (el acceso directo): sys.stdout y sys.stderr son None y no hay donde imprimir."""
+    return sys.stdout is not None
+
+
 def setup_logging(data_dir):
-    """La consola de siempre y, ademas, %LOCALAPPDATA%\\AudiosApp\\server.log con rotacion (3 x 1 MB)."""
+    """La consola (si la hay) y, ademas, %LOCALAPPDATA%\\AudiosApp\\server.log con rotacion (3 x 1 MB).
+    Con pythonw.exe no hay consola (sys.stdout es None): solo el fichero, que es el registro completo."""
     import logging.handlers
     for h in list(LOGGER.handlers):
         LOGGER.removeHandler(h)
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
     stream = sys.stdout
-    try:  # consola cp1252/cp850 (Windows): los emojis del log no deben tumbar el logging («--- Logging error ---»)
-        stream.reconfigure(errors="backslashreplace")
-    except (AttributeError, ValueError):
-        pass
-    console = logging.StreamHandler(stream)
-    console.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
-    LOGGER.addHandler(console)
+    if stream is not None:
+        try:  # consola cp1252/cp850 (Windows): los emojis del log no deben tumbar el logging («--- Logging error ---»)
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+        console = logging.StreamHandler(stream)
+        console.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        LOGGER.addHandler(console)
     if not data_dir:
         return
     try:
@@ -169,7 +182,23 @@ def log_exc():
     try:
         LOGGER.error(traceback.format_exc().rstrip())
     except Exception:
-        traceback.print_exc()
+        if has_console():
+            traceback.print_exc()
+
+
+def alert(title, text):
+    """Error que el usuario tiene que ver aunque no haya consola (pythonw.exe): al log siempre y, en Windows sin
+    consola, un MessageBox (MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST). Con consola, el texto ya sale por ella."""
+    try:
+        LOGGER.error("%s: %s", title, text)
+    except Exception:
+        pass
+    if WINDOWS and not has_console():
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, title, 0x10 | 0x10000 | 0x40000)
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------------- secretos (DPAPI)

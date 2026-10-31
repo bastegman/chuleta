@@ -1,19 +1,23 @@
 ﻿# Instalador de Notas (lo lanza INSTALAR.bat). No necesita permisos de administrador:
 #   1. Python de 3.10 a 3.13 (si no hay, instala 3.13 con winget solo para este usuario)
 #   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests,
+#      pywebview (la ventana de la app sobre WebView2; sin ella se abre en Edge),
 #      sherpa-onnx (quien habla) y pywin32 (calendario de Outlook), opcionales: si no cargan, la app funciona igual
-#   3. Accesos directos "Notas" en el escritorio y en el menu Inicio
+#   3. Accesos directos "Notas" en el escritorio y en el menu Inicio: apuntan a pythonw.exe (sin ventana de consola)
+#      y llevan el AppUserModelID de la app, para que la barra de tareas agrupe y ancle la ventana como algo propio
 # Se puede repetir sin problema. Para probarlo sin tocar nada: -NoShortcut / -NoLaunch, y -Port / -Desktop
-# (otro puerto y otra carpeta de escritorio, como si fuera otro PC).
-param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "")
+# (otro puerto y otra carpeta de escritorio, como si fuera otro PC). -AppName cambia el nombre visible (el de
+# common.APP_NAME); las carpetas y los .bat no cambian.
+param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Notas")
 
 $ErrorActionPreference = "Continue"
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $app
-$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore")
+$packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststore", "pywebview==6.2.1")
 # opcionales: se instalan una a una y aparte del resto; si alguna falla, solo se avisa (la app funciona sin ella)
 $optional = @("sherpa-onnx==2.0.1", "pywin32==312")  # quien habla / calendario de Outlook
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
+$AppId = "Bernardo.Notas"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
 
 function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color }
 function Step($text) { Write-Host ""; Write-Host "  > $text" -ForegroundColor Cyan }
@@ -21,6 +25,59 @@ function Fail($text) {
     Write-Host ""
     Write-Host "  X  $text" -ForegroundColor Red
     exit 1
+}
+
+function Set-ShortcutAppId($path, $id) {
+    # System.AppUserModel.ID del .lnk (IPropertyStore de la shell). Con el mismo id que fija server.py en su proceso,
+    # Windows agrupa la ventana bajo este acceso directo y "Anclar a la barra de tareas" ancla el acceso directo
+    # (icono y argumentos) y no pythonw.exe a secas. Si falla, el acceso directo funciona igual.
+    try {
+        if (-not ("NotasLnk.PropertyStore" -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+namespace NotasLnk {
+  [StructLayout(LayoutKind.Sequential, Pack = 4)]
+  public struct PropertyKey { public Guid fmtid; public uint pid; public PropertyKey(Guid f, uint p) { fmtid = f; pid = p; } }
+  [StructLayout(LayoutKind.Explicit)]
+  public struct PropVariant {
+    [FieldOffset(0)] public ushort vt;
+    [FieldOffset(8)] public IntPtr p;
+    [FieldOffset(16)] public IntPtr p2;
+  }
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IPropertyStore {
+    void GetCount(out uint cProps);
+    void GetAt(uint iProp, out PropertyKey pkey);
+    void GetValue(ref PropertyKey key, out PropVariant pv);
+    void SetValue(ref PropertyKey key, ref PropVariant pv);
+    void Commit();
+  }
+  public static class PropertyStore {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern IPropertyStore SHGetPropertyStoreFromParsingName(string path, IntPtr pbc, int flags, ref Guid riid);
+    [DllImport("ole32.dll", PreserveSig = false)]
+    static extern void PropVariantClear(ref PropVariant pv);
+    public static void SetAppId(string lnk, string appId) {
+      Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+      IPropertyStore ps = SHGetPropertyStoreFromParsingName(lnk, IntPtr.Zero, 2, ref iid);
+      PropertyKey key = new PropertyKey(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5);
+      PropVariant pv = new PropVariant();
+      pv.vt = 31;
+      pv.p = Marshal.StringToCoTaskMemUni(appId);
+      try { ps.SetValue(ref key, ref pv); ps.Commit(); }
+      finally { PropVariantClear(ref pv); Marshal.ReleaseComObject(ps); }
+    }
+  }
+}
+"@
+        }
+        [NotasLnk.PropertyStore]::SetAppId($path, $id)
+        return $true
+    } catch {
+        Say "    (el acceso directo no lleva AppUserModelID: $($_.Exception.Message))" Yellow
+        return $false
+    }
 }
 
 function Find-Python {
@@ -52,36 +109,48 @@ function Find-Python {
 
 Write-Host ""
 Write-Host "  ==========================================================" -ForegroundColor DarkCyan
-Write-Host "    NOTAS  ·  grabar, transcribir y resumir reuniones" -ForegroundColor White
+Write-Host "    $($AppName.ToUpper())  ·  grabar, transcribir y resumir reuniones" -ForegroundColor White
 Write-Host "  ==========================================================" -ForegroundColor DarkCyan
 Say "    Carpeta: $root"
 
 # archivos descargados de Teams/correo: sin esto Windows pregunta cada vez al abrirlos
 Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
 
-# --- si Notas esta abierto se cierra: si no, al terminar se volveria a ver la version vieja (sigue en marcha)
-Step "Comprobando si Notas está abierto..."
+# --- si la app esta abierta se cierra: si no, al terminar se volveria a ver la version vieja (sigue en marcha)
+Step "Comprobando si $AppName está abierto..."
 $running = $null
 try { $running = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 2 } catch {}
 if ($running -and $running.app -eq "audios") {
     $st = $null
     try { $st = Invoke-RestMethod "http://127.0.0.1:$Port/api/rec/status" -TimeoutSec 2 } catch {}
-    if ($st -and $st.recording) { Fail "Notas está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
+    if ($st -and $st.recording) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
+    # primero por las buenas: POST /api/apagar (versiones desde el 31/10/2026); si no contesta, como antes
+    $apagado = $false
+    try {
+        $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5
+        for ($k = 0; $k -lt 24 -and -not $apagado; $k++) {
+            Start-Sleep -Milliseconds 250
+            try { $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 1 } catch { $apagado = $true }
+        }
+    } catch {}
     $owner = $null
+    if ($apagado) { $owner = -1 }
     try { $owner = (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess } catch {}
     if (-not $owner) {
         $m = netstat -ano -p tcp | Select-String ":$Port\s+\S+\s+LISTENING\s+(\d+)" | Select-Object -First 1
         if ($m) { $owner = [int]$m.Matches[0].Groups[1].Value }
     }
-    if (-not $owner) { Fail "Notas está abierto y no he podido cerrarlo: cierra su ventana negra y vuelve a abrir INSTALAR.bat." }
-    $ids = @($owner)
-    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$owner"
-    for ($k = 0; $k -lt 2 -and $p; $k++) {  # tambien el "py" y la ventana negra que lo lanzaron
-        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)"
-        if ($p -and ($p.Name -eq "py.exe" -or ($p.Name -eq "cmd.exe" -and $p.CommandLine -like "*Notas.bat*"))) { $ids += $p.ProcessId }
+    if (-not $owner) { Fail "$AppName está abierto y no he podido cerrarlo: ciérralo (Ajustes > Apagar, o su ventana de consola) y vuelve a abrir INSTALAR.bat." }
+    if ($owner -gt 0) {
+        $ids = @($owner)
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$owner"
+        for ($k = 0; $k -lt 2 -and $p; $k++) {  # tambien el "py" y la ventana de consola que lo lanzaron (instalaciones antiguas)
+            $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)"
+            if ($p -and ($p.Name -eq "py.exe" -or ($p.Name -eq "cmd.exe" -and $p.CommandLine -like "*Notas.bat*"))) { $ids += $p.ProcessId }
+        }
+        $ids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 1
     }
-    $ids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Seconds 1
     Say "    Cerrada la versión que estaba abierta (al terminar se abre la nueva)" Green
 } else {
     Say "    No estaba abierto"
@@ -92,16 +161,20 @@ if ($running -and $running.app -eq "audios") {
 if (-not $NoShortcut -or $Desktop) {
     $old = $null
     try {
-        $lnkPath = Join-Path $(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }) "Notas.lnk"
+        $lnkPath = Join-Path $(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }) "$AppName.lnk"
         if (Test-Path -LiteralPath $lnkPath) {
-            $oldApp = Split-Path -Parent (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath).TargetPath
+            $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
+            # el acceso directo apunta a pythonw.exe (desde el 31/10/2026) o a Notas.bat: la carpeta de la app es
+            # WorkingDirectory en los dos casos (y la del destino, en los antiguos)
+            $oldApp = $sc.WorkingDirectory
+            if (-not $oldApp -or -not (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) { $oldApp = Split-Path -Parent $sc.TargetPath }
             if ($oldApp -and (Test-Path -LiteralPath (Join-Path $oldApp "server.py")) -and
                 ((Resolve-Path -LiteralPath $oldApp).Path -ne (Resolve-Path -LiteralPath $app).Path)) { $old = $oldApp }
         }
     } catch {}
     if ($old) {
         $oldRoot = Split-Path -Parent $old
-        Step "Ya tenías Notas en $oldRoot : actualizo esa (con tus grabaciones)..."
+        Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..."
         Get-ChildItem -LiteralPath $app -File | Where-Object { $_.Extension -in ".py", ".bat", ".ps1" } |
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $old -Force }
         foreach ($sub in @("static", "export")) {  # export: plantillas del instalador (para "Compartir Notas")
@@ -178,6 +251,9 @@ if ($coreOk) {
 if ($LASTEXITCODE -ne 0) { Say "    sherpa-onnx no esta disponible: la opcion Voces (quien habla) no se podra activar en este PC" Yellow }
 & $py -c "import win32com.client; print('    pywin32 (calendario de Outlook: disponible)')" 2>$null
 if ($LASTEXITCODE -ne 0) { Say "    pywin32 no esta disponible: no se podra leer el calendario de Outlook (el resto funciona)" Yellow }
+# la ventana propia tampoco bloquea: sin pywebview (o sin WebView2) la app se abre en Edge como siempre
+& $py -c "import webview; from importlib.metadata import version; print('    pywebview', version('pywebview'), '(ventana propia: disponible)')" 2>$null
+if ($LASTEXITCODE -ne 0) { Say "    pywebview no esta disponible: la app se abrira en una ventana de Edge" Yellow }
 if (-not $coreOk) {
     $log = ($script:pipOut -join "`n")
     $pyVer = & $py -c "import sys; print('%d.%d' % sys.version_info[:2])"
@@ -195,21 +271,34 @@ if (-not $coreOk) {
 }
 # el lanzador usa este Python (si hay varios instalados, el de las librerias)
 [IO.File]::WriteAllText((Join-Path $app "python.txt"), $py, (New-Object Text.UTF8Encoding $false))
+# pythonw.exe (junto a python.exe): el mismo interprete sin ventana de consola; el log completo queda en server.log
+$pyw = Join-Path (Split-Path -Parent $py) "pythonw.exe"
+$sinConsola = Test-Path -LiteralPath $pyw
+if (-not $sinConsola) { Say "    No hay pythonw.exe junto a $py : el acceso directo abrirá una ventana de consola (Notas.bat)" Yellow }
 
 if (-not $NoShortcut) {
-    Step "Creando el acceso directo 'Notas'..."
+    Step "Creando el acceso directo '$AppName'..."
     $ws = New-Object -ComObject WScript.Shell
     $places = if ($Desktop) { @($Desktop) } else { @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs")) }  # escritorio y menu Inicio
     foreach ($dir in $places) {
         try {
-            $lnk = $ws.CreateShortcut((Join-Path $dir "Notas.lnk"))
-            $lnk.TargetPath = Join-Path $app "Notas.bat"
+            $lnkPath = Join-Path $dir "$AppName.lnk"
+            $lnk = $ws.CreateShortcut($lnkPath)
+            if ($sinConsola) {
+                $lnk.TargetPath = $pyw
+                $lnk.Arguments = '"' + (Join-Path $app "server.py") + '"'
+                $lnk.WindowStyle = 1
+            } else {
+                $lnk.TargetPath = Join-Path $app "Notas.bat"
+                $lnk.Arguments = ""
+                $lnk.WindowStyle = 7  # la ventana de consola, minimizada
+            }
             $lnk.WorkingDirectory = $app
             $lnk.IconLocation = (Join-Path $app "static\notas.ico") + ",0"
-            $lnk.WindowStyle = 7  # la ventana del motor, minimizada
-            $lnk.Description = "Notas: grabar, transcribir y resumir reuniones"
+            $lnk.Description = "$AppName`: grabar, transcribir y resumir reuniones"
             $lnk.Save()
-            Say "    $dir\Notas.lnk" Green
+            $null = Set-ShortcutAppId $lnkPath $AppId
+            Say "    $lnkPath" Green
         } catch {
             Say "    No se pudo crear en $dir (usa ABRIR NOTAS.bat)" Yellow
         }
@@ -221,7 +310,9 @@ $ver = "$(Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\LEEME.txt') -Tot
 $ver = if ($ver -match '\((vers[^)]*)\)') { " ($($Matches[1]))" } else { "" }
 Write-Host "  Listo$ver." -ForegroundColor Green
 Write-Host "  Si es la primera vez: Ajustes (rueda dentada) > Transcripcion en la nube > tu API key (Groq u otro proveedor)." -ForegroundColor Green
+Write-Host "  Para apagar $AppName del todo: Ajustes > Apagar $AppName (cerrar la ventana la deja en segundo plano)." -ForegroundColor Green
 Write-Host "  Instrucciones completas en LEEME.txt" -ForegroundColor Green
 if (-not $NoLaunch) {
-    Start-Process -FilePath (Join-Path $app "Notas.bat") -WorkingDirectory $app -WindowStyle Minimized
+    if ($sinConsola) { Start-Process -FilePath $pyw -ArgumentList "server.py" -WorkingDirectory $app }
+    else { Start-Process -FilePath (Join-Path $app "Notas.bat") -WorkingDirectory $app -WindowStyle Minimized }
 }

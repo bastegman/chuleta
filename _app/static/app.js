@@ -130,7 +130,7 @@ const provName = () => S.config?.providers?.[S.config.cloud?.provider]?.label ||
 const estDuration = a => a.duration || (a.ext === '.wav' ? a.size / 192000 : a.size / 16000);
 /* nombres de carpeta: las vinculadas (fuera de Audios) van por dentro como ":<id>/…" y se ven con su nombre */
 const nodeName = p => nfc(S.folders.get(p)?.name ?? p.split('/').pop());
-const folderName = p => p ? nodeName(p) : 'Notas (raíz)';
+const folderName = p => p ? nodeName(p) : `${APP_NAME} (raíz)`;
 const pathLabel = p => p.split('/').map((_, i, parts) => nodeName(parts.slice(0, i + 1).join('/'))).join(' › ');
 
 function hlTerms(text, terms) {
@@ -156,6 +156,8 @@ async function api(path, body) {
 }
 
 /* ---------------------------------------------------------------- estado */
+// Nombre de la app: el servidor lo pone en <title> (common.APP_NAME) y lo confirma /api/config (setConfig)
+let APP_NAME = document.title;
 const S = {
   config: null, presetsById: {}, tree: null, version: '',
   audios: new Map(), folders: new Map(), docs: new Map(),
@@ -269,7 +271,7 @@ function renderLiveHero(a) {
     <div class="lh-row">
       <span class="rec-badge"><i class="recdot"></i>EN VIVO</span>
       <span class="lh-clock" data-rec-clock>${fmtClock(clockNow(a.path))}</span>
-      <span class="lh-sub">${mine ? 'grabando desde Notas' : 'grabado hasta ahora'}</span>
+      <span class="lh-sub">${mine ? `grabando desde ${APP_NAME}` : 'grabado hasta ahora'}</span>
       <span class="sp"></span>
       ${mine && S.rec.mic ? `<button class="btn sm${muted ? ' muted-on' : ''}" data-act="rec-mute" title="Deja de grabar tu voz; el audio del ordenador se sigue grabando">${muted ? I.micOff + 'Micro silenciado · reactivar' : I.mic + 'Silenciar mi micro'}</button>` : ''}
       ${mine ? `<button class="btn sm rec-stop" data-act="rec-stop">${I.stop}Parar grabación</button>` : ''}
@@ -334,6 +336,7 @@ S.rec = { recording: false };
 let recTimer = null, recDialog = false;
 async function pollRec() {
   clearTimeout(recTimer);
+  if (S.off) return;
   const was = !!S.rec.recording;
   try { S.rec = await api('/api/rec/status' + (recDialog ? '?monitor=1' : '')); } catch { /* reiniciando */ }
   // la app se ha actualizado y reiniciado: se recarga sola (sin cortar un dialogo ni un audio que suena)
@@ -405,7 +408,7 @@ async function openRec() {
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
       ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar con esta misma configuración desde cualquier programa (aunque estés en Teams) y vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
-      : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con Notas en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
+      : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
     <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
     d.addEventListener('click', e => { if (e.target.closest('[data-m="no"]')) closeModal(false); });
@@ -709,7 +712,7 @@ async function moveItem(path, folder, name) {
 /* ---------------------------------------------------------------- componentes */
 function crumbs(path, last) {
   const parts = path ? path.split('/') : [];
-  const out = ['<a href="#/">Notas</a>'];
+  const out = [`<a href="#/">${esc(APP_NAME)}</a>`];
   parts.forEach((p, i) => out.push(`<span class="sep">›</span><a href="${href('f', parts.slice(0, i + 1).join('/'))}">${esc(nodeName(parts.slice(0, i + 1).join('/')))}</a>`));
   if (last) out.push(`<span class="sep">›</span><span>${esc(last)}</span>`);
   return `<div class="crumbs">${out.join('')}</div>`;
@@ -875,9 +878,9 @@ function viewFolder(f) {
       <button class="btn" data-act="new-folder" data-path="${esc(f.path)}">${I.plus}Subcarpeta</button>
       <button class="btn" data-act="rename-folder" data-path="${esc(f.path)}">${I.edit}Renombrar</button>
       <button class="btn" data-act="reveal" data-path="${esc(f.path)}">${I.ext}Abrir en el Explorador</button>
-      ${f.linked ? `<button class="btn" data-act="link-remove" data-path="${esc(f.path)}" title="Deja de verse en Notas; no se borra nada">Quitar de Notas</button>` : ''}
+      ${f.linked ? `<button class="btn" data-act="link-remove" data-path="${esc(f.path)}" title="Deja de verse en ${esc(APP_NAME)}; no se borra nada">Quitar de ${esc(APP_NAME)}</button>` : ''}
     </div>
-    ${f.linked ? `<div class="help">${I.link}Carpeta vinculada: <code>${esc(f.linked)}</code>${f.missing ? ' · <span class="warn-txt">ahora no se encuentra (¿disco o OneDrive desconectado?)</span>' : ''}. «Renombrar» solo cambia cómo se llama en Notas.</div>` : ''}
+    ${f.linked ? `<div class="help">${I.link}Carpeta vinculada: <code>${esc(f.linked)}</code>${f.missing ? ' · <span class="warn-txt">ahora no se encuentra (¿disco o OneDrive desconectado?)</span>' : ''}. «Renombrar» solo cambia cómo se llama en ${esc(APP_NAME)}.</div>` : ''}
     ${pending.length ? `<h2>Pendientes <span class="count">${pending.length}</span></h2>${txBox(pending, pending.length === 1 ? 'Transcribir el pendiente' : `Transcribir los ${pending.length} pendientes`, { resume: true })}` : ''}
     ${f.folders.length ? `<h2>Carpetas <span class="count">${f.folders.length}</span></h2><div class="fgrid">${f.folders.map(fcard).join('')}</div>` : ''}
     ${f.audios.length || !f.folders.length ? `<h2>Grabaciones <span class="count">${f.audios.length}</span></h2>${alist(f.audios)}` : ''}
@@ -1325,7 +1328,7 @@ async function viewSearch(q) {
     const hits = x.hits.map(h => `<div class="hit" data-go="${k}" data-path="${esc(x.path)}" data-t="${h.start ?? ''}" data-q="${esc(q)}">`
       + `<span class="ts">${h.start != null ? fmtClock(h.start) : '·'}</span><span>${hlTerms(h.text, terms)}</span></div>`).join('');
     return `<div class="card sres"><div class="h" data-go="${k}" data-path="${esc(x.path)}" data-q="${esc(q)}"><b>${x.kind === 'doc' ? I.doc : ''}${esc(title)}</b>`
-      + `<span class="f">${esc(nfc(x.folder || 'Notas').replaceAll('/', ' › '))} · ${x.count} ${x.count === 1 ? 'vez' : 'veces'}</span></div>${hits}`
+      + `<span class="f">${esc(nfc(x.folder || APP_NAME).replaceAll('/', ' › '))} · ${x.count} ${x.count === 1 ? 'vez' : 'veces'}</span></div>${hits}`
       + `${x.count > x.hits.length ? `<div class="muted" style="font-size:12.5px;padding-top:6px">y ${x.count - x.hits.length} más…</div>` : ''}</div>`;
   }).join('');
 }
@@ -1580,6 +1583,7 @@ document.addEventListener('keydown', e => {
 let jobsTimer = null;
 async function pollJobs(now) {
   clearTimeout(jobsTimer);
+  if (S.off) return;
   try { onJobs((await api('/api/jobs')).jobs); } catch { /* servidor reiniciandose */ }
   const active = S.jobs.some(isActive);
   jobsTimer = setTimeout(pollJobs, active ? 1000 : 4000);
@@ -1601,7 +1605,7 @@ function onJobs(jobs) {
   badge.textContent = active.length;
   badge.classList.toggle('hidden', !active.length);
   badge.classList.toggle('pulse', !!running);
-  document.title = running ? `(${Math.round(running.progress * 100)} %) Notas` : 'Notas';
+  document.title = running ? `(${Math.round(running.progress * 100)} %) ${APP_NAME}` : APP_NAME;
   if (!$('#jobsPanel').classList.contains('hidden')) renderJobsPanel();
   onSummaryJobs(prev);
   onVoicesJobs(prev);
@@ -1699,7 +1703,7 @@ function ask(title, html, ok = 'Aceptar') {
 
 function flatFolders() {
   const out = [];
-  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : 'Notas (raíz)', depth: d }); n.folders.forEach(f => w(f, d + 1)); })(S.tree, 0);
+  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); n.folders.forEach(f => w(f, d + 1)); })(S.tree, 0);
   return out;
 }
 /* vincular una carpeta de fuera de Audios (p. ej. la del proyecto): selector de carpetas de Windows */
@@ -1713,19 +1717,19 @@ async function linkFolder() {
     const r = await api('/api/link/add', { path });
     setConfig(await api('/api/config'));
     await refreshTree(true);
-    toast(`🔗 <b>${esc(r.name)}</b> añadida a Notas: aparece arriba en Carpetas`);
+    toast(`🔗 <b>${esc(r.name)}</b> añadida a ${esc(APP_NAME)}: aparece arriba en Carpetas`);
     return r.rel;
   } catch (err) { toast(esc(err.message), 'err'); return null; }
 }
 async function unlinkFolder(rel) {
   const f = S.folders.get(rel);
-  if (!f || !await ask(`¿Quitar «${nfc(f.name)}» de Notas?`, `No se borra ni se mueve nada: la carpeta y sus grabaciones siguen en<br><code>${esc(f.linked)}</code><br>y la puedes volver a añadir cuando quieras.`, 'Quitar de Notas')) return false;
+  if (!f || !await ask(`¿Quitar «${nfc(f.name)}» de ${APP_NAME}?`, `No se borra ni se mueve nada: la carpeta y sus grabaciones siguen en<br><code>${esc(f.linked)}</code><br>y la puedes volver a añadir cuando quieras.`, `Quitar de ${APP_NAME}`)) return false;
   try {
     await api('/api/link/remove', { path: rel });
     setConfig(await api('/api/config'));
     await refreshTree(true);
     if ((S.route.path || '').startsWith(rel)) go('home', '');
-    toast(`«${esc(nfc(f.name))}» ya no aparece en Notas (sus archivos siguen donde estaban)`);
+    toast(`«${esc(nfc(f.name))}» ya no aparece en ${esc(APP_NAME)} (sus archivos siguen donde estaban)`);
     return true;
   } catch (err) { toast(esc(err.message), 'err'); return false; }
 }
@@ -1839,7 +1843,7 @@ function openSettings() {
     <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
       <div id="sLinks"></div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
-      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. Notas la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de Notas no borra nada.</div>
+      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de Notas no borra nada.</div>
     </fieldset>
     <fieldset><legend>${I.book}Vocabulario</legend>
       <label>Por tema <span class="muted" style="font-weight:400">· se elige al grabar o en cada reunión</span></label>
@@ -1849,15 +1853,18 @@ function openSettings() {
       <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
     </fieldset>
     ${vocesFieldsetHtml()}
-    <fieldset><legend>${I.package}Compartir Notas</legend>
+    <fieldset><legend>${I.package}Compartir ${esc(APP_NAME)}</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario por tema <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="xExport" type="button">Crear instalador para otra persona</button><span id="xRes" class="muted" style="font-size:12.5px"></span></div>
-      <div class="help">Crea en el escritorio <b>Notas - instalador.zip</b> con la app completa y un INSTALAR.bat. No lleva tus grabaciones, notas, ajustes ni tu API key: la otra persona conecta su propio proveedor. Compártelo por un enlace de OneDrive o Teams (el correo suele bloquear los .zip con .bat).<br>
+      <div class="help">Crea en el escritorio <b>${esc(APP_NAME)} - instalador.zip</b> con la app completa y un INSTALAR.bat. No lleva tus grabaciones, notas, ajustes ni tu API key: la otra persona conecta su propio proveedor. Compártelo por un enlace de OneDrive o Teams (el correo suele bloquear los .zip con .bat).<br>
         <b>Para actualizar a alguien que ya lo tiene</b>: mándale el zip nuevo y que ejecute su INSTALAR.bat. El instalador cierra la versión abierta y actualiza la que ya tenía, en su carpeta de siempre (con sus grabaciones).</div>
     </fieldset>
     <div class="help" style="margin-top:16px"><b>Atajos:</b> Ctrl+Alt+R empezar/parar grabación (desde cualquier programa) · Espacio reproducir/pausa · ← → 5 s · Shift + ← → 15 s · [ ] velocidad · Ctrl K buscar en todas las transcripciones · Ctrl P ir a una reunión · Ctrl F buscar en la transcripción</div>
-    <div class="help" style="margin-top:6px">Notas · versión del ${esc(S.config.version || '')}</div>
+    <div class="help" style="margin-top:6px">${esc(APP_NAME)} · versión del ${esc(S.config.version || '')}</div>
+    <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">⏻ Apagar ${esc(APP_NAME)}</button>
+      <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
+    $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
     const fields = () => {
       const p = $('#cProv', d).value, info = P[p];
       if (p === 'azure') {
@@ -1955,6 +1962,22 @@ function openSettings() {
 }
 $('#btnSettings').onclick = openSettings;
 
+/* ---------------------------------------------------------------- apagar */
+async function confirmShutdown() {
+  const busy = S.jobs.some(isActive);
+  const ok = await ask(`Apagar ${APP_NAME}`, `<p>Se cierra la app del todo: la ventana y el motor que corre en segundo plano. El atajo Ctrl+Alt+R dejará de funcionar hasta que la vuelvas a abrir con el acceso directo.</p>${busy ? '<p><b>Hay transcripciones en marcha</b>: se cancelan (lo ya escrito se conserva) y podrás relanzarlas al volver.</p>' : ''}`, 'Apagar');
+  if (!ok) return openSettings();  // la confirmacion ocupa el hueco de Ajustes: al cancelar, se vuelve
+  try { await api('/api/apagar', {}); shutdownScreen(); }
+  catch (err) { toast(esc(err.message), 'err'); }
+}
+function shutdownScreen() {
+  S.off = true;  // los sondeos paran: el servidor ya no contesta
+  clearTimeout(recTimer); clearTimeout(jobsTimer);
+  document.title = `${APP_NAME} · apagada`;
+  document.body.innerHTML = `<div class="page" style="max-width:520px;margin:18vh auto;text-align:center"><img src="/notas.png" alt="" style="width:72px;height:72px">
+    <h2 style="margin:16px 0 8px">${esc(APP_NAME)} se ha apagado</h2><p class="muted">Cierra esta ventana. Para volver a usar ${esc(APP_NAME)}, ábrela con el acceso directo del escritorio.</p></div>`;
+}
+
 function toast(html, kind = '', onclick) {
   const el = document.createElement('div');
   el.className = 'toast ' + kind;
@@ -1967,6 +1990,7 @@ function toast(html, kind = '', onclick) {
 /* ---------------------------------------------------------------- arranque */
 function setConfig(c) {
   S.config = c;
+  if (c.app_name) APP_NAME = c.app_name;
   S.presetsById = Object.fromEntries(c.presets.map(p => [p.id, p]));
   if (!S.selPreset || !S.presetsById[S.selPreset]) S.selPreset = c.preset in S.presetsById ? c.preset : 'rapido';
   if (S.selLang == null) S.selLang = c.language ?? 'es-en';
@@ -1991,13 +2015,13 @@ async function init() {
     indexTree(r.tree);
     await loadVocab();  // temas (<proyecto>/Vocabulario/*.txt…) para los selectores
   } catch (err) {
-    main.innerHTML = `<div class="page"><div class="card empty">No se puede conectar con el servidor de la app.<br>Ábrela con el acceso directo <b>Notas</b> del escritorio.<br><br><span class="muted">${esc(err.message)}</span></div></div>`;
+    main.innerHTML = `<div class="page"><div class="card empty">No se puede conectar con el servidor de la app.<br>Ábrela con el acceso directo <b>${esc(APP_NAME)}</b> del escritorio.<br><br><span class="muted">${esc(err.message)}</span></div></div>`;
     return;
   }
   route();
   pollJobs();
   pollRec();
-  setInterval(() => { if (!document.hidden) refreshTree(); }, 6000);
+  setInterval(() => { if (!document.hidden && !S.off) refreshTree(); }, 6000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTree(); });
 }
 addEventListener('DOMContentLoaded', init);  // tras cargar tambien notas.js
