@@ -68,6 +68,10 @@ def write_version(version):
 
 
 def main(argv):
+    try:  # en Windows, con la salida redirigida, stdout va en cp1252 y «versión» rompe a quien la lea como UTF-8
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     ap = argparse.ArgumentParser(description="Genera el zip instalable.")
     ap.add_argument("dest", nargs="?", default=os.path.join(REPO, "dist", f"{server.APP_NAME} - instalador.zip"))
     ap.add_argument("--vocab", nargs="?", const=REPO, default=None, metavar="CARPETA",

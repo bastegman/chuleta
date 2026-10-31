@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """Medición (solo Windows, pensada para un runner de GitHub Actions): qué icono y qué AppUserModelID pone Edge en la
-ventana `--app=` de Notas según lo que sirva la página como favicon.
+ventana `--app=` de la app según lo que sirva la página como favicon.
 
     python scripts/lookfeel_spike.py SALIDA
 
 Para cada variante copia `_app` a una carpeta temporal, ajusta `static/index.html`, arranca `server.py --no-browser`
 en el puerto 8765, abre `msedge --app=http://127.0.0.1:8765 --window-size=1200,800` con un perfil nuevo, espera la
-ventana titulada «Notas» y vuelca a SALIDA/report.json y SALIDA/report.md:
+ventana titulada como la app (common.APP_NAME) y vuelca a SALIDA/report.json y SALIDA/report.md:
   (a) el AppUserModelID de la ventana (SHGetPropertyStoreForWindow + PKEY_AppUserModel_ID);
   (b) el tamaño en píxeles de los iconos WM_GETICON (ICON_SMALL, ICON_BIG, ICON_SMALL2) y de los de la clase
       (GCLP_HICON, GCLP_HICONSM), que guarda además como PNG para verlos.
@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 PORT = 8765
 URL = f"http://127.0.0.1:{PORT}/"
-TITLE = "Notas"
+TITLE = "Chuleta"  # = common.APP_NAME (el <title> que sirve index.html)
 
 SVG_HEAD = '<link rel="icon" href="/logo.svg" type="image/svg+xml">\n'
 ICO_HEAD = ('<link rel="icon" href="/notas.ico" sizes="16x16 20x20 24x24 32x32 40x40 48x48 64x64 128x128 256x256">\n'
@@ -330,7 +330,7 @@ def measure_variant(kind, base, out_dir, edge):
             if not hwnd:
                 time.sleep(0.5)
         if not hwnd:
-            rec["notes"].append("no apareció ninguna ventana Chrome_WidgetWin titulada «Notas» en 45 s")
+            rec["notes"].append(f"no apareció ninguna ventana Chrome_WidgetWin titulada «{TITLE}» en 45 s")
             rec["windows"] = [{"hwnd": h, "title": t, "class": c, "pid": p} for h, t, c, p in windows()
                               if c.startswith("Chrome_WidgetWin") or "Edge" in t]
             return rec

@@ -5,6 +5,38 @@
 Punto de partida: la versión del 30/10/2026 tal como se exportaba desde la propia app, saneada para que no lleve
 nada de ningún proyecto concreto.
 
+### Renombrado a Chuleta
+- La app pasa a llamarse **Chuleta** (`common.APP_NAME`): título de la ventana y de la pestaña, raíz del árbol,
+  mensajes y avisos, cabecera `Server`, nombre del zip (`Chuleta - instalador.zip`) y su carpeta raíz (`Chuleta/`),
+  `-AppName` del instalador y el acceso directo «Chuleta» («Chuleta: grabar, transcribir y resumir reuniones»).
+  Ficheros renombrados conservando la historia: `ABRIR NOTAS.bat` → `ABRIR CHULETA.bat` (raíz y `_app/export`),
+  `_app/Notas.bat` → `_app/Chuleta.bat`, `_app/static/notas.ico`/`.png` → `chuleta.ico`/`.png` (`make_icons.py`,
+  `index.html`, la ventana y el instalador los usan).
+- **No cambia, a propósito**, para que las instalaciones y los datos existentes sigan valiendo: la carpeta de datos
+  `%LOCALAPPDATA%\AudiosApp`, la cabecera `X-Audios`, la respuesta de `/api/ping` (`"audios"`), las claves de los
+  `.md` (`proyecto`, `workstream`), el AppUserModelID `Bernardo.Chuleta` (ya era este), la pestaña **Notas** de cada
+  reunión y «Tomar Notas» (son la función de tomar notas, no la marca), `notas.js`, y las variables de entorno
+  `NOTAS_*` que solo usan los tests y la CI.
+- **Instalador**: encuentra la instalación anterior también por su acceso directo `Notas.lnk` (escritorio y, si allí
+  no hay ninguno, menú Inicio), la actualiza en su carpeta como siempre y **renombra** `Notas.lnk` a `Chuleta.lnk`
+  (nunca borra nada; si ya existiera un `Chuleta.lnk`, conserva el antiguo y lo dice en el detalle). Copia también
+  `_app/version.txt` y `ABRIR CHULETA.bat`; `ABRIR NOTAS.bat` y `_app/Notas.bat` de la copia antigua se quedan (siguen
+  funcionando) y el detalle avisa de que ya no hacen falta. Los mensajes llevan sus tildes («instalación»,
+  «librerías», «Transcripción») y el «Listo» enseña la versión instalada.
+- **Versión real**: `scripts/build_zip.py` escribe `_app/version.txt` con `AAAA-MM-DD · <sha corto>` (fecha del
+  commit y `git rev-parse --short HEAD`; sin git, la fecha de hoy), lo mete en el zip y pone la misma cadena en la
+  primera línea del `LEEME.txt` generado. `server.py` la enseña como versión si el fichero existe (si no, la fecha y
+  hora del código, como antes); la recarga automática de la ventana al actualizar sigue basada en el mtime. Una copia
+  instalada que vuelve a exportar conserva su versión.
+- **Ajustes → Acerca de** (al final): nombre, versión, licencia (leída de `LICENSE`), enlace al repositorio
+  (`github.com/bastegman/chuleta`), carpeta de datos con «Abrir» (`POST /api/acerca/abrir`) y «Copiar diagnóstico»
+  (`GET /api/diagnostico`: versión, Python, sistema, motor y modelo, carpetas y las últimas 30 líneas de `server.log`
+  con la API key, las claves adicionales y cualquier token con pinta de clave enmascarados).
+- E2E de Windows (`scripts/e2e/lookfeel_e2e.ps1`, workflow `lookfeel-e2e`): instalación limpia que crea
+  `Chuleta.lnk` y abre la ventana «Chuleta»; segunda instalación sobre una copia con `Notas.lnk` (la detecta, la
+  actualiza, renombra el acceso directo y arranca con el título nuevo); tercera con los dos accesos directos
+  (conserva `Notas.lnk`); e instalación que falla a propósito.
+
 ### Cambiado
 - El árbol de reuniones (`/api/tree`, que la página sondea cada 6 s) ya no recorre el disco si ninguna carpeta ha
   cambiado de fecha y ninguna grabación abierta ha crecido (un `stat` por carpeta); cada 30 s se repasa todo en
@@ -16,27 +48,26 @@ nada de ningún proyecto concreto.
   (SVG) en vez de emojis en la navegación, los botones, las pestañas, las propiedades, Ajustes y las etiquetas de
   formulario (los iconos que elige el usuario para carpetas y reuniones siguen siendo emojis, y los avisos
   emergentes no cambian); etiquetas de hablante con un color estable por persona; botones, chips, diálogos y
-  tablas con radios, sombras y estados de foco coherentes. Los demás textos «Notas» se cambian en el renombrado.
+  tablas con radios, sombras y estados de foco coherentes. Los demás textos «Notas» cambian en el renombrado (arriba).
 - **Ventana propia** (`_app/window.py`, pywebview sobre WebView2, el motor de Edge que trae Windows) en vez de
   `msedge --app`: la barra de tareas ve un proceso nuestro con nuestro icono (256 px por `WM_SETICON`) y el
-  AppUserModelID `Bernardo.Notas`, no una ventana más de Edge. Cerrar la ventana la **oculta**: la app sigue en
+  AppUserModelID `Bernardo.Chuleta`, no una ventana más de Edge. Cerrar la ventana la **oculta**: la app sigue en
   segundo plano (Ctrl+Alt+R y las grabaciones siguen) y el acceso directo la vuelve a enseñar (`POST /api/mostrar`).
   Si pywebview no está o no puede abrir la ventana, se abre Edge como antes. Medido en `windows-latest` (Python 3.10
   y 3.13): con `msedge --app` la ventana lleva el AUMID `MSEdge.127.0.0.1_/` (con `--user-data-dir` propio,
   `MSEdge.127.0.0.1_/.<carpeta>.Default`) e iconos de 16/32 px sacados del favicon; con la ventana propia, 16 y 256.
 - **Sin ventana de consola**: el acceso directo apunta a `pythonw.exe server.py` (el mismo Python de `python.txt`),
   con el icono y el `System.AppUserModel.ID` del .lnk, para que «Anclar a la barra de tareas» ancle el acceso
-  directo y no `pythonw.exe` a secas. `ABRIR NOTAS.bat` / `_app/Notas.bat` siguen arrancando con consola (modo
+  directo y no `pythonw.exe` a secas. `ABRIR CHULETA.bat` / `_app/Chuleta.bat` siguen arrancando con consola (modo
   diagnóstico). Sin consola, `print` se pierde: el arranque y el apagado hablan solo por `server.log`, y un error de
   arranque (puerto ocupado por otro programa, excepción al iniciar) se anota ahí y sale en un aviso de Windows.
-- **Ajustes → ⏻ Apagar Notas** (`POST /api/apagar`): la salida explícita ahora que no hay consola. Se niega si hay
+- **Ajustes → ⏻ Apagar Chuleta** (`POST /api/apagar`): la salida explícita ahora que no hay consola. Se niega si hay
   una grabación en curso; si no, cancela la cola, mata los procesos de Whisper, cierra el servidor y la ventana y
-  termina el proceso al cabo de 0,5 s; la página muestra «Notas se ha apagado». El instalador lo usa para cerrar la
+  termina el proceso al cabo de 0,5 s; la página muestra «Chuleta se ha apagado». El instalador lo usa para cerrar la
   copia abierta antes de recurrir a matar procesos.
 - El nombre visible de la app sale de `common.APP_NAME` (título de la ventana y de la pestaña, raíz del árbol,
   mensajes, nombre del zip instalable); `app.js` lo recibe por `/api/config` (`app_name`) y `instalar.ps1` por
-  `-AppName`. Rutas, carpetas (`_app`, `AudiosApp`, la raíz `Notas/` del zip) y `.bat` no cambian. Prepara el
-  renombrado pendiente.
+  `-AppName`. Rutas y la carpeta de datos (`_app`, `AudiosApp`) no cambian. Preparaba el renombrado (hecho: arriba).
 - La app es agnóstica: ejemplos, placeholders, avisos y el manual ya no nombran a ningún cliente, empresa ni
   persona. Los avisos de privacidad hablan de «la política de tu empresa y el acuerdo con tu cliente, si lo hay».
 - La etiqueta «Workstream» de la interfaz pasa a «Tema». Los ficheros `.md` siguen usando las claves `proyecto`
@@ -48,7 +79,7 @@ nada de ningún proyecto concreto.
 - `requirements.txt`, `LICENSE` (MIT), `README.md` y este fichero.
 
 ### Corregido
-- El icono de la app (acceso directo, barra de tareas, pestaña): `notas.ico` se genera ahora con `make_icons.py`
+- El icono de la app (acceso directo, barra de tareas, pestaña): `chuleta.ico` se genera ahora con `make_icons.py`
   desde el SVG, con los tamaños de 16 y 20 px dibujados aparte (sin anillas, renglones de 1 px) en vez de ser una
   reducción borrosa del de 256, y todas las entradas en BMP (el anterior las llevaba en PNG, que Windows no siempre
   pinta bien en tamaños pequeños). La página usa el `.ico` y el PNG de 256 como favicon en vez del SVG.
@@ -207,7 +238,7 @@ nada de ningún proyecto concreto.
   o con alternativa (`open`/`xdg-open`; la «papelera» es `DATA_DIR/papelera/<fecha>/`).
 - Tests (`tests/`, `python tests/run.py`), `flake8` (`setup.cfg`) y CI en GitHub Actions (Windows y Ubuntu ×
   Python 3.10–3.13).
-- `scripts/build_zip.py` genera `dist/Notas - instalador.zip` sin vocabulario.
+- `scripts/build_zip.py` genera `dist/Chuleta - instalador.zip` sin vocabulario.
 - `server.py` se reparte en módulos planos (el instalador solo copia ficheros sueltos de `_app`): `common.py`
   (utilidades puras y log) y `recording.py` (atajo global, pitidos, avisos, proceso de la grabadora y detección
   de reunión). El árbol, la cola y la API siguen en `server.py` (≈2.800 líneas): separarlos exige un módulo de

@@ -1,4 +1,4 @@
-# Notas
+# Chuleta
 
 App local de Windows para grabar reuniones, transcribirlas y resumirlas. Funciona en tu propio PC, en su propia
 ventana (WebView2, el motor de Edge que trae Windows), sin instalar nada más que Python y unas librerías. Todo lo tuyo (grabaciones, transcripciones,
@@ -33,20 +33,22 @@ notas) se queda en la carpeta donde descomprimas la app.
 
 ## Instalar (Windows, sin permisos de administrador)
 
-1. Descarga el zip (`Notas - instalador.zip`) o este repositorio y descomprímelo donde quieras tener tus
+1. Descarga el zip (`Chuleta - instalador.zip`) o este repositorio y descomprímelo donde quieras tener tus
    reuniones (Documentos, Escritorio, OneDrive…).
 2. Doble clic en `INSTALAR.bat`. Si no hay Python lo instala, instala las librerías (`requirements.txt`) y
-   crea el acceso directo «Notas» en el escritorio y en el menú Inicio.
-3. Se abre Notas. Para transcribir en la nube: ⚙ Ajustes → Transcripción en la nube → tu API key.
+   crea el acceso directo «Chuleta» en el escritorio y en el menú Inicio.
+3. Se abre Chuleta. Para transcribir en la nube: ⚙ Ajustes → Transcripción en la nube → tu API key.
    Sin nube también funciona (transcribe en el propio PC, más lento).
-4. Cerrar la ventana deja Notas en segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando); el acceso directo la
-   vuelve a abrir. Para apagarla del todo: ⚙ Ajustes → Apagar Notas.
+4. Cerrar la ventana deja Chuleta en segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando); el acceso directo la
+   vuelve a abrir. Para apagarla del todo: ⚙ Ajustes → Apagar Chuleta.
+5. Si ya tenías la versión anterior (se llamaba «Notas»), el mismo `INSTALAR.bat` la encuentra por su acceso directo,
+   la actualiza en su carpeta (con tus grabaciones) y renombra el acceso directo «Notas» a «Chuleta»; no borra nada.
 
 El manual completo está en `LEEME.txt`.
 
 ## Privacidad
 
-- Grabaciones, transcripciones y notas viven en la carpeta de Notas, en tu PC.
+- Grabaciones, transcripciones y notas viven en la carpeta de Chuleta, en tu PC.
 - Ajustes y API key, en `%LOCALAPPDATA%\AudiosApp` (fuera de OneDrive). La API key se guarda cifrada con DPAPI
   (solo tu cuenta de Windows en ese PC la descifra; si DPAPI fallara, se guardaría en claro y quedaría anotado en
   `server.log`). Ahí quedan también los registros (`server.log`,
@@ -74,8 +76,11 @@ El manual completo está en `LEEME.txt`.
 El servidor es Python 3.10–3.13 con la librería estándar más `faster-whisper`, `soundcard`, `requests`,
 `truststore`, `pywebview` (la ventana, sobre WebView2; sin ella la interfaz se abre en Edge en modo app), y
 `sherpa-onnx` y `pywin32` (opcionales, importación perezosa); la interfaz es HTML/JS sin compilar (`_app/static`). No
-hay paso de build: el acceso directo lanza `pythonw.exe server.py` (sin consola) y `_app/Notas.bat` lo mismo con
-consola. El nombre visible de la app es `common.APP_NAME` (y `-AppName` en el instalador); las carpetas no cambian con él.
+hay paso de build: el acceso directo lanza `pythonw.exe server.py` (sin consola) y `_app/Chuleta.bat` lo mismo con
+consola. El nombre visible de la app es `common.APP_NAME` (y `-AppName` en el instalador); por compatibilidad no cambian
+con él la carpeta de datos `AudiosApp`, la cabecera `X-Audios` ni las claves de los `.md`. La versión que se ve en
+Ajustes → Acerca de sale de `_app/version.txt` (lo escribe `scripts/build_zip.py`: `AAAA-MM-DD · sha`); en una copia
+de trabajo sin ese fichero se enseña la fecha y hora del código.
 
 En macOS/Linux el servidor arranca para desarrollar la interfaz y la lógica (la grabadora, el atajo global,
 la papelera y los avisos son solo de Windows):
@@ -140,7 +145,7 @@ servidor la declara, pintado), para saber si el cuello está en Groq, en la red 
 ### Generar el zip instalable
 
 ```
-python3 scripts/build_zip.py            # deja dist/Notas - instalador.zip (sin vocabulario)
+python3 scripts/build_zip.py            # deja dist/Chuleta - instalador.zip (sin vocabulario) y _app/version.txt
 ```
 
 ### Regenerar los iconos
@@ -150,8 +155,8 @@ python3 scripts/build_zip.py            # deja dist/Notas - instalador.zip (sin 
 ```
 
 Rasteriza `_app/static/logo.svg` (y `design/logo-small.svg` para 16 y 20 px) con Chrome o Edge headless y escribe
-`_app/static/notas.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
-`_app/static/notas.png`. Solo hace falta si cambia el logo.
+`_app/static/chuleta.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
+`_app/static/chuleta.png`. Solo hace falta si cambia el logo.
 
 ## Licencia
 
