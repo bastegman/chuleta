@@ -330,13 +330,17 @@ function renderSummary(a) {
       <div class="sub">Se hace en ${provName()} por partes, al ritmo que permite tu plan · ${Math.round((j.progress || 0) * 100)} %</div></div>
       <button class="btn sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button><div class="pbar${j.progress < 0.02 ? ' indet' : ''}"><i style="width:${(j.progress || 0) * 100}%"></i></div></div>` : '';
   const err = !j && last && last.status === 'error' ? `<div class="notice">No se pudo resumir: ${esc(last.error)}</div>` : '';
+  // con Azure OpenAI solo se configura el deployment de Whisper: el resumen aún no funciona ahí (no es que falte configurar)
+  const azure = S.config?.cloud?.provider === 'azure' && !s.ready;
+  const azureNote = '<div class="muted">El resumen con IA aún no funciona con Azure OpenAI: con Azure solo se transcribe. Para resumir, elige Groq, OpenAI u otra API compatible con OpenAI en Ajustes.</div>';
   if (!s.exists) {
     box.innerHTML = progress + err + `<div class="card sum-empty">
       <div class="se-i">${I.spark}</div>
       <div><b>Resumen con IA de la reunión</b><div class="muted">Resumen, puntos clave, decisiones, próximos pasos y participantes, con el minuto de cada punto. Usa también tus notas.</div></div>
       ${!has ? '<div class="muted">Primero hay que transcribir la reunión.</div>'
-        : !s.ready ? '<button class="btn" data-act="settings">Configurar la nube en Ajustes</button>'
-          : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">${I.spark}Resumir esta reunión</button>`}
+        : azure ? azureNote
+          : !s.ready ? '<button class="btn" data-act="settings">Configurar la nube en Ajustes</button>'
+            : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">${I.spark}Resumir esta reunión</button>`}
     </div>`;
     return;
   }
@@ -346,8 +350,9 @@ function renderSummary(a) {
       <span class="sp"></span>
       <button class="btn sm" data-act="sum-copy">${I.copy}Copiar</button>
       <button class="btn sm" data-act="sum-to-notes">${I.plus}A mis notas</button>
-      ${j ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">${I.refresh}Regenerar</button>`}
+      ${j || azure ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">${I.refresh}Regenerar</button>`}
     </div>
+    ${azure ? azureNote : ''}
     <div class="card docview sumview">${linkStamps(md(s.text).replace(/<li>\[ \]\s?/g, '<li class="todo">☐ ').replace(/<li>\[x\]\s?/gi, '<li class="todo done">☑ '))}</div>`;
 }
 main.addEventListener('click', async e => {

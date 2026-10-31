@@ -223,7 +223,9 @@ class Store:
     antiguo con la clave en claro se lee igual y queda cifrado en el primer guardado (migracion transparente).
     Si no se puede descifrar (otro usuario de Windows, otro PC), la clave queda vacia y se avisa en el log."""
 
-    SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"))  # un texto o una lista de textos
+    # un texto o una lista de textos; las claves adicionales van por proveedor (engines.EXTRA_KEYS_FIELDS)
+    SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"), ("cloud", "extra_keys_openai"),
+               ("cloud", "extra_keys_azure"), ("cloud", "extra_keys_custom"))
 
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
@@ -327,7 +329,10 @@ DEFAULT_SETTINGS = {
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
               "chunk_minutes": 10, "parallel": 3,
               # directo en la nube: modelo rapido por trozo y claves de otras cuentas de Groq (rotacion de cupo)
-              "live_model": engines.LIVE_MODEL_DEFAULT, "extra_keys": []},
+              "live_model": engines.LIVE_MODEL_DEFAULT, "extra_keys": [],
+              # «Otra (compatible)»: modelo del directo propio ("" = el de la cola) y sus claves adicionales; las
+              # claves adicionales de cada proveedor solo se usan con el (engines.EXTRA_KEYS_FIELDS)
+              "live_model_custom": "", "extra_keys_openai": [], "extra_keys_azure": [], "extra_keys_custom": []},
     "speed": {},
 }
 
@@ -1279,6 +1284,18 @@ def preload_model(st, cached=None):
     return None
 
 
+def live_cloud_cfg(st):
+    """Ajustes de la nube para el directo: los de cloud y el modelo del resumen (la traduccion lo usa con una
+    pasarela propia). _run_live los vuelve a leer en cada trozo, no una copia del arranque."""
+    return dict(st.get("cloud") or {}, summary_model=st.get("summary_model"))
+
+
+class PendingPasses(Complete):
+    """Reuniones con el repaso final pendiente (en cola o a medias), en DATA_DIR/repasos_pendientes.json: se apunta
+    al ponerlo en cola y se quita al terminar (bien, con error o cancelado a mano). Lo que siga apuntado al arrancar
+    se quedo a medias al apagar la app (o al cerrar la sesion de Windows) y se retoma."""
+
+
 _SALIDAS_LOCK = threading.Lock()  # temporizadores de la reescritura agrupada de los destinos de salida
 
 
@@ -1299,13 +1316,17 @@ class Jobs:
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
         self._registro, self._salidas_timers = None, {}  # salidas.json (documentos escritos) y reescrituras pendientes
+        self.closing = False  # apagando: un repaso final cancelado queda pendiente para el proximo arranque
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
+        threading.Thread(target=self._resume_final_passes, daemon=True, name="repasos-pendientes").start()
 
     def shutdown(self):
         """Apagar: lo que esta en cola se cancela, lo que corre recibe la senal de cancelar y los procesos de Whisper
-        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan."""
+        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan, y un repaso final en cola
+        o a medias sigue apuntado (repasos_pendientes.json): se retoma al volver a abrir la app."""
+        self.closing = True
         with self.lock:
             for j in self.list:
                 if j.status == "queued":
@@ -1407,13 +1428,68 @@ class Jobs:
             self._cloud_ready()
         except ApiError:
             return False
-        j = Job(job.path, job.name, "nube", job.language)
+        self._queue_final_pass(job.path, job.name, job.language)
+        return True
+
+    def _queue_final_pass(self, rel, name, language):
+        j = Job(rel, name, "nube", language)
         j.final_pass, j.stage = True, "En cola: repaso final en la nube"
+        self._pending().set(rel)  # hasta que termine: si se apaga antes, se retoma al arrancar
         with self.lock:
             self.list.append(j)
         self.queues[j.engine].put(j)
-        log(f"↻ {job.name}  repaso final de la grabación entera en la nube")
-        return True
+        log(f"↻ {name}  repaso final de la grabación entera en la nube")
+        return j
+
+    def _pending(self):
+        """Los repasos finales pendientes (PendingPasses), en el DATA_DIR vigente."""
+        path = os.path.join(DATA_DIR, "repasos_pendientes.json")
+        reg = getattr(self, "_pending_reg", None)
+        if reg is None or reg.path != path:
+            reg = self._pending_reg = PendingPasses(path)
+        return reg
+
+    def _final_pass_over(self, rel, keep_live_text=False):
+        """El repaso final de esa reunion ya no esta pendiente. keep_live_text: no se hizo (cancelado a mano o ya no se
+        puede hacer): se queda el texto del directo y con el se hacen los destinos y el resumen."""
+        try:
+            self._pending().set(rel, False)
+        except OSError:
+            log_exc()
+        if keep_live_text:
+            log("   se mantiene el texto del directo")
+            self._after_transcribe(rel)
+
+    def _resume_final_passes(self, delay=3.0):
+        """Al arrancar: los repasos finales que quedaron en cola o a medias al apagar se vuelven a poner en cola, y al
+        terminar se hacen los destinos y el resumen como siempre. Si ya no se puede (sin nube, el repaso apagado en
+        Ajustes, la reunion corregida a mano), se hacen con el texto del directo; si la reunion ya no esta, se
+        olvida."""
+        time.sleep(delay)
+        try:
+            for rel in sorted(self._pending().data):
+                try:
+                    abs_path = safe(rel, "file")
+                except ApiError:
+                    log(f"   repaso final pendiente de {rel}: la reunión ya no está ahí, se olvida")
+                    self._final_pass_over(rel)
+                    continue
+                if self.active_for(rel):
+                    continue
+                ok = self.settings.get().get("live_final_pass", True) and not os.path.isdir(backup_dir(rel))
+                if ok:
+                    try:
+                        self._cloud_ready()
+                    except ApiError:
+                        ok = False
+                if ok:
+                    log(f"   {os.path.basename(abs_path)}: el repaso final se quedó pendiente al apagar; se retoma")
+                    self._queue_final_pass(rel, os.path.basename(abs_path), None)
+                else:
+                    log(f"   {os.path.basename(abs_path)}: el repaso final pendiente ya no se puede hacer")
+                    self._final_pass_over(rel, keep_live_text=True)
+        except Exception:
+            log_exc()
 
     def refresh_prompt(self, rel):
         """Cambio el tema, el idioma o el contexto de una reunion: si se esta transcribiendo en directo, live.run lo
@@ -1460,7 +1536,10 @@ class Jobs:
                 resume = []
         opts = {"preset": job.preset, **meeting_setup(abs_path, st),  # language, prompt (vocabulario) y about
                 "threads": int(st.get("threads") or default_threads()),
-                "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": st["cloud"],
+                "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": live_cloud_cfg(st),
+                # los ajustes de la nube vigentes en cada trozo (no una copia del arranque): una clave pegada, cambiada
+                # o quitada en Ajustes vale desde el siguiente
+                "cloud_cfg_fn": lambda: live_cloud_cfg(self.settings.get()),
                 "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume, "summarizer": self.summarizer}
         job.opts = opts  # live.run los lee en cada trozo: si cambias tema, idioma o contexto, vale desde el siguiente
         job.out = LiveOutputs(abs_path)
@@ -1480,6 +1559,7 @@ class Jobs:
         try:
             segs, lang = live.run(job, abs_path, opts, writer, log)
             job.detected = lang
+            err = getattr(job, "live_error", None)  # el ultimo trozo de la nube que no salio (live.run lo salta)
             if segs:
                 writer(segs)
                 if job.edits:  # lo que transcribio Whisper, para poder "Restaurar original" despues
@@ -1489,8 +1569,14 @@ class Jobs:
                     self._after_transcribe(job.path)
                 job.status, job.stage, job.progress = "done", "Hecho", 1.0
                 log(f"✔ {job.name}  directo terminado ({job.recorded / 60:.0f} min grabados)")
+            elif self._final_pass(job):  # sin texto del directo (p. ej. fallaron todos los trozos): lo hace el repaso
+                job.status, job.progress = "done", 1.0
+                job.stage = "Sin texto en directo: el repaso final transcribe la grabación entera"
+                log(f"   {job.name}: el directo no dejó texto ({err or 'sin voz'}); lo transcribe el repaso final")
             else:
-                job.status, job.stage, job.error = "error", "Error", "No se ha detectado voz en la grabación."
+                job.status, job.stage = "error", "Error"
+                job.error = (f"No se ha podido transcribir en directo ({err}). El audio se conserva: transcríbelo "
+                             "desde la cola." if err else "No se ha detectado voz en la grabación.")
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Directo detenido"
             log(f"■ {job.name}  directo detenido")
@@ -1498,6 +1584,9 @@ class Jobs:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  {job.error}")
             log_exc()
+            # si la grabacion ya habia terminado, el repaso final (y tras el, los destinos y el resumen) se hace igual
+            if not job.recording and self._final_pass(job):
+                job.stage = "Error en el directo: el repaso final transcribe la grabación entera"
         finally:
             job.recording = False
             job.finished = time.time()
@@ -1533,8 +1622,9 @@ class Jobs:
 
     def submit_summary(self, rel, auto=False):
         abs_path = safe(rel, "file")
-        if not self.summary_ready():
-            raise ApiError("El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+        if not self.summary_ready():  # con Azure OpenAI: que el resumen aun no funciona ahi (no "configura la nube")
+            raise ApiError(engines.chat_missing(self.settings.get()["cloud"])
+                           or "El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
         if not any(os.path.isfile(os.path.splitext(abs_path)[0] + e) for e in (".srt", ".txt")):
             raise ApiError("Primero hay que transcribir la reunión.")
         with self.lock:
@@ -1917,16 +2007,23 @@ class Jobs:
                 self.auto_summary(job.path)
 
     def cancel(self, job_id):
+        queued_pass = None
         with self.lock:
             for j in self.list:
                 if j.id == job_id and j.status in ("queued", "running"):
                     j.cancel = True
                     if j.status == "queued":
                         j.status, j.stage, j.finished = "cancelled", "Cancelado", time.time()
+                        queued_pass = j.path if getattr(j, "final_pass", False) else None
                     else:
                         j.stage = "Cancelando…"
-                    return True
-        return False
+                    break
+            else:
+                return False
+        if queued_pass:  # el repaso final en cola: se queda el texto del directo (los destinos y el resumen, con el)
+            threading.Thread(target=self._final_pass_over, args=(queued_pass, True), daemon=True,
+                             name="repaso-cancelado").start()
+        return True
 
     def clear(self):
         with self.lock:
@@ -2010,6 +2107,8 @@ class Jobs:
                 write_outputs(abs_path, segs)
                 shutil.rmtree(backup_dir(job.path), ignore_errors=True)  # el "original" es ahora este
             COMPLETE.set(job.path)  # aunque el texto acabe antes que el audio, esta completa
+            if job.final_pass:
+                self._final_pass_over(job.path)
             self._after_transcribe(job.path)
             job.duration, job.detected = dur or job.duration, lang
             job.status, job.progress, job.stage, job.eta = "done", 1.0, "Hecho", 0
@@ -2026,12 +2125,18 @@ class Jobs:
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Cancelado"
             log(f"■ {job.name}  cancelado")
+            if job.final_pass:
+                if getattr(self, "closing", False):  # al apagar: sigue pendiente y se retoma al volver a abrir
+                    log("   el repaso final queda pendiente para el próximo arranque")
+                else:  # cancelado a mano: se queda el texto del directo, y con el los destinos y el resumen
+                    self._final_pass_over(job.path, keep_live_text=True)
         except Exception as e:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  {job.error}")
             if not isinstance(e, (engines.EngineError, ApiError)):
                 log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
+                self._final_pass_over(job.path)
                 log("   se mantiene el texto del directo")
                 self.write_outputs(job.path)
                 self.auto_summary(job.path)
@@ -2353,7 +2458,7 @@ class App:
             lines = read_text(os.path.join(DATA_DIR, "server.log")).splitlines()[-30:]
         except OSError:
             lines = ["(no hay server.log)"]
-        keys = [cloud.get("api_key"), *(cloud.get("extra_keys") or [])]
+        keys = [cloud.get("api_key"), *engines.all_extra_keys(cloud)]  # las adicionales de todos los proveedores
         info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
                 f"Transcripción: {motor} · directo: {st.get('live_preset') or 'medium'}",
                 f"Carpeta: {ROOT}", f"Datos: {DATA_DIR}", "", "server.log (últimas 30 líneas):",
@@ -2373,8 +2478,12 @@ class App:
         cloud = dict(st["cloud"])
         cloud["has_key"] = bool(cloud.get("api_key"))
         cloud["api_key"] = masked(cloud.get("api_key"))
-        cloud["extra_keys"] = [masked(k) for k in (cloud.get("extra_keys") or []) if k]  # nunca en claro
-        cloud["quota"] = self.jobs.cloud.keys.public(st["cloud"]) if cloud["has_key"] else None
+        # claves adicionales: enmascaradas (nunca en claro) y por proveedor, cada una con el suyo; en extra_keys, las
+        # del proveedor configurado (las unicas que se usan)
+        by = {p: [masked(k) for k in (cloud.pop(f, None) or []) if k] for p, f in engines.EXTRA_KEYS_FIELDS.items()}
+        cloud["extra_keys_by"], cloud["extra_keys"] = by, by.get(cloud.get("provider") or "groq", [])
+        cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
+                          if cloud["has_key"] else None)
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
@@ -2926,6 +3035,10 @@ class App:
     def live_translate(self, b):
         """Traducción al español del directo en la nube, por reunión (apagada por defecto); live.py hace el resto."""
         job = self.jobs._live_job(b.get("id"))
+        if b.get("on"):  # sin servicio de chat (Azure OpenAI) no hay traduccion: se dice, no falla a medias
+            why = engines.chat_missing(self.settings.get()["cloud"], "La traducción del directo")
+            if why:
+                raise ApiError(why)
         job.translate = bool(b.get("on"))
         if isinstance(job.directo, dict):  # que la respuesta ya lo refleje (live.py lo vuelve a publicar en <1 s)
             job.directo = dict(job.directo, translate=job.translate)
@@ -3093,12 +3206,22 @@ class App:
                 d["cloud"]["api_key"] = c["api_key"].strip()
             if c.get("clear_key"):
                 d["cloud"]["api_key"] = ""
-            if "live_model" in c:
-                d["cloud"]["live_model"] = (c["live_model"] or "").strip()[:80]
-            if isinstance(c.get("extra_keys"), list):  # las ya guardadas vuelven enmascaradas: se conservan
-                old = {masked(k): k for k in d["cloud"].get("extra_keys") or []}
-                new = [old.get(k.strip(), k.strip()) for k in c["extra_keys"] if isinstance(k, str) and k.strip()]
-                d["cloud"]["extra_keys"] = [k for k in new if "…" not in k and "•" not in k][:10]
+            for k in ("live_model", "live_model_custom"):  # el del directo en Groq y el de una pasarela propia
+                if k in c:
+                    d["cloud"][k] = (c[k] or "").strip()[:80]
+            # claves adicionales: cada lista es de su proveedor (las de Groq, en extra_keys). La interfaz manda las de
+            # cada proveedor en extra_keys_by; extra_keys a secas son las del proveedor que se guarda. Las ya guardadas
+            # vuelven enmascaradas y se conservan, pero solo dentro de su proveedor: nunca pasan a otro
+            lists = c.get("extra_keys_by") if isinstance(c.get("extra_keys_by"), dict) else {}
+            if not lists and isinstance(c.get("extra_keys"), list):
+                lists = {d["cloud"].get("provider") or "groq": c["extra_keys"]}
+            for prov, incoming in lists.items():
+                field = engines.extra_keys_field(prov)
+                if not field or not isinstance(incoming, list):
+                    continue
+                old = {masked(k): k for k in d["cloud"].get(field) or []}
+                new = [old.get(k.strip(), k.strip()) for k in incoming if isinstance(k, str) and k.strip()]
+                d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
         return self.config({})
 

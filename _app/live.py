@@ -10,7 +10,9 @@ asi que en la app se va viendo el texto casi al momento.
 En la nube (Groq) el directo va en trozos de 3-6 s cortados en la primera pausa, solo con la voz
 (sin los silencios de los extremos) y al ritmo que permite el cupo gratuito del dia: con menos
 peticiones restantes, trozos mas largos; con muy pocas, el directo se pausa (la grabacion sigue y
-lo que falte se transcribe despues en trozos grandes, mas el repaso final).
+lo que falte se transcribe despues en trozos grandes, mas el repaso final). Si la API va mas lenta que
+la reunion (un cupo por minuto bajo, la red), lo pendiente se junta en peticiones mas grandes hasta
+ponerse al dia, nunca de mas de CATCHUP_MAX_S (por debajo de los 25 MB por archivo de las APIs).
 """
 import os
 import struct
@@ -39,10 +41,16 @@ DIRECT_PACE = (3, 6)        # ventana objetivo (min, max) en segundos; el KeyPoo
 DIRECT_OVERLAP_S = 0.5      # corte forzado (nadie calla en 6 s): la ventana siguiente repite 0,5 s y se deduplica
 DIRECT_PAD_S = 0.2          # margen alrededor de la voz al recortar los silencios de los extremos
 DIRECT_FUSE_X = 2           # con retraso acumulado, los trozos pendientes se fusionan hasta 2 x la ventana maxima
+# ...y con mas retraso que eso (la API va mas lenta que la reunion) se junta todo lo pendiente en una peticion, hasta
+# 10 min: un WAV de 16 kHz mono de 16 bit son 32 KB/s, 19,2 MB en 10 min, por debajo de los 25 MB por archivo de las
+# APIs de transcripcion. Es tambien el tope del ultimo trozo al terminar (antes se mandaba todo el retraso de golpe)
+CATCHUP_MAX_S = 600
 DIRECT_MIN_VOICE_S = 1.0    # menos voz que esto en un trozo: ruido o un golpe; no se manda (Whisper inventaria)
 TRAIL_SILENCE_S = 0.5       # silencio al final del buffer que ya cuenta como pausa
 TRANSLATE_EVERY_S = 12      # traduccion del directo: cada 10-15 s, lo ultimo que se dijo
 TRANSLATE_MAX_CHARS = 1500  # por peticion (~500 tokens: cabe de sobra en 8.000 tokens/min)
+TRANSLATE_BACK_S = 30       # solo lo dicho en los ultimos 30 s: al activarla a mitad de reunion (o si se queda atras)
+TRANSLATE_FINAL_S = 10      # al terminar el directo, el ultimo paso: un intento de como mucho 10 s de lectura
 TRANSLATION_PUBLIC = 60     # ultimos bloques traducidos que viajan en el estado del trabajo
 
 
@@ -160,27 +168,53 @@ def pauses_of(ts, n):
     return cuts
 
 
-def direct_cut(buf, ts, pace=DIRECT_PACE):
+def behind(buf, pace=DIRECT_PACE):
+    """El directo va con retraso: lo leido y aun sin transcribir pasa de 2 x la ventana maxima (la API, o el cupo
+    por minuto, va mas lenta que la reunion). Entonces direct_cut junta todo lo pendiente (hasta CATCHUP_MAX_S)."""
+    return len(buf) > DIRECT_FUSE_X * pace[1] * SR
+
+
+def direct_cut(buf, ts, pace=DIRECT_PACE, catch_up=False):
     """Donde cortar el directo en la nube. Devuelve (cut, overlap) en muestras; cut = 0 es "esperar".
 
     La ventana se mide desde el primer tramo de voz (el silencio inicial se recorta luego y no cuenta):
       - con una pausa a >= min_s de ahi, se corta en la ULTIMA pausa que no pase de 2 x max_s (si el bucle
-        venia con retraso y hay varios trozos pendientes, se fusionan en una peticion);
-      - sin pausa y con >= max_s de audio desde la voz, corte forzado en max_s con 0,5 s de solape (la ventana
-        siguiente empieza 0,5 s antes y dedupe_overlap quita lo que acabe dentro del solape);
-      - sin voz (ts vacio), todo el buffer se descarta sin mandarlo: (n, 0)."""
+        venia con retraso y hay varios trozos pendientes, se fusionan en una peticion); con catch_up (mas retraso
+        que eso: behind), en la ultima que no pase de CATCHUP_MAX_S, para ponerse al dia;
+      - sin pausa y con >= max_s de audio desde la voz, corte forzado en max_s (con catch_up, en lo que haya, hasta
+        CATCHUP_MAX_S) con 0,5 s de solape (la ventana siguiente empieza 0,5 s antes y dedupe_overlap quita lo que
+        acabe dentro del solape);
+      - sin voz (ts vacio), todo el buffer se descarta sin mandarlo: (n, 0).
+    Nunca devuelve un trozo de mas de CATCHUP_MAX_S desde la voz: el audio que se manda no pasa de ~19 MB."""
     n = len(buf)
     if not ts:
         return n, 0
     lo, hi = pace
     base = ts[0]["start"]
+    limit = (CATCHUP_MAX_S if catch_up else DIRECT_FUSE_X * hi) * SR
     good = [p for p in pauses_of(ts, n) if p - base >= lo * SR]
     if good:
-        near = [p for p in good if p - base <= DIRECT_FUSE_X * hi * SR]
-        return (near[-1] if near else good[0]), 0
+        near = [p for p in good if p - base <= limit]
+        cut = near[-1] if near else good[0]
+        if cut - base <= CATCHUP_MAX_S * SR:
+            return cut, 0
     if n - base >= hi * SR:
-        return base + int(hi * SR), int(DIRECT_OVERLAP_S * SR)
+        span = min(n - base, CATCHUP_MAX_S * SR) if catch_up else int(hi * SR)
+        return base + int(span), int(DIRECT_OVERLAP_S * SR)
     return 0, 0
+
+
+def capped_cut(buf, ts, limit_s=CATCHUP_MAX_S):
+    """Ultimo trozo al terminar, en la nube: lo que queda, pero nunca mas de limit_s (el bucle sigue con el resto).
+    ts: la VAD de buf[:limit_s]. Se corta en la ultima pausa de la segunda mitad; si no la hay, en el tope con el
+    solape de siempre. Devuelve (cut, overlap) en muestras."""
+    n, lim = len(buf), int(limit_s * SR)
+    if n <= lim:
+        return n, 0
+    cuts = [p for p in pauses_of(ts or [], lim) if lim // 2 <= p <= lim]
+    if cuts:
+        return cuts[-1], 0
+    return lim, int(DIRECT_OVERLAP_S * SR)
 
 
 def trim_voice(window, ts, pad=DIRECT_PAD_S):
@@ -285,6 +319,12 @@ def fmt_wait(secs):
     return f"{secs // 60} min" if secs >= 120 else f"{secs} s"
 
 
+def no_key_message(why):
+    """Texto del estado cuando el directo en la nube no puede mandar nada (p. ej. se ha quitado la API key)."""
+    return (f"Directo en pausa: {why.rstrip('.')}. La grabación sigue; en cuanto vuelva a haber clave se retoma "
+            "y lo que falte se transcribe al terminar.")
+
+
 def pause_message(q):
     """Texto del estado cuando el directo se pausa por falta de cupo."""
     if q.get("blocked_for"):
@@ -302,7 +342,9 @@ def pause_message(q):
 class LiveTranslator:
     """Hilo que traduce al espanol lo ultimo que se ha transcrito, cada TRANSLATE_EVERY_S, mientras job.translate.
     get_segs() devuelve (generacion, lista de frases); si la generacion cambia (rehacer desde el principio), empieza
-    de cero. Lo traducido se acumula en job.translation (en memoria: es una ayuda para seguir la reunion)."""
+    de cero. Lo traducido se acumula en job.translation (en memoria: es una ayuda para seguir la reunion). Solo se
+    traduce lo dicho en los ultimos TRANSLATE_BACK_S: activada a mitad de reunion empieza por ahi, no por el minuto 0,
+    y si se queda atras (un trozo grande al ponerse al dia) salta a lo ultimo."""
 
     def __init__(self, job, opts, get_segs, log, every=TRANSLATE_EVERY_S):
         self.job, self.opts, self.get_segs, self.log, self.every = job, opts, get_segs, log, every
@@ -324,6 +366,10 @@ class LiveTranslator:
         if gen != self.gen:
             self.gen, self.done = gen, 0
             self.job.translation.clear()
+        if segs:  # lo anterior a los ultimos TRANSLATE_BACK_S ya no ayuda a seguir la reunion: se salta
+            since = segs[-1][1] - TRANSLATE_BACK_S
+            while self.done < len(segs) and segs[self.done][1] < since:
+                self.done += 1
         segs = segs[self.done:]
         take, chars = [], 0
         for s in segs:
@@ -333,17 +379,22 @@ class LiveTranslator:
             chars += len(s[2]) + 1
         return take
 
-    def step(self, cancelled=None):
-        """Una pasada: traduce lo pendiente (si hay). Devuelve True si tradujo algo."""
-        with self.lock:
+    def step(self, cancelled=None, final=False):
+        """Una pasada: traduce lo pendiente (si hay). Devuelve True si tradujo algo. final: el ultimo paso al terminar
+        el directo, que no puede retener el final de la sesion: si el hilo esta a mitad de una peticion no se espera
+        a que acabe, y se hace un solo intento corto (TRANSLATE_FINAL_S)."""
+        if not self.lock.acquire(blocking=not final):
+            return False
+        try:
             take = self.pending()
             if not take or not getattr(self.job, "translate", False):
                 return False
             text = " ".join(t for _, _, t in take)
             self.busy = True
+            kw = {"timeout": TRANSLATE_FINAL_S, "attempts": 1} if final else {}
             try:
                 out, _ = self.opts["summarizer"].translate(self.opts["cloud_cfg"], text, lambda **k: None,
-                                                           cancelled or self._cancelled)
+                                                           cancelled or self._cancelled, **kw)
             except engines.Cancelled:
                 return False
             except engines.EngineError as e:
@@ -357,6 +408,8 @@ class LiveTranslator:
                                          "text": out})
             self.done += len(take)
             return True
+        finally:
+            self.lock.release()
 
     def _loop(self):
         last = 0.0
@@ -368,8 +421,12 @@ class LiveTranslator:
                     self.log(f"   traducción del directo: {e.__class__.__name__}: {e}")
                     did = False
                 # con exito y mas pendiente, el siguiente en ~2 s; si no (o tras un error), al ritmo normal
-                last = last + 2.0 if did and self.pending() else time.time()
+                last = last + 2.0 if did and self._more() else time.time()
             time.sleep(0.25)
+
+    def _more(self):
+        with self.lock:  # pending() avanza lo que se salta: con el candado, como step()
+            return bool(self.pending())
 
 
 def run(job, path, opts, write, log):
@@ -379,7 +436,12 @@ def run(job, path, opts, write, log):
     pide rehacerlo todo desde el principio. opts: language, prompt, about (contexto libre de la reunion),
     threads, worker (WorkerClient propio), cloud, cloud_cfg, tmp_dir, resume (segmentos ya escritos por una
     sesion anterior), summarizer (traduccion del directo). language, prompt y about se releen en cada trozo:
-    si se cambian en la pagina de la reunion, valen desde el siguiente."""
+    si se cambian en la pagina de la reunion, valen desde el siguiente. cloud_cfg_fn (opcional): devuelve los
+    ajustes de la nube vigentes y se llama en cada vuelta (una clave pegada, cambiada o quitada en Ajustes vale
+    desde el siguiente trozo; sin el, cloud_cfg tal cual).
+
+    En la nube un trozo que falla (tambien al ponerse al dia o el ultimo) no tumba la sesion: se anota en el log y
+    en job.live_error, se salta y la grabacion sigue; el repaso final lo recupera al terminar."""
     info = None
     for _ in range(60):  # OBS puede tardar un instante en escribir la cabecera
         info = wav_info(path)
@@ -399,12 +461,23 @@ def run(job, path, opts, write, log):
     latency = Latency()
     translator = None
 
+    def fresh_cfg():
+        """Los ajustes de la nube vigentes (no una copia del arranque): el trozo, la traduccion y el estado los usan."""
+        fn = opts.get("cloud_cfg_fn")
+        if fn is not None:
+            try:
+                opts["cloud_cfg"] = fn() or {}
+            except Exception as e:  # nunca tumba el directo: se sigue con los ultimos que se leyeron
+                log(f"   directo: no se pudieron releer los ajustes de la nube ({e.__class__.__name__})")
+        return opts.get("cloud_cfg") or {}
+
     def reset(from_t):
         st["pos"] = off + int(from_t * br) // block * block
         st["t0"] = (st["pos"] - off) / br
         st["buf"] = np.zeros(0, np.float32)
         st["resample"] = Resampler(info["rate"])
         st["dedupe_until"] = None
+        st["flushed"] = False
         job.transcribed = st["t0"]
 
     reset(segs[-1][1] if segs else 0.0)  # retoma donde lo dejo una sesion anterior
@@ -419,12 +492,19 @@ def run(job, path, opts, write, log):
             return
         tr = list(job.translation)
         on_cloud = bool(keys) and (engines.PRESETS_BY_ID.get(job.preset) or {}).get("engine") == "cloud"
-        job.directo = {"cloud": on_cloud, "quota": keys.public(cfg) if on_cloud else None,
+        lm = engines.CloudEngine.live_model(cfg) if on_cloud else None
+        # la traduccion, con el modelo y el proveedor reales; sin servicio de chat (Azure) no se ofrece
+        why = engines.chat_missing(cfg, "La traducción del directo") if on_cloud else None
+        job.directo = {"cloud": on_cloud, "quota": keys.public(cfg, model=lm) if on_cloud else None,
                        "pace": list(pace) if pace else None, "paused": bool(paused), "latency": latency.stats(),
                        "translate": bool(getattr(job, "translate", False)), "translation": tr[-TRANSLATION_PUBLIC:],
                        "translation_n": len(tr), "translate_error": translator.error if translator else None,
                        "translating": bool(translator and translator.busy),
-                       "live_model": engines.CloudEngine.live_model(cfg) if on_cloud else None}
+                       "translate_ok": on_cloud and not why, "translate_why": why,
+                       "translate_model": engines.Summarizer.translate_model(cfg) if on_cloud else None,
+                       "provider": (engines.PROVIDERS.get(cfg.get("provider", "groq")) or {}).get("label")
+                       if on_cloud else None,
+                       "live_model": lm}
 
     def transcribe(window, offset, timing=None):
         nonlocal lang, fixed_lang
@@ -472,10 +552,12 @@ def run(job, path, opts, write, log):
 
     st["caught_up"] = False
     paused_logged = False
+    job.live_error = None  # ultimo trozo que no se pudo transcribir (en la nube), para el estado final
     try:
         while True:
             if job.cancel:
                 raise engines.Cancelled()
+            cfg = fresh_cfg()
             if job.restart:
                 job.restart = False
                 segs = []
@@ -506,10 +588,13 @@ def run(job, path, opts, write, log):
             # se transcribira al terminar en trozos grandes) y se avisa
             pace = None
             if cloud and keys:
-                pace = keys.live_pace(cfg)
+                lm, why = engines.CloudEngine.live_model(cfg), None
+                try:
+                    pace = keys.live_pace(cfg, model=lm)
+                except engines.EngineError as e:  # sin API key (se quito en Ajustes): en pausa, sin mandar nada
+                    why = str(e)
                 if pace is None and job.recording:
-                    q = keys.public(cfg)
-                    msg = pause_message(q)
+                    msg = pause_message(keys.public(cfg, model=lm)) if why is None else no_key_message(why)
                     if not paused_logged:
                         log("   " + msg)
                         paused_logged = True
@@ -531,18 +616,25 @@ def run(job, path, opts, write, log):
             caught_up = pos >= end
             st["caught_up"] = caught_up and len(buf) < 60 * SR  # solo para el texto de estado
             final = (closed or stalled) and caught_up
-            if final:
+            if final and not st["flushed"]:
                 buf = np.concatenate([buf, resample.flush()])
+                st["flushed"] = True
             st.update(pos=pos, buf=buf)
             directo = cloud and caught_up and not final
             overlap = 0
             if directo:
-                lo = (pace or DIRECT_PACE)[0]
-                if len(buf) < lo * SR:
+                p = pace or DIRECT_PACE
+                if len(buf) < p[0] * SR:
                     cut, ts = 0, None
                 else:
                     ts = speech(buf)
-                    cut, overlap = direct_cut(buf, ts, pace or DIRECT_PACE)
+                    # con retraso (la API va mas lenta que la reunion), todo lo pendiente en una peticion: se pone
+                    # al dia en vez de acumular minutos que al final saldrian de golpe
+                    cut, overlap = direct_cut(buf, ts, p, catch_up=behind(buf, p))
+            elif final and cloud:  # lo que queda al terminar, en trozos de como mucho CATCHUP_MAX_S
+                head = buf[:int(CATCHUP_MAX_S * SR)]
+                cut, overlap = capped_cut(buf, speech(head) if len(buf) > len(head) else None)
+                ts = None
             else:
                 cut, ts = choose_cut(buf, final, catching_up=not caught_up, cloud=cloud)
             if cut:
@@ -558,16 +650,20 @@ def run(job, path, opts, write, log):
                     tm = {"prep": perf_counter() - t_iter}
                     try:
                         new = transcribe(audio, t0 + a / SR, tm)
-                    except engines.EngineError as e:
-                        if not directo:
+                    except engines.Cancelled:
+                        raise
+                    except Exception as e:
+                        if not cloud:  # en local, como siempre
                             raise
-                        # el directo no se cae por un trozo: se salta (el repaso final lo recupera) y, si Groq ha
-                        # bloqueado la clave, la siguiente vuelta entra en pausa
-                        new = []
-                        if str(e) != st.get("last_error"):
-                            st["last_error"] = str(e)
-                            log(f"   trozo sin transcribir ({e}); se sigue con el siguiente")
-                        stage(f"Sin respuesta de la nube ({e}). Se sigue con el siguiente trozo; el repaso final "
+                        # en la nube la sesion no se cae por un trozo (tampoco al ponerse al dia ni el ultimo): se
+                        # salta, la grabacion sigue y el repaso final lo recupera; si Groq ha bloqueado la clave, la
+                        # siguiente vuelta entra en pausa. Tambien un fallo inesperado (una respuesta rara del proxy)
+                        err = str(e) if isinstance(e, engines.EngineError) else f"{e.__class__.__name__}: {e}"
+                        new, job.live_error = [], err
+                        if err != st.get("last_error"):
+                            st["last_error"] = err
+                            log(f"   trozo sin transcribir ({err}); se sigue con el siguiente")
+                        stage(f"Sin respuesta de la nube ({err}). Se sigue con el siguiente trozo; el repaso final "
                               "recupera el texto.")
                     if job.restart:  # se pidio rehacer mientras tanto: este trozo ya no vale
                         continue
@@ -588,7 +684,7 @@ def run(job, path, opts, write, log):
                 job.transcribed = st["t0"]
                 job.progress = min(1.0, st["t0"] / job.recorded) if job.recorded else 0.0
             publish(pace if directo else None)
-            if final:
+            if final and not (cut and len(st["buf"])):  # al terminar, hasta que no quede nada (trozos con tope)
                 break
             if not cut:
                 stage("Escuchando la grabación…" if job.recording else "Terminando…")
@@ -599,9 +695,10 @@ def run(job, path, opts, write, log):
             translator.stop()
         raise
     if translator:
-        if getattr(job, "translate", False):  # lo ultimo que quedo sin traducir
+        if getattr(job, "translate", False):  # lo ultimo que quedo sin traducir: un intento corto, sin esperar
+            deadline = time.time() + TRANSLATE_FINAL_S
             try:
-                translator.step(cancelled=lambda: job.cancel)
+                translator.step(cancelled=lambda: job.cancel or time.time() > deadline, final=True)
             except Exception:
                 pass
         translator.stop()

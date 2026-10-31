@@ -196,7 +196,7 @@ class FakeCloud:
         self.keys.clock = rec.now
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
-                         model=None, timing=None):
+                         model=None, about=None, timing=None):
         secs = len(audio) / SR
         self.calls.append({"secs": secs, "at": self.rec.now(), "voice": None})
         self.rec.sleep(self.latency)
@@ -254,8 +254,9 @@ def run(path, latency, real, remaining, pace, verbose):
         cloud = FakeCloud(rec, latency)
         cfg = {"provider": "groq", "api_key": "clave-de-mentira"}
         if remaining is not None:
-            cloud.keys.note(cfg["api_key"], "whisper", 200,
-                            {"x-ratelimit-remaining-requests": str(remaining), "x-ratelimit-reset-requests": "6h"})
+            cloud.keys.note(cfg["api_key"], "whisper", 200,  # el cupo es por modelo: el del directo
+                            {"x-ratelimit-remaining-requests": str(remaining), "x-ratelimit-reset-requests": "6h"},
+                            engines.CloudEngine.live_model(cfg))
     if pace:
         engines.LIVE_PACES = ((0, tuple(pace)),)
     opts = {"preset": "nube", "language": None, "prompt": None, "threads": 1, "worker": None, "cloud": cloud,
