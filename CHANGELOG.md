@@ -5,6 +5,39 @@
 Punto de partida: la versión del 30/10/2026 tal como se exportaba desde la propia app, saneada para que no lleve
 nada de ningún proyecto concreto.
 
+### Instalación de empresa: carpeta propia, Aplicaciones instaladas y desinstalador
+- **Carpeta propia**: sin instalación anterior, `INSTALAR.bat` copia la app de la carpeta descomprimida (Descargas…)
+  a `%USERPROFILE%\Chuleta` (fuera de Descargas y de OneDrive; si esa carpeta ya tiene otras cosas, `Chuleta (2)`…;
+  `-Destino <carpeta>` para otra nueva o vacía) con `_app`, `LEEME.txt`, `LICENSE`, los `.bat` y las listas
+  `*\Vocabulario\*.txt` del zip, y crea allí los accesos directos. La ventana enseña el paso («Instalando en …») y al
+  final dónde ha quedado y que la carpeta descomprimida ya se puede borrar. Una carpeta ya instalada (con
+  `_app\python.txt`) o la que ya es `%USERPROFILE%\Chuleta` no se copian.
+- **Detección de la instalación anterior**, por este orden: la entrada de Aplicaciones instaladas (`InstallLocation`,
+  si sigue teniendo `_app\server.py`), `Chuleta.lnk`/`Notas.lnk` en el escritorio y en Inicio, y
+  `%USERPROFILE%\Chuleta`. Se actualiza en su sitio como antes (mismo copiado, ahora en `Copy-AppFiles`) y el detalle
+  dice cómo se encontró. Con `-NoShortcut` o `-Desktop` (pruebas) no se lee ni se escribe nada del sistema.
+- **Aplicaciones instaladas**: `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta` (sin
+  administrador) con `DisplayName`, `DisplayVersion` (la de `_app\version.txt`; si no hay, la fecha), `Publisher`,
+  `DisplayIcon`, `InstallLocation`, `InstallDate` (`yyyyMMdd`), `URLInfoAbout`, `UninstallString` y
+  `QuietUninstallString` (REG_SZ) y `EstimatedSize` (KB de `_app`), `NoModify` y `NoRepair` (REG_DWORD). Si una
+  política de la empresa no lo deja, solo se avisa: la app funciona igual.
+- **Desinstalador** (`_app\desinstalar.ps1`): ventana con el estilo del instalador («Se quitará la aplicación
+  Chuleta de este PC. Tus reuniones, transcripciones y notas en … NO se borran.»), casilla desmarcada para borrar
+  también `%LOCALAPPDATA%\AudiosApp` (con el aviso de que las huellas de voz son datos biométricos y borrarlas es
+  definitivo), «Desinstalar»/«Cancelar» y, al terminar, «Chuleta se ha desinstalado. Tus reuniones siguen en …» con
+  «Abrir la carpeta». Apaga la app con `/api/apagar` (si está grabando, 409: avisa y no toca nada), espera a que no
+  quede ningún proceso suyo, quita los accesos directos que apuntan a esa instalación, la entrada y `_app` (solo
+  ficheros de la app, por extensión de código o por nombre exacto: lo demás se queda y se dice; el desinstalador se
+  borra el último para poder reintentar) y los `.bat` de la raíz; deja `LEEME.txt` y `LICENSE` junto a las reuniones
+  (así una reinstalación vuelve a la misma carpeta). Se copia a `%TEMP%` y se relanza desde allí; `-Silencioso` sin
+  ventana (no borra `AudiosApp` salvo con `-BorrarDatos`); registro en `%TEMP%\chuleta-desinstalar.log`.
+- **Tests y E2E**: `tests/test_desinstalar.py` (paquete, parseo con PowerShell, BOM/CRLF, valores y tipos del
+  registro, orden de detección, ningún `Remove-Item` sobre la raíz ni extensiones de reunión y, en Windows,
+  desinstalación real sobre una carpeta temporal comparando las reuniones por sha256). El E2E de Windows instala desde
+  `Descargas-test` en `%USERPROFILE%\Chuleta`, vuelca la entrada del registro, crea una reunión falsa, actualiza por
+  el registro y por `Notas.lnk`, y desinstala cancelando, con la app «grabando», en silencio con la app abierta y,
+  tras reinstalar, con «Borrar también mis ajustes»; la reunión se compara por sha256 en cada fase.
+
 ### Renombrado a Chuleta
 - La app pasa a llamarse **Chuleta** (`common.APP_NAME`): título de la ventana y de la pestaña, raíz del árbol,
   mensajes y avisos, cabecera `Server`, nombre del zip (`Chuleta - instalador.zip`) y su carpeta raíz (`Chuleta/`),
