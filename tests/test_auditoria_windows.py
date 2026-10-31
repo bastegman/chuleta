@@ -734,6 +734,10 @@ class TranscripcionTextoTests(unittest.TestCase):
             src = f.read()
         self.assertIn("&& await txSavedForReload()) return location.reload()", src)
         self.assertIn("if (flushTxOnUnload()) { e.preventDefault(); e.returnValue = ''; }", src)
+        i = src.index("async function loadTranscript(a) {")
+        load = src[i:src.index("\n}\n", i)]
+        # al volver a la misma reunion, primero termina el guardado en curso y luego se lee el texto
+        self.assertLess(load.index("await txInflight.get(want)"), load.index("api('/api/transcript?path="))
 
 
 # ------------------------------------------------------------------------ P2-32 · «Avisarme si estoy en una llamada»

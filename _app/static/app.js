@@ -1011,6 +1011,7 @@ async function appendLive(a) {
 async function loadTranscript(a) {
   if (S.editing && S.tx && S.tx.path === a.path) return liveJob(a) ? appendLive(a) : undefined;  // no pisar lo que se esta corrigiendo
   const want = a.path;
+  try { await txInflight.get(want); } catch { /* lo avisa saveTxNow */ }  // primero, la correccion que aun se guarda
   let t;
   try { t = await api('/api/transcript?path=' + enc(a.path)); } catch (err) { t = { kind: null, segments: [], error: err.message }; }
   if (S.route.kind !== 'a' || S.route.path !== want) return;
