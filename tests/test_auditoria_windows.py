@@ -89,7 +89,8 @@ def old_toast_script(title, body):
             f"$x.Item(1).AppendChild($t.CreateTextNode('{q(body)}')) > $null;")
 
 
-INYECCION = "Pla d’acció’)) > $null; New-Item -ItemType File -Path $env:NOTAS_MARCA -Force > $null; $null = ((’"
+# cierra la cadena con ’ (que q() no doblaba), ejecuta New-Item y deja el resto del script bien formado
+INYECCION = "x’)) > $null; New-Item -ItemType File -Path $env:NOTAS_MARCA -Force > $null; $null = ((’"
 
 
 @unittest.skipUnless(WIN, "solo Windows (PowerShell 5.1)")
@@ -130,8 +131,9 @@ class AvisoPowerShellRealTests(unittest.TestCase):
     def test_un_nombre_preparado_no_ejecuta_nada(self):
         # control: con el script de antes, el mismo nombre ejecuta New-Item (la prueba es sensible de verdad)
         antes = os.path.join(self.tmp, "antes.txt")
-        self.run_ps(old_toast_script(INYECCION, "cuerpo"), dict(os.environ, NOTAS_MARCA=antes))
-        self.assertTrue(os.path.exists(antes), "el payload ya no inyecta con el script antiguo: revisar la prueba")
+        r0 = self.run_ps(old_toast_script(INYECCION, "cuerpo"), dict(os.environ, NOTAS_MARCA=antes))
+        self.assertTrue(os.path.exists(antes), "el payload ya no inyecta con el script antiguo: revisar la prueba\n"
+                        + r0.stderr.decode("utf-8", "replace")[-1500:])
         # ahora: el aviso real (el mismo argv que notify) con ese nombre de tema en el titulo y en el texto
         ahora = os.path.join(self.tmp, "ahora.txt")
         argv, env = recording.toast_command(f"● Grabando en {INYECCION}", f"{INYECCION} · $(New-Item {ahora})")
@@ -469,6 +471,11 @@ def free_port():
 
 
 WM_QUERYENDSESSION, WM_ENDSESSION, SMTO_ABORTIFHUNG = 0x11, 0x16, 0x2
+SIN_ARREGLO = ("import runpy, sys\n"
+               f"sys.path.insert(0, {APP!r})\n"
+               "import window\n"
+               "window.Window._hook_native = lambda self: False\n"
+               f"runpy.run_path({os.path.join(APP, 'server.py')!r}, run_name='__main__')\n")
 
 
 @unittest.skipUnless(WIN and os.environ.get("NOTAS_VENTANA_REAL"), "solo Windows con NOTAS_VENTANA_REAL=1")
@@ -486,10 +493,10 @@ class VentanaRealTests(unittest.TestCase):
         self.out = open(os.path.join(self.data, "consola.txt"), "wb")
         self.p = None
 
-    def start(self, **env):
-        self.p = subprocess.Popen([sys.executable, os.path.join(APP, "server.py"), "--port", str(self.port),
-                                   "--data", self.data], cwd=APP, stdout=self.out, stderr=subprocess.STDOUT,
-                                  env=dict(os.environ, **env))
+    def start(self, code=None, **env):
+        cmd = ["-c", code] if code else [os.path.join(APP, "server.py")]
+        self.p = subprocess.Popen([sys.executable, *cmd, "--port", str(self.port), "--data", self.data], cwd=APP,
+                                  stdout=self.out, stderr=subprocess.STDOUT, env=dict(os.environ, **env))
 
     def tearDown(self):
         if self.p is not None and self.p.poll() is None:
@@ -536,6 +543,16 @@ class VentanaRealTests(unittest.TestCase):
         u = ctypes.WinDLL("user32")
         u.IsWindow.argtypes = [wintypes.HWND]
         return bool(u.IsWindow(hwnd))
+
+    def test_control_sin_el_arreglo_la_app_impide_apagar(self):
+        # la misma app sin los manejadores propios de FormClosing (como en 5c55e54): pywebview cancela el cierre y
+        # WM_QUERYENDSESSION devuelve FALSE. Demuestra que la prueba de abajo detecta el defecto.
+        self.start(code=SIN_ARREGLO)
+        hwnd = int(self.wait_log(r"ventana abierta \(WebView2; hwnd (\d+)\)").group(1))
+        time.sleep(3)
+        ok, res = self.send(hwnd, WM_QUERYENDSESSION, 0, 0)
+        self.assertTrue(ok)
+        self.assertEqual(res, 0)
 
     def test_windows_puede_apagar_y_la_app_se_apaga_limpia(self):
         self.start()
