@@ -83,6 +83,16 @@ class DirectoHelpersTests(unittest.TestCase):
         self.assertIn("1,8 s", out)
         self.assertIn("3,2 s", out)
         self.assertNotRegex(out, re.compile(r"\d\.\d"))  # coma decimal, no punto
+        self.assertNotIn("red", out)
+        # por fases: cuanto es red (y Groq, si lo declara) y cuanto cupo; el resto es de este lado
+        out = self.run_js("console.log(directoLatencyText({n:5, p50:1.8, p95:3.2, phases:{net:{p50:1.1, p95:2.0}, "
+                          "infer:{p50:0.8, p95:1.1}, wait:{p50:0.3, p95:1.0}}}))")
+        self.assertIn("red 1,1 s (inferencia 0,8 s)", out)
+        self.assertIn("cupo 0,3 s", out)
+        out = self.run_js("console.log(directoLatencyText({n:5, p50:1.8, p95:3.2, phases:{net:{p50:1.1, p95:2.0}, "
+                          "wait:{p50:0.01, p95:0.02}}}))")
+        self.assertNotIn("cupo", out)
+        self.assertNotIn("inferencia", out)
 
 
 if __name__ == "__main__":

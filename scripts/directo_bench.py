@@ -196,7 +196,7 @@ class FakeCloud:
         self.keys.clock = rec.now
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
-                         model=None):
+                         model=None, timing=None):
         secs = len(audio) / SR
         self.calls.append({"secs": secs, "at": self.rec.now(), "voice": None})
         self.rec.sleep(self.latency)

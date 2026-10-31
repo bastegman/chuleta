@@ -6,6 +6,11 @@ Punto de partida: la versión del 30/10/2026 tal como se exportaba desde la prop
 nada de ningún proyecto concreto.
 
 ### Cambiado
+- El árbol de reuniones (`/api/tree`, que la página sondea cada 6 s) ya no recorre el disco si ninguna carpeta ha
+  cambiado de fecha y ninguna grabación abierta ha crecido (un `stat` por carpeta); cada 30 s se repasa todo en
+  segundo plano por si un `.md` o `.srt` se editó desde fuera, y los endpoints que escriben siguen forzando el
+  escaneo completo. Medido con 1.000 reuniones: cada sondeo pasaba de 93 ms (bloqueando el hilo HTTP) a 1 ms;
+  el primer pintado y el escaneo tras un cambio siguen en ~100 ms.
 - Nueva identidad **Chuleta**: logo (chuleta con hueso) en la cabecera, en el icono de la app y en el favicon;
   paleta burdeos/rosa sobre neutros cálidos con contraste AA en el texto, también en modo oscuro; iconos de línea
   (SVG) en vez de emojis en la navegación, los botones, las pestañas, las propiedades, Ajustes y las etiquetas de
@@ -106,6 +111,25 @@ nada de ningún proyecto concreto.
   línea del `.txt`, `docProps/core.xml` del `.docx`) y cuyo hash coincide con el registro
   `%LOCALAPPDATA%\AudiosApp\salidas.json`; uno ajeno, o uno nuestro cambiado en el destino, se deja como está y se
   anota en `server.log`.
+- **Rendimiento, con medición antes/después** (`scripts/rendimiento_bench.py`, documentado en el README):
+  - Las peticiones a Groq/OpenAI (directo, repaso final, cola, resumen y traducción) van por una `requests.Session`
+    por hilo con keep-alive (`engines.Http`), con timeouts por fase (10 s para conectar y el de lectura de cada
+    petición) y sin reintentos en el adaptador (los decide el `KeyPool`). Antes cada petición abría conexión
+    nueva (DNS + TCP + TLS): medido contra `api.groq.com` sin clave, 86 → 57 ms por petición (p50; p95 108 → 61),
+    que en el directo se paga cada 3-6 s.
+  - El proceso de Whisper en local sigue cargado `worker_keepalive_min` minutos tras el último trabajo (30 por
+    defecto; 0 = 5 min, como antes) y, al arrancar la app, se precarga el modelo local del directo si ya está
+    descargado (`worker_preload`, activado; en segundo plano y con prioridad baja, sin bloquear la interfaz).
+    Medido: arrancar el proceso y cargar `small` cuesta 2,0-2,9 s y `medium` 4,7-6,2 s, que antes pagaba el primer
+    trozo de cada reunión; mientras está cargado ocupa ~450 MB (`small`) o ~1 GB (`medium`). «Apagar» sigue
+    matando los dos procesos.
+  - La latencia de cada trozo del directo en la nube se desglosa por fases en `server.log` y en la cabecera del
+    directo («texto a los 1,8 s · red 1,1 s · cupo 0,3 s»): preparación, espera por cupo, red (conexión + subida +
+    inferencia; la inferencia aparte si el servidor manda `*-processing-ms`) y pintado. Así se ve si el cuello
+    está en Groq, en la red o en este lado.
+  - La transcripción en la nube de un archivo escribe el FLAC de cada parte justo antes de subirla, en vez de
+    todas antes de la primera subida: la primera subida empieza ~0,7 s antes en una hora de audio (el total no
+    cambia: lo que manda es decodificar, 4,2 s por hora, y la API).
 - **Directo en la nube casi en streaming** (`_app/live.py`, `_app/engines.py`, `_app/static/directo.js`): con
   Groq el directo manda trozos de 3–6 s en vez de 8–15: corta en la primera pausa de la voz a partir de 3 s y, si
   nadie calla, a los 6 s con 0,5 s de solape que se deduplica por tiempos; solo se envía la voz (los silencios de

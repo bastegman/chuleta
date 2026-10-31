@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import threading
 import time
+from time import perf_counter  # aparte de `time`: los tests le ponen un sleep falso
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -29,6 +30,55 @@ class Cancelled(Exception):
 
 class EngineError(Exception):
     pass
+
+
+# ----------------------------------------------------------------------------- conexiones HTTP (keep-alive)
+CONNECT_TIMEOUT = 10  # s hasta tener la conexion (DNS + TCP + TLS); la lectura lleva su propio tope en cada peticion
+
+
+class Http:
+    """Una requests.Session por hilo, con keep-alive. En el directo sale una peticion cada 3-6 s y, sin sesion,
+    cada una abre conexion nueva (DNS + TCP + TLS) y la paga entera. Session no es segura entre hilos, asi que
+    cada hilo (cola, directo, traduccion, resumen) tiene la suya. El adaptador no reintenta nada: los reintentos
+    los deciden _post y _chat, que saben de cupo y de retry-after. Si `requests` no trae Session (los tests lo
+    sustituyen por un doble que solo tiene post), se usa requests.post tal cual."""
+
+    POOL = 4  # conexiones que guarda cada sesion (un hilo tiene como mucho una en vuelo; con margen)
+
+    def __init__(self):
+        self.local = threading.local()
+
+    def session(self):
+        import requests
+        if not hasattr(requests, "Session"):
+            return requests
+        s = getattr(self.local, "session", None)
+        if s is None or getattr(self.local, "module", None) is not requests:
+            s = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(pool_connections=2, pool_maxsize=self.POOL, max_retries=0)
+            s.mount("https://", adapter)
+            s.mount("http://", adapter)
+            self.local.session, self.local.module = s, requests
+        return s
+
+    def post(self, url, read_timeout, **kw):
+        """POST con timeouts por fase: CONNECT_TIMEOUT para conectar y read_timeout para la respuesta."""
+        return self.session().post(url, timeout=(CONNECT_TIMEOUT, read_timeout), **kw)
+
+
+HTTP = Http()
+
+
+def processing_s(headers):
+    """Tiempo de proceso que declara el servidor, si lo declara (p. ej. openai-processing-ms), en segundos."""
+    for k, v in (headers or {}).items():
+        k = str(k).lower()
+        if "processing" in k and k.endswith("-ms"):
+            try:
+                return float(v) / 1000
+            except (TypeError, ValueError):
+                pass
+    return None
 
 
 # speed = veces tiempo real medidas en un portatil reciente (Core Ultra 7 265U, 2025); la app las va
@@ -389,23 +439,36 @@ class WorkerClient:
     El motor nativo de Whisper se ha llegado a quedar colgado dentro de generate() sin volver.
     En otro proceso se puede matar y relanzar sin tumbar la app; y cancelar es instantaneo."""
 
-    IDLE_S = 300  # sin trabajo 5 min: se cierra y libera la RAM del modelo (1,5-3,4 GB)
+    IDLE_S = 300  # sin trabajo 5 min: se cierra y libera la RAM del modelo (0,4-3,4 GB)
 
-    def __init__(self, name, log_dir):
-        self.name, self.log_dir = name, log_dir
+    def __init__(self, name, log_dir, idle_s=None):
+        """idle_s: segundos sin trabajo antes de cerrar el proceso (numero o funcion que lo devuelve: el ajuste
+        worker_keepalive_min puede cambiar en caliente). None = IDLE_S."""
+        self.name, self.log_dir, self.idle_s = name, log_dir, idle_s
         self.p, self.q, self.key = None, None, None
         self.lock = threading.Lock()
-        self.last_used = time.time()
+        self.clock = time.time  # los tests ponen un reloj falso
+        self.last_used = self.clock()
         threading.Thread(target=self._janitor, daemon=True, name=f"janitor-{name}").start()
+
+    def idle_limit(self):
+        v = self.idle_s() if callable(self.idle_s) else self.idle_s
+        return float(v) if v else float(self.IDLE_S)
+
+    def _idle_check(self):
+        """Cierra el proceso si lleva mas de idle_limit() sin trabajo. Devuelve True si lo ha cerrado."""
+        if self.alive() and self.clock() - self.last_used > self.idle_limit() and self.lock.acquire(blocking=False):
+            try:
+                self.kill()
+                return True
+            finally:
+                self.lock.release()
+        return False
 
     def _janitor(self):
         while True:
             time.sleep(30)
-            if self.alive() and time.time() - self.last_used > self.IDLE_S and self.lock.acquire(blocking=False):
-                try:
-                    self.kill()
-                finally:
-                    self.lock.release()
+            self._idle_check()
 
     def alive(self):
         return self.p is not None and self.p.poll() is None
@@ -489,7 +552,7 @@ class WorkerClient:
                     raise EngineError(m.get("error") or "error en Whisper")
                 if req.get("model"):
                     self.key = (req["model"], int(req.get("threads") or 0))
-                self.last_used = time.time()
+                self.last_used = self.clock()
                 return m
 
     def ensure(self, model, threads, on_progress=None, cancelled=None):
@@ -504,8 +567,8 @@ class WorkerClient:
 
 
 class LocalEngine:
-    def __init__(self, log_dir, name="batch"):
-        self.worker = WorkerClient(name, log_dir)
+    def __init__(self, log_dir, name="batch", idle_s=None):
+        self.worker = WorkerClient(name, log_dir, idle_s=idle_s)
 
     def transcribe(self, path, preset, language, prompt, threads, report, cancelled, start=0.0, about=None):
         """start > 0: solo desde ese segundo (continuar una transcripcion a medias). about: contexto libre."""
@@ -621,12 +684,16 @@ class KeyPool:
         """Aprende de la respuesta: cabeceras x-ratelimit-* y retry-after. Devuelve una copia del estado."""
         h = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
         rl = {k: v for k, v in h.items() if k.startswith("x-ratelimit-")}
+        # y las de tiempos, si las hay (openai-processing-ms…): dicen cuanto de la latencia es inferencia
+        tm = {k: v for k, v in h.items() if any(w in k for w in ("processing", "timing", "latency"))}
         with self.lock:
             st, now = self._st(key, family), self.clock()
             st["used"] += 1
             if rl and not self.headers_logged:  # la primera vez, todas: para saber que cabeceras manda el servicio
                 self.headers_logged = True
-                self.log("   cabeceras de cupo del servicio: " + ", ".join(f"{k}={v}" for k, v in sorted(rl.items())))
+                self.log("   cabeceras de cupo del servicio: " + ", ".join(f"{k}={v}" for k, v in sorted(rl.items()))
+                         + ("; de tiempos: " + ", ".join(f"{k}={v}" for k, v in sorted(tm.items())) if tm else
+                            "; sin cabeceras de tiempo de proceso"))
             try:
                 if "x-ratelimit-remaining-requests" in rl:
                     st["remaining"] = int(float(rl["x-ratelimit-remaining-requests"]))
@@ -771,9 +838,12 @@ class CloudEngine:
             time.sleep(min(0.25, max(0.0, end - time.time())))
 
     def _post(self, cfg, chunk, language, prompt, report, cancelled, context=None, model=None, timeout=300,
-              about=None):
+              about=None, timing=None):
         """Una peticion de transcripcion. La clave la elige el KeyPool (rotacion), que tambien marca el ritmo
-        (>= 3 s entre peticiones de la misma clave) y aprende de las cabeceras de cupo de la respuesta."""
+        (>= 3 s entre peticiones de la misma clave) y aprende de las cabeceras de cupo de la respuesta.
+        timeout: segundos de lectura (la conexion tiene su tope aparte, CONNECT_TIMEOUT). timing: si se pasa un
+        dict, se anotan los segundos de espera por cupo/reintentos ("wait"), de red de la peticion que respondio
+        ("net": conexion + subida + inferencia + bajada) y, si el servidor lo declara, de inferencia ("infer")."""
         import requests
         self.endpoint(cfg, model=model)  # valida la configuracion
         data = {"response_format": "verbose_json", "temperature": "0"}
@@ -782,6 +852,8 @@ class CloudEngine:
             data["language"] = language
         if prompt:
             data["prompt"] = prompt
+        tm = timing if timing is not None else {}
+        tm.setdefault("wait", 0.0)
         last, family = None, "whisper"
         for attempt in range(6):
             if cancelled():
@@ -790,18 +862,23 @@ class CloudEngine:
             url, headers, mdl = self.endpoint(cfg, key=key, model=model)
             if mdl:
                 data["model"] = mdl
-            self._wait(self.keys.reserve(key, family), cancelled)
+            pause = self.keys.reserve(key, family)
+            tm["wait"] += pause
+            self._wait(pause, cancelled)
             try:
                 with open(chunk, "rb") as fh:
                     mime = "audio/wav" if chunk.lower().endswith(".wav") else "audio/flac"
-                    r = requests.post(url, headers=headers, data=data, timeout=timeout,
-                                      files={"file": (os.path.basename(chunk), fh, mime)})
+                    t0 = perf_counter()
+                    r = HTTP.post(url, timeout, headers=headers, data=data,
+                                  files={"file": (os.path.basename(chunk), fh, mime)})
+                    tm["net"] = perf_counter() - t0
             except requests.RequestException as e:
                 last = f"sin conexión con el servicio ({e.__class__.__name__})"
                 wait = 2 ** attempt
             else:
                 self.keys.note(key, family, r.status_code, r.headers)
                 if r.status_code == 200:
+                    tm["infer"] = processing_s(r.headers)
                     return r.json()
                 last = api_error(r)
                 if r.status_code not in (408, 409, 429, 500, 502, 503, 504):
@@ -815,6 +892,7 @@ class CloudEngine:
                     raise EngineError(f"Groq pide esperar {int(wait // 60)} min ({last})")
             wait = min(max(wait, 1.0), 120.0)
             report(stage=f"La API pide esperar ({last}). Reintento en {wait:.0f} s…")
+            tm["wait"] += wait
             self._wait(wait, cancelled)
         raise EngineError(last or "la API no respondió")
 
@@ -834,9 +912,6 @@ class CloudEngine:
             chunk_s = max(60, int(float(cfg.get("chunk_minutes") or 10) * 60))
             parts = self._cut_points(duration, silences, chunk_s)
             n = len(parts)
-            report(stage=f"Cortando en {n} partes por los silencios…", frac=0.1)
-            chunks = self._extract_parts(y, parts, work)
-            del y  # libera la memoria antes de subir
             if cancelled():
                 raise Cancelled()
             report(stage=f"Transcribiendo en la nube (0/{n} partes)…", frac=0.12, transcribing=True)
@@ -845,9 +920,22 @@ class CloudEngine:
             def stop():
                 return cancelled() or abort.is_set()
 
-            def do_part(i, start, end):
-                res = self._post(cfg, chunks[i], language, prompt, report, stop, about=about)
-                return i, parse_verbose(res, start, end), res.get("language")
+            buf, encoded, enc_lock = {"y": y}, [0], threading.Lock()
+            del y  # buf lo suelta en cuanto este codificada la ultima parte: no se retiene durante la subida
+
+            def do_part(i, a, b):
+                # cada hilo escribe el FLAC de su parte justo antes de subirla: la primera subida empieza en cuanto
+                # esta su parte (no cuando estan las n) y las demas se codifican mientras otras ya suben
+                path = os.path.join(work, f"part_{i:03d}.flac")
+                write_flac(path, buf["y"][int(a * 16000):int(b * 16000)])
+                with enc_lock:
+                    encoded[0] += 1
+                    if encoded[0] == n:
+                        buf["y"] = None
+                if stop():
+                    raise Cancelled()
+                res = self._post(cfg, path, language, prompt, report, stop, about=about)
+                return i, parse_verbose(res, a, b), res.get("language")
 
             results, langs, done = {}, [], 0
             workers = max(1, min(int(cfg.get("parallel") or 3), 8))
@@ -874,17 +962,21 @@ class CloudEngine:
             shutil.rmtree(work, ignore_errors=True)
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
-                         model=None, about=None):
+                         model=None, about=None, timing=None):
         """Un trozo ya en memoria (16 kHz mono), para el modo en directo. context: lo ultimo que se dijo;
         model: el del directo (cloud.live_model), distinto del de la cola y el repaso final; about: contexto
-        libre de la reunion."""
+        libre de la reunion; timing: dict donde anotar los tiempos por fase (ver _post; aqui se suma a "prep"
+        lo que tarda en escribir el WAV)."""
         os.makedirs(tmp_dir, exist_ok=True)
         f = os.path.join(tmp_dir, f"live_{job_id}.wav")
+        t0 = perf_counter()
         write_wav16(f, audio)
+        if timing is not None:
+            timing["prep"] = timing.get("prep", 0.0) + perf_counter() - t0
         try:
             # trozos de pocos segundos: si la red se atasca mas de 60 s, mejor fallar y seguir con el siguiente
             res = self._post(cfg, f, language, prompt, lambda **k: stage(k.get("stage", "")), cancelled, context,
-                             model=model, timeout=60, about=about)
+                             model=model, timeout=60, about=about, timing=timing)
         finally:
             try:
                 os.remove(f)
@@ -1032,7 +1124,7 @@ class Summarizer:
             key = self.keys.pick(cfg, family)
             self._sleep(self.keys.reserve(key, family), cancelled)
             try:
-                r = requests.post(url, json=body, timeout=timeout, headers={"Authorization": f"Bearer {key}"})
+                r = HTTP.post(url, timeout, json=body, headers={"Authorization": f"Bearer {key}"})
             except requests.RequestException as e:
                 report(stage=f"Sin conexión con {provider} ({e.__class__.__name__}), reintentando…")
                 self._sleep(3 * 2 ** attempt, cancelled)

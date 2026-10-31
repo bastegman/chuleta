@@ -86,7 +86,11 @@ function directoQuotaText(q) {
 function directoLatencyText(lat) {
   if (!lat || !lat.n) return 'midiendo…';
   const f = x => String(Math.round((+x || 0) * 10) / 10).replace('.', ',');
-  return `texto a los ${f(lat.p50)} s (p95 ${f(lat.p95)} s)`;
+  let t = `texto a los ${f(lat.p50)} s (p95 ${f(lat.p95)} s)`;
+  const ph = lat.phases || {};  // por fases: cuanto es red/Groq (y cupo) y cuanto queda de este lado
+  if (ph.net) t += ` · red ${f(ph.net.p50)} s` + (ph.infer ? ` (inferencia ${f(ph.infer.p50)} s)` : '');
+  if (ph.wait && ph.wait.p50 >= 0.05) t += ` · cupo ${f(ph.wait.p50)} s`;
+  return t;
 }
 
 /* ---------------------------------------------------------------- barra del directo (dentro del hero) */

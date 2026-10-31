@@ -16,6 +16,7 @@ import os
 import struct
 import threading
 import time
+from time import perf_counter  # aparte de `time`: los tests sustituyen live.time por un reloj falso
 
 import numpy as np
 
@@ -207,12 +208,32 @@ def stitch(prev, new, dedupe_until, language):
     return engines.clean_segments(prev + new, None, language)[len(prev):]
 
 
+PHASES = ("prep", "wait", "net", "infer", "paint")  # por trozo: preparacion, espera por cupo, red, inferencia, pintado
+PHASE_LABELS = {"prep": "preparación", "wait": "cupo", "net": "red", "infer": "inferencia", "paint": "pintado"}
+
+
+def fmt_phases(p):
+    """' · preparación 0,05 s · red 1,10 s (inferencia 0,80 s) · pintado 0,01 s' para el log (solo lo que se midio)."""
+    out = []
+    for k in PHASES:
+        v = (p or {}).get(k)
+        if v is None or k == "infer":
+            continue
+        s = f"{PHASE_LABELS[k]} {v:.2f} s"
+        if k == "net" and p.get("infer") is not None:
+            s += f" (inferencia {p['infer']:.2f} s)"
+        out.append(s)
+    return "".join(" · " + s for s in out)
+
+
 class Latency:
     """Latencia del directo: del final del audio de cada trozo (cuando ya estaba en el fichero) al texto escrito.
-    marks: (segundos grabados, hora de pared en que el fichero llegaba hasta ahi), una por lectura."""
+    marks: (segundos grabados, hora de pared en que el fichero llegaba hasta ahi), una por lectura.
+    Ademas, por fases (PHASES), para saber si el cuello esta en la red/Groq o en este lado."""
 
     def __init__(self, keep=400):
         self.marks, self.samples, self.keep = [], [], keep
+        self.phases = {k: [] for k in PHASES}
 
     def seen(self, recorded_s, now):
         if not self.marks or recorded_s > self.marks[-1][0]:
@@ -226,7 +247,7 @@ class Latency:
                 return w
         return None
 
-    def add(self, rec_end_s, now):
+    def add(self, rec_end_s, now, phases=None):
         w = self.wall_of(rec_end_s)
         if w is None:
             return None
@@ -234,14 +255,27 @@ class Latency:
         self.samples.append(lat)
         if len(self.samples) > self.keep:
             del self.samples[:-self.keep]
+        for k in PHASES:
+            v = (phases or {}).get(k)
+            if v is not None:
+                xs = self.phases[k]
+                xs.append(float(v))
+                if len(xs) > self.keep:
+                    del xs[:-self.keep]
         return lat
+
+    @staticmethod
+    def _q(xs, p):
+        s = sorted(xs)
+        return s[min(len(s) - 1, int(round(p * (len(s) - 1))))]
 
     def stats(self):
         if not self.samples:
-            return {"n": 0, "p50": None, "p95": None, "last": None}
-        s = sorted(self.samples)
-        q = lambda p: s[min(len(s) - 1, int(round(p * (len(s) - 1))))]  # noqa: E731
-        return {"n": len(s), "p50": round(q(0.5), 2), "p95": round(q(0.95), 2), "last": round(self.samples[-1], 2)}
+            return {"n": 0, "p50": None, "p95": None, "last": None, "phases": {}}
+        ph = {k: {"p50": round(self._q(xs, 0.5), 2), "p95": round(self._q(xs, 0.95), 2)}
+              for k, xs in self.phases.items() if xs}
+        return {"n": len(self.samples), "p50": round(self._q(self.samples, 0.5), 2),
+                "p95": round(self._q(self.samples, 0.95), 2), "last": round(self.samples[-1], 2), "phases": ph}
 
 
 def fmt_wait(secs):
@@ -392,7 +426,7 @@ def run(job, path, opts, write, log):
                        "translating": bool(translator and translator.busy),
                        "live_model": engines.CloudEngine.live_model(cfg) if on_cloud else None}
 
-    def transcribe(window, offset):
+    def transcribe(window, offset, timing=None):
         nonlocal lang, fixed_lang
         preset = engines.PRESETS_BY_ID.get(job.preset) or engines.PRESETS_BY_ID["medium"]
         prev = segs[-1:]  # para no repetir la ultima frase del trozo anterior
@@ -402,12 +436,13 @@ def run(job, path, opts, write, log):
             fixed_lang, lang = want, (want or lang)
             log(f"   directo: idioma {want or 'detectar'} desde el siguiente trozo")
         about = opts.get("about") or None
+        tm = timing if timing is not None else {}
         if preset["engine"] == "cloud":
             out, detected = opts["cloud"].transcribe_array(opts["cloud_cfg"], window, fixed_lang, opts.get("prompt"),
                                                            opts["tmp_dir"], job.id, stage, lambda: job.cancel,
                                                            context=context,
                                                            model=engines.CloudEngine.live_model(opts["cloud_cfg"]),
-                                                           about=about)
+                                                           about=about, timing=tm)
             lang = engines.LANG_CODES.get(str(detected or "").lower(), lang)
             out = [(a + offset, b + offset, t) for a, b, t in out]
             return stitch(prev, out, st["dedupe_until"], lang)
@@ -419,7 +454,9 @@ def run(job, path, opts, write, log):
                 worker.ensure(preset["model"], opts["threads"], lambda m: stage(m.get("stage") or job.stage),
                               lambda: job.cancel)
                 stage("Transcribiendo en directo…" if st["caught_up"] else "Poniéndose al día con lo ya grabado…")
+                t_req = perf_counter()
                 res = worker.request(req, audio=window, timeout=120 + 4 * secs, cancelled=lambda: job.cancel)
+                tm["infer"] = perf_counter() - t_req  # en local la "red" es el proceso de Whisper
                 break
             except engines.WorkerTimeout as e:  # el motor se colgo: proceso nuevo y otro intento
                 log(f"   {e} ({secs:.0f} s de audio, intento {attempt + 1})")
@@ -464,6 +501,7 @@ def run(job, path, opts, write, log):
             job.recording = not (closed or stalled)
             job.recorded = (end - off) / br
             latency.seen(job.recorded, now)
+            t_iter = perf_counter()  # preparacion de esta vuelta: leer, remuestrear, VAD, recortar
             # directo en la nube: ventana segun el cupo del dia; sin cupo, se deja de leer (lo que llegue
             # se transcribira al terminar en trozos grandes) y se avisa
             pace = None
@@ -517,8 +555,9 @@ def run(job, path, opts, write, log):
                     voice = sum(min(s["end"], cut) - s["start"] for s in ts if s["start"] < cut) / SR
                     audio, a = window, 0
                 if voice >= DIRECT_MIN_VOICE_S:  # menos de 1 s de voz: musica/ruido, Whisper solo inventaria
+                    tm = {"prep": perf_counter() - t_iter}
                     try:
-                        new = transcribe(audio, t0 + a / SR)
+                        new = transcribe(audio, t0 + a / SR, tm)
                     except engines.EngineError as e:
                         if not directo:
                             raise
@@ -532,15 +571,17 @@ def run(job, path, opts, write, log):
                               "recupera el texto.")
                     if job.restart:  # se pidio rehacer mientras tanto: este trozo ya no vale
                         continue
+                    t_paint = perf_counter()
                     if new:
                         segs.extend(new)
                         write(segs)
                         job.rev += 1
                     if directo:
-                        lat = latency.add(t0 + (a + len(audio)) / SR, time.time())
+                        tm["paint"] = perf_counter() - t_paint
+                        lat = latency.add(t0 + (a + len(audio)) / SR, time.time(), tm)
                         if lat is not None:
                             log(f"   trozo de {len(audio) / SR:.1f} s ({voice:.1f} s de voz, {len(new)} frases): "
-                                f"texto a los {lat:.1f} s")
+                                f"texto a los {lat:.1f} s{fmt_phases(tm)}")
                 st["dedupe_until"] = (t0 + cut / SR) if overlap else None
                 st["buf"] = buf[cut - overlap:]
                 st["t0"] = t0 + (cut - overlap) / SR

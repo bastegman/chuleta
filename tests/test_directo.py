@@ -604,7 +604,7 @@ class FakeCloud:
                            {"x-ratelimit-remaining-requests": str(remaining), "x-ratelimit-reset-requests": "5h"})
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
-                         model=None, about=None):
+                         model=None, about=None, timing=None):
         secs = len(audio) / SR
         self.calls.append({"secs": secs, "model": model, "at": self.rec.time(), "language": language,
                            "prompt": prompt, "about": about})

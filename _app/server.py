@@ -286,6 +286,10 @@ DEFAULT_SETTINGS = {
                # destinos de salida: cada reunion como documento en estas carpetas (salidas.py), al terminar la
                # transcripcion y el resumen y al guardar cambios: [{"path", "format": md|txt|docx, "by_project"}]
                "outputs": []},
+    # Whisper en local: minutos que el modelo sigue cargado tras la ultima reunion (0 = 5 min, como antes) y si se
+    # precarga al arrancar el que usara el directo (solo si ya esta descargado; medido: 2-6 s de arranque en frio)
+    "worker_keepalive_min": 30,
+    "worker_preload": True,
     # nube: whisper-large-v3 (el mas preciso; -turbo es mas rapido y algo menos fino)
     "cloud": {"provider": "groq", "api_key": "", "model": "whisper-large-v3", "base_url": "",
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
@@ -349,14 +353,18 @@ class Durations:
 
 # ----------------------------------------------------------------------------- arbol de carpetas
 
-def scan():
-    """Arbol de carpetas con audios (+ estado de transcripcion) y documentos sueltos."""
+def scan(dirs=None):
+    """Arbol de carpetas con audios (+ estado de transcripcion) y documentos sueltos.
+    dirs: si se pasa un dict, se rellena con carpeta -> mtime_ns (Library lo usa para saber si hay que volver a
+    escanear: la fecha de una carpeta cambia con cada alta, baja o renombrado dentro de ella)."""
     flat = []
 
     def walk(abs_dir, rel, depth=0, max_depth=99):
         node = {"name": os.path.basename(abs_dir) if rel else APP_NAME, "path": rel,
                 "folders": [], "audios": [], "docs": []}
         try:
+            if dirs is not None:
+                dirs[abs_dir] = os.stat(abs_dir).st_mtime_ns
             entries = list(os.scandir(abs_dir))
         except OSError:
             return node
@@ -437,15 +445,29 @@ LINK_DEPTH = 4  # en una carpeta de proyecto grande no se baja mas (el arbol se 
 
 
 class Library:
+    """El arbol de reuniones, con cache. Un sondeo (cada 6 s desde la pagina) no vuelve a recorrer el disco si ninguna
+    carpeta ha cambiado de fecha (un stat por carpeta) y ninguna grabacion abierta ha crecido; `at = 0` (lo ponen
+    los endpoints que escriben) fuerza el escaneo completo. Cada FULL_RESCAN_S se repasa todo de todas formas, en
+    segundo plano, por si un .md o .srt se edito desde fuera (eso no toca la fecha de la carpeta)."""
+
+    FULL_RESCAN_S = 30
+    RECENT_S = 2.0  # una carpeta modificada hace menos de esto se da por cambiada (discos con fechas de 1-2 s)
+
     def __init__(self, durations):
         self.durations = durations
         self.lock = threading.Lock()
         self.tree, self.flat, self.version, self.at = None, [], "", 0
+        self.public = None  # el arbol sin campos privados, listo para /api/tree (se calcula una vez por escaneo)
         self.pending_durations = False
         self.growth = {}  # ruta -> (tamano, cuando cambio): OBS no actualiza la fecha mientras graba
         self.ends = {}    # .srt -> (fecha, segundo en que acaba): para detectar transcripciones a medias
         self.notes = {}   # .md -> (fecha, propiedades, tiene texto)
         self.speakers = {}  # .hablantes.json -> (fecha, resumen {n, known, doubt, tu} o None si solo lleva el micro)
+        self.dirs = {}    # carpeta -> mtime_ns en el ultimo escaneo
+        self.watch = {}   # grabaciones abiertas (cambian sin tocar su carpeta): ruta -> (tamano, fecha)
+        self.full_at, self.full_wall, self.clock = 0.0, 0.0, time.time  # clock: los tests ponen un reloj falso
+        self.rescan_thread = None
+        self.scans = 0    # escaneos completos (para los tests y el banco)
 
     def _props(self, a):
         p = a["_md"]
@@ -517,37 +539,91 @@ class Library:
         a["recording"] = time.time() - self.growth[a["path"]][1] < live.STALLED_S
         return round(max(0, a["size"] - info["data_off"]) / info["byte_rate"], 1)
 
-    def refresh(self, max_age=0.0):
-        with self.lock:
-            if self.tree is not None and time.time() - self.at < max_age:
-                return self.tree, self.version
-            tree, flat = scan()
-            missing = False
-            for a in flat:
-                a["recording"] = False
-                a["tx_end"] = self._tx_end(a)
-                a["props"], a["has_notes"] = self._props(a)
-                a["speakers"] = self._speakers(a)
-                a["has_speakers"] = bool(a["speakers"])
-                open_dur = self._recording(a)
-                if open_dur is not None:  # sin cachear: cambia cada pocos segundos
-                    a["duration"] = open_dur
-                    a["partial"] = False
-                    continue
-                # duraciones: las rapidas (cabecera WAV) ya; las demas (PyAV) en segundo plano
-                quick = a["ext"] == ".wav" or a["cloud"]
-                a["duration"] = self.durations.get(a["_abs"], a["path"], a["size"], a["mtime"], a["cloud"],
-                                                   a["_srt"], compute=quick)
-                missing |= a["duration"] is None and not quick
-                a["partial"] = is_partial(a)
-            self.durations.flush()
-            payload = json.dumps(strip_private(tree), ensure_ascii=False, sort_keys=True)
-            self.tree, self.flat, self.at = tree, flat, time.time()
-            self.version = hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
+    def _changed(self):
+        """True si algo ha podido cambiar en disco desde el ultimo escaneo completo: la fecha de alguna carpeta (alta,
+        baja o renombrado dentro), o el tamano/fecha de una grabacion abierta. Un stat por carpeta: milisegundos."""
+        for d, m in self.dirs.items():
+            try:
+                st = os.stat(d)
+            except OSError:
+                return True
+            if st.st_mtime_ns != m or st.st_mtime > self.full_wall - self.RECENT_S:
+                return True
+        for p, (size, mtime) in self.watch.items():
+            try:
+                st = os.stat(p)
+            except OSError:
+                return True
+            if st.st_size != size or st.st_mtime != mtime:
+                return True
+        return False
+
+    def _rescan(self, now):
+        """Escaneo completo (con self.lock cogido)."""
+        dirs = {}
+        tree, flat = scan(dirs)
+        missing, watch = False, {}
+        for a in flat:
+            a["recording"] = False
+            a["tx_end"] = self._tx_end(a)
+            a["props"], a["has_notes"] = self._props(a)
+            a["speakers"] = self._speakers(a)
+            a["has_speakers"] = bool(a["speakers"])
+            open_dur = self._recording(a)
+            if open_dur is not None:  # sin cachear: cambia cada pocos segundos
+                a["duration"] = open_dur
+                a["partial"] = False
+                watch[a["_abs"]] = (a["size"], a["mtime"])
+                continue
+            # duraciones: las rapidas (cabecera WAV) ya; las demas (PyAV) en segundo plano
+            quick = a["ext"] == ".wav" or a["cloud"]
+            a["duration"] = self.durations.get(a["_abs"], a["path"], a["size"], a["mtime"], a["cloud"],
+                                               a["_srt"], compute=quick)
+            missing |= a["duration"] is None and not quick
+            a["partial"] = is_partial(a)
+        self.durations.flush()
+        public = strip_private(tree)
+        payload = json.dumps(public, ensure_ascii=False, sort_keys=True)
+        self.tree, self.flat, self.public, self.at = tree, flat, public, now
+        self.version = hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
+        self.dirs, self.watch, self.full_at, self.full_wall = dirs, watch, now, time.time()
+        self.scans += 1
         if missing and not self.pending_durations:
             self.pending_durations = True
             threading.Thread(target=self._fill_durations, daemon=True).start()
-        return tree, self.version
+
+    def _rescan_later(self):
+        """Escaneo completo en segundo plano (el sondeo que lo pide se lleva el arbol que ya hay, sin esperar)."""
+        if self.rescan_thread is not None and self.rescan_thread.is_alive():
+            return
+
+        def run():
+            with self.lock:
+                self._rescan(self.clock())
+        self.rescan_thread = threading.Thread(target=run, daemon=True, name="library-rescan")
+        self.rescan_thread.start()
+
+    def _refresh_locked(self, max_age):
+        now = self.clock()
+        if self.tree is not None and now - self.at < max_age:
+            return
+        if self.tree is not None and self.at and not self._changed():
+            self.at = now  # nada ha cambiado: el mismo arbol
+            if now - self.full_at >= self.FULL_RESCAN_S:
+                self._rescan_later()
+            return
+        self._rescan(now)
+
+    def refresh(self, max_age=0.0):
+        with self.lock:
+            self._refresh_locked(max_age)
+            return self.tree, self.version
+
+    def snapshot(self, max_age=0.0):
+        """(arbol publico, version) para /api/tree, coherentes entre si."""
+        with self.lock:
+            self._refresh_locked(max_age)
+            return self.public, self.version
 
     def _fill_durations(self):
         try:
@@ -1148,6 +1224,29 @@ class Job:
         return d
 
 
+def keepalive_s(st):
+    """Segundos que un proceso de Whisper sigue cargado sin trabajo (ajuste worker_keepalive_min; 0 = 5 min, como
+    antes de existir el ajuste). Mientras esta cargado ocupa su RAM (medido: small ~450 MB, medium ~1 GB)."""
+    try:
+        m = int(st.get("worker_keepalive_min", 30) or 0)
+    except (TypeError, ValueError):
+        m = 30
+    return m * 60 if m > 0 else engines.WorkerClient.IDLE_S
+
+
+def preload_model(st, cached=None):
+    """(worker, modelo) que conviene dejar cargado al arrancar: el del directo si es local y ya esta descargado; si
+    no, el de la cola. None si worker_preload esta apagado o no hay modelo en cache (descargar no es precargar)."""
+    if not st.get("worker_preload", True):
+        return None
+    cached = cached or engines.model_cached
+    for which, key in (("live", "live_preset"), ("batch", "preset")):
+        p = engines.PRESETS_BY_ID.get(st.get(key) or "")
+        if p and p["engine"] == "local" and cached(p["model"]):
+            return which, p["model"]
+    return None
+
+
 class Jobs:
     def __init__(self, settings, library):
         self.settings, self.library = settings, library
@@ -1155,9 +1254,10 @@ class Jobs:
         self.claimed = set()  # grabaciones de la propia app: el directo lo arranca quien graba, no el vigilante
         self.queues = {"local": queue.Queue(), "cloud": queue.Queue()}
         # Whisper corre en procesos aparte (worker.py): uno para la cola y otro para el directo,
-        # cada uno con su modelo en memoria
-        self.local = engines.LocalEngine(DATA_DIR, "batch")
-        self.live_worker = engines.WorkerClient("live", DATA_DIR)
+        # cada uno con su modelo en memoria; siguen cargados worker_keepalive_min tras el ultimo trabajo
+        keep = lambda: keepalive_s(self.settings.get())  # noqa: E731
+        self.local = engines.LocalEngine(DATA_DIR, "batch", idle_s=keep)
+        self.live_worker = engines.WorkerClient("live", DATA_DIR, idle_s=keep)
         self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"), log=log)
         self.summarizer = engines.Summarizer(keys=self.cloud.keys)  # en la nube (Groq); mismas claves y cupo
         self.queues["resumen"] = queue.Queue()
@@ -1183,6 +1283,25 @@ class Jobs:
                     w.kill()
             except Exception:
                 log_exc()
+
+    def preload(self):
+        """Al arrancar: deja cargado el modelo local que va a usar el directo (o, si el directo es en la nube, el de
+        la cola) en su proceso de prioridad baja, para que el primer trozo de la reunion no espere a la carga
+        (medido: 2-6 s en frio). Devuelve (worker, modelo) o None. Pensado para un hilo aparte: no bloquea nada."""
+        st = self.settings.get()
+        pick = preload_model(st)
+        if not pick:
+            return None
+        which, model = pick
+        w = self.live_worker if which == "live" else self.local.worker
+        t0 = time.time()
+        try:
+            if w.ensure(model, int(st.get("threads") or default_threads())):
+                log(f"modelo {model} precargado para {'el directo' if which == 'live' else 'la cola'} "
+                    f"en {time.time() - t0:.1f} s")
+        except engines.EngineError as e:
+            log(f"no se pudo precargar {model}: {e}")
+        return pick
 
     @property
     def voices(self):
@@ -2164,14 +2283,16 @@ class App:
                             "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
                             "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()},
                 "voices": {"enabled": bool(st.get("voices_enabled")), "models_ready": voices.models_ready(DATA_DIR)},
+                "worker_keepalive_min": int(st.get("worker_keepalive_min", 30) or 0),
+                "worker_preload": bool(st.get("worker_preload", True)),
                 "lost_secrets": list(getattr(self.settings, "lost", [])),
                 "perfil": perfil_de(st)}
 
     def tree(self, q):
-        tree, version = self.library.refresh(max_age=1.0)
+        public, version = self.library.snapshot(max_age=1.0)
         if q.get("v") == version:
             return {"version": version, "same": True}
-        return {"version": version, "tree": strip_private(tree)}
+        return {"version": version, "tree": public}
 
     def transcript(self, q):
         abs_path = safe(q.get("path"), "file")
@@ -2845,6 +2966,10 @@ class App:
                 d["threads"] = max(1, min(int(b["threads"] or default_threads()), os.cpu_count() or 16))
             if perfil:
                 update_perfil(d, perfil)
+            if "worker_keepalive_min" in b:  # 0 = como antes (5 min); tope 12 h
+                d["worker_keepalive_min"] = max(0, min(int(b["worker_keepalive_min"] or 0), 720))
+            if "worker_preload" in b:
+                d["worker_preload"] = bool(b["worker_preload"])
             c = b.get("cloud") or {}
             for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
                 if k in c:
@@ -3337,6 +3462,8 @@ def main():
         fatal(f"Error al iniciar: {e.__class__.__name__}: {e}\n\nDetalle en {os.path.join(DATA_DIR, 'server.log')}")
     Handler.app.library.refresh()
     threading.Thread(target=Handler.app.transcripts.warm, args=(Handler.app.library,), daemon=True).start()
+    # el modelo local del directo, cargado antes de que empiece la primera reunion (sin bloquear la interfaz)
+    threading.Thread(target=Handler.app.jobs.preload, daemon=True, name="preload").start()
     try:
         SERVER = srv = Server((HOST, PORT), Handler)
     except OSError as e:

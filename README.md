@@ -117,6 +117,26 @@ Imprime la distribución de tamaños de trozo, cuánto silencio se manda, la lat
 escrito) y el ritmo de peticiones. Con `--remaining N` simula lo que queda del cupo del día (la ventana crece).
 La VAD es la de faster-whisper si está instalada; si no, una por energía.
 
+### Banco de rendimiento
+
+```
+.venv/bin/python scripts/rendimiento_bench.py                    # red, worker, audio y biblioteca
+.venv/bin/python scripts/rendimiento_bench.py red biblioteca --json despues.json
+```
+
+Mide lo que limita la transcripción por nuestro lado: el coste de abrir una conexión con `api.groq.com` en cada
+petición frente a reutilizarla (sin clave: la API responde 401 y basta para medir DNS + TCP + TLS), el arranque en
+frío del proceso de Whisper frente a tenerlo ya cargado (y su memoria), una hora de audio sintético (decodificar,
+silencios, FLAC y el tiempo total con una API falsa) y una biblioteca de 1.000 reuniones (`scan()`,
+`Library.refresh()` y `/api/tree` por HTTP). Las medidas `worker` y `audio` necesitan `faster-whisper` y PyAV en
+ese Python; las demás, no. No lee `.env` ni manda ninguna petición autenticada.
+
+Ajustes relacionados (en `settings.json`, por `/api/settings`): `worker_keepalive_min` (minutos que el modelo
+local sigue cargado tras el último trabajo; 30 por defecto, 0 = 5 min como antes) y `worker_preload` (al arrancar,
+cargar el modelo local del directo si ya está descargado; activado). En el directo en la nube, `server.log` y la
+cabecera del directo desglosan la latencia de cada trozo por fases (preparación, cupo, red, inferencia si el
+servidor la declara, pintado), para saber si el cuello está en Groq, en la red o en este lado.
+
 ### Generar el zip instalable
 
 ```
