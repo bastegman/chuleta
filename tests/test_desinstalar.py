@@ -97,6 +97,40 @@ class FicherosTests(unittest.TestCase):
         self.assertIn(f"ficheros={len(files)} errores=0", r.stdout, r.stdout + r.stderr)
 
 
+E2E = os.path.join(REPO, "scripts", "e2e", "lookfeel_e2e.ps1")
+
+
+class VariablesPowerShellTests(unittest.TestCase):
+    """PowerShell no distingue mayúsculas en los nombres de variable. En el E2E, `$base` (la ruta de la reunión falsa,
+    fase r) era la misma variable que `$Base` (la dirección de la API): desde esa fase todas sus peticiones iban a
+    «...\\Reunion de prueba\\api\\config» (System.Net.WebException: Could not find a part of the path) y parecía que
+    la app no contestaba, cuando la misma app contestaba en milisegundos a un vigía en Python (runs 41341410510 y
+    41344499739)."""
+
+    SCRIPTS = (INSTALAR, DESINSTALAR, E2E, os.path.join(REPO, "scripts", "e2e", "capturas.ps1"))
+
+    def test_ninguna_variable_del_script_con_dos_grafias(self):
+        """Las del nivel del script (param, asignaciones y Set-Variable sin sangría): una sola grafía cada una."""
+        for path in self.SCRIPTS:
+            with self.subTest(os.path.basename(path)):
+                texto = ps_text(path)
+                m = re.search(r"^param\((.*?)\)\s*$", texto, re.S | re.M)
+                nombres = re.findall(r"\$(\w+)", m.group(1)) if m else []
+                nombres += re.findall(r"^\$(?:script:)?(\w+)\s*=", texto, re.M)
+                nombres += re.findall(r"^Set-Variable\s+-Name\s+(\w+)", texto, re.M)
+                grafias = {}
+                for n in nombres:
+                    grafias.setdefault(n.lower(), set()).add(n)
+                self.assertEqual({k: sorted(v) for k, v in grafias.items() if len(v) > 1}, {})
+
+    def test_la_direccion_de_la_api_no_se_puede_pisar(self):
+        """$Base es constante: si otra asignación la pisa, PowerShell da un error en esa línea en vez de seguir con
+        otra dirección."""
+        texto = ps_text(E2E)
+        self.assertRegex(texto, r'(?m)^Set-Variable -Name Base -Option Constant -Value "http://127\.0\.0\.1:\$Port"')
+        self.assertNotRegex(texto, r"(?mi)^\s*\$base\s*=")
+
+
 class InstaladorEmpresaTests(unittest.TestCase):
     def setUp(self):
         self.ps1 = ps_text(INSTALAR)

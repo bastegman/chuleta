@@ -19,7 +19,9 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $script:checks = New-Object System.Collections.Specialized.OrderedDictionary
 $script:gated = @{}
 $Port = 8765
-$Base = "http://127.0.0.1:$Port"
+# constante: PowerShell no distingue mayusculas y una asignacion a $base en otra fase la pisaba (todas las
+# peticiones iban despues a una ruta de disco); asi la que lo intente da error en esa linea
+Set-Variable -Name Base -Option Constant -Value "http://127.0.0.1:$Port"
 $App = "Chuleta"      # common.APP_NAME: titulo de la ventana, carpeta raiz del zip, accesos directos
 $Legacy = "Notas"     # nombre anterior: el instalador reconoce y renombra su acceso directo
 $python = (Get-Command python).Source
@@ -470,10 +472,10 @@ $reunionDir = Join-Path $inst "Proyecto Alfa"
 New-Item -ItemType Directory -Force (Join-Path $reunionDir "Vocabulario") | Out-Null
 $wav = Join-Path $reunionDir "2026-10-31 10-00-00 Reunion de prueba.wav"
 & $python -c "import sys, wave; w = wave.open(sys.argv[1], 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(32000)); w.close()" $wav
-$base = $wav.Substring(0, $wav.Length - 4)
-Set-Content -LiteralPath "$base.txt" -Value "Transcripcion de prueba: hola." -Encoding UTF8
-Set-Content -LiteralPath "$base.md" -Value "# Notas de prueba" -Encoding UTF8
-Set-Content -LiteralPath "$base.resumen.md" -Value "Resumen de prueba" -Encoding UTF8
+$reunionBase = $wav.Substring(0, $wav.Length - 4)  # no $base: seria $Base (la API)
+Set-Content -LiteralPath "$reunionBase.txt" -Value "Transcripcion de prueba: hola." -Encoding UTF8
+Set-Content -LiteralPath "$reunionBase.md" -Value "# Notas de prueba" -Encoding UTF8
+Set-Content -LiteralPath "$reunionBase.resumen.md" -Value "Resumen de prueba" -Encoding UTF8
 Set-Content -LiteralPath (Join-Path $reunionDir "Vocabulario\Tema.txt") -Value "Alfa" -Encoding UTF8
 $reunion0 = Get-Reunion
 Check "r.creada" ((Test-Path -LiteralPath $wav) -and ($reunion0 -split ";").Count -eq 5) $reunion0
