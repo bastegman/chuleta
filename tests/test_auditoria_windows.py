@@ -618,16 +618,20 @@ class VentanaRealTests(unittest.TestCase):
 # ----------------------------------------------------------------------------- P1-12 · correcciones de la transcripción
 
 def edit_block():
-    """Las funciones de edición y guardado de la transcripción de app.js (de syncEdits a startEdit, y finishEdit)."""
+    """Las funciones de edición y guardado de la transcripción de app.js (de syncEdits a startEdit, finishEdit y
+    restoreOriginal)."""
     with open(os.path.join(STATIC, "app.js"), encoding="utf-8") as f:
         src = f.read()
     a, b = src.index("function syncEdits() {"), src.index("function startEdit() {")
-    i = src.index("async function finishEdit() {")
-    return src[a:b] + src[i:src.index("\n}\n", i) + 3]
+    out = src[a:b]
+    for fn in ("async function finishEdit() {", "async function restoreOriginal() {"):
+        i = src.index(fn)
+        out += src[i:src.index("\n}\n", i) + 3]
+    return out
 
 
 HARNESS = r"""
-const out = { api: [], fetch: [], toasts: [] };
+const out = { api: [], fetch: [], toasts: [], loads: [] };
 let apiFails = 0, apiDelay = 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const S = { tx: null, editing: false, dirty: false, saveTimer: 0,
@@ -636,8 +640,10 @@ let dom = null;  // los segmentos editables de la pagina, solo en los tests que 
 const $ = () => null, $$ = sel => (dom && sel === '#txBody .s[data-i]' ? dom : []);
 const esc = s => String(s), fullTitle = a => a.title, renderTxSection = () => { };
 const toast = (html, kind, fn) => out.toasts.push({ html, kind: kind || '', fn });
+const ask = async () => true, loadTranscript = a => out.loads.push(a.path);  // «Restaurar original»: se acepta
 async function api(path, body) {
-  const call = { path, n: body.segments.length, first: body.segments[0] && body.segments[0].text, t0: Date.now() };
+  const sg = body.segments || [];
+  const call = { path, n: sg.length, first: sg[0] && sg[0].text, t0: Date.now() };
   out.api.push(call);
   if (apiDelay) await sleep(apiDelay);
   call.t1 = Date.now();
@@ -744,6 +750,50 @@ class TranscripcionNoSePierdeTests(unittest.TestCase):
         self.assertFalse(out["r1"])
         self.assertTrue(out["r2"])
         self.assertEqual(out["pending"], 0)
+
+    def test_la_recarga_automatica_no_repite_el_aviso(self):
+        # con la app actualizada, cada sondeo (1,5 s) vuelve a intentar el guardado antes de recargar: si sigue
+        # fallando, el aviso sale una vez (del guardado normal o del primer sondeo), no uno nuevo cada 1,5 s
+        for pre, saves in (("await saveEdits();", 7), ("", 6)):
+            with self.subTest(primero="guardado normal" if pre else "sondeo"):
+                out = self.run_js("apiFails = 99; edit(3, 20);" + pre +
+                                  "for (let i = 0; i < 6; i++) out.r = await txSavedForReload();")
+                self.assertEqual(len([c for c in out["api"] if c["path"] == "/api/transcript/save"]), saves)
+                self.assertFalse(out["r"])  # sin guardar no se recarga
+                self.assertEqual(len([t for t in out["toasts"] if t["kind"] == "err"]), 1)
+
+    def test_restaurar_descarta_lo_que_no_se_pudo_guardar(self):
+        # la corrección cuyo guardado falló no vuelve a salir tras «Restaurar original»: ni con keepalive al cerrar o
+        # recargar ni antes de la recarga automática (pisaría el original restaurado y crearía otra copia)
+        out = self.run_js("apiFails = 1; edit(3, 20); await saveEdits(); out.p1 = pending();"
+                          "await restoreOriginal(); out.p2 = pending(); out.left = flushTxOnUnload();"
+                          "out.reload = await txSavedForReload(); await sleep(50); out.editing = S.editing;")
+        self.assertEqual(out["p1"], 1)
+        self.assertEqual([c["path"] for c in out["api"]], ["/api/transcript/save", "/api/transcript/restore"])
+        self.assertEqual(out["fetch"], [])
+        self.assertEqual((out["p2"], out["left"], out["reload"], out["editing"]), (0, 0, True, False))
+        self.assertEqual(out["loads"], ["r/a.wav"])
+        self.assertIn("Restaurado el texto original de Whisper", [t["html"] for t in out["toasts"]])
+
+    def test_restaurar_espera_al_guardado_en_camino(self):
+        out = self.run_js("apiDelay = 40; edit(3, 20); const first = saveEdits(); await restoreOriginal();"
+                          "out.r = await first; out.pending = pending();")
+        save, restore = out["api"]
+        self.assertEqual((save["path"], restore["path"]), ("/api/transcript/save", "/api/transcript/restore"))
+        self.assertGreaterEqual(restore["t0"], save["t1"])  # la corrección no llega después y pisa el original
+        self.assertEqual(out["pending"], 0)
+        self.assertEqual([t for t in out["toasts"] if t["kind"] == "err"], [])
+
+    def test_si_no_se_puede_restaurar_sigue_corrigiendo(self):
+        out = self.run_js("apiFails = 2; edit(3, 20); await saveEdits(); await restoreOriginal();"
+                          "out.editing = S.editing; out.dirty = S.dirty; await finishEdit(); out.pending = pending();")
+        self.assertEqual([c["path"] for c in out["api"]],
+                         ["/api/transcript/save", "/api/transcript/restore", "/api/transcript/save"])
+        self.assertTrue(out["editing"])
+        self.assertTrue(out["dirty"])  # lo corregido se vuelve a guardar
+        self.assertEqual(out["pending"], 0)
+        self.assertEqual(out["loads"], [])
+        self.assertEqual(len([t for t in out["toasts"] if "Cambios guardados" in t["html"]]), 1)
 
 
 class TranscripcionTextoTests(unittest.TestCase):

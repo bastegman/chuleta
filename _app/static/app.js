@@ -1133,7 +1133,8 @@ async function saveTxNow(payload, tries = 3, quiet = false) {
     }
   }
 }
-async function saveEdits() {
+/* quiet: la recarga automatica, que lo reintenta en cada sondeo, no repite el aviso de un fallo que ya ha salido */
+async function saveEdits(quiet = false) {
   clearTimeout(S.saveTimer);
   if (!S.tx) return true;
   syncEdits();
@@ -1148,15 +1149,20 @@ async function saveEdits() {
   const payload = txVersion();
   try {
     const r = await sendTx(payload);
-    if (!r.live && S.tx && S.tx === payload.tx) {  // en directo la copia del original se guarda al terminar
-      S.tx.has_backup = true;
-      $('[data-act="tx-restore"]')?.classList.remove('hidden');
+    if (S.tx && S.tx === payload.tx) {
+      S.tx.saveErr = null;
+      if (!r.live) {  // en directo la copia del original se guarda al terminar
+        S.tx.has_backup = true;
+        $('[data-act="tx-restore"]')?.classList.remove('hidden');
+      }
     }
     setSaveState(S.dirty ? 'Sin guardar…' : 'Guardado ✓');
     return !S.dirty;
   } catch (err) {
     if (S.editing && S.tx && S.tx === payload.tx) {  // sigue en la pagina: el siguiente guardado lo reintenta
-      S.dirty = true; setSaveState('No se ha podido guardar'); toast(esc(err.message), 'err');
+      S.dirty = true; setSaveState('No se ha podido guardar');
+      if (!quiet || S.tx.saveErr !== err.message) toast(esc(err.message), 'err');
+      S.tx.saveErr = err.message;
     } else saveTxNow(payload);  // ya ha cambiado de reunion: reintentos y aviso
     return false;
   }
@@ -1185,9 +1191,9 @@ function flushTxOnUnload() {
   return left;
 }
 /* antes de la recarga automatica (app actualizada): primero se guarda lo corregido (y se reintenta, sin avisos, lo
-   que hubiera fallado); si algo no se puede guardar, no se recarga */
+   que hubiera fallado); si algo no se puede guardar, no se recarga. Va en cada sondeo: el mismo fallo se avisa una vez */
 async function txSavedForReload() {
-  if (S.editing && !(await saveEdits())) return false;
+  if (S.editing && !(await saveEdits(true))) return false;
   for (const p of [...txPending.values()]) await saveTxNow(p, 1, true);
   return !txPending.size;
 }
@@ -1226,16 +1232,24 @@ function replaceAll() {
   toast(`${n} ${n === 1 ? 'cambio' : 'cambios'}: «${esc(find)}» → «${esc(rep)}»`);
 }
 async function restoreOriginal() {
-  if (!await ask('¿Restaurar el original?', 'Se descartan todas tus correcciones y vuelve el texto tal como lo transcribió Whisper.', 'Restaurar')) return;
+  if (!await ask('¿Restaurar el original?', 'Se descartan todas tus correcciones y vuelve el texto tal como lo transcribió Whisper.', 'Restaurar') || !S.tx) return;
+  const tx = S.tx, path = tx.path, unsaved = S.dirty || txPending.has(path);
+  // lo corregido que aun no ha llegado al servidor se descarta: no se reintenta ni sale al cerrar o recargar la pagina
+  // (pisaria el original restaurado), y lo que ya va en camino se espera, para que llegue antes que la restauracion
   clearTimeout(S.saveTimer);
+  S.editing = false; S.dirty = false;
+  txPending.delete(path); txLatest.delete(path);
+  for (let p; (p = txInflight.get(path));) { try { await p; } catch { /* descartado */ } }
   try {
-    await api('/api/transcript/restore', { path: S.tx.path });
-    S.editing = false; S.dirty = false;
-    const a = S.audios.get(S.tx.path);
+    await api('/api/transcript/restore', { path });
+    const a = S.audios.get(path);
     S.tx = null;
     if (a) loadTranscript(a);
     toast('Restaurado el texto original de Whisper');
-  } catch (err) { toast(esc(err.message), 'err'); }
+  } catch (err) {
+    if (S.tx === tx) { S.editing = true; S.dirty = unsaved; if (unsaved) scheduleSave(); }  // sin restaurar: se sigue corrigiendo
+    toast(esc(err.message), 'err');
+  }
 }
 
 function paragraphs(segs, who) {
