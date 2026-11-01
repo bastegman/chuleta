@@ -10,14 +10,17 @@ Chuleta: app local para ordenar, escuchar, leer y transcribir las grabaciones de
 Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Chuleta.bat lo arranca con consola
 para ver los mensajes). La interfaz se abre en una ventana propia (window.py, WebView2) o, si no se puede, en Edge.
 """
+import atexit
 import copy
 import hashlib
+import hmac
 import json
 import logging
 import os
 import platform
 import queue
 import re
+import secrets
 import shutil
 import struct
 import subprocess
@@ -25,6 +28,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 import uuid
 import webbrowser
@@ -39,6 +43,7 @@ import voices
 from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS,  # noqa: F401 (re-exportados)
                     alert, clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key,
                     parse_srt, protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
+from common import TOKEN_FILE, TOKEN_HEADER, local_opener, read_token  # sesion local (P1-02) y loopback sin proxy
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
 from window import Window, set_app_id
 
@@ -800,6 +805,16 @@ def public_transcript(data):
 NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
              "contexto")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
+ICON_BAD = re.compile(r"[<>&\"'\x00-\x1f\x7f]")
+ICON_MAX = 8  # code points: cabe cualquier emoji compuesto (banderas, tonos de piel, familias con ZWJ)
+
+
+def clean_icon(v):
+    """El icono de una reunion es un emoji o un texto corto (como mucho 8 code points) sin < > & " ' ni controles; si
+    no, ninguno. El .md puede venir de una carpeta vinculada compartida (OneDrive, SharePoint) y la interfaz pinta el
+    icono como HTML: un valor con marcado ejecutaria codigo en la app (P0-2)."""
+    v = " ".join(str(v or "").split())
+    return v if len(v) <= ICON_MAX and not ICON_BAD.search(v) else ""
 
 
 def parse_notes(text):
@@ -812,6 +827,8 @@ def parse_notes(text):
             for line in lines[1:end]:
                 k, _, v = line.partition(":")
                 k, v = k.strip().lower(), v.strip()
+                if k == "icono":
+                    v = clean_icon(v)
                 if k in NOTE_KEYS and v:
                     props[k] = [t.strip() for t in v.strip("[]").split(",") if t.strip()] if k == "etiquetas" else v
             body = "\n".join(lines[end + 1:]).lstrip("\n")
@@ -2452,6 +2469,8 @@ class App:
                         v = v if IDIOMA_RE.match(v) else ""
                     elif k == "contexto":
                         v = " ".join(str(v or "").split())[:engines.ABOUT_CHARS]
+                    elif k == "icono":
+                        v = clean_icon(v)
                     props[k] = v
             if "body" in b:
                 body = b.get("body") or ""
@@ -3294,10 +3313,21 @@ class App:
 
 # ----------------------------------------------------------------------------- HTTP
 
+# P0-2: la interfaz no lleva <script> en linea ni manejadores on…= (todo va en los .js), asi que un script colado en el
+# HTML no llega a ejecutarse; los style="…" de las plantillas si hacen falta ('unsafe-inline' solo en estilos)
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "media-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+DRAIN_MAX = 1 << 20  # P0-1: un cuerpo sin leer de hasta 1 MiB se lee y se descarta antes de responder (el error llega
+# entero y la conexion sigue); uno mayor (una subida rechazada) o sin Content-Length cierra la conexion
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"{APP_NAME}/1.0"
     app = None
+    token = None  # P1-02: el de esta sesion (lo pone main()); sin el, /api/* y /media responden 403
+    body_read = False  # P0-1: el cuerpo de la peticion en curso se ha leido entero
+    denied_logged = set()  # el primer 403 sin token de un navegador y el de un programa van al log, los demas no
 
     def log_message(self, fmt, *args):
         pass
@@ -3305,13 +3335,88 @@ class Handler(BaseHTTPRequestHandler):
     def _host_ok(self):
         return self.headers.get("Host", "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
 
+    def _origin_ok(self):
+        """P0-1: un POST que llega de una pagina web solo vale si es la propia interfaz. El navegador manda Origin en
+        todo POST y Sec-Fetch-Site (same-origin, same-site, cross-site o none); los programas (el acceso directo, el
+        aviso flotante, el instalador, las pruebas) no mandan ninguna de las dos."""
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+            return False
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
+    def _cookie_name(self):
+        return f"audios_sesion_{PORT}"  # con el puerto: las cookies no distinguen puertos (otra copia con --port)
+
+    def _token_matches(self, given):
+        tok = self.token
+        return bool(tok and given) and hmac.compare_digest(str(given).encode("utf-8", "replace"), tok.encode("utf-8"))
+
+    def _token_ok(self):
+        """P1-02: la cabecera X-Chuleta-Token (programas) o la cookie de sesion (la interfaz, que la recibe al abrir
+        /?t=<token>)."""
+        if self._token_matches(self.headers.get(TOKEN_HEADER)):
+            return True
+        for raw in self.headers.get_all("Cookie") or []:
+            for part in raw.split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == self._cookie_name() and self._token_matches(v.strip()):
+                    return True
+        return False
+
+    def _denied(self):
+        quien = "navegador" if self.headers.get("Sec-Fetch-Mode") else "programa"
+        if quien not in Handler.denied_logged:
+            Handler.denied_logged.add(quien)
+            log(f"   403 sin token de sesión ({quien}): {self.command} {urlparse(self.path).path} (solo el primero)")
+        self._json({"error": f"Sesión no válida: vuelve a abrir {APP_NAME} con su acceso directo."}, 403)
+
+    def _session_start(self, t):
+        """GET /?t=<token> (la ventana propia y Edge abren esa direccion): si es el token de esta sesion, la cookie
+        (HttpOnly, SameSite=Strict) y a "/", para que el token no se quede en la direccion; si no, a "/" sin cookie (la
+        interfaz dira que hay que abrir la app con su acceso directo)."""
+        extra = {"Location": "/"}
+        if self._token_matches(t):
+            extra["Set-Cookie"] = f"{self._cookie_name()}={self.token}; Path=/; HttpOnly; SameSite=Strict"
+            log("   sesión: cookie entregada a la interfaz")
+        else:
+            log("   sesión: /?t= con un token que no es el de esta sesión (sin cookie)")
+        self._send(303, b"", "text/plain; charset=utf-8", extra)
+
+    def _close_if_unread(self):
+        """P0-1: si la peticion traia un cuerpo que no se ha leido (un 403, un error antes de leerlo), se lee y se
+        descarta (hasta DRAIN_MAX) o la conexion se cierra tras la respuesta. Con keep-alive, esos bytes se tomarian por
+        la peticion siguiente, con sus propias cabeceras: asi una web podia colar un POST con Host y X-Audios dentro del
+        cuerpo de otro."""
+        te, cl = self.headers.get("Transfer-Encoding"), (self.headers.get("Content-Length") or "0").strip()
+        if self.body_read or (not te and cl == "0"):
+            return
+        if not te and cl.isdigit() and int(cl) <= DRAIN_MAX:
+            left = int(cl)
+            try:
+                self.connection.settimeout(5)
+                while left > 0:
+                    chunk = self.rfile.read(min(1 << 16, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                self.connection.settimeout(None)
+            except OSError:
+                left = -1
+            if left == 0:
+                self.body_read = True
+                return
+        self.send_header("Connection", "close")
+
     def _send(self, code, body, ctype, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if ctype.startswith("text/html"):
+            self.send_header("Content-Security-Policy", CSP)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
+        self._close_if_unread()
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -3320,10 +3425,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
     def do_GET(self):
+        self.body_read = False
         if not self._host_ok():
             return self._send(403, b"forbidden", "text/plain")
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if u.path in ("", "/") and "t" in q:
+            return self._session_start(q["t"])
+        if (u.path.startswith("/api/") or u.path == "/media") and not self._token_ok():
+            return self._denied()
         a = self.app
         routes = {"/api/ping": lambda q: {"app": "audios"}, "/api/config": a.config, "/api/tree": a.tree,
                   "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
@@ -3349,8 +3459,11 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
     def do_POST(self):
-        if not self._host_ok() or self.headers.get("X-Audios") != "1":
+        self.body_read = False
+        if not self._host_ok() or not self._origin_ok() or self.headers.get("X-Audios") != "1":
             return self._send(403, b"forbidden", "text/plain")
+        if not self._token_ok():
+            return self._denied()
         a = self.app
         routes = {"/api/transcribe": a.transcribe, "/api/cancel": a.cancel, "/api/jobs/clear": a.clear_jobs,
                   "/api/move": a.move, "/api/mkdir": a.mkdir, "/api/rename-folder": a.rename_folder,
@@ -3374,10 +3487,18 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/acerca/abrir": a.acerca_abrir}
         try:
             u = urlparse(self.path)
+            if self.headers.get("Transfer-Encoding"):  # sin Content-Length no se sabe donde acaba el cuerpo (P0-1)
+                raise ApiError("Cuerpo no válido: falta Content-Length", 411)
             if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos
-                return self._json(a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()}))
+                r = a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()})
+                self.body_read = True  # import_file lo ha leido entero (si se corta, lanza ApiError)
+                return self._json(r)
             n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            if n < 0:
+                raise ApiError("Cuerpo no válido")
+            raw = self.rfile.read(n) if n else b""
+            self.body_read = len(raw) == n
+            body = json.loads(raw or b"{}")
             if not isinstance(body, dict):
                 raise ApiError("Cuerpo no válido: se esperaba un objeto JSON")
             route = routes.get(u.path)
@@ -3402,7 +3523,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
 
     def _media(self, p):
-        """Audio con soporte de Range: permite saltar a cualquier minuto al instante."""
+        """Audio con soporte de Range: permite saltar a cualquier minuto al instante. Solo audio y video: un .html, un
+        .js o un .svg de una carpeta vinculada, servido desde este origen, se saltaria la CSP (P0-2)."""
+        if os.path.splitext(p)[1].lower() not in AUDIO_EXT:
+            raise ApiError("Solo se sirven audios", 404)
         size = os.path.getsize(p)
         start, end, code = 0, size - 1, 200
         m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
@@ -3416,6 +3540,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(416)
                 self.send_header("Content-Range", f"bytes */{size}")
                 self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self._close_if_unread()
                 self.end_headers()
                 return
             code = 206
@@ -3423,8 +3549,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
+        # P2-13: el audio de las reuniones no se queda en la cache de WebView2 (su perfil es persistente, en DATA_DIR)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self._close_if_unread()
         self.end_headers()
         if self.command == "HEAD":
             return
@@ -3465,36 +3595,119 @@ class Server(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def open_ui():
+def ui_url(token=None):
+    """La direccion con la que se abre la interfaz: con ?t=<token> el servidor entrega la cookie de sesion y redirige a
+    "/" (P1-02). Sin token (el de esta copia si no se pasa otro), la de siempre."""
+    token = Handler.token if token is None else token
+    return URL + (f"?t={token}" if token else "")
+
+
+def open_ui(token=None):
     """La interfaz en Edge (modo app, sin barra de direcciones) o, sin Edge, en el navegador por defecto. Es el
     camino de siempre y el de reserva cuando no hay ventana propia (window.py)."""
+    url = ui_url(token)
     for exe in (r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
                 r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"):
         exe = os.path.expandvars(exe)
         if os.path.exists(exe):
-            subprocess.Popen([exe, f"--app={URL}", "--window-size=1500,920"])
+            subprocess.Popen([exe, f"--app={url}", "--window-size=1500,920"])
             return
-    webbrowser.open(URL)
+    webbrowser.open(url)
 
 
-def already_running():
+def _local_request(path, token, data=None, timeout=1.5):
+    """Peticion a la copia que corre en este puerto: sin proxy (P1-13) y con el token de DATA_DIR (P1-02)."""
+    headers = {TOKEN_HEADER: token} if token else {}
+    if data is not None:
+        headers.update({"X-Audios": "1", "Content-Type": "application/json"})
+    req = urllib.request.Request(URL + path, data=data, method="POST" if data is not None else "GET", headers=headers)
+    with local_opener().open(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def probe_running(token=None, timeout=1.5):
+    """Que hay en el puerto: "app" (esta app, y acepta nuestro token), "libre" (nadie escucha), "arrancando" (acepta la
+    conexion pero no contesta: otra copia entre reservar el puerto y empezar a servir) u "otro" (otro programa, u otra
+    sesion de Windows con su propio token)."""
+    token = read_token(DATA_DIR) if token is None else token
     try:
-        with urllib.request.urlopen(URL + "api/ping", timeout=1.5) as r:
-            return json.load(r).get("app") == "audios"
+        return "app" if _local_request("api/ping", token, timeout=timeout).get("app") == "audios" else "otro"
+    except urllib.error.HTTPError:
+        return "otro"
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ConnectionRefusedError):
+            return "libre"
+        return "arrancando" if isinstance(e.reason, TimeoutError) else "otro"
+    except TimeoutError:
+        return "arrancando"
     except Exception:
-        return False
+        return "otro"
 
 
-def ask_running_to_show():
+def already_running(token=None):
+    """La app ya corre en este puerto y es la nuestra (contesta con el token de DATA_DIR): no la de otro usuario."""
+    return probe_running(token) == "app"
+
+
+def ask_running_to_show(token=None):
     """Pide a la copia que ya corre que ensene su ventana (POST /api/mostrar). False si no contesta que si (una
     version anterior sin esa ruta): entonces se abre Edge como antes."""
     try:
-        req = urllib.request.Request(URL + "api/mostrar", data=b"{}", method="POST",
-                                     headers={"X-Audios": "1", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return bool(json.load(r).get("ok"))
+        return bool(_local_request("api/mostrar", read_token(DATA_DIR) if token is None else token, b"{}",
+                                   timeout=5).get("ok"))
     except Exception:
         return False
+
+
+PORT_WAIT = 20.0  # s que se espera a otra copia que arranca a la vez (doble clic en el acceso directo)
+
+
+def reserve_port(wait=None):
+    """P1-13: abre el puerto ANTES de crear App() (y sus hilos: atajo Ctrl+Alt+R, vigilante de reuniones, directo).
+    Si ya lo tiene otra copia que esta arrancando a la vez, espera a que conteste y devuelve None (la llamada le pide
+    su ventana); si lo tiene otro programa, el aviso de siempre y fuera."""
+    end = time.time() + (PORT_WAIT if wait is None else wait)
+    while True:
+        try:
+            return Server((HOST, PORT), Handler)
+        except OSError as e:
+            err = e
+        estado = probe_running()
+        if estado == "app":
+            return None
+        if estado == "otro" or time.time() >= end:
+            break
+        time.sleep(0.3)  # "libre" (se acaba de soltar) o "arrancando": otra vuelta
+    log(f"puerto {PORT} ocupado ({estado}): {err}")
+    fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({err}).\n\nCierra ese programa (o arranca "
+          f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
+
+
+def write_token(data_dir, token):
+    """DATA_DIR\\sesion.token (UTF-8, sin salto de linea; DATA_DIR es privado del usuario)."""
+    os.makedirs(data_dir, exist_ok=True)
+    fd = os.open(os.path.join(data_dir, TOKEN_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        f.write(token)
+
+
+def remove_token(data_dir, token):
+    """Al apagar: borra sesion.token si sigue siendo el de esta sesion (no el de otra copia que arrancara despues)."""
+    try:
+        if token and read_token(data_dir) == token:
+            os.remove(os.path.join(data_dir, TOKEN_FILE))
+    except OSError:
+        pass
+
+
+def start_session(data_dir):
+    """P1-02: un token nuevo en cada arranque. Lo exige el Handler en /api/* y /media, y lo leen de DATA_DIR el acceso
+    directo, el aviso flotante, el instalador y las pruebas."""
+    token = secrets.token_urlsafe(32)
+    write_token(data_dir, token)
+    Handler.token = token
+    atexit.register(remove_token, data_dir, token)  # salidas normales (Ctrl+C); shutdown() lo borra antes de _exit
+    return token
 
 
 def shutdown(reason, exit_fn=os._exit):
@@ -3507,6 +3720,7 @@ def shutdown(reason, exit_fn=os._exit):
             Handler.app.shutdown_prepare()
     except Exception:
         log_exc()
+    remove_token(DATA_DIR, Handler.token)  # os._exit no pasa por atexit
     log("apagado")
     logging.shutdown()  # antes de parar el servidor: en cuanto serve_forever vuelve, el hilo principal sale solo
     try:
@@ -3555,11 +3769,18 @@ def main():
     DATA_DIR = os.path.abspath(arg("--data", DATA_DIR))
     setup_logging(DATA_DIR)
     no_browser = "--no-browser" in sys.argv
-    if already_running():
+    os.environ["CHULETA_DATOS"] = DATA_DIR  # el aviso flotante (proceso hijo) lee ahi sesion.token, tambien con --data
+    srv = None if already_running() else reserve_port()  # el puerto, antes de App() (P1-13)
+    if srv is None:
         log("la app ya estaba abierta: se ensena su ventana")
         if not no_browser and not ask_running_to_show():
-            open_ui()
+            open_ui(read_token(DATA_DIR))
         return
+    try:
+        start_session(DATA_DIR)
+    except OSError as e:
+        log_exc()
+        fatal(f"Error al iniciar: no se puede escribir en {DATA_DIR} ({e}).")
     try:
         import truststore  # usa los certificados de Windows (proxies corporativos), si esta instalado
         truststore.inject_into_ssl()
@@ -3576,17 +3797,14 @@ def main():
     threading.Thread(target=Handler.app.transcripts.warm, args=(Handler.app.library,), daemon=True).start()
     # el modelo local del directo, cargado antes de que empiece la primera reunion (sin bloquear la interfaz)
     threading.Thread(target=Handler.app.jobs.preload, daemon=True, name="preload").start()
-    try:
-        SERVER = srv = Server((HOST, PORT), Handler)
-    except OSError as e:
-        log_exc()
-        fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({e}).\n\nCierra ese programa (o arranca "
-              f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
+    SERVER = srv
     for line in ("=" * 64, f"  {APP_NAME.upper()}  ·  {URL}", f"  Carpeta: {ROOT}",
                  f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).", "=" * 64):
         log(line)
     log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]}")
-    WINDOW = None if no_browser else Window(URL, DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
+    if no_browser:  # para abrirla a mano (desarrollo): el token no va al log, que sale entero en el diagnostico
+        log(f"  Interfaz: {URL}?t=<el contenido de {os.path.join(DATA_DIR, TOKEN_FILE)}>")
+    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
     if WINDOW is not None and WINDOW.available:
         # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar
         threading.Thread(target=srv.serve_forever, daemon=True, name="http").start()

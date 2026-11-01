@@ -304,19 +304,23 @@ Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | 
 
 # --- si la app esta abierta se cierra: si no, al terminar se volveria a ver la version vieja (sigue en marcha)
 Step "Comprobando si $AppName está abierta..."
+# la API de la app abierta exige el token de su sesión (lo deja en %LOCALAPPDATA%\AudiosApp\sesion.token al arrancar);
+# las versiones anteriores no lo tienen ni lo piden
+$api = @{}
+try { $t = (Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA "AudiosApp\sesion.token") -Raw -ErrorAction Stop).Trim(); if ($t) { $api["X-Chuleta-Token"] = $t } } catch {}
 $running = $null
-try { $running = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 2 } catch {}
+try { $running = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -Headers $api -TimeoutSec 2 } catch {}
 if ($running -and $running.app -eq "audios") {
     $st = $null
-    try { $st = Invoke-RestMethod "http://127.0.0.1:$Port/api/rec/status" -TimeoutSec 2 } catch {}
+    try { $st = Invoke-RestMethod "http://127.0.0.1:$Port/api/rec/status" -Headers $api -TimeoutSec 2 } catch {}
     if ($st -and $st.recording) { Fail "$AppName está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat." }
     # primero por las buenas: POST /api/apagar (versiones desde el 31/10/2026); si no contesta, como antes
     $apagado = $false
     try {
-        $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5
+        $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers ($api + @{ "X-Audios" = "1" }) -TimeoutSec 5
         for ($k = 0; $k -lt 24 -and -not $apagado; $k++) {
             Start-Sleep -Milliseconds 250
-            try { $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -TimeoutSec 1 } catch { $apagado = $true }
+            try { $null = Invoke-RestMethod "http://127.0.0.1:$Port/api/ping" -Headers $api -TimeoutSec 1 } catch { $apagado = $true }
         }
     } catch {}
     $owner = $null

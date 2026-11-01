@@ -8,8 +8,9 @@ tareas), que NO roba el foco (WS_EX_NOACTIVATE: puedes seguir escribiendo en la 
                     [--tema "Alfa · General"] [--segundos 20]
                     [--estado fichero.json] [--auto-grabar-ms N]        (estos dos, para las pruebas)
 
-«Grabar» hace POST http://127.0.0.1:<puerto>/api/rec/toggle (cabecera X-Audios: 1, la que exige el servidor) con el
-nombre y el tema sugeridos; si ya se estaba grabando no toca nada. Al salir escribe una línea JSON en stdout:
+«Grabar» hace POST http://127.0.0.1:<puerto>/api/rec/toggle (cabeceras X-Audios: 1 y X-Chuleta-Token con el token de
+la sesión, que lee de sesion.token en la carpeta de datos; sin proxy) con el nombre y el tema sugeridos; si ya se
+estaba grabando no toca nada. Al salir escribe una línea JSON en stdout:
 {"resultado": "grabar" | "cerrar" | "tiempo" | "grabando" | "sin-servidor" | "error", ...}.
 """
 import argparse
@@ -19,6 +20,8 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+
+from common import TOKEN_HEADER, local_opener, read_token
 
 WINDOWS = sys.platform == "win32"
 ANCHO, ALTO = 340, 64  # px a 96 ppp; se escala con el monitor
@@ -202,9 +205,12 @@ class Aviso:
     # --- acciones
     def _pedir(self, path, body=None, timeout=15):
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(self.url + path, data=data, method="POST" if data else "GET",
-                                     headers={"Content-Type": "application/json", "X-Audios": "1"} if data else {})
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # Host: 127.0.0.1:<puerto>, como exige el servidor
+        headers = {"Content-Type": "application/json", "X-Audios": "1"} if data else {}
+        token = read_token()  # el de la sesion que corre (CHULETA_DATOS o %LOCALAPPDATA%\AudiosApp\sesion.token)
+        if token:
+            headers[TOKEN_HEADER] = token
+        req = urllib.request.Request(self.url + path, data=data, method="POST" if data else "GET", headers=headers)
+        with local_opener().open(req, timeout=timeout) as r:  # sin proxy; Host: 127.0.0.1:<puerto>, como exige
             return json.load(r)
 
     def grabar(self):

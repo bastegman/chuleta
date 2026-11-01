@@ -5,8 +5,9 @@ ventana `--app=` de la app según lo que sirva la página como favicon.
     python scripts/lookfeel_spike.py SALIDA
 
 Para cada variante copia `_app` a una carpeta temporal, ajusta `static/index.html`, arranca `server.py --no-browser`
-en el puerto 8765, abre `msedge --app=http://127.0.0.1:8765 --window-size=1200,800` con un perfil nuevo, espera la
-ventana titulada como la app (common.APP_NAME) y vuelca a SALIDA/report.json y SALIDA/report.md:
+en el puerto 8765, abre `msedge --app=http://127.0.0.1:8765/?t=<token> --window-size=1200,800` (la dirección con
+la que la abre la app: con el token de la sesión) con un perfil nuevo, espera la ventana titulada como la app
+(common.APP_NAME) y vuelca a SALIDA/report.json y SALIDA/report.md:
   (a) el AppUserModelID de la ventana (SHGetPropertyStoreForWindow + PKEY_AppUserModel_ID);
   (b) el tamaño en píxeles de los iconos WM_GETICON (ICON_SMALL, ICON_BIG, ICON_SMALL2) y de los de la clase
       (GCLP_HICON, GCLP_HICONSM), que guarda además como PNG para verlos.
@@ -16,6 +17,7 @@ manifest.webmanifest con iconos 192/512 enlazado desde index.html.
 No instala nada ni toca el repo. Solo la librería estándar (y Pillow, si está, para los PNG de 192/512).
 """
 import ctypes
+import http.client
 import json
 import os
 import shutil
@@ -35,9 +37,9 @@ URL = f"http://127.0.0.1:{PORT}/"
 TITLE = "Chuleta"  # = common.APP_NAME (el <title> que sirve index.html)
 
 SVG_HEAD = '<link rel="icon" href="/logo.svg" type="image/svg+xml">\n'
-ICO_HEAD = ('<link rel="icon" href="/notas.ico" sizes="16x16 20x20 24x24 32x32 40x40 48x48 64x64 128x128 256x256">\n'
-            '<link rel="icon" href="/notas.png" type="image/png" sizes="256x256">\n'
-            '<link rel="apple-touch-icon" href="/notas.png">\n')
+ICO_HEAD = ('<link rel="icon" href="/chuleta.ico" sizes="16x16 20x20 24x24 32x32 40x40 48x48 64x64 128x128 256x256">\n'
+            '<link rel="icon" href="/chuleta.png" type="image/png" sizes="256x256">\n'
+            '<link rel="apple-touch-icon" href="/chuleta.png">\n')
 MANIFEST_LINK = '<link rel="manifest" href="/manifest.webmanifest">\n'
 
 user32, gdi32, shell32, ole32, kernel32 = (ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.shell32,
@@ -259,13 +261,13 @@ def make_variant(kind, base):
             name = f"notas-{size}.png"
             try:
                 from PIL import Image
-                Image.open(os.path.join(static, "notas.png")).convert("RGBA").resize((size, size),
-                                                                                     Image.LANCZOS).save(
+                Image.open(os.path.join(static, "chuleta.png")).convert("RGBA").resize((size, size),
+                                                                                       Image.LANCZOS).save(
                     os.path.join(static, name))
                 icons.append({"src": "/" + name, "sizes": f"{size}x{size}", "type": "image/png", "purpose": "any"})
             except Exception as e:  # sin Pillow: se declara el PNG de 256 con ese tamaño
-                print(f"   sin PNG de {size} ({e}); se usa notas.png")
-                icons.append({"src": "/notas.png", "sizes": "256x256", "type": "image/png", "purpose": "any"})
+                print(f"   sin PNG de {size} ({e}); se usa chuleta.png")
+                icons.append({"src": "/chuleta.png", "sizes": "256x256", "type": "image/png", "purpose": "any"})
         manifest = {"name": TITLE, "short_name": TITLE, "start_url": "/", "display": "standalone",
                     "background_color": "#ffffff", "theme_color": "#ffffff", "icons": icons}
         with open(os.path.join(static, "manifest.webmanifest"), "w", encoding="utf-8") as f:
@@ -282,15 +284,35 @@ def make_variant(kind, base):
     return os.path.join(app, "server.py")
 
 
-def wait_ping(timeout=40):
+def session_token(data):
+    """El token de la sesión, que el servidor deja en <data>/sesion.token al arrancar ("" si aún no está)."""
+    try:
+        with open(os.path.join(data, "sesion.token"), encoding="utf-8") as f:
+            return f.read().strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def ui_url(data):
+    """La dirección con la que la app abre su interfaz (server.ui_url): con ?t=<token> el servidor entrega la cookie
+    de la sesión y redirige a "/". Sin el token, la página medida recibiría 403 en toda la API."""
+    return URL + "?t=" + session_token(data)
+
+
+def wait_ping(data, timeout=40):
+    """True en cuanto el servidor de <data> contesta al ping con el token de su sesión. Solo se reintenta lo que pasa
+    mientras arranca (aún sin sesion.token, sin conexión, 403 con el token de un arranque anterior): un error de
+    programación, como llamarla sin `data`, sale al momento en vez de dar vueltas hasta agotar el tiempo."""
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            with urllib.request.urlopen(URL + "api/ping", timeout=2) as r:
+        try:  # la API exige el token de la sesión (cabecera X-Chuleta-Token)
+            req = urllib.request.Request(URL + "api/ping", headers={"X-Chuleta-Token": session_token(data)})
+            with urllib.request.urlopen(req, timeout=2) as r:
                 if json.load(r).get("app") == "audios":
                     return True
-        except Exception:
-            time.sleep(0.5)
+        except (OSError, ValueError, http.client.HTTPException):
+            pass
+        time.sleep(0.5)
     return False
 
 
@@ -307,7 +329,7 @@ def measure_variant(kind, base, out_dir, edge):
     srv = subprocess.Popen([sys.executable, server_py, "--no-browser", "--port", str(PORT), "--data", data],
                            stdout=log, stderr=subprocess.STDOUT)
     try:
-        if not wait_ping():
+        if not wait_ping(data):
             rec["notes"].append("el servidor no respondió al ping en 40 s")
             return rec
         with urllib.request.urlopen(URL, timeout=5) as r:
@@ -317,7 +339,7 @@ def measure_variant(kind, base, out_dir, edge):
         # sufijo de perfil con el perfil Default del user-data-dir por defecto); las demas, un perfil propio
         udd = [] if kind == "ico" else [f"--user-data-dir={os.path.join(base, kind, 'edge-profile')}"]
         rec["user_data_dir"] = udd[0] if udd else "(por defecto)"
-        edge_p = subprocess.Popen([edge, f"--app={URL.rstrip('/')}", "--window-size=1200,800", *udd,
+        edge_p = subprocess.Popen([edge, f"--app={ui_url(data)}", "--window-size=1200,800", *udd,
                                    "--no-first-run", "--no-default-browser-check", "--disable-sync",
                                    "--disable-features=msEdgeFirstRunExperience,msImplicitSignin"])
         rec["edge_pid"] = edge_p.pid

@@ -724,15 +724,16 @@ class RutasPerfilTests(TempTree):
     def setUpClass(cls):
         cls.srv = server.Server(("127.0.0.1", 0), server.Handler)
         cls.port = cls.srv.server_address[1]
-        cls._app, cls._port = server.Handler.app, server.PORT
+        cls._app, cls._port, cls._token = server.Handler.app, server.PORT, server.Handler.token
         server.PORT = cls.port
+        server.Handler.token = "prueba-perfil"  # el token de sesion que exige la API (P1-02)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
         cls.srv.server_close()
-        server.Handler.app, server.PORT = cls._app, cls._port
+        server.Handler.app, server.PORT, server.Handler.token = cls._app, cls._port, cls._token
 
     def setUp(self):
         super().setUp()
@@ -748,6 +749,7 @@ class RutasPerfilTests(TempTree):
     def call(self, path, body=None, headers=True):
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method="POST" if data else "GET")
+        req.add_header(server.TOKEN_HEADER, server.Handler.token)
         if data and headers:
             req.add_header("X-Audios", "1")
             req.add_header("Content-Type", "application/json")

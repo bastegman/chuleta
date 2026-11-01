@@ -139,19 +139,20 @@ class ServidorHttpTests(unittest.TestCase):
         cls.app.jobs = bare_jobs([])
         cls.srv = server.Server(("127.0.0.1", 0), server.Handler)
         cls.port = cls.srv.server_address[1]
-        cls.saved = (server.PORT, server.URL, server.Handler.app, server.WINDOW)
+        cls.saved = (server.PORT, server.URL, server.Handler.app, server.WINDOW, server.Handler.token)
         server.PORT, server.URL = cls.port, f"http://127.0.0.1:{cls.port}/"
         server.Handler.app = cls.app
+        server.Handler.token = "prueba-lookfeel"  # el token de sesion que exige la API (P1-02)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
         cls.srv.server_close()
-        server.PORT, server.URL, server.Handler.app, server.WINDOW = cls.saved
+        server.PORT, server.URL, server.Handler.app, server.WINDOW, server.Handler.token = cls.saved
 
     def call(self, path, body=None, header=True):
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", common.TOKEN_HEADER: server.Handler.token}
         if header:
             headers["X-Audios"] = "1"
         data = json.dumps(body).encode() if body is not None else None
@@ -233,11 +234,17 @@ class ServidorHttpTests(unittest.TestCase):
         self.assertEqual(self.call("/api/ocultar", {}), (200, {"ok": False}))  # sin ventana propia
 
     def test_ask_running_to_show_usa_la_ruta(self):
+        """El acceso directo (la copia que se abre cuando la app ya corre) lee el token de DATA_DIR\\sesion.token."""
         win = mock.Mock()
         win.show.return_value = True
         server.WINDOW = win
+        tmp = tempfile.mkdtemp(prefix="chuleta-token-")
         try:
-            self.assertTrue(server.ask_running_to_show())
+            with patched_paths(DATA_DIR=tmp):
+                self.assertFalse(server.ask_running_to_show())  # sin sesion.token: 403
+                win.show.assert_not_called()
+                server.write_token(tmp, server.Handler.token)
+                self.assertTrue(server.ask_running_to_show())
         finally:
             server.WINDOW = None
         win.show.assert_called_once()

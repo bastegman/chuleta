@@ -19,6 +19,7 @@ $App = "Chuleta"      # common.APP_NAME: titulo de la ventana, carpeta raiz del 
 $Legacy = "Notas"     # nombre anterior: el instalador reconoce y renombra su acceso directo
 $python = (Get-Command python).Source
 $logDir = Join-Path $env:LOCALAPPDATA "AudiosApp"
+$tokenFile = Join-Path $logDir "sesion.token"
 
 function Check($name, $ok, $valor, $gate = $true) {
     $script:checks[$name] = @{ ok = [bool]$ok; valor = "$valor" }
@@ -32,10 +33,23 @@ function Save-Summary {
     foreach ($k in $script:checks.Keys) { $o[$k] = $script:checks[$k] }
     ($o | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $Out "resumen.json") -Encoding UTF8
 }
+function Api-Headers([switch]$Post) {
+    # la API exige el token de la sesion (server.py lo escribe en sesion.token al arrancar; cambia en cada arranque)
+    $h = @{}
+    try { $t = (Get-Content -LiteralPath $tokenFile -Raw -ErrorAction Stop).Trim(); if ($t) { $h["X-Chuleta-Token"] = $t } } catch {}
+    if ($Post) { $h["X-Audios"] = "1" }
+    return $h
+}
+function Http-Status($url) {
+    # codigo HTTP de un GET sin token (403 esperado) o 0 si no contesta
+    try { return [int](Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 5).StatusCode } catch {
+        if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode } else { return 0 }
+    }
+}
 function Wait-Http($url, $seconds) {
     $end = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
-        try { return Invoke-RestMethod $url -TimeoutSec 3 } catch { Start-Sleep -Milliseconds 500 }
+        try { return Invoke-RestMethod $url -Headers (Api-Headers) -TimeoutSec 3 } catch { Start-Sleep -Milliseconds 500 }
     }
     return $null
 }
@@ -233,9 +247,11 @@ Check "e.config_window_true" ($cfg -and $cfg.window -eq $true) "$($cfg.window)"
 Check "e.config_app_name" ($cfg -and $cfg.app_name -eq $App) "$($cfg.app_name)"
 Check "e.config_version_del_zip" ($cfg -and $cfg.version -eq $verZip) "$($cfg.version) vs $verZip"
 Check "e.config_acerca" ($cfg -and $cfg.acerca.repo -eq "https://github.com/bastegman/chuleta" -and $cfg.acerca.licencia -eq "MIT" -and $cfg.acerca.datos -ieq $logDir) ("repo=$($cfg.acerca.repo) licencia=$($cfg.acerca.licencia) datos=$($cfg.acerca.datos)")
-try { $diag = Invoke-RestMethod "$Base/api/diagnostico" -TimeoutSec 10 } catch { $diag = $null }
+try { $diag = Invoke-RestMethod "$Base/api/diagnostico" -Headers (Api-Headers) -TimeoutSec 10 } catch { $diag = $null }
 Check "e.diagnostico" ($diag -and $diag.texto -match "^$App . versi.n " -and $diag.texto -match "server\.log") $(if ($diag) { ($diag.texto -split "`n" | Select-Object -First 3) -join " | " } else { "sin respuesta" })
-Check "e.server_header" (((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -TimeoutSec 5).Headers["Server"]) -like "$App/*") ((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -TimeoutSec 5).Headers["Server"])
+Check "e.server_header" (((Invoke-WebRequest "$Base/api/ping" -Headers (Api-Headers) -UseBasicParsing -TimeoutSec 5).Headers["Server"]) -like "$App/*") ((Invoke-WebRequest "$Base/api/ping" -Headers (Api-Headers) -UseBasicParsing -TimeoutSec 5).Headers["Server"])
+$tok = $(if (Test-Path -LiteralPath $tokenFile) { (Get-Content -LiteralPath $tokenFile -Raw).Trim() } else { "" })
+Check "e.token_sesion" ($tok.Length -ge 40) ("longitud " + $tok.Length)
 Start-Sleep -Seconds 6  # que la ventana termine de pintar (y una captura mas)
 $lis = @(Get-Listener)
 Check "e.un_servidor" ($lis.Count -eq 1) ("listeners en ${Port}: " + $lis.Count)
@@ -251,8 +267,13 @@ Check "e.icon_big_256" ($w.icons -and $w.icons.ICON_BIG.px -eq "256x256") "$($w.
 $slog = Tail-Log "server.log" 200
 Check "e.log_aumid" ($slog -match "AppUserModelID Bernardo\.Chuleta: fijado") ""
 Check "e.log_ventana" ($slog -match "ventana abierta \(WebView2") (($slog -split "`n" | Select-String "ventana abierta") -join "")
+# la ventana abre /?t=<token>: el servidor le da la cookie de sesion y la interfaz habla con la API sin ningun 403
+Check "e.log_cookie_interfaz" ($slog -match "cookie entregada a la interfaz") (($slog -split "`n" | Select-String "sesi.n:") -join " | ")
+Check "e.interfaz_sin_403" (-not ($slog -match "403 sin token de sesi.n \(navegador\)")) (($slog -split "`n" | Select-String "403 sin token") -join " | ")
+$sinToken = Http-Status "$Base/api/config"
+Check "e.api_sin_token_403" ($sinToken -eq 403) "HTTP $sinToken"
 # ocultar (como al pulsar la X y «Entendido») y volver a abrir con el acceso directo
-try { $r = Invoke-RestMethod "$Base/api/ocultar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch { $r = $null }
+try { $r = Invoke-RestMethod "$Base/api/ocultar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers -Post) -TimeoutSec 5 } catch { $r = $null }
 Start-Sleep -Seconds 2
 $w2 = Ventana "find"
 Check "e.ocultar" ($r -and $r.ok -eq $true -and $w2.hwnd -and -not $w2.visible) ("ok=$($r.ok) visible=$($w2.visible)")
@@ -269,10 +290,11 @@ $slog = Tail-Log "server.log" 200
 Check "e.log_ya_abierta" ($slog -match "ya estaba abierta") ""
 Start-Sleep -Seconds 5
 # apagar
-try { $r = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch { $r = @{ error = $_.Exception.Message } }
+try { $r = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers -Post) -TimeoutSec 5 } catch { $r = @{ error = $_.Exception.Message } }
 $gone = Wait-Process-Gone $appPid 5
 Check "e.apagar_responde" ($r -and $r.ok -eq $true) ("$($r | ConvertTo-Json -Compress)")
 Check "e.apagar_proceso_muere_5s" $gone "pid $appPid"
+Check "e.apagar_borra_token" (-not (Test-Path -LiteralPath $tokenFile)) $tokenFile
 Start-Sleep -Seconds 1
 $slog = Tail-Log "server.log" 60
 Check "e.log_apagado" ($slog -match "(?m)^.*\bapagado$") (($slog -split "`n" | Select-String "apag") -join " | ")
@@ -324,7 +346,7 @@ Check "f.titulo" ($wf.hwnd -and $wf.title -eq $App) "$($wf.title) visible=$($wf.
 $lisf = @(Get-Listener)
 if ($lisf.Count -ge 1) {
     $pidf = $lisf[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers -Post) -TimeoutSec 5 } catch {}
     Check "f.apagar" (Wait-Process-Gone $pidf 5) "pid $pidf"
 }
 
@@ -345,7 +367,7 @@ Check "f2.app_arranca" ($cfg22 -and $cfg22.root -ieq $dir1) "root=$($cfg22.root)
 $lisf2 = @(Get-Listener)
 if ($lisf2.Count -ge 1) {
     $pidf2 = $lisf2[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers -Post) -TimeoutSec 5 } catch {}
     Check "f2.apagar" (Wait-Process-Gone $pidf2 5) "pid $pidf2"
 }
 
@@ -374,7 +396,7 @@ Note "g.server_log_cola" ((Tail-Log "server.log" 6) -replace "`n", " | ")
 $lish = @(Get-Listener)
 if ($lish.Count -ge 1) {
     Note "h.servidor_restante" (Describe-Listeners)
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers @{ "X-Audios" = "1" } -TimeoutSec 5 } catch {}
+    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers -Post) -TimeoutSec 5 } catch {}
     Note "h.servidor_restante_apagado" (Wait-Process-Gone $lish[0].OwningProcess 5)
 }
 Copy-Logs "h"
