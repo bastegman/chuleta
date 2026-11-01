@@ -604,7 +604,8 @@ class Library:
         for a in flat:
             a["recording"] = False
             a["tx_end"] = self._tx_end(a)
-            a["props"], a["has_notes"] = self._props(a)
+            props, a["has_notes"] = self._props(a)
+            a["props"] = with_theme_id(props, a["path"])  # con el id de su tema en este PC (la cache no lo lleva)
             a["speakers"] = self._speakers(a)
             a["has_speakers"] = bool(a["speakers"])
             open_dur = self._recording(a)
@@ -718,6 +719,67 @@ class Complete:
 COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
 
 
+class Temas:
+    """El tema de cada reunion por el id de su lista (ruta interna del audio -> id de list_vocab), en este PC: con dos
+    proyectos que se llaman igual, los nombres de la cabecera del .md (proyecto y workstream, que leen todas las
+    versiones) no dicen cual es. No va en la cabecera: las versiones anteriores solo aceptan ahi las claves que
+    conocen y, con una nueva, toman la cabecera entera por notas. El id solo vale mientras su lista se llame como dice
+    la cabecera (si no, otra version u otro PC cambio el tema y mandan los nombres: find_vocab)."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        self.data = {k: v for k, v in data.items() if isinstance(v, str) and v} if isinstance(data, dict) else {}
+
+    def get(self, rel):
+        return self.data.get(rel)
+
+    def _save(self):
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, sort_keys=True)
+        os.replace(tmp, self.path)
+
+    def set(self, rel, vid):
+        with self.lock:
+            if self.data.get(rel) == (vid or None):
+                return
+            if vid:
+                self.data[rel] = vid
+            else:
+                self.data.pop(rel, None)
+            self._save()
+
+    def moved(self, old, new, folder=False):
+        """Una reunion (o, con folder, una carpeta) cambia de ruta: su tema la sigue; con folder, tambien el id de las
+        listas que estan dentro."""
+        with self.lock:
+            out = {}
+            for k, v in self.data.items():
+                k2 = moved_rel(k, old, new, folder)
+                v2 = moved_rel(v, old, new, folder=True) if folder else None
+                out[k if k2 is None else k2] = v if v2 is None else v2
+            if out != self.data:
+                self.data = out
+                self._save()
+
+
+_TEMAS, _TEMAS_LOCK = {}, threading.Lock()
+
+
+def temas():
+    """El almacen Temas de este PC (DATA_DIR/temas.json; uno por DATA_DIR, que los tests cambian)."""
+    path = os.path.join(DATA_DIR, "temas.json")
+    with _TEMAS_LOCK:
+        if path not in _TEMAS:
+            _TEMAS[path] = Temas(path)
+        return _TEMAS[path]
+
+
 def is_partial(a):
     """Transcripcion que se quedo a medias: el .srt acaba bastante antes que el audio."""
     d, end = a.get("duration"), a.get("tx_end")
@@ -803,10 +865,10 @@ def public_transcript(data):
 # y debajo las notas en Markdown. Se mueve con el audio igual que el .txt y el .srt.
 # idioma: codigo ("es", "pt", "es-en"…) o "auto" (detectar); sin la clave, el idioma del perfil (Ajustes).
 # contexto: una o dos frases (de que va, quien participa) que reciben Whisper, tras el vocabulario, y el resumen.
-# vocabulario: id de la lista del tema (<proyecto>/Vocabulario/<tema>.txt, como en list_vocab): proyecto y workstream
-# son los nombres que se ven; con el id el tema se encuentra aunque otro proyecto se llame igual (find_vocab).
+# El id de la lista del tema no va aqui sino en temas() (ver Temas): las versiones anteriores solo aceptan las claves
+# que conocen y, con una nueva, toman la cabecera entera por notas.
 NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
-             "contexto", "vocabulario")
+             "contexto")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
 NOTE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*$")  # una clave de la cabecera (las que no conocemos se conservan)
 
@@ -899,17 +961,32 @@ def _project_dir(v):
     return os.path.dirname(os.path.dirname(v["_abs"]))
 
 
+def _is_app_name(project):
+    """El proyecto de las listas de la raiz: el nombre de la app o uno de los que tuvo («Notas»)."""
+    from common import APP_FORMER_NAMES
+    return fold(project or "") in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME,)}
+
+
+def _of_project(v, project):
+    """La lista es del proyecto `project`: se llama asi o, con el nombre de la app (o uno antiguo), es de la raiz."""
+    return fold(v["project"]) == fold(project or "") or (
+        _is_app_name(project) and os.path.normcase(os.path.normpath(_project_dir(v)))
+        == os.path.normcase(os.path.normpath(ROOT)))
+
+
 def find_vocab(project, name, id_=None, near=None):
-    """La lista de un tema. Por id (la ruta interna de la lista: estable aunque otro proyecto se llame igual); si no,
-    por nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus nombres antiguos). Si dos
+    """La lista de un tema. Por id (la ruta interna de la lista: estable aunque otro proyecto se llame igual), si se
+    llama como dicen `project` y `name` (los nombres de la cabecera de la reunion; sin ellos, el id basta); si no, por
+    nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus nombres antiguos). Si dos
     proyectos se llaman igual, `near` (la ruta del audio de la reunion) elige la del proyecto que la contiene; si sigue
     sin estar claro, ninguna. Con proyecto nunca se toma la lista de otro proyecto (antes, si solo habia un tema con
-    ese nombre, se usaba aunque fuera de otro cliente)."""
-    from common import APP_FORMER_NAMES  # nombres anteriores de la app: alias del proyecto de las listas de la raiz
+    ese nombre, se usaba aunque fuera de otro cliente). Si ningun proyecto se llama ya asi (se renombro su carpeta o la
+    vinculada, tambien desde fuera de la app), vale la de ese tema en la carpeta de proyecto que contiene la reunion:
+    es su proyecto con el nombre nuevo."""
     vs = list_vocab()
     if id_:
         hit = next((v for v in vs if v["id"] == id_), None)
-        if hit and (not name or fold(hit["name"]) == fold(name)):
+        if hit and (not name or (fold(hit["name"]) == fold(name) and (not project or _of_project(hit, project)))):
             return hit
         if not name:
             return None
@@ -919,12 +996,14 @@ def find_vocab(project, name, id_=None, near=None):
     if not project:
         return same[0] if len(same) == 1 else None
     root = os.path.normcase(os.path.normpath(ROOT))
-    alias = fold(project) in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME,)}
-    named = [v for v in same if fold(v["project"]) == fold(project)
-             or (alias and os.path.normcase(os.path.normpath(_project_dir(v))) == root)]
-    if len(named) <= 1:
-        return named[0] if named else None
-    if near:  # varios proyectos con ese nombre: el que contiene la reunion (el mas cercano)
+    named = [v for v in same if _of_project(v, project)]
+    if len(named) == 1:
+        return named[0]
+    if not named and not _is_app_name(project) and not any(_of_project(v, project) for v in vs):
+        # ese proyecto ya no existe con ese nombre: la de la carpeta que contiene la reunion (la raiz no cuenta, que
+        # las contiene todas y sus listas solo valen por su nombre o el de antes de la app)
+        named = [v for v in same if os.path.normcase(os.path.normpath(_project_dir(v))) != root]
+    if near and named:  # varios proyectos con ese nombre (o renombrado): el que contiene la reunion (el mas cercano)
         mine = sorted((v for v in named if _inside(os.path.dirname(near), _project_dir(v))),
                       key=lambda v: -len(os.path.normpath(_project_dir(v))))
         if mine and (len(mine) == 1 or len(os.path.normpath(_project_dir(mine[0])))
@@ -934,35 +1013,43 @@ def find_vocab(project, name, id_=None, near=None):
 
 
 def theme_vocab(props, abs_audio, changed=()):
-    """Deja en `props` (la cabecera del .md de una reunion) el id de la lista de su tema: `vocabulario`. Si se acaba de
-    elegir por id, proyecto y tema salen de esa lista; si se eligio por nombres (proyecto + tema, como hace la pagina
-    de la reunion) o el .md solo trae nombres (reuniones de antes), se busca con find_vocab y, si se encuentra, se
-    guarda el id y el nombre actual del proyecto (p. ej. «Notas» pasa a ser el de la raiz). Sin tema, sin id.
-    `changed`: las claves que trae la peticion (las demas vienen del propio .md)."""
-    by_names = bool({"proyecto", "workstream"} & set(changed))
+    """El tema de una reunion cuando la peticion lo cambia (al grabar y en la pagina de la reunion): en `props` (la
+    cabecera de su .md) quedan los nombres, proyecto y workstream, y el id de su lista va a temas() (ver Temas).
+    Por id (`vocabulario` en la peticion; "" = sin tema), proyecto y tema salen de esa lista; por nombres, find_vocab
+    la busca (y el proyecto pasa a llamarse como ahora: «Notas» es el de la raiz), salvo que la que ya tenia se llame
+    asi: con dos proyectos que se llaman igual, los nombres no dicen cual. Al guardar las notas u otra propiedad no
+    cambia nada (una reunion de antes se queda con su cabecera). `changed`: lo que trae la peticion (lo demas viene
+    del .md)."""
+    changed = changed or {}
+    if not {"proyecto", "workstream", "vocabulario"} & set(changed):
+        return
+    rel, store = rel_of(abs_audio), temas()
+    by_id = "vocabulario" in changed
+    vid = str(changed.get("vocabulario") or "") if by_id else ""
     try:
-        if "vocabulario" in changed:  # elegido por id: proyecto y tema salen de esa lista ("" = sin tema)
-            v = find_vocab(None, None, props.get("vocabulario")) if props.get("vocabulario") else None
-            if v or not props.get("vocabulario"):
-                for k in ("proyecto", "workstream", "vocabulario"):
-                    props.pop(k, None)
-                if v:
-                    props.update(proyecto=v["project"], workstream=v["name"], vocabulario=v["id"])
-                return
-            props.pop("vocabulario", None)  # un id que no existe: como si no hubiera venido
-        if not props.get("workstream"):
-            props.pop("vocabulario", None)
-            return
-        if props.get("vocabulario") and not by_names:
-            return  # ya lleva el id de su lista (si dejara de existir, find_vocab vuelve a los nombres)
-        v = find_vocab(props.get("proyecto"), props["workstream"], None if by_names else props.get("vocabulario"),
-                       near=abs_audio)
+        v = find_vocab(None, None, vid) if vid else None
+        if by_id and (v or not vid):  # elegido por id: proyecto y tema salen de esa lista ("" = sin tema)
+            props.pop("proyecto", None)
+            props.pop("workstream", None)
+        elif props.get("workstream"):  # por nombres (o un id que ya no existe: como si no hubiera venido)
+            v = find_vocab(props.get("proyecto"), props["workstream"], store.get(rel), near=abs_audio)
+        else:
+            v = None
     except OSError:
         return
     if v:
-        props.update(proyecto=v["project"], workstream=v["name"], vocabulario=v["id"])
-    else:
-        props.pop("vocabulario", None)
+        props.update(proyecto=v["project"], workstream=v["name"])
+    try:
+        store.set(rel, v["id"] if v else None)
+    except OSError:
+        log_exc()
+
+
+def with_theme_id(props, rel):
+    """Las propiedades de una reunion para la interfaz: con `vocabulario`, el id de la lista de su tema en este PC
+    (temas()), aunque no este en el .md. La interfaz lo usa para marcar la lista elegida (vocabOf en notas.js)."""
+    vid = temas().get(rel) if (props or {}).get("workstream") else None
+    return dict(props, vocabulario=vid) if vid else props
 
 
 def vocab_info(v, language):
@@ -998,7 +1085,8 @@ def vocab_for(abs_audio, st, props=None):
     """Vocabulario para Whisper: el del tema de la reunion o, si no tiene, el general de Ajustes."""
     props = md_props(abs_audio) if props is None else props
     try:
-        v = find_vocab(props.get("proyecto"), props.get("workstream"), props.get("vocabulario"), near=abs_audio)
+        vid = temas().get(rel_of(abs_audio)) if props.get("workstream") else None  # el id solo desempata
+        v = find_vocab(props.get("proyecto"), props.get("workstream"), vid, near=abs_audio)
         if v:
             return ", ".join(read_vocab(v["_abs"])[1])
     except OSError:
@@ -1180,10 +1268,27 @@ def settings_moved(d, old, new, folder=False, project=None):
     d["project_folders"] = pf
 
 
+def theme_moved(props, vid, new, lists, project, ambiguous=False, inside=False):
+    """Lo que cambia en la cabecera de una reunion cuando la carpeta de un proyecto (o la vinculada) pasa de llamarse
+    project[0] a project[1] (`new`: su ruta interna, ya renombrada): si la cabecera dice el nombre viejo, el nuevo,
+    siempre que la reunion sea de ese proyecto: el id de la lista de su tema (`vid`, de temas(), que ya lo ha seguido)
+    esta dentro o, sin id, ningun otro proyecto se sigue llamando asi (`ambiguous` False) o la reunion esta dentro
+    (`inside`). `lists`: id -> lista, ya renombrada. Solo cambia el valor de `proyecto`, que todas las versiones leen;
+    {} si nada cambia."""
+    if not project or not props.get("workstream") or fold(props.get("proyecto") or "") != fold(project[0]) \
+            or props.get("proyecto") == project[1]:
+        return {}
+    v = lists.get(vid) if vid else None
+    if v and fold(v["name"]) == fold(props["workstream"]):  # el id de su tema dice de que proyecto es
+        return {"proyecto": project[1]} if moved_rel(vid, new, new, folder=True) is not None else {}
+    return {"proyecto": project[1]} if inside or not ambiguous else {}
+
+
 def has_vocab_dir(folder):
     """La carpeta es la de un proyecto: tiene una carpeta Vocabulario (sus listas toman de ella el nombre)."""
     try:
-        return any(e.is_dir() and fold(e.name) == VOCAB_FOLDER for e in os.scandir(folder))
+        with os.scandir(folder) as it:
+            return any(e.is_dir() and fold(e.name) == VOCAB_FOLDER for e in it)
     except OSError:
         return False
 
@@ -2699,7 +2804,7 @@ class App:
         if not os.path.isfile(md):
             return {"props": {}, "body": "", "mtime": 0}
         props, body = parse_notes(read_text(md))
-        return {"props": props, "body": body, "mtime": os.path.getmtime(md)}
+        return {"props": with_theme_id(props, rel_of(abs_path)), "body": body, "mtime": os.path.getmtime(md)}
 
     def notes_save(self, b):
         """Guarda las notas y/o propiedades (solo lo que venga en la peticion)."""
@@ -2717,7 +2822,7 @@ class App:
                     elif k == "contexto":
                         v = " ".join(str(v or "").split())[:engines.ABOUT_CHARS]
                     props[k] = v
-            theme_vocab(props, abs_path, b.get("props") or {})  # el id de la lista del tema (y migra los nombres)
+            theme_vocab(props, abs_path, b.get("props") or {})  # el tema: nombres a la cabecera, id a temas()
             if "body" in b:
                 body = b.get("body") or ""
             text = dump_notes(props, body)
@@ -2729,7 +2834,8 @@ class App:
             self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
         self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento con las notas nuevas
         self.library.at = 0
-        return {"props": props, "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
+        return {"props": with_theme_id(props, rel_of(abs_path)),
+                "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
 
     def tags(self, q):
         self.library.refresh(max_age=5)
@@ -2976,6 +3082,10 @@ class App:
         COMPLETE.set(rel, False)
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
         self.jobs.voice_vectors.pop(rel, None)
+        try:
+            temas().set(rel, None)
+        except OSError:
+            log_exc()
         self.settings.update(lambda d: d.update(favorites=[f for f in d.get("favorites", []) if f["path"] != rel]))
         copias = 0
         if ext.lower() in AUDIO_EXT:  # sus documentos de los destinos de salida que nadie ha cambiado, tambien
@@ -3264,6 +3374,10 @@ class App:
         COMPLETE.moved(rel_of(src), rel_of(moves[0][1]))
         if rel_of(src) in self.jobs.voice_vectors:
             self.jobs.voice_vectors[rel_of(moves[0][1])] = self.jobs.voice_vectors.pop(rel_of(src))
+        try:  # su tema la sigue
+            temas().moved(rel_of(src), rel_of(moves[0][1]))
+        except OSError:
+            log_exc()
         self._rename_refs(rel_of(src), rel_of(moves[0][1]))
         self.jobs.outputs_moved(rel_of(src), rel_of(moves[0][1]))  # sus documentos de los destinos siguen siendo suyos
         old_b, new_b = backup_dir(rel_of(src)), backup_dir(rel_of(moves[0][1]))
@@ -3291,6 +3405,10 @@ class App:
             self._save_links()
             if has_vocab_dir(LINKS[lid]["path"]):  # sus listas toman el nombre de la carpeta vinculada
                 self.settings.update(lambda d: settings_moved(d, "", "", project=(old_name, new_name)))
+                try:  # y el proyecto de sus reuniones (el nombre ya ha cambiado: si esto falla se anota)
+                    self._themes_moved(LINK + lid, (old_name, new_name))
+                except Exception:
+                    log_exc()
             return {"path": b["path"].strip("/")}
         src = safe(b.get("path"), "dir")
         if os.path.normcase(src) == os.path.normcase(ROOT) or in_app_dir(src):
@@ -3315,9 +3433,10 @@ class App:
 
     def _folder_moved(self, old, new, project=None):
         """Una carpeta renombrada: lo que la app guarda por ruta interna la sigue, como al mover una reunion (move):
-        la copia del original de cada transcripcion corregida, el estado «completa», las huellas de voz en memoria, los
-        documentos de los destinos de salida y los ajustes (carpeta y tema del perfil, ultima carpeta y ultimo tema,
-        carpeta de cada proyecto; con `project`, el proyecto tambien cambia de nombre)."""
+        la copia del original de cada transcripcion corregida, el estado «completa», las huellas de voz en memoria, el
+        tema de cada reunion (temas()), los documentos de los destinos de salida y los ajustes (carpeta y tema del
+        perfil, ultima carpeta y ultimo tema, carpeta de cada proyecto; con `project`, el proyecto tambien cambia de
+        nombre, tambien en la cabecera de sus reuniones: _themes_moved)."""
         dst = safe(new, "dir")
         for d, _, files in os.walk(dst):
             for n in files:
@@ -3335,8 +3454,44 @@ class App:
         vv = self.jobs.voice_vectors
         for r in [r for r in list(vv) if moved_rel(r, old, new, folder=True)]:
             vv[moved_rel(r, old, new, folder=True)] = vv.pop(r)
+        try:  # el tema de sus reuniones y el id de sus listas
+            temas().moved(old, new, folder=True)
+        except OSError:
+            log_exc()
         self.jobs.outputs_moved(old, new, folder=True)
         self.settings.update(lambda d: settings_moved(d, old, new, folder=True, project=project))
+        self._themes_moved(new, project)
+
+    def _themes_moved(self, new, project=None):
+        """Al renombrar la carpeta de un proyecto (o la vinculada, que da su nombre a las listas), las reuniones de ese
+        proyecto lo siguen en la cabecera de su .md, esten donde esten (theme_moved): si no, al volver a transcribirlas
+        se quedaban con el vocabulario general, porque nunca se toma la lista de otro proyecto. El id de cada una ya lo
+        ha seguido temas(). `new`: la ruta interna de la carpeta, ya renombrada. Devuelve cuantas han cambiado."""
+        if not project:
+            return 0  # ningun proyecto cambia de nombre (el de una lista es el de la carpeta que tiene Vocabulario)
+        lists = {v["id"]: v for v in list_vocab()}
+        ambiguous = any(fold(v["project"]) == fold(project[0]) for v in lists.values())
+        store = temas()
+        self.library.at = 0
+        self.library.refresh()
+        n = 0
+        for a in list(self.library.flat):
+            if not a.get("_md") or not (a.get("props") or {}).get("workstream"):
+                continue
+            inside = moved_rel(a["path"], new, new, folder=True) is not None
+            with self.notes_lock:
+                try:
+                    props, body = parse_notes(read_text(a["_md"]))
+                    ch = theme_moved(props, store.get(a["path"]), new, lists, project, ambiguous, inside)
+                    if ch:
+                        save_text(a["_md"], dump_notes(dict(props, **ch), body), "utf-8")
+                        n += 1
+                except OSError:
+                    log_exc()
+        if n:
+            self.library.at = 0
+            log(f"   tema de {n} reuniones: siguen a la carpeta renombrada {new}")
+        return n
 
     def reveal(self, b):
         p = safe(b.get("path", ""))

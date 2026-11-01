@@ -25,7 +25,7 @@ import re
 import threading
 import time
 import zipfile
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, unescape
 
 from common import APP_NAME, ApiError, clean_name
 
@@ -469,8 +469,14 @@ def is_ours(path, fmt):
 
 
 def origin_of(path, fmt):
-    """La reunion de origen que dice el propio documento (`origen:` de la cabecera del .md, «Origen: …» del .txt), o
-    None (el .docx no se abre para esto)."""
+    """La reunion de origen que dice el propio documento: `origen:` de la cabecera del .md o «Origen: …» de la linea de
+    propiedades del .txt y del .docx (la que pinta render_docx en word/document.xml). None si no lo dice."""
+    if fmt == "docx":
+        try:
+            lines = _docx_lines(path)
+        except Exception:  # un .docx roto o a medio subir: no dice nada
+            return None
+        return next((o for o in map(_origin_in, lines[1:]) if o), None)
     try:
         with open(path, "rb") as f:
             head = f.read(_HEAD_BYTES).decode("utf-8", "replace").lstrip("﻿")
@@ -485,11 +491,34 @@ def origin_of(path, fmt):
                     v = v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
                 return v or None
     elif fmt == "txt":
-        for l in head.splitlines()[:4]:
-            for part in l.split(" · "):
-                if part.startswith("Origen: "):
-                    return part[len("Origen: "):].strip() or None
+        return next((o for o in map(_origin_in, head.splitlines()[1:4]) if o), None)
     return None
+
+
+_W_P = re.compile(r"<w:p\b[^>]*>(.*?)</w:p>", re.S)
+_W_T = re.compile(r"<w:t\b[^>]*>([^<]*)</w:t>")
+
+
+def _origin_in(line):
+    """La ruta de «Origen: …» en la linea de propiedades del .txt o del .docx. Es el ultimo campo de esa linea: una
+    ruta que lleve « · » tambien se lee entera."""
+    if line.startswith("Origen: "):
+        return line[len("Origen: "):].strip() or None
+    i = line.find(" · Origen: ")
+    return (line[i + len(" · Origen: "):].strip() or None) if i >= 0 else None
+
+
+def _docx_lines(path, n=6):
+    """El texto de los primeros parrafos de un .docx (titulo, propiedades, marca…), tambien si Word lo ha vuelto a
+    guardar con el texto partido en varios trozos."""
+    with zipfile.ZipFile(path) as z, z.open("word/document.xml") as f:
+        xml = f.read(1 << 16).decode("utf-8", "replace")
+    out = []
+    for m in _W_P.finditer(xml):
+        out.append(unescape("".join(_W_T.findall(m.group(1))), {"&quot;": '"', "&apos;": "'"}))
+        if len(out) == n:
+            break
+    return out
 
 
 _GENERADO = re.compile(rb"^generado: .*\r?\n", re.M)
@@ -537,10 +566,42 @@ def alt_name(folder, stem, rel, fmt):
     return os.path.join(folder, f"{stem} ({h}).{fmt}")
 
 
+MAX_ALT = 10  # nombres propios que se prueban para una reunion (alt_for)
+
+
+def alt_for(registro, folder, stem, rel, fmt):
+    """El nombre propio de una reunion cuando <stem>.<fmt> no le vale: alt_name, salvo que ese ya sea de otra reunion
+    (la que estuvo antes en esta misma ruta y se movio conservando su documento) o de un fichero ajeno; entonces el de
+    la siguiente semilla. Devuelve uno libre o uno que ya es de esta reunion (si los MAX_ALT estan cogidos, el ultimo:
+    write_one no escribe encima del documento de otra reunion)."""
+    for n in range(MAX_ALT):
+        alt = alt_name(folder, stem, f"{rel}#{n}" if n else rel, fmt)
+        if not os.path.isfile(alt):
+            return alt
+        owner = registro.rel_of(alt)
+        if owner == rel or (owner is None and is_ours(alt, fmt) and origin_of(alt, fmt) in (None, rel)):
+            return alt
+    return alt
+
+
+def _own_doc(entries, folder, stem, fmt, first):
+    """De los documentos que el registro da por de esta reunion, el que sigue en esta carpeta con su nombre
+    (<stem>.<fmt> o <stem> (<6 hex>).<fmt>); con varios, primero los de `first` (el normal y el propio de ahora)."""
+    name = re.compile(re.escape(stem) + r"( \([0-9a-f]{6}\))?\." + re.escape(fmt), re.I if os.name == "nt" else 0)
+    here = os.path.normcase(os.path.normpath(folder))
+    first = [os.path.normcase(p) for p in first]
+    hits = [p for p, _ in entries if os.path.normcase(os.path.normpath(os.path.dirname(p))) == here
+            and name.fullmatch(os.path.basename(p)) and os.path.isfile(p)]
+    hits.sort(key=lambda p: (first.index(os.path.normcase(p)) if os.path.normcase(p) in first else len(first), p))
+    return hits[0] if hits else None
+
+
 def dest_path(destino, doc, registro=None):
     """Carpeta final (con la subcarpeta del proyecto si el destino lo pide y la reunion tiene proyecto) y fichero.
-    Con el registro: el documento que ya es de esta reunion si sigue ahi; si no, <stem>.<fmt> salvo que ese nombre sea
-    de otra reunion (registro u `origen:` del propio documento) o de un fichero ajeno: entonces alt_name."""
+    Con el registro: el documento que ya es de esta reunion si sigue ahi, tambien el que tenia antes de moverla o de
+    renombrar su carpeta (Registro.moved lo sigue, aunque alt_name, que sale de la ruta, ya no sea el mismo); si no,
+    <stem>.<fmt> salvo que ese nombre sea de otra reunion (registro u origen que dice el propio documento) o de un
+    fichero ajeno: entonces alt_for."""
     folder = destino["path"]
     project = (doc.get("props") or {}).get("proyecto")
     if destino.get("by_project") and project:
@@ -552,12 +613,11 @@ def dest_path(destino, doc, registro=None):
     plain = os.path.join(folder, f"{stem}.{fmt}")
     if registro is None or not rel:
         return folder, plain
-    alt = alt_name(folder, stem, rel, fmt)
-    mine = {os.path.normcase(p) for p, _ in registro.entries(rel)}
-    for cand in (plain, alt):
-        if os.path.normcase(cand) in mine and os.path.isfile(cand):
-            return folder, cand
-    if os.path.isfile(alt) and is_ours(alt, fmt):
+    own = _own_doc(registro.entries(rel), folder, stem, fmt, (plain, alt_name(folder, stem, rel, fmt)))
+    if own:
+        return folder, own
+    alt = alt_for(registro, folder, stem, rel, fmt)
+    if os.path.isfile(alt):
         return folder, alt  # su nombre propio ya esta ahi aunque el registro no lo sepa (otro PC, reinstalacion)
     if not os.path.isfile(plain):
         return folder, plain
@@ -621,12 +681,12 @@ def write_one(doc, destino, registro, blocked=None):
                 return dest, "igual"
             if not is_ours(dest, fmt):
                 return dest, "ajeno"
-            before = registro.get(dest)
+            before, owner = registro.get(dest), registro.rel_of(dest)
             if same_content(dest, data, fmt):  # solo cambian las fechas de generacion: no se toca
                 registro.set(dest, have, rel)
                 return dest, "igual"
-            if before is None or before != have:
-                return dest, "cambiado"
+            if before is None or before != have or (owner and rel and owner != rel):
+                return dest, "cambiado"  # tambien si es de otra reunion (alt_for sin nombre libre): nunca encima
         os.makedirs(folder, exist_ok=True)
         _replace(dest, data)
         registro.set(dest, sha, rel)

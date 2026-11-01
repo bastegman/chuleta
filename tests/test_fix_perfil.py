@@ -13,7 +13,7 @@ import unittest
 import zipfile
 from unittest import mock
 
-from support import TempTree, bare_jobs, engines, server, srt_text  # noqa: F401  (support prepara sys.path)
+from support import REPO, TempTree, bare_jobs, engines, server, srt_text, wav_bytes  # noqa: F401  (prepara sys.path)
 import salidas  # noqa: E402
 from test_frontend import js_defs, read  # noqa: E402
 
@@ -226,7 +226,7 @@ class NombresUnicosTests(TempTree):
             with open(p, encoding="utf-8") as f:
                 self.assertIn(txt, f.read())
         self.assertEqual(self.reg.rel_of(pa), "Alfa/Kickoff.m4a")
-        # sin registro (otro PC, reinstalacion) cada una sigue encontrando el suyo, tambien en .docx (sin `origen:`)
+        # sin registro (otro PC, reinstalacion) cada una sigue encontrando el suyo, tambien en .docx
         reg2 = salidas.Registro(os.path.join(self.data_dir, "otro.json"))
         self.assertEqual(salidas.write_all(dict(b, notes="Beta 2"), self.dest, reg2)[0], (pb, "igual"))
         self.assertEqual(salidas.write_all(dict(a, notes="Alfa 2"), self.dest, reg2)[0], (pa, "igual"))
@@ -265,6 +265,114 @@ class NombresUnicosTests(TempTree):
         self.assertEqual(reg.rel_of(x), doc()["source"])
         self.assertEqual(reg.moved("Alfa", "Gamma", folder=True), 1)
         self.assertEqual(reg.rel_of(x), "Gamma/" + STEM + ".wav")
+
+    def old_registry(self, fmt, notes):
+        """El documento de Alfa ya escrito y un registro del formato de antes (destino -> sha, sin la reunión)."""
+        x = os.path.join(self.d, "Kickoff." + fmt)
+        with open(x, "wb") as f:
+            f.write(salidas.render(doc(stem="Kickoff", source="Alfa/Kickoff.m4a", notes=notes), fmt))
+        p = os.path.join(self.data_dir, f"viejo-{fmt}.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({os.path.normcase(x): salidas.sha256_of(x)}, f)
+        return x, salidas.Registro(p)
+
+    def body(self, path, fmt):
+        if fmt == "docx":
+            with zipfile.ZipFile(path) as z:
+                return z.read("word/document.xml").decode("utf-8")
+        with open(path, encoding="utf-8-sig") as f:
+            return f.read()
+
+    def test_registro_antiguo_y_otra_reunion_con_el_mismo_nombre(self):
+        """Con el registro de antes, la segunda reunión con el mismo nombre no escribe encima del documento de la
+        primera: el propio documento dice de qué reunión es, también el .docx (antes solo el .md y el .txt)."""
+        for fmt in ("md", "txt", "docx"):
+            x, reg = self.old_registry(fmt, "NOTAS_ALFA")
+            b = doc(stem="Kickoff", source="Beta/Kickoff.m4a", notes="NOTAS_BETA")
+            done = salidas.write_all(b, [{"path": self.d, "format": fmt}], reg)
+            self.assertEqual(done, [(salidas.alt_name(self.d, "Kickoff", "Beta/Kickoff.m4a", fmt), "escrito")], fmt)
+            self.assertIn("NOTAS_ALFA", self.body(x, fmt), fmt)
+            self.assertNotIn("NOTAS_BETA", self.body(x, fmt), fmt)
+            # y la propia Alfa sigue escribiendo en el suyo
+            a = doc(stem="Kickoff", source="Alfa/Kickoff.m4a", notes="ALFA_2")
+            self.assertEqual(salidas.write_all(a, [{"path": self.d, "format": fmt}], reg), [(x, "escrito")], fmt)
+
+    def test_sin_registro_un_docx_de_otra_reunion(self):
+        """Sin registro (otro PC) y con el .docx de otra reunión en el destino, el documento va a su nombre propio en
+        vez de quedarse sin escribir («cambiado»)."""
+        x = os.path.join(self.d, "Kickoff.docx")
+        with open(x, "wb") as f:
+            f.write(salidas.render(doc(stem="Kickoff", source="Otra/Kickoff · 2.m4a", notes="de la otra"), "docx"))
+        self.assertEqual(salidas.origin_of(x, "docx"), "Otra/Kickoff · 2.m4a")  # la ruta entera, con « · »
+        b = doc(stem="Kickoff", source="Beta/Kickoff.m4a")
+        done = salidas.write_all(b, [{"path": self.d, "format": "docx"}], self.reg)
+        self.assertEqual(done, [(salidas.alt_name(self.d, "Kickoff", "Beta/Kickoff.m4a", "docx"), "escrito")])
+        self.assertIn("de la otra", self.body(x, "docx"))
+        # guardado otra vez por Word (atributos en cada párrafo y el texto en varios trozos): se sigue leyendo
+        with zipfile.ZipFile(x) as z:
+            parts = {n: z.read(n) for n in z.namelist()}
+        xml = parts["word/document.xml"].decode("utf-8").replace("<w:p>", '<w:p w:rsidR="00A1B2C3">')
+        xml = xml.replace("Origen: Otra/", 'Ori</w:t></w:r><w:r><w:t xml:space="preserve">gen: Otra/', 1)
+        parts["word/document.xml"] = xml.encode("utf-8")
+        with zipfile.ZipFile(x, "w") as z:
+            for n, data in parts.items():
+                z.writestr(n, data)
+        self.assertEqual(salidas.origin_of(x, "docx"), "Otra/Kickoff · 2.m4a")
+        self.assertIsNone(salidas.origin_of(os.path.join(self.d, "no-existe.docx"), "docx"))
+
+    def test_mover_una_reunion_que_ya_tiene_nombre_propio(self):
+        """La reunión que escribe «Kickoff (<hash>)» porque «Kickoff» es de otra sigue escribiendo en ese mismo
+        documento al moverla o al renombrar su carpeta, aunque el hash, que sale de la ruta, cambie."""
+        for fmt in ("md", "docx"):
+            for folder in (False, True):
+                d = os.path.join(self.tmp, f"vault-{fmt}-{folder}")
+                os.makedirs(d)
+                reg = salidas.Registro(os.path.join(self.data_dir, f"r-{fmt}-{folder}.json"))
+                dest = [{"path": d, "format": fmt}]
+                a = doc(stem="Kickoff", source="Alfa/Kickoff.m4a", notes="ALFA")
+                b = doc(stem="Kickoff", source="Beta/Kickoff.m4a", notes="BETA")
+                salidas.write_all(a, dest, reg)
+                pb = salidas.write_all(b, dest, reg)[0][0]
+                jobs = bare_jobs([])
+                jobs._registro = reg
+                if folder:  # renombrar la carpeta Beta (server._folder_moved)
+                    jobs.outputs_moved("Beta", "Beta 2", folder=True)
+                    new = dict(b, source="Beta 2/Kickoff.m4a", notes="BETA 2")
+                else:  # mover la reunión (server.move)
+                    jobs.outputs_moved("Beta/Kickoff.m4a", "Gamma/Kickoff.m4a")
+                    new = dict(b, source="Gamma/Kickoff.m4a", notes="BETA 2")
+                self.assertEqual(salidas.write_all(new, dest, reg), [(pb, "escrito")], (fmt, folder))
+                self.assertEqual(sorted(os.listdir(d)), sorted(["Kickoff." + fmt, os.path.basename(pb)]))
+                self.assertEqual(reg.entries(new["source"]), [(pb, salidas.sha256_of(pb))])
+                self.assertIn("BETA 2", self.body(pb, fmt))
+                # una reunión nueva en la ruta de antes no se queda con ese documento: tiene el suyo
+                otra = doc(stem="Kickoff", source="Beta/Kickoff.m4a", notes="NUEVA")
+                po, accion = salidas.write_all(otra, dest, reg)[0]
+                self.assertEqual(accion, "escrito")
+                self.assertNotIn(po, (pb, os.path.join(d, "Kickoff." + fmt)))
+                self.assertRegex(os.path.basename(po), r"^Kickoff \([0-9a-f]{6}\)\." + fmt + "$")
+                self.assertIn("BETA 2", self.body(pb, fmt))
+                self.assertIn("NUEVA", self.body(po, fmt))
+                # y cada una sigue en el suyo, también sin registro (otro PC)
+                self.assertEqual(salidas.write_all(new, dest, reg), [(pb, "igual")])
+                self.assertEqual(salidas.write_all(otra, dest, reg), [(po, "igual")])
+                otro_pc = salidas.Registro(os.path.join(self.data_dir, f"otro-{fmt}-{folder}.json"))
+                self.assertEqual(salidas.write_all(otra, dest, otro_pc), [(po, "igual")])
+
+    def test_sin_nombre_libre_nunca_encima_de_otra_reunion(self):
+        """Si todos los nombres propios que se prueban (alt_for) ya son de otras reuniones, el documento se queda sin
+        escribir («cambiado», con su aviso) en vez de ir encima del de otra reunión."""
+        a = doc(stem="Kickoff", source="Alfa/Kickoff.m4a", notes="ALFA")
+        b = doc(stem="Kickoff", source="Beta/Kickoff.m4a", notes="BETA")
+        salidas.write_all(a, self.dest, self.reg)
+        pb = salidas.write_all(b, self.dest, self.reg)[0][0]
+        self.reg.moved("Beta/Kickoff.m4a", "Gamma/Kickoff.m4a")  # Beta se va con su documento
+        nueva = doc(stem="Kickoff", source="Beta/Kickoff.m4a", notes="NUEVA")  # y otra reunión ocupa su ruta
+        with mock.patch.object(salidas, "MAX_ALT", 1):  # su único nombre propio es el de Beta
+            self.assertEqual(salidas.write_all(nueva, self.dest, self.reg), [(pb, "cambiado")])
+        self.assertIn("BETA", self.body(pb, "md"))
+        self.assertNotIn("NUEVA", self.body(pb, "md"))
+        self.assertEqual(self.reg.rel_of(pb), "Gamma/Kickoff.m4a")
 
 
 # ----------------------------------------------------------------------------- P2-04 / P2-05
@@ -486,6 +594,37 @@ class BorrarTests(TempTree):
 
 # ----------------------------------------------------------------------------- P2-26
 
+# parse_notes de las versiones publicadas, copiado de `git show 5c55e54:_app/server.py`: el de la del 30-oct (012bb24)
+# es el mismo y solo cambia NOTE_KEYS (sin idioma ni contexto). Solo aceptan una cabecera con claves que conocen; si no,
+# la toman entera por notas. test_la_copia_es_la_publicada lo comprueba contra git cuando el clon tiene la historia.
+PARSE_NOTES_PUBLICADO = r'''def parse_notes(text):
+    lines = text.replace("\r\n", "\n").split("\n")
+    props, body = {}, text
+    if lines and lines[0].strip() == "---":
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        # solo es cabecera si todo lo de dentro es "clave: valor" conocido (si no, era un separador)
+        if end and all(not l.strip() or l.partition(":")[0].strip().lower() in NOTE_KEYS for l in lines[1:end]):
+            for line in lines[1:end]:
+                k, _, v = line.partition(":")
+                k, v = k.strip().lower(), v.strip()
+                if k in NOTE_KEYS and v:
+                    props[k] = [t.strip() for t in v.strip("[]").split(",") if t.strip()] if k == "etiquetas" else v
+            body = "\n".join(lines[end + 1:]).lstrip("\n")
+    return props, body
+'''
+NOTE_KEYS_PUBLICADAS = {
+    "012bb24": ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream"),
+    "5c55e54": ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
+                "contexto"),
+}
+
+
+def parse_publicado(rev):
+    ns = {"NOTE_KEYS": NOTE_KEYS_PUBLICADAS[rev]}
+    exec(PARSE_NOTES_PUBLICADO, ns)
+    return ns["parse_notes"]
+
+
 class TemaPorIdTests(TempTree):
     """P2-26: el tema de cada reunión se resuelve por id (y por la ruta de la reunión), no solo por nombre."""
 
@@ -526,32 +665,213 @@ class TemaPorIdTests(TempTree):
         self.write("r.md", "---\nproyecto: Proyecto\nworkstream: General\n---\n")
         self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "general")
         bid = f":{server.link_id(b)}/Vocabulario/General.txt"
-        self.write("r.md", f"---\nproyecto: Proyecto\nworkstream: General\nvocabulario: {bid}\n---\n")
+        server.temas().set("r.wav", bid)  # el id que guarda este PC al elegir la de B
         self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "de B")  # con el id, sin dudas
+        # el id solo desempata: si otra versión u otro PC cambia el tema en la cabecera, mandan los nombres
+        self.write("Otro/Vocabulario/General.txt", "otro\n")
+        self.write("r.md", "---\nproyecto: Otro\nworkstream: General\n---\n")
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "otro")
+        self.write("r.md", "---\nproyecto: Proyecto\n---\n")  # y sin tema, ninguna lista aunque quede el id
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "general")
 
-    def test_al_grabar_y_al_guardar_queda_el_id(self):
-        _, b = self.links()
-        bid = f":{server.link_id(b)}/Vocabulario/General.txt"
-        self.write("Vocabulario/General.txt", "raíz\n")
+    def app(self):
         a = server.App.__new__(server.App)
         a.settings, a.notes_lock = settings_store(self.tmp), threading.Lock()
         a.library = types.SimpleNamespace(at=1)
         a.jobs = types.SimpleNamespace(refresh_prompt=lambda rel: None, schedule_outputs=lambda rel, delay=4.0: None)
-        self.wav("r.wav")
-        a.notes_save({"path": "r.wav", "props": {"vocabulario": bid}})  # elegido por id
-        p = server.parse_notes(server.read_text(os.path.join(self.root, "r.md")))[0]
-        self.assertEqual((p["proyecto"], p["workstream"], p["vocabulario"]), ("Proyecto", "General", bid))
-        # una reunion de antes, con el nombre anterior de la app: al guardar cualquier cosa se migra
+        return a
+
+    def test_al_grabar_y_al_guardar_queda_el_id(self):
+        """El id de la lista va al almacén de este PC (temas()), no a la cabecera del .md, que solo lleva los nombres;
+        la interfaz lo recibe en props.vocabulario."""
+        _, b = self.links()
+        bid = f":{server.link_id(b)}/Vocabulario/General.txt"
+        self.write("Vocabulario/General.txt", "raíz\n")
+        a = self.app()
+        audio, md = self.wav("r.wav"), os.path.join(self.root, "r.md")
+        r = a.notes_save({"path": "r.wav", "props": {"vocabulario": bid}})  # elegido por id
+        self.assertNotIn("vocabulario", server.read_text(md))
+        self.assertEqual(server.parse_notes(server.read_text(md))[0], {"proyecto": "Proyecto", "workstream": "General"})
+        self.assertEqual(server.temas().get("r.wav"), bid)
+        self.assertEqual(r["props"]["vocabulario"], bid)
+        self.assertEqual(a.notes_get({"path": "r.wav"})["props"],
+                         {"proyecto": "Proyecto", "workstream": "General", "vocabulario": bid})
+        # una reunion de antes, con el nombre anterior de la app: guardar las notas u otra propiedad no le toca la
+        # cabecera; el tema se sigue encontrando por nombres
+        server.temas().set("r.wav", None)
         self.write("r.md", "---\nproyecto: Notas\nworkstream: General\n---\n\nnotas\n")
+        a.notes_save({"path": "r.wav", "body": "notas nuevas"})  # el autoguardado de las notas
+        self.assertEqual(server.read_text(md), "---\nproyecto: Notas\nworkstream: General\n---\n\nnotas nuevas\n")
         a.notes_save({"path": "r.wav", "props": {"estado": "Revisada"}})
-        p = server.parse_notes(server.read_text(os.path.join(self.root, "r.md")))[0]
-        self.assertEqual((p["proyecto"], p["vocabulario"], p["estado"]),
-                         (server.APP_NAME, "Vocabulario/General.txt", "Revisada"))
+        p = server.parse_notes(server.read_text(md))[0]
+        self.assertEqual(p, {"proyecto": "Notas", "workstream": "General", "estado": "Revisada"})
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "raíz")
+        # al elegir el tema, si (tambien por nombres): el nombre de ahora del proyecto y el id
+        a.notes_save({"path": "r.wav", "props": {"proyecto": "Notas", "workstream": "General"}})
+        p = server.parse_notes(server.read_text(md))[0]
+        self.assertEqual((p["proyecto"], server.temas().get("r.wav")), (server.APP_NAME, "Vocabulario/General.txt"))
         a.notes_save({"path": "r.wav", "props": {"proyecto": "", "workstream": ""}})  # sin tema: sin id
-        self.assertNotIn("vocabulario", server.parse_notes(server.read_text(os.path.join(self.root, "r.md")))[0])
+        self.assertIsNone(server.temas().get("r.wav"))
+        self.assertNotIn("vocabulario", a.notes_get({"path": "r.wav"})["props"])
         src = read_server()
         rec = src[src.index("    def rec_start"):src.index("    def rec_mic")]
         self.assertIn('"vocabulario": v["id"]} if v else {}', rec)
+
+    @unittest.skipUnless(shutil.which("node"), "node no instalado")
+    def test_la_pagina_de_la_reunion_elige_por_id(self):
+        """Con dos carpetas vinculadas que se llaman igual, lo que la página manda al elegir la lista de B (wsPatch)
+        hace que Whisper use la de B, aunque la reunión esté en A o fuera de las dos; y el selector marca la de B."""
+        src = read("notas.js")
+        handler = src[src.index("e.target.dataset.prop !== 'workstream'"):]
+        self.assertIn("saveProps(a, wsPatch(v))", handler[:handler.index("});")])  # el selector manda el id
+        a_dir, b_dir = self.links()
+        aid, bid = (f":{server.link_id(p)}/Vocabulario/General.txt" for p in (a_dir, b_dir))
+        vocab = [{"id": i, "project": "Proyecto", "name": "General"} for i in (aid, bid)]
+        js = js_defs(read("app.js"), ["nfc", "foldMap", "fold"]) + "\n" + js_function(read("notas.js"), "vocabOf")
+        js += js_defs(read("notas.js"), ["wsPatch"]) + f"\nconst S = {{vocab: {json.dumps(vocab)}}};\n"
+
+        def node(code):
+            r = subprocess.run(["node", "-e", js + code], capture_output=True, text=True, encoding="utf-8", timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return r.stdout.strip()
+        patch = json.loads(node("console.log(JSON.stringify(wsPatch(S.vocab[1])));"))
+        self.assertEqual(json.loads(node("console.log(JSON.stringify(wsPatch(undefined)));")), {"vocabulario": ""})
+        app = self.app()
+        dentro = os.path.join(a_dir, "r.wav")
+        with open(dentro, "wb") as f:
+            f.write(b"RIFF")
+        fuera = self.wav("r.wav")
+        # en A, grabada con la lista de A y en la página se elige la de B; fuera de las dos, grabada con B y en la
+        # página se vuelve a elegir B (antes, las dos acababan en la de A o en el vocabulario general)
+        for audio, grabada in ((dentro, aid), (fuera, bid)):
+            rel = server.rel_of(audio)
+            app.notes_save({"path": rel, "props": {"proyecto": "Proyecto", "workstream": "General",
+                                                   "vocabulario": grabada}})  # como rec_start
+            app.notes_save({"path": rel, "props": patch})
+            self.assertNotIn("vocabulario", server.read_text(os.path.splitext(audio)[0] + ".md"))
+            props = app.notes_get({"path": rel})["props"]  # lo que recibe la página
+            self.assertEqual(props.get("vocabulario"), bid, rel)
+            self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "de B", rel)
+            elegida = node(f"console.log(vocabOf({{props: {json.dumps(props)}}}).id);")
+            self.assertEqual(elegida, bid, rel)  # antes, la primera con ese proyecto: la de A
+        app.notes_save({"path": server.rel_of(dentro), "props": {"vocabulario": ""}})  # «Ninguno»
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "general")
+
+    def test_por_nombres_se_queda_la_lista_que_ya_tenia(self):
+        """Quien todavía mande el tema por nombres (una página abierta antes de actualizar) no le quita a la reunión
+        la lista que ya tenía si los nombres son los suyos; si son los de otro proyecto, sí cambia."""
+        _, b_dir = self.links()
+        bid = f":{server.link_id(b_dir)}/Vocabulario/General.txt"
+        self.write("Otro/Vocabulario/General.txt", "otro\n")
+        app, fuera = self.app(), self.wav("r.wav")
+        app.notes_save({"path": "r.wav", "props": {"vocabulario": bid}})
+        app.notes_save({"path": "r.wav", "props": {"proyecto": "Proyecto", "workstream": "General"}})
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "de B")  # antes: el general
+        app.notes_save({"path": "r.wav", "props": {"proyecto": "Otro", "workstream": "General"}})
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "otro")
+
+    def test_proyecto_renombrado(self):
+        """La carpeta del proyecto se renombra (también desde el Explorador): sus reuniones conservan el nombre viejo
+        en la cabecera y siguen usando la lista de ese tema de la carpeta en la que están, no el vocabulario general."""
+        self.write("Gamma/Vocabulario/Kick.txt", "gamma, uno\n")
+        self.write("Vocabulario/Kick.txt", "raíz\n")  # la de la raíz solo vale con su nombre
+        audio = self.wav("Gamma/Reuniones/r.wav")
+        self.write("Gamma/Reuniones/r.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "gamma, uno")
+        server.temas().set("Gamma/Reuniones/r.wav", "Beta/Vocabulario/Kick.txt")  # el id de antes, que ya no existe
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "gamma, uno")
+        fuera = self.wav("Reuniones/r.wav")  # fuera de su carpeta no hay de dónde sacarla
+        self.write("Reuniones/r.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
+        self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "general")
+        # una carpeta vinculada con listas que se renombra en la app: sus listas toman el nombre nuevo
+        ext = os.path.join(self.tmp, "Ext")
+        os.makedirs(os.path.join(ext, "Vocabulario"))
+        with open(os.path.join(ext, "Vocabulario", "Kick.txt"), "w", encoding="utf-8") as f:
+            f.write("externo\n")
+        server.LINKS[server.link_id(ext)] = {"name": "Cliente", "path": ext}  # antes «Externo»
+        dentro = os.path.join(ext, "r.wav")
+        with open(dentro, "wb") as f:
+            f.write(b"RIFF")
+        with open(os.path.join(ext, "r.md"), "w", encoding="utf-8") as f:
+            f.write("---\nproyecto: Externo\nworkstream: Kick\n---\n")
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "externo")
+        # pero si el proyecto existe (con otras listas), nunca la de otro: la regla de siempre
+        self.write("Beta/Vocabulario/Otro.txt", "beta\n")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")
+
+    def test_la_copia_es_la_publicada(self):
+        """PARSE_NOTES_PUBLICADO y NOTE_KEYS_PUBLICADAS son los de esas versiones (en la CI, que clona sin historia,
+        se salta)."""
+        for rev, keys in NOTE_KEYS_PUBLICADAS.items():
+            try:
+                r = subprocess.run(["git", "-C", REPO, "show", f"{rev}:_app/server.py"], capture_output=True,
+                                   text=True, encoding="utf-8", timeout=30)
+            except OSError:
+                self.skipTest("sin git")
+            if r.returncode:
+                self.skipTest(f"el clon no tiene {rev}")
+            code = r.stdout
+            i = code.index("def parse_notes(text):")
+            end = "    return props, body\n"
+            self.assertEqual(code[i:code.index(end, i) + len(end)], PARSE_NOTES_PUBLICADO, rev)
+            j = code.index("NOTE_KEYS = ")
+            ns = {}
+            exec(code[j:code.index(")", j) + 1], ns)
+            self.assertEqual(ns["NOTE_KEYS"], keys, rev)
+
+    def test_lo_que_escribe_esta_version_lo_leen_las_publicadas(self):
+        """Regresión de P2-26: con la clave `vocabulario` en la cabecera, la versión publicada (5c55e54) tomaba la
+        cabecera entera por notas, y la reescribía dentro de ellas al guardar. El id va ahora a temas() y la cabecera
+        solo lleva claves que esa versión conoce: al grabar con tema, idioma, contexto y participantes, al elegir el
+        tema en la página, al cambiar estado, etiquetas o título y en el autoguardado de las notas. La del 30-oct
+        (012bb24) no conoce idioma ni contexto, que son de 5c55e54 (P2-29); sin ellos también lee bien esta."""
+        _, b_dir = self.links()
+        bid = f":{server.link_id(b_dir)}/Vocabulario/General.txt"
+        app = self.app()
+        self.wav("r1.wav")
+        app.notes_save({"path": "r1.wav", "props": {"proyecto": "Proyecto", "workstream": "General", "vocabulario": bid,
+                                                    "idioma": "es", "contexto": "Semanal de seguimiento",
+                                                    "participantes": "Ana, Luis"}})  # como rec_start
+        app.notes_save({"path": "r1.wav", "body": "## Apuntes\n\n- uno\n"})
+        app.notes_save({"path": "r1.wav", "props": {"vocabulario": bid}})  # el tema, otra vez desde la página
+        app.notes_save({"path": "r1.wav", "props": {"estado": "Revisada", "etiquetas": ["kick", "q4"]}})
+        app.notes_save({"path": "r1.wav", "body": "## Apuntes\n\n- uno\n- dos\n"})
+        esperado = {"proyecto": "Proyecto", "workstream": "General", "idioma": "es", "participantes": "Ana, Luis",
+                    "contexto": "Semanal de seguimiento", "estado": "Revisada", "etiquetas": ["kick", "q4"]}
+        text = server.read_text(os.path.join(self.root, "r1.md"))
+        self.assertEqual(parse_publicado("5c55e54")(text), (esperado, "## Apuntes\n\n- uno\n- dos\n"))
+        self.assertEqual(server.vocab_for(os.path.join(self.root, "r1.wav"), {"prompt": "general"}), "de B")
+        self.wav("r2.wav")  # sin idioma ni contexto (Ctrl+Alt+R sin idioma elegido, una reunión importada)
+        app.notes_save({"path": "r2.wav", "props": {"vocabulario": bid}})
+        app.notes_save({"path": "r2.wav", "props": {"estado": "Pendiente", "titulo": "Kick-off"}})
+        app.notes_save({"path": "r2.wav", "body": "notas\n"})
+        text = server.read_text(os.path.join(self.root, "r2.md"))
+        for rev in NOTE_KEYS_PUBLICADAS:
+            self.assertEqual(parse_publicado(rev)(text), ({"proyecto": "Proyecto", "workstream": "General",
+                                                          "estado": "Pendiente", "titulo": "Kick-off"}, "notas\n"), rev)
+
+    def test_el_id_sigue_a_la_reunion_y_se_olvida_al_borrarla(self):
+        _, b_dir = self.links()
+        bid = f":{server.link_id(b_dir)}/Vocabulario/General.txt"
+        self.wav("r.wav")
+        os.makedirs(os.path.join(self.root, "Dest"))
+        app = server.App.__new__(server.App)
+        app.jobs = bare_jobs([])
+        app.jobs.voice_vectors = {}
+        app.jobs.refresh_prompt = app.jobs.schedule_outputs = lambda rel, delay=4.0: None
+        app.library = server.Library(server.Durations(os.path.join(self.data_dir, "durations.json")))
+        app.settings, app.notes_lock, app.rec = settings_store(self.tmp), threading.Lock(), None
+        app.notes_save({"path": "r.wav", "props": {"vocabulario": bid}})
+        with mock.patch.object(server, "log"):
+            self.assertEqual(app.move({"path": "r.wav", "folder": "Dest", "name": "nuevo"})["path"], "Dest/nuevo.wav")
+        self.assertEqual((server.temas().get("r.wav"), server.temas().get("Dest/nuevo.wav")), (None, bid))
+        self.assertEqual(server.vocab_for(os.path.join(self.root, "Dest", "nuevo.wav"), {"prompt": "general"}), "de B")
+        app.library.refresh()
+        self.assertEqual(app.library.find("Dest/nuevo.wav")["props"]["vocabulario"], bid)  # lo que ve la biblioteca
+        self.assertEqual(server.Temas(os.path.join(self.data_dir, "temas.json")).data, {"Dest/nuevo.wav": bid})
+        with mock.patch.object(server, "log"):
+            app.delete({"path": "Dest/nuevo.wav"})
+        self.assertIsNone(server.temas().get("Dest/nuevo.wav"))
 
 
 # ----------------------------------------------------------------------------- P2-27
@@ -562,12 +882,98 @@ class PerfilSigueAlRenombrarTests(TempTree):
 
     def app(self, **st):
         a = server.App.__new__(server.App)
-        a.settings = settings_store(self.tmp, **st)
-        a.library = types.SimpleNamespace(at=1)
+        a.settings, a.notes_lock = settings_store(self.tmp, **st), threading.Lock()
+        a.library = server.Library(server.Durations(os.path.join(self.data_dir, "d.json")))
         a.jobs = bare_jobs([])
         a.jobs.voice_vectors = {}
         a.rec = None
         return a
+
+    def props(self, rel):
+        return server.parse_notes(server.read_text(os.path.join(self.root, rel)))[0]
+
+    def test_renombrar_la_carpeta_de_un_proyecto_lleva_sus_reuniones(self):
+        """Regresión de P2-26: con el proyecto renombrado, sus reuniones (también las grabadas fuera de su carpeta) se
+        quedaban con el vocabulario general, porque ya no se toma la lista de otro proyecto. Ahora su cabecera lo sigue,
+        sin añadir claves (una versión anterior la sigue leyendo), y el id de su lista, en temas(), también."""
+        self.write("Beta/Vocabulario/Kick.txt", "beta, uno\n")
+        self.write("Otro/Vocabulario/Kick.txt", "otro\n")
+        heads = {"Reuniones/r1": "proyecto: Beta\nworkstream: Kick",
+                 "Reuniones/r2": "proyecto: Beta\nworkstream: Kick",
+                 "Beta/Sub/r3": "estado: Revisada\nproyecto: Beta\nworkstream: Kick",
+                 "Reuniones/r4": "proyecto: Otro\nworkstream: Kick",
+                 "Reuniones/r5": "estado: Revisada"}
+        for base, head in heads.items():
+            self.wav(base + ".wav")
+            self.write(base + ".md", f"---\n{head}\n---\n\nnotas\n")
+        server.temas().set("Reuniones/r2.wav", "Beta/Vocabulario/Kick.txt")
+        before = {b: server.read_text(os.path.join(self.root, b + ".md")) for b in ("Reuniones/r4", "Reuniones/r5")}
+        a = self.app()
+        with mock.patch.object(server, "log"):
+            self.assertEqual(a.rename_folder({"path": "Beta", "name": "Gamma"}), {"path": "Gamma"})
+        self.assertEqual(self.props("Reuniones/r1.md"), {"proyecto": "Gamma", "workstream": "Kick"})
+        self.assertEqual(self.props("Reuniones/r2.md"), {"proyecto": "Gamma", "workstream": "Kick"})
+        self.assertEqual(server.temas().get("Reuniones/r2.wav"), "Gamma/Vocabulario/Kick.txt")
+        self.assertEqual(self.props("Gamma/Sub/r3.md"),
+                         {"estado": "Revisada", "proyecto": "Gamma", "workstream": "Kick"})
+        for b, text in before.items():
+            self.assertEqual(server.read_text(os.path.join(self.root, b + ".md")), text)  # sin tocar
+        for rel in ("Reuniones/r1.wav", "Reuniones/r2.wav", "Gamma/Sub/r3.wav"):
+            self.assertEqual(server.vocab_for(os.path.join(self.root, rel), {"prompt": "general"}), "beta, uno", rel)
+        self.assertEqual(server.vocab_for(os.path.join(self.root, "Reuniones/r4.wav"), {"prompt": "general"}), "otro")
+
+    def test_si_otro_proyecto_se_sigue_llamando_asi(self):
+        """Si queda otro proyecto con el nombre viejo, una reunión sin id solo lo cambia si está dentro de la carpeta
+        renombrada (la de fuera puede ser de ese otro); con el id, siempre."""
+        self.write("Beta/Vocabulario/Kick.txt", "beta, uno\n")
+        ext = os.path.join(self.tmp, "Ext")
+        os.makedirs(os.path.join(ext, "Vocabulario"))
+        with open(os.path.join(ext, "Vocabulario", "Kick.txt"), "w", encoding="utf-8") as f:
+            f.write("ext\n")
+        server.LINKS[server.link_id(ext)] = {"name": "Beta", "path": ext}
+        for base in ("Reuniones/r1", "Beta/r2", "Reuniones/r3", "Reuniones/r4"):
+            self.wav(base + ".wav")
+            self.write(base + ".md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
+        server.temas().set("Reuniones/r3.wav", "Beta/Vocabulario/Kick.txt")
+        server.temas().set("Reuniones/r4.wav", f":{server.link_id(ext)}/Vocabulario/Kick.txt")  # la del otro
+        with mock.patch.object(server, "log"):
+            self.app().rename_folder({"path": "Beta", "name": "Gamma"})
+        self.assertEqual(self.props("Reuniones/r1.md")["proyecto"], "Beta")
+        self.assertEqual(self.props("Gamma/r2.md")["proyecto"], "Gamma")
+        self.assertEqual(self.props("Reuniones/r3.md")["proyecto"], "Gamma")
+        self.assertEqual(self.props("Reuniones/r4.md")["proyecto"], "Beta")
+        self.assertEqual(server.temas().get("Reuniones/r3.wav"), "Gamma/Vocabulario/Kick.txt")
+        for r, txt in (("r3", "beta, uno"), ("r4", "ext"), ("r1", "ext")):  # r1: sin id, el Beta que queda
+            self.assertEqual(server.vocab_for(os.path.join(self.root, "Reuniones", r + ".wav"), {"prompt": "general"}),
+                             txt, r)
+
+    def test_renombrar_una_vinculada_lleva_sus_reuniones(self):
+        ext = os.path.join(self.tmp, "Ext")
+        os.makedirs(os.path.join(ext, "Vocabulario"))
+        with open(os.path.join(ext, "Vocabulario", "Kick.txt"), "w", encoding="utf-8") as f:
+            f.write("externo\n")
+        lid = server.link_id(ext)
+        server.LINKS[lid] = {"name": "Externo", "path": ext}
+        with open(os.path.join(ext, "r1.wav"), "wb") as f:
+            f.write(wav_bytes(1.0))
+        with open(os.path.join(ext, "r1.md"), "w", encoding="utf-8") as f:
+            f.write("---\nproyecto: Externo\nworkstream: Kick\n---\n")
+        self.wav("r2.wav")  # fuera de la vinculada
+        self.write("r2.md", "---\nproyecto: Externo\nworkstream: Kick\n---\n")
+        self.wav("r3.wav")
+        self.write("r3.md", "---\nproyecto: Externo\nworkstream: Kick\n---\n")
+        server.temas().set("r3.wav", f":{lid}/Vocabulario/Kick.txt")
+        a = self.app()
+        a._save_links = lambda: None
+        with mock.patch.object(server, "log"):
+            a.rename_folder({"path": ":" + lid, "name": "Cliente"})
+        with open(os.path.join(ext, "r1.md"), encoding="utf-8") as f:
+            self.assertEqual(server.parse_notes(f.read())[0], {"proyecto": "Cliente", "workstream": "Kick"})
+        self.assertEqual(self.props("r2.md"), {"proyecto": "Cliente", "workstream": "Kick"})
+        self.assertEqual(self.props("r3.md")["proyecto"], "Cliente")
+        for audio in (os.path.join(ext, "r1.wav"), os.path.join(self.root, "r2.wav"),
+                      os.path.join(self.root, "r3.wav")):
+            self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "externo", audio)
 
     def test_renombrar_y_borrar_el_tema(self):
         self.write("Alfa/Vocabulario/General.txt", "API\n")
