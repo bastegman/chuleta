@@ -50,8 +50,9 @@ TRAIL_SILENCE_S = 0.5       # silencio al final del buffer que ya cuenta como pa
 TRANSLATE_EVERY_S = 12      # traduccion del directo: cada 10-15 s, lo ultimo que se dijo
 TRANSLATE_MAX_CHARS = 1500  # por peticion (~500 tokens: cabe de sobra en 8.000 tokens/min)
 TRANSLATE_BACK_S = 30       # solo lo dicho en los ultimos 30 s: al activarla a mitad de reunion (o si se queda atras)
-TRANSLATE_FINAL_S = 10      # al terminar el directo, el ultimo paso: un intento de como mucho 10 s de lectura
-TRANSLATE_LOCK_S = 2        # ...y como mucho 2 s esperando a que el hilo de la traduccion acabe la suya
+TRANSLATE_FINAL_S = 10      # al terminar el directo, el ultimo paso: como mucho 10 s EN TOTAL (esperas y peticion)
+TRANSLATE_LOCK_S = 2        # ...de ellos, como mucho 2 s esperando a que el hilo de la traduccion acabe la suya
+TRANSLATE_FINAL_ATTEMPTS = 3  # ...e intentos dentro del plazo (otra clave tras un 401, max_tokens tras un 400)
 TRANSLATION_PUBLIC = 60     # ultimos bloques traducidos que viajan en el estado del trabajo
 
 
@@ -350,17 +351,22 @@ class LiveTranslator:
     def __init__(self, job, opts, get_segs, log, every=TRANSLATE_EVERY_S):
         self.job, self.opts, self.get_segs, self.log, self.every = job, opts, get_segs, log, every
         self.done, self.gen, self.stop_flag, self.error, self.busy = 0, None, False, None, False
+        self.stop_at = 0.0  # cuando se llamo a stop()
         self.lock = threading.Lock()  # step() lo llama el hilo y, al final, el bucle del directo
+        self.after_stop = None  # lo que el hilo traduzca despues de stop() (lo que se llevo): run() lo publica igual
         self.thread = threading.Thread(target=self._loop, daemon=True, name="live-translate")
 
     def start(self):
         self.thread.start()
 
     def stop(self):
-        self.stop_flag = True
+        """Fin de la sesion: el hilo no empieza nada mas. Lo que tenga en marcha (lo que se llevo) aun puede acabar
+        durante TRANSLATE_FINAL_S, tambien si le toca esperar (un 429, un 503), y se publica igual (after_stop)."""
+        self.stop_flag, self.stop_at = True, time.time()
 
     def _cancelled(self):
-        return self.stop_flag or self.job.cancel
+        """Para las peticiones: cancelar a mano corta en el acto; tras stop(), pasado TRANSLATE_FINAL_S."""
+        return bool(self.job.cancel) or (self.stop_flag and time.time() - self.stop_at > TRANSLATE_FINAL_S)
 
     def pending(self):
         gen, segs = self.get_segs()
@@ -382,9 +388,11 @@ class LiveTranslator:
 
     def step(self, cancelled=None, final=False):
         """Una pasada: traduce lo pendiente (si hay). Devuelve True si tradujo algo. final: el ultimo paso al terminar
-        el directo, que no puede retener el final de la sesion: si el hilo esta a mitad de una peticion no se espera
-        mas de TRANSLATE_LOCK_S a que acabe (lo que se llevo lo traduce el), y se hace un solo intento corto
-        (TRANSLATE_FINAL_S)."""
+        el directo, que no puede retener el final de la sesion: como mucho TRANSLATE_FINAL_S en total. Si el hilo esta
+        a mitad de una peticion se le espera como mucho TRANSLATE_LOCK_S (lo que se llevo lo traduce el y se publica
+        aunque llegue tarde: after_stop), y lo que quede del plazo es el de la peticion (Summarizer._chat, budget:
+        una espera que no cabe no se hace, y conectar y leer tienen como tope lo que quede)."""
+        t0 = time.time()
         if not self.lock.acquire(timeout=TRANSLATE_LOCK_S if final else -1):
             return False
         try:
@@ -393,7 +401,8 @@ class LiveTranslator:
                 return False
             text = " ".join(t for _, _, t in take)
             self.busy = True
-            kw = {"timeout": TRANSLATE_FINAL_S, "attempts": 1} if final else {}
+            kw = ({"budget": max(0.0, TRANSLATE_FINAL_S - (time.time() - t0)), "attempts": TRANSLATE_FINAL_ATTEMPTS}
+                  if final else {})
             try:
                 out, _ = self.opts["summarizer"].translate(self.opts["cloud_cfg"], text, lambda **k: None,
                                                            cancelled or self._cancelled, **kw)
@@ -409,13 +418,15 @@ class LiveTranslator:
             self.job.translation.append({"start": round(float(take[0][0]), 2), "end": round(float(take[-1][1]), 2),
                                          "text": out})
             self.done += len(take)
+            if self.stop_flag and self.after_stop:  # la sesion ya termino: que se vea igual
+                self.after_stop()
             return True
         finally:
             self.lock.release()
 
     def _loop(self):
         last = 0.0
-        while not self._cancelled():
+        while not (self.stop_flag or self.job.cancel):
             if getattr(self.job, "translate", False) and time.time() - last >= self.every:
                 try:
                     did = self.step()
@@ -697,12 +708,12 @@ def run(job, path, opts, write, log):
             translator.stop()
         raise
     if translator:
-        if getattr(job, "translate", False):  # lo ultimo que quedo sin traducir: un intento corto, sin esperar
-            deadline = time.time() + TRANSLATE_FINAL_S
+        if getattr(job, "translate", False):  # lo ultimo que quedo sin traducir: como mucho TRANSLATE_FINAL_S
             try:
-                translator.step(cancelled=lambda: job.cancel or time.time() > deadline, final=True)
+                translator.step(final=True)
             except Exception:
                 pass
+        translator.after_stop = lambda: publish(None)  # lo que se llevo el hilo, si llega despues, se ve igual
         translator.stop()
     publish(None)
     job.recording = False

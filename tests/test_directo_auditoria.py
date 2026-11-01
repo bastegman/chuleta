@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -573,7 +574,60 @@ class RepasoPendienteTests(LiveJobs):  # P2-09
         third._resume_final_passes(delay=0)
         self.assertEqual(third.list, [])
         self.assertEqual(third.after, ["r.wav"])
-        self.assertEqual(third._pending().data, set())
+        self.assertEqual(third._pending().data, {})
+
+
+class RepasoConTramoLocalTests(LiveJobs):
+    """local_part: si el directo tuvo algun trozo en local (lo marca fix-privacidad en start_live y set_live_preset).
+    Si el repaso final no acaba, el texto que queda es el del directo, y con algo en local el resumen automatico no lo
+    sube a la nube sin permiso: el dato viaja con el repaso (_queue_final_pass, con un valor por defecto) y queda
+    apuntado con el en repasos_pendientes.json, para el que se retome al arrancar. Sin el dato, como local."""
+
+    def pending_file(self):
+        with open(os.path.join(self.data_dir, "repasos_pendientes.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def live_job(self, local_part=None):
+        job = super().live_job()
+        if local_part is not None:
+            job.local_part = local_part
+        return job
+
+    def test_el_repaso_lleva_lo_que_diga_su_directo_y_queda_apuntado(self):
+        for local_part in (False, True):
+            jobs = self.jobs()
+            self.assertTrue(jobs._final_pass(self.live_job(local_part)))
+            self.assertIs(self.final_passes(jobs)[-1].local_part, local_part)
+            self.assertEqual(self.pending_file(), {"r.wav": {"local_part": local_part}})
+            jobs._final_pass_over("r.wav")
+            self.assertEqual(self.pending_file(), {})
+
+    def test_sin_el_dato_cuenta_como_local(self):
+        jobs = self.jobs()
+        jobs._final_pass(self.live_job())  # un directo que no dice nada
+        jobs._queue_final_pass("r.wav", "r.wav", None)  # y una llamada sin el parametro
+        self.assertEqual([j.local_part for j in self.final_passes(jobs)], [True, True])
+        self.assertEqual(self.pending_file(), {"r.wav": {"local_part": True}})
+
+    def test_el_repaso_retomado_al_arrancar_conserva_lo_apuntado(self):
+        for local_part in (False, True):
+            jobs = self.jobs()
+            jobs._final_pass(self.live_job(local_part))
+            jobs.shutdown()
+            again = self.jobs()  # el proximo arranque, con el mismo DATA_DIR
+            again._resume_final_passes(delay=0)
+            queued = [j for j in self.final_passes(again) if j.status == "queued"]
+            self.assertEqual([j.local_part for j in queued], [local_part])
+            self.assertEqual(self.pending_file(), {"r.wav": {"local_part": local_part}})
+            again._final_pass_over("r.wav")
+
+    def test_un_pendiente_del_formato_anterior_se_retoma_como_local(self):
+        with open(os.path.join(self.data_dir, "repasos_pendientes.json"), "w", encoding="utf-8") as f:
+            json.dump(["r.wav"], f)  # antes solo se apuntaban las rutas
+        jobs = self.jobs()
+        jobs._resume_final_passes(delay=0)
+        self.assertEqual([j.local_part for j in self.final_passes(jobs)], [True])
+        self.assertEqual(self.pending_file(), {"r.wav": {"local_part": True}})
 
 
 # ----------------------------------------------------------------------------- P2-18: claves no validas
@@ -711,8 +765,11 @@ class TraduccionTests(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 1.5)
         self.assertLessEqual(live.TRANSLATE_LOCK_S, 3)
         tr.lock.release()
-        self.assertTrue(tr.step(final=True))  # sin nadie: un solo intento corto
-        self.assertEqual(summ.kw, {"timeout": live.TRANSLATE_FINAL_S, "attempts": 1})
+        self.assertTrue(tr.step(final=True))  # sin nadie: con plazo (todo incluido) y pocos intentos
+        self.assertEqual(sorted(summ.kw), ["attempts", "budget"])
+        self.assertEqual(summ.kw["attempts"], live.TRANSLATE_FINAL_ATTEMPTS)
+        self.assertLessEqual(summ.kw["budget"], live.TRANSLATE_FINAL_S)
+        self.assertGreater(summ.kw["budget"], live.TRANSLATE_FINAL_S - 1)  # sin esperar al hilo, el plazo entero
         self.assertLessEqual(live.TRANSLATE_FINAL_S, 15)
 
     def test_translate_hace_un_solo_intento_corto(self):
@@ -723,6 +780,202 @@ class TraduccionTests(unittest.TestCase):
                 s.translate(CFG2, "Bom dia.", lambda **k: None, lambda: False, timeout=12, attempts=1)
         self.assertEqual(len(net.fake.calls), 1)
         self.assertEqual(net.fake.calls[0][1]["timeout"], (engines.CONNECT_TIMEOUT, 12))
+
+    def test_run_hace_el_ultimo_paso_con_plazo(self):
+        """live.run, no solo step: al terminar, lo que quedo sin traducir sale con el plazo del ultimo paso (sin el
+        hilo, que aqui no traduce nada, todo lo pendiente llega a ese paso)."""
+        calls = []
+
+        class Summ(FakeSummarizer):
+            def translate(self, *a, **kw):
+                calls.append(dict(kw))
+                return super().translate(*a, **kw)
+        with mock.patch.object(live.LiveTranslator, "_loop", lambda tr: None):
+            r = run_session([(0.0, 3.4), (4.0, 7.0)], 9.0, translate=True, summ=Summ())
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(sorted(calls[0]), ["attempts", "budget"])
+        self.assertEqual(calls[0]["attempts"], live.TRANSLATE_FINAL_ATTEMPTS)
+        self.assertTrue(0 < calls[0]["budget"] <= live.TRANSLATE_FINAL_S)
+        self.assertEqual(len(r.job.translation), 1)
+        self.assertEqual(r.job.directo["translation_n"], 1)
+
+    def test_run_no_espera_al_hilo_que_tiene_el_candado(self):
+        """El hilo esta a mitad de una peticion que no acaba: live.run vuelve en TRANSLATE_LOCK_S, no cuando acaba
+        el."""
+        held, release = threading.Event(), threading.Event()
+
+        def busy(tr):
+            with tr.lock:
+                held.set()
+                release.wait(8)
+
+        class WaitCloud(FakeCloud):
+            def transcribe_array(self, *a, **k):
+                held.wait(5)  # el primer trozo sale con el candado ya cogido por el hilo
+                return super().transcribe_array(*a, **k)
+        summ = FakeSummarizer()
+        t0 = time.monotonic()
+        try:
+            with mock.patch.object(live.LiveTranslator, "_loop", busy), \
+                    mock.patch.object(live, "TRANSLATE_LOCK_S", 0.5):
+                r = run_session([(0.0, 3.4), (4.0, 7.0)], 9.0, translate=True, summ=summ, cloud_cls=WaitCloud)
+            took = time.monotonic() - t0
+        finally:
+            release.set()
+        self.assertTrue(held.is_set())
+        self.assertLess(took, 3.0)
+        self.assertEqual(summ.calls, [])
+        self.assertGreaterEqual(len(r.segs), 1)
+
+    def test_lo_que_se_llevo_el_hilo_se_publica_aunque_llegue_tarde(self):
+        job, summ, tr = self.tr([(0.0, 2.0, "Bom dia.")])
+        seen = []
+        tr.after_stop = lambda: seen.append(len(job.translation))
+        tr.stop()  # la sesion termino mientras el hilo traducia
+        self.assertTrue(tr.step())
+        self.assertEqual(seen, [1])
+
+    def test_lo_que_se_llevo_el_hilo_acaba_aunque_le_toque_esperar(self):
+        """La sesion termina mientras la peticion del hilo espera (un 503 y sus 5 s): no se cancela por eso, tiene
+        TRANSLATE_FINAL_S para acabar. Cancelar a mano corta en el acto, y el bucle no empieza nada mas."""
+        tr = None
+
+        class Summ(FakeSummarizer):
+            def translate(self, cfg, text, report, cancelled, **kw):
+                tr.stop()  # aqui, a mitad de la espera de la peticion
+                if cancelled():  # lo que mira Summarizer._sleep
+                    raise engines.Cancelled()
+                return super().translate(cfg, text, report, cancelled, **kw)
+        job, summ, tr = self.tr([(0.0, 2.0, "Bom dia.")], summ=Summ())
+        seen = []
+        tr.after_stop = lambda: seen.append(len(job.translation))
+        self.assertTrue(tr.step())
+        self.assertEqual(seen, [1])
+        later = time.time() + live.TRANSLATE_FINAL_S + 1
+        with mock.patch.object(live, "time", types.SimpleNamespace(time=lambda: later)):
+            self.assertTrue(tr._cancelled())  # pasado el plazo, si
+        job.cancel = True
+        tr.stop_at = time.time()
+        self.assertTrue(tr._cancelled())
+        loop = threading.Thread(target=tr._loop)
+        job.cancel = False
+        loop.start()
+        loop.join(2)
+        self.assertFalse(loop.is_alive())
+
+
+class RelojFalso:
+    """Reloj de engines (time.time y time.sleep): las esperas y lo que tarda cada peticion lo hacen avanzar."""
+
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def time(self):
+        return self.t
+
+    def sleep(self, dt):
+        self.t += max(0.0, dt)
+
+    monotonic = perf_counter = time
+
+
+class RedLenta(FakeRequests):
+    """`requests` falso que tarda: cada paso es (segundos, respuesta) o (None, None) = el servidor no contesta, y vence
+    el tope de la peticion (conectar y leer: lo peor)."""
+
+    class Timeout(FakeRequests.RequestException):
+        pass
+
+    def __init__(self, clock, steps):
+        super().__init__([])
+        self.clock, self.steps = clock, list(steps)
+
+    def post(self, url, **kw):
+        self.calls.append((url, kw))
+        took, resp = self.steps.pop(0)
+        if resp is None:
+            self.clock.sleep(sum(kw["timeout"]))
+            raise self.Timeout("read timed out")
+        self.clock.sleep(took)
+        return resp
+
+
+class UltimoPasoConPlazoTests(unittest.TestCase):  # P2-22: el plazo del ultimo paso es el total, no solo las esperas
+    BUDGET = 10.0
+
+    def final(self, steps, prep=None, cfg=CFG2):
+        clock = RelojFalso()
+        s = engines.Summarizer()
+        s.keys.clock = clock.time
+        if prep:
+            prep(s, clock)
+        net = RedLenta(clock, steps)
+        t0 = clock.t
+        with mock.patch.dict(sys.modules, {"requests": net}), mock.patch.object(engines, "time", clock):
+            try:
+                out = s.translate(cfg, "Bom dia.", lambda **k: None, lambda: False, budget=self.BUDGET,
+                                  attempts=live.TRANSLATE_FINAL_ATTEMPTS)
+            except engines.EngineError as e:
+                out = e
+        return out, clock.t - t0, net
+
+    def check_timeouts(self, net, took):
+        for _, kw in net.calls:
+            connect, read = kw["timeout"]
+            self.assertLessEqual(connect, engines.CONNECT_TIMEOUT)
+            self.assertLessEqual(connect + read, self.BUDGET + 1e-6)
+        self.assertLessEqual(took, self.BUDGET + 1e-6)
+
+    def test_un_servidor_que_no_contesta_no_pasa_del_plazo(self):
+        out, took, net = self.final([(None, None)])
+        self.assertIsInstance(out, engines.EngineError)
+        self.assertIn("a tiempo", str(out))
+        self.assertEqual(len(net.calls), 1)
+        self.check_timeouts(net, took)
+
+    def test_una_espera_que_no_cabe_no_se_hace(self):
+        """El caso medido: 9 s de cupo por minuto y despues un servidor que no contesta (20 s antes del arreglo)."""
+        def prep(s, clock):
+            s.remaining, s.reset_at = 0, clock.t + 9
+        out, took, net = self.final([(None, None)], prep)
+        self.assertIsInstance(out, engines.EngineError)
+        self.assertIn("límite por minuto", str(out))
+        self.assertEqual(net.calls, [])
+        self.assertLess(took, 1)
+
+    def test_una_espera_que_cabe_deja_a_la_peticion_lo_que_queda(self):
+        def prep(s, clock):
+            s.remaining, s.reset_at = 0, clock.t + 3
+        out, took, net = self.final([(None, None)], prep)
+        self.assertIsInstance(out, engines.EngineError)
+        self.assertEqual(len(net.calls), 1)
+        connect, read = net.calls[0][1]["timeout"]
+        self.assertLessEqual(4 + connect + read, self.BUDGET + 1e-6)  # 4 s de espera + la peticion
+        self.check_timeouts(net, took)
+
+    def test_429_y_503_en_bucle_dentro_del_plazo(self):
+        out, took, net = self.final([(0.2, FakeResponse(429, {"retry-after": "20"}, {}))])
+        self.assertIsInstance(out, engines.EngineError)
+        self.assertEqual(len(net.calls), 1)  # 20 s de retry-after no caben: ni se espera
+        self.check_timeouts(net, took)
+        out, took, net = self.final([(0.5, FakeResponse(503, {}, {}))] * 3)
+        self.assertIsInstance(out, engines.EngineError)
+        self.assertLessEqual(len(net.calls), 2)
+        self.check_timeouts(net, took)
+
+    def test_dentro_del_plazo_otra_clave_tras_un_401(self):
+        out, took, net = self.final([(0.2, FakeResponse(401, {}, {"error": {"message": "invalid api key"}})),
+                                     (0.3, FakeResponse(200, {}, CHAT_OK))])
+        self.assertEqual(out, ("Buenos días.", "openai/gpt-oss-20b"))
+        self.assertEqual([kw["headers"]["Authorization"] for _, kw in net.calls], [f"Bearer {K1}", f"Bearer {K2}"])
+        self.check_timeouts(net, took)
+
+    def test_sin_plazo_como_siempre(self):
+        s = engines.Summarizer()
+        s.keys.clock = Clock()
+        with Net([FakeResponse(200, {}, CHAT_OK)]) as net:
+            s.translate(CFG2, "Bom dia.", lambda **k: None, lambda: False)
+        self.assertEqual(net.fake.calls[0][1]["timeout"], (engines.CONNECT_TIMEOUT, 60))
 
 
 # ----------------------------------------------------------------------------- P2-23: cupo por modelo

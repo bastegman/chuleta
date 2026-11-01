@@ -34,6 +34,7 @@ class EngineError(Exception):
 
 # ----------------------------------------------------------------------------- conexiones HTTP (keep-alive)
 CONNECT_TIMEOUT = 10  # s hasta tener la conexion (DNS + TCP + TLS); la lectura lleva su propio tope en cada peticion
+BUDGET_MIN_S = 3.0  # con plazo (Summarizer._chat, budget): si despues no quedarian 3 s, ni se espera ni se pide nada
 
 
 class Http:
@@ -61,9 +62,11 @@ class Http:
             self.local.session, self.local.module = s, requests
         return s
 
-    def post(self, url, read_timeout, **kw):
-        """POST con timeouts por fase: CONNECT_TIMEOUT para conectar y read_timeout para la respuesta."""
-        return self.session().post(url, timeout=(CONNECT_TIMEOUT, read_timeout), **kw)
+    def post(self, url, read_timeout, connect_timeout=None, **kw):
+        """POST con timeouts por fase: connect_timeout (por defecto CONNECT_TIMEOUT) para conectar y read_timeout para
+        la respuesta."""
+        return self.session().post(url, timeout=(CONNECT_TIMEOUT if connect_timeout is None else connect_timeout,
+                                                 read_timeout), **kw)
 
 
 HTTP = Http()
@@ -1232,13 +1235,18 @@ class Summarizer:
         return out
 
     def _chat(self, cfg, system, user, max_tokens, report, cancelled, model=None, temperature=0.2, timeout=180,
-              attempts=8):
+              attempts=8, budget=None):
+        """(texto, modelo). attempts: intentos como mucho. budget: segundos que puede durar todo, esperas y peticiones
+        incluidas (el ultimo paso de la traduccion del directo). Con el, una espera que no deja BUDGET_MIN_S para la
+        peticion no se hace (se falla ya), y cada peticion lleva como topes lo que quede: un tercio para conectar
+        (como mucho CONNECT_TIMEOUT) y el resto, como mucho timeout, para la respuesta."""
         import requests
         provider = cfg.get("provider", "groq")
         url = chat_url(cfg)
         missing = chat_missing(cfg)
         if missing:
             raise EngineError(missing)
+        end = None if budget is None else time.time() + budget
         model = model or cfg.get("summary_model") or (SUMMARY_MODELS[0] if provider in ("groq", "custom")
                                                       else "gpt-4o-mini")
         body = {"model": model, "temperature": temperature, "max_completion_tokens": max_tokens,
@@ -1248,6 +1256,13 @@ class Summarizer:
         need = (len(system) + len(user)) // 3 + max_tokens
         family = "chat"
         last = None
+
+        def pause(secs):
+            """Espera secs (se puede cancelar). Con plazo, si despues no quedaria BUDGET_MIN_S, no espera: False."""
+            if end is not None and time.time() + secs + BUDGET_MIN_S > end:
+                return False
+            self._sleep(secs, cancelled)
+            return True
         for attempt in range(attempts):
             if cancelled():
                 raise Cancelled()
@@ -1255,16 +1270,29 @@ class Summarizer:
             if self.remaining is not None and self.remaining < need and time.time() < self.reset_at:
                 wait = self.reset_at - time.time() + 1
                 report(stage=f"Esperando al límite por minuto de Groq ({wait:.0f} s)…")
-                self._sleep(wait, cancelled)
+                if not pause(wait):
+                    last = f"hay que esperar {wait:.0f} s al límite por minuto"
+                    break
             key = self.keys.pick(cfg, family, model=model)
-            self._sleep(self.keys.reserve(key, family, model, per_minute=not daily_quota(cfg)), cancelled)
+            wait = self.keys.reserve(key, family, model, per_minute=not daily_quota(cfg))
+            if not pause(wait):
+                last = f"hay que esperar {wait:.0f} s al límite por minuto" if wait >= 1 else last
+                break
+            connect, read = None, timeout
+            if end is not None:  # con plazo: la peticion, con lo que quede (si no quedan BUDGET_MIN_S, ni se manda)
+                left = end - time.time()
+                if left < BUDGET_MIN_S:
+                    break
+                connect = min(CONNECT_TIMEOUT, left / 3)
+                read = min(timeout, left - connect)
             try:
-                r = HTTP.post(url, timeout, json=body, headers={"Authorization": f"Bearer {key}"})
+                r = HTTP.post(url, read, connect_timeout=connect, json=body, headers={"Authorization": f"Bearer {key}"})
             except requests.RequestException as e:
                 last = f"sin conexión con {provider} ({e.__class__.__name__})"
                 if attempt < attempts - 1:
                     report(stage=f"Sin conexión con {provider} ({e.__class__.__name__}), reintentando…")
-                    self._sleep(3 * 2 ** attempt, cancelled)
+                    if not pause(3 * 2 ** attempt):
+                        break
                 continue
             self.keys.note(key, family, r.status_code, r.headers, model)
             if "x-ratelimit-remaining-tokens" in r.headers:
@@ -1298,20 +1326,22 @@ class Summarizer:
                 last = api_error(r)
                 if attempt < attempts - 1:
                     report(stage=f"Groq pide esperar {wait:.0f} s (límite por minuto)…")
-                    self._sleep(wait + 1, cancelled)
+                    if not pause(wait + 1):
+                        break
                 continue
             if r.status_code in (500, 502, 503):
                 last = api_error(r)
-                if attempt < attempts - 1:
-                    self._sleep(5, cancelled)
+                if attempt < attempts - 1 and not pause(5):
+                    break
                 continue
             if r.status_code == 400 and "max_completion_tokens" in body and "max_completion_tokens" in (r.text or ""):
                 body["max_tokens"] = body.pop("max_completion_tokens")  # pasarela antigua: nombre anterior
                 report(stage="La API no admite max_completion_tokens: reintentando con max_tokens…")
                 continue
             raise EngineError(api_error(r))
+        how = " a tiempo" if end is not None else ": el servicio no respondió tras varios intentos"
         raise EngineError(f"{'La traducción' if system == self.TRANSLATE_SYSTEM else 'El resumen'} no ha podido "
-                          "hacerse: el servicio no respondió tras varios intentos" + (f" ({last})." if last else "."))
+                          f"hacerse{how}" + (f" ({last})." if last else "."))
 
     @staticmethod
     def _sleep(secs, cancelled):
@@ -1340,10 +1370,10 @@ class Summarizer:
             return (cfg.get("summary_model") or "").strip() or cls.TRANSLATE_MODEL
         return cls.TRANSLATE_MODEL if provider == "groq" else "gpt-4o-mini"
 
-    def translate(self, cfg, text, report, cancelled, model=None, timeout=60, attempts=8):
+    def translate(self, cfg, text, report, cancelled, model=None, timeout=60, attempts=8, budget=None):
         """Traduce al espanol un trozo del directo con un modelo de chat rapido (translate_model). Devuelve (texto,
-        modelo). Comparte claves y rotacion con la transcripcion. timeout y attempts: el ultimo paso, al terminar el
-        directo, hace un solo intento corto para no retener el final de la sesion."""
+        modelo). Comparte claves y rotacion con la transcripcion. timeout, attempts y budget (ver _chat): el ultimo
+        paso, al terminar el directo, tiene un plazo para no retener el final de la sesion."""
         text = " ".join((text or "").split())
         model = model or self.translate_model(cfg)
         if not text:
@@ -1353,7 +1383,7 @@ class Summarizer:
             raise EngineError(missing)
         max_tokens = min(1200, 120 + len(text) // 2)  # el espanol ocupa ~1 token por 3-4 caracteres; con margen
         return self._chat(cfg, self.TRANSLATE_SYSTEM, text, max_tokens, report, cancelled, model=model,
-                          temperature=0.1, timeout=timeout, attempts=attempts)
+                          temperature=0.1, timeout=timeout, attempts=attempts, budget=budget)
 
     def summarize(self, segments, meta, cfg, report, cancelled):
         """meta: title, date, duration, participants, notes, lang, extra. Devuelve (markdown, modelo)."""

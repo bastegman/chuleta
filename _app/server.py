@@ -1293,7 +1293,46 @@ def live_cloud_cfg(st):
 class PendingPasses(Complete):
     """Reuniones con el repaso final pendiente (en cola o a medias), en DATA_DIR/repasos_pendientes.json: se apunta
     al ponerlo en cola y se quita al terminar (bien, con error o cancelado a mano). Lo que siga apuntado al arrancar
-    se quedo a medias al apagar la app (o al cerrar la sesion de Windows) y se retoma."""
+    se quedo a medias al apagar la app (o al cerrar la sesion de Windows) y se retoma.
+
+    Con cada reunion va local_part: si su directo tuvo algun trozo en local. Si el repaso no acaba, el texto que queda
+    es el del directo, y lo transcrito en local no sale del PC por el resumen automatico sin permiso: el repaso que se
+    retoma al arrancar lo necesita igual que el de entonces. Sin el dato (el formato anterior, una lista de rutas) se da
+    por hecho que si, que es lo seguro."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = {}
+        if isinstance(raw, list):  # formato anterior: solo las rutas
+            raw = {rel: {} for rel in raw if isinstance(rel, str)}
+        self.data = {rel: v for rel, v in raw.items() if isinstance(v, dict)} if isinstance(raw, dict) else {}
+
+    def _save(self):
+        with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, sort_keys=True)
+        os.replace(self.path + ".tmp", self.path)
+
+    def set(self, rel, done=True, local_part=True):
+        """done: apuntarla (con local_part) o, con False, quitarla."""
+        with self.lock:
+            if done:
+                info = {"local_part": bool(local_part)}
+                if self.data.get(rel) == info:
+                    return
+                self.data[rel] = info
+            elif rel in self.data:
+                del self.data[rel]
+            else:
+                return
+            self._save()
+
+    def local_part(self, rel):
+        """Si el directo de esa reunion tuvo algun trozo en local (sin el dato, si)."""
+        return (self.data.get(rel) or {}).get("local_part") is not False
 
 
 _SALIDAS_LOCK = threading.Lock()  # temporizadores de la reescritura agrupada de los destinos de salida
@@ -1324,10 +1363,9 @@ class Jobs:
 
     def shutdown(self):
         """Apagar: lo que esta en cola se cancela, lo que corre recibe la senal de cancelar y los procesos de Whisper
-        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan, y un repaso final en cola
-        o a medias sigue apuntado (repasos_pendientes.json): se retoma al volver a abrir la app."""
-        self.closing = True
+        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan."""
         with self.lock:
+            self.closing = True  # un repaso final en cola o a medias queda apuntado: se retoma al volver a abrir
             for j in self.list:
                 if j.status == "queued":
                     j.status = "cancelled"
@@ -1428,13 +1466,19 @@ class Jobs:
             self._cloud_ready()
         except ApiError:
             return False
-        self._queue_final_pass(job.path, job.name, job.language)
+        # local_part del directo: si tuvo algun trozo en local (sin el dato, si: lo seguro)
+        self._queue_final_pass(job.path, job.name, job.language, local_part=getattr(job, "local_part", True))
         return True
 
-    def _queue_final_pass(self, rel, name, language):
+    def _queue_final_pass(self, rel, name, language, local_part=True):
+        """El repaso final de esa reunion a la cola: el del directo que acaba de terminar o, al arrancar, el que quedo
+        apuntado (_resume_final_passes). Queda apuntado en repasos_pendientes.json hasta que termine: si se apaga
+        antes, se retoma al arrancar. local_part: si su directo tuvo algun trozo en local (sin el dato, si: lo seguro).
+        Va con el repaso (j.local_part) y se apunta con el, porque si el repaso no acaba el texto que queda es el del
+        directo, y lo transcrito en local no sale del PC por el resumen automatico sin permiso."""
         j = Job(rel, name, "nube", language)
-        j.final_pass, j.stage = True, "En cola: repaso final en la nube"
-        self._pending().set(rel)  # hasta que termine: si se apaga antes, se retoma al arrancar
+        j.final_pass, j.stage, j.local_part = True, "En cola: repaso final en la nube", local_part is not False
+        self._pending().set(rel, local_part=j.local_part)
         with self.lock:
             self.list.append(j)
         self.queues[j.engine].put(j)
@@ -1484,7 +1528,8 @@ class Jobs:
                         ok = False
                 if ok:
                     log(f"   {os.path.basename(abs_path)}: el repaso final se quedó pendiente al apagar; se retoma")
-                    self._queue_final_pass(rel, os.path.basename(abs_path), None)
+                    self._queue_final_pass(rel, os.path.basename(abs_path), None,
+                                           local_part=self._pending().local_part(rel))
                 else:
                     log(f"   {os.path.basename(abs_path)}: el repaso final pendiente ya no se puede hacer")
                     self._final_pass_over(rel, keep_live_text=True)
