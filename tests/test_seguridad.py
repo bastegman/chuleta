@@ -222,6 +222,47 @@ class PeticionesEscondidasTests(ServidorBase):
         self.assertEqual(self.app.ocultar.call_count, 3)
 
 
+class ConexionesOciosasTests(ServidorBase):
+    """Cada conexión es un hilo de ThreadingHTTPServer, y sin plazo una keep-alive ociosa (un cliente que deja
+    conexiones abiertas) lo retenía para siempre: los hilos se acumulaban. Se cierra sola a los Handler.timeout s,
+    también tras descartar el cuerpo de un POST rechazado (P0-1, que dejaba el socket sin plazo). El plazo es por
+    operación del socket: lo que tarda la app en contestar (el selector de carpetas espera al usuario) no cuenta."""
+
+    CORTO = 0.4  # s, en vez de los de verdad, para no esperar en los tests
+
+    def ociosa(self, data):
+        """Manda `data` por un socket nuevo con el plazo corto, lee lo que conteste y espera sin mandar nada más:
+        (bytes, cerrada por el servidor antes de 3 s)."""
+        with mock.patch.object(server.Handler, "timeout", self.CORTO):
+            return exchange(self.port, data, idle=3.0, total=8.0)
+
+    def test_hay_plazo(self):
+        self.assertIsInstance(server.Handler.timeout, (int, float))
+        self.assertTrue(10 <= server.Handler.timeout <= 120, server.Handler.timeout)
+
+    def test_ociosa_tras_una_peticion_normal_se_cierra(self):
+        t = time.time()
+        raw, closed = self.ociosa(request_bytes("GET", "/api/ping", self.port, {TOKEN_HEADER: TOKEN}))
+        self.assertEqual(statuses(raw), [200], raw[:300])
+        self.assertTrue(closed)
+        self.assertLess(time.time() - t, 2.5)
+
+    def test_ociosa_tras_descartar_un_cuerpo_tambien(self):
+        """Un POST rechazado con un cuerpo pequeño: se lee y se descarta (la conexión sigue, sin Connection: close) y
+        el plazo de la conexión vuelve a ser el de siempre, no ninguno."""
+        raw, closed = self.ociosa(request_bytes("POST", "/api/ocultar", self.port, {"Content-Type": "text/plain"},
+                                                b"hola"))
+        self.assertEqual(statuses(raw), [403], raw[:300])
+        self.assertNotIn(b"Connection: close", raw)
+        self.assertTrue(closed)
+
+    def test_una_respuesta_lenta_no_se_corta(self):
+        self.app.config.side_effect = lambda q: time.sleep(3 * self.CORTO) or {"ok": True}
+        raw, _ = self.ociosa(request_bytes("GET", "/api/config", self.port, {TOKEN_HEADER: TOKEN}))
+        self.assertEqual(statuses(raw), [200], raw[:300])
+        self.assertIn(b'{"ok": true}', raw)
+
+
 # ----------------------------------------------------------------------------- P1-02
 
 class TokenDeSesionTests(ServidorBase):

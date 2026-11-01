@@ -4607,6 +4607,10 @@ DRAIN_MAX = 1 << 20  # P0-1: un cuerpo sin leer de hasta 1 MiB se lee y se desca
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"{APP_NAME}/1.0"
+    # cada conexion es un hilo de ThreadingHTTPServer: una keep-alive ociosa (o que deja de leer o de mandar a medias)
+    # se cierra a los 60 s, y un cliente que deja conexiones abiertas ya no acumula hilos. El plazo es por operacion
+    # del socket, no lo que tarda la app en contestar (el selector de carpetas espera al usuario)
+    timeout = 60
     app = None
     token = None  # P1-02: el de esta sesion (lo pone main()); sin el, /api/* y /media responden 403
     body_read = False  # P0-1: el cuerpo de la peticion en curso se ha leido entero
@@ -4682,7 +4686,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not chunk:
                         break
                     left -= len(chunk)
-                self.connection.settimeout(None)
+                self.connection.settimeout(self.timeout)  # el de siempre (sin plazo, la conexion ociosa no se cierra)
             except OSError:
                 left = -1
             if left == 0:
