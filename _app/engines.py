@@ -35,6 +35,7 @@ class EngineError(Exception):
 # ----------------------------------------------------------------------------- conexiones HTTP (keep-alive)
 CONNECT_TIMEOUT = 10  # s hasta tener la conexion (DNS + TCP + TLS); la lectura lleva su propio tope en cada peticion
 BUDGET_MIN_S = 3.0  # con plazo (Summarizer._chat, budget): si despues no quedarian 3 s, ni se espera ni se pide nada
+BUDGET_SLACK_S = 0.5  # una espera, ademas, deja este margen: al despertar siempre se pasa algo, y no espera en balde
 
 
 class Http:
@@ -1238,8 +1239,8 @@ class Summarizer:
               attempts=8, budget=None):
         """(texto, modelo). attempts: intentos como mucho. budget: segundos que puede durar todo, esperas y peticiones
         incluidas (el ultimo paso de la traduccion del directo). Con el, una espera que no deja BUDGET_MIN_S para la
-        peticion no se hace (se falla ya), y cada peticion lleva como topes lo que quede: un tercio para conectar
-        (como mucho CONNECT_TIMEOUT) y el resto, como mucho timeout, para la respuesta."""
+        peticion, y BUDGET_SLACK_S de margen, no se hace (se falla ya), y cada peticion lleva como topes lo que quede:
+        un tercio para conectar (como mucho CONNECT_TIMEOUT) y el resto, como mucho timeout, para la respuesta."""
         import requests
         provider = cfg.get("provider", "groq")
         url = chat_url(cfg)
@@ -1258,8 +1259,12 @@ class Summarizer:
         last = None
 
         def pause(secs):
-            """Espera secs (se puede cancelar). Con plazo, si despues no quedaria BUDGET_MIN_S, no espera: False."""
-            if end is not None and time.time() + secs + BUDGET_MIN_S > end:
+            """Espera secs (se puede cancelar). Con plazo, si despues no quedarian BUDGET_MIN_S para la peticion y el
+            margen BUDGET_SLACK_S (al despertar se pasa algo: sin el, una espera justa acababa sin peticion), no espera:
+            False. Sin nada que esperar, True: lo que quede lo mira la peticion."""
+            if secs <= 0:
+                return True
+            if end is not None and time.time() + secs + BUDGET_MIN_S + BUDGET_SLACK_S > end:
                 return False
             self._sleep(secs, cancelled)
             return True

@@ -216,15 +216,47 @@ class ClavesPorProveedorAjustesTests(unittest.TestCase):
 
 class DiagnosticoClavesTests(TempTree):
     def test_enmascara_las_adicionales_de_todos_los_proveedores(self):
+        """scrub recibe las claves adicionales de todos los proveedores, no solo las de Groq. Se mira lo que recibe y
+        no solo el texto: con la lista blanca de fix-privacidad, una linea que no es de la app ya sale como «<texto>»,
+        pero scrub sigue siendo lo que enmascara las claves en lo que si sale."""
         app = server.App.__new__(server.App)
         app.settings = server.Store(os.path.join(self.data_dir, "settings.json"), server.DEFAULT_SETTINGS)
         azk = "0123456789abcdef0123456789abcdef"  # con pinta de clave de Azure: el patron gsk_/sk- no la ve
         app.settings.update(lambda d: d["cloud"].update(extra_keys_azure=[azk]))
         with open(os.path.join(self.data_dir, "server.log"), "w", encoding="utf-8") as f:
             f.write(f"una línea con {azk} dentro\n")
-        out = app.diagnostico({})["texto"]
+        seen, scrub = [], server.scrub
+        with mock.patch.object(server, "scrub", lambda text, keys=(): seen.append(list(keys)) or scrub(text, keys)):
+            out = app.diagnostico({})["texto"]
         self.assertNotIn(azk, out)
-        self.assertIn(server.masked(azk), out)
+        self.assertTrue(seen)
+        self.assertTrue(all(azk in keys for keys in seen), seen)
+
+
+@unittest.skipUnless(hasattr(server.Store, "_rescue"), "el rescate de un settings.json roto llega con fix-privacidad: "
+                     "este test vigila la fusion")
+class AjustesRotosClavesPorProveedorTests(unittest.TestCase):
+    """settings.json cortado: el rescate (Store.RESCUE, que lleva todos los SECRETS) recupera tambien las claves
+    adicionales de OpenAI, Azure y la pasarela, no solo las de Groq, y el aviso las cuenta todas."""
+
+    def test_se_rescatan_las_de_todos_los_proveedores(self):
+        tmp = tempfile.mkdtemp(prefix="chuleta-ajustes-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        path = os.path.join(tmp, "settings.json")
+        extra = {"extra_keys": ["gsk_" + "g" * 24], "extra_keys_openai": ["sk-" + "o" * 24, "sk-" + "p" * 24],
+                 "extra_keys_azure": ["a" * 32], "extra_keys_custom": ["clave-de-la-pasarela-0001"]}
+        self.assertEqual(sorted(extra), sorted(engines.EXTRA_KEYS_FIELDS.values()))
+        cloud = {"provider": "openai", "api_key": server.protect(("sk-" + "m" * 24).encode())}
+        cloud.update({f: [server.protect(k.encode()) for k in v] for f, v in extra.items()})
+        text = json.dumps({"language": "pt", "cloud": cloud, "zzz": "x" * 50}, indent=1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text[:-20])  # corte de luz a mitad de escritura
+        with mock.patch.object(server, "log"):
+            st = server.Store(path, server.DEFAULT_SETTINGS)
+        c = st.get()["cloud"]
+        self.assertEqual(c["api_key"], "sk-" + "m" * 24)
+        self.assertEqual({f: c[f] for f in extra}, extra)
+        self.assertEqual(st.broken["recuperado"], ["la API key", "5 claves adicionales"])
 
 
 @unittest.skipUnless(shutil.which("node"), "node no instalado")
@@ -865,16 +897,17 @@ class TraduccionTests(unittest.TestCase):
 
 
 class RelojFalso:
-    """Reloj de engines (time.time y time.sleep): las esperas y lo que tarda cada peticion lo hacen avanzar."""
+    """Reloj de engines (time.time y time.sleep): las esperas y lo que tarda cada peticion lo hacen avanzar. late: lo
+    que se pasa cada time.sleep al despertar, como el de verdad (que nunca vuelve justo a tiempo)."""
 
-    def __init__(self, t=1000.0):
-        self.t = t
+    def __init__(self, t=1000.0, late=0.0):
+        self.t, self.late = t, late
 
     def time(self):
         return self.t
 
     def sleep(self, dt):
-        self.t += max(0.0, dt)
+        self.t += max(0.0, dt) + (self.late if dt > 0 else 0.0)
 
     monotonic = perf_counter = time
 
@@ -903,8 +936,8 @@ class RedLenta(FakeRequests):
 class UltimoPasoConPlazoTests(unittest.TestCase):  # P2-22: el plazo del ultimo paso es el total, no solo las esperas
     BUDGET = 10.0
 
-    def final(self, steps, prep=None, cfg=CFG2):
-        clock = RelojFalso()
+    def final(self, steps, prep=None, cfg=CFG2, late=0.0):
+        clock = RelojFalso(late=late)
         s = engines.Summarizer()
         s.keys.clock = clock.time
         if prep:
@@ -952,6 +985,45 @@ class UltimoPasoConPlazoTests(unittest.TestCase):  # P2-22: el plazo del ultimo 
         connect, read = net.calls[0][1]["timeout"]
         self.assertLessEqual(4 + connect + read, self.BUDGET + 1e-6)  # 4 s de espera + la peticion
         self.check_timeouts(net, took)
+
+    def test_una_espera_justa_no_se_hace_en_balde(self):
+        """Al despertar siempre se pasa algo: una espera que dejaba justo BUDGET_MIN_S acababa sin peticion (7 s de
+        cupo por minuto con 10 s de plazo: 7 s esperando y nada). Si espera, pide; si no cabe con margen, falla ya."""
+        for wait in (5.0, 6.0, 6.5, 6.6, 7.0, 7.4):
+            def prep(s, clock, wait=wait):
+                s.remaining, s.reset_at = 0, clock.t + wait - 1  # Summarizer espera reset_at - ahora + 1
+            out, took, net = self.final([(0.2, FakeResponse(200, {}, CHAT_OK))], prep, late=0.01)
+            if wait + engines.BUDGET_MIN_S + engines.BUDGET_SLACK_S <= self.BUDGET:
+                self.assertGreaterEqual(took, wait, wait)  # espero...
+                self.assertEqual(len(net.calls), 1, wait)  # ...y pidio
+                self.assertEqual(out, ("Buenos días.", "openai/gpt-oss-20b"))
+            else:
+                self.assertLess(took, 1, wait)  # ni espero
+                self.assertEqual(net.calls, [], wait)
+                self.assertIn("límite por minuto", str(out))
+
+    def test_lo_que_se_espera_al_hilo_sale_del_plazo(self):
+        """step(final=True) entero, con el Summarizer de verdad: el hilo suelta el candado al cabo de 1 s y el servidor
+        no contesta. La espera al hilo y la peticion juntas no pasan de TRANSLATE_FINAL_S (eran 11 s: la peticion
+        llevaba el plazo entero)."""
+        clock = RelojFalso()
+        s = engines.Summarizer()
+        s.keys.clock = clock.time
+        job = DirectoJob(preset="nube")
+        job.translate = True
+        tr = live.LiveTranslator(job, {"summarizer": s, "cloud_cfg": CFG2}, lambda: (0, [(0.0, 2.0, "Bom dia.")]),
+                                 lambda m: None)
+        net = RedLenta(clock, [(None, None)] * live.TRANSLATE_FINAL_ATTEMPTS)
+        tr.lock.acquire()  # el hilo, a mitad de la suya
+        threading.Timer(1.0, tr.lock.release).start()
+        t0 = time.monotonic()
+        with mock.patch.dict(sys.modules, {"requests": net}), mock.patch.object(engines, "time", clock):
+            self.assertFalse(tr.step(final=True))
+        waited = time.monotonic() - t0  # de verdad: el candado (la peticion va con el reloj falso)
+        self.assertGreaterEqual(waited, 0.9)
+        self.assertEqual(len(net.calls), 1)
+        self.assertIn("a tiempo", tr.error)
+        self.assertLessEqual(waited + (clock.t - 1000.0), live.TRANSLATE_FINAL_S + 0.3)
 
     def test_429_y_503_en_bucle_dentro_del_plazo(self):
         out, took, net = self.final([(0.2, FakeResponse(429, {"retry-after": "20"}, {}))])
