@@ -100,7 +100,7 @@ function reunionExtra(d) {
   return { participantes: d.dataset.rnParticipantes || '', sugerido: d.dataset.rnSource || '' };
 }
 
-/* Página de la reunión: participantes sugeridos por Outlook/Teams al grabar (participantes_origen en el .md). Hasta
+/* Página de la reunión: participantes sugeridos por Outlook/Teams al grabar (props.participantes_origen). Hasta
    que se confirman o se editan, el servidor no los manda al resumen con IA ni a los destinos de salida. notas.js
    pinta esta fila debajo de «Participantes» y avisa al guardarlos (reunionParticipantesGuardados). */
 function reunionParticipantesHtml(a) {

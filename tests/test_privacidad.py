@@ -488,8 +488,10 @@ class ParticipantesConfirmadosTests(TempTree):
         return "\n".join(sent)
 
     def test_cabecera_con_el_origen(self):
+        # el origen va detras de los nombres, no en una clave propia: las versiones publicadas solo aceptan las claves
+        # que conocen (fix-perfil; tests/test_integracion.py). La de setUp, con la clave, se sigue leyendo
         self.assertEqual(server.dump_notes({"participantes": "Ana", "participantes_origen": "outlook"}, "x"),
-                         "---\nparticipantes: Ana\nparticipantes_origen: outlook\n---\n\nx\n")
+                         "---\nparticipantes: Ana (sugeridos por Outlook, sin confirmar)\n---\n\nx\n")
         self.assertEqual(self.props()["participantes_origen"], "outlook")
         self.assertEqual(server.participantes_confirmados(self.props()), "")
         self.assertEqual(server.participantes_confirmados({"participantes": "Ana"}), "Ana")

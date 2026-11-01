@@ -1058,7 +1058,8 @@ def public_transcript(data):
 # El id de la lista del tema no va aqui sino en temas() (ver Temas): las versiones anteriores solo aceptan las claves
 # que conocen y, con una nueva, toman la cabecera entera por notas.
 # participantes_origen: "outlook" o "teams" mientras los participantes son los que sugirio la reunion en curso al
-# grabar y el usuario no los ha confirmado ni editado; mientras tanto no salen del PC (participantes_confirmados).
+# grabar y el usuario no los ha confirmado ni editado; mientras tanto no salen del PC (participantes_confirmados). En
+# el .md no va como clave propia sino detras de los nombres (PARTICIPANTES_NOTA), por lo mismo que el id del tema.
 NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "participantes_origen", "proyecto",
              "workstream", "idioma", "contexto")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
@@ -1076,6 +1077,18 @@ def clean_icon(v):
 
 
 PARTICIPANTES_ORIGENES = ("outlook", "teams")
+# «Ana, Luis (sugeridos por Outlook, sin confirmar)»: asi las versiones publicadas (012bb24, 5c55e54), que solo
+# aceptan las claves que conocen, leen la cabecera y ensenan los nombres con la nota. La clave participantes_origen
+# (como la escribia fix-privacidad antes de fusionarse con fix-perfil) se sigue leyendo; al guardar pasa a la nota.
+PARTICIPANTES_NOTA = " (sugeridos por {}, sin confirmar)"
+PARTICIPANTES_NOMBRE = {"outlook": "Outlook", "teams": "Teams"}
+_PARTICIPANTES_NOTA_RE = re.compile(r"^(.*\S)\s*\(sugeridos por (Outlook|Teams), sin confirmar\)$")
+
+
+def participantes_del_md(v):
+    """(nombres, origen) de la linea «participantes» del .md: con la nota del final, su origen; sin ella, None."""
+    m = _PARTICIPANTES_NOTA_RE.match(v or "")
+    return (m.group(1), m.group(2).lower()) if m else (v, None)
 
 
 def participantes_confirmados(props):
@@ -1101,6 +1114,12 @@ def parse_notes(text):
                 k, v = k.strip().lower(), v.strip()
                 if k == "icono":
                     v = clean_icon(v)
+                elif k == "participantes":
+                    v, origen = participantes_del_md(v)
+                    if origen:
+                        props["participantes_origen"] = origen
+                elif k == "participantes_origen" and v not in PARTICIPANTES_ORIGENES:
+                    v = ""  # como en notes_save: solo outlook o teams
                 if k in NOTE_KEYS and v:
                     props[k] = [t.strip() for t in v.strip("[]").split(",") if t.strip()] if k == "etiquetas" else v
                 elif v and k not in NOTE_KEYS:  # de una version mas nueva: se conserva tal cual (dump_notes la escribe)
@@ -1113,8 +1132,10 @@ def dump_notes(props, body):
     head = []
     for k in list(NOTE_KEYS) + [k for k in props if k not in NOTE_KEYS and NOTE_KEY_RE.match(str(k))]:
         v = props.get(k)
-        if v:
+        if v and k != "participantes_origen":  # el origen va detras de los participantes (PARTICIPANTES_NOTA)
             v = "[" + ", ".join(v) + "]" if k == "etiquetas" else " ".join(str(v).split())
+            if k == "participantes" and props.get("participantes_origen") in PARTICIPANTES_NOMBRE:
+                v += PARTICIPANTES_NOTA.format(PARTICIPANTES_NOMBRE[props["participantes_origen"]])
             head.append(f"{k}: {v}")
     out = ("---\n" + "\n".join(head) + "\n---\n\n" if head else "") + (body or "").strip("\n")
     return out + "\n" if out.strip() else ""

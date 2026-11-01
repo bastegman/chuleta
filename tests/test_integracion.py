@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Lo que solo se puede probar con varias correcciones de la auditoría final juntas (la rama «correcciones»): cada
 rama trae sus tests, pero estos caminos cruzan dos de ellas. Todo con dobles: sin red, sin Windows."""
+import os
 import queue
+import threading
 import time
 import types
 import unittest
 from unittest import mock
 
 from support import TempTree, bare_jobs, engines, server, srt_text  # noqa: F401  (support prepara sys.path)
+from test_fix_perfil import NOTE_KEYS_PUBLICADAS, parse_publicado  # noqa: E402  (ayudantes, no tests)
 from test_perfil import settings_store  # noqa: E402  (ayudante, no tests)
 
 KEY = "gsk_" + "k1" * 12
@@ -142,6 +145,79 @@ class RepasoRetomadoTests(TempTree):
         self.directo_y_apagar("nube", "rapido", "nube")
         j, _ = self.repasar(falla)
         self.assertEqual(j.enviados, [])
+
+
+# ----------------------------------------------------------------------------- fix-privacidad + fix-perfil
+
+class ParticipantesSugeridosCompatTests(TempTree):
+    """fix-perfil garantiza que las versiones publicadas (012bb24 y 5c55e54) leen la cabecera que escribe esta: solo
+    aceptan una cabecera con las claves que conocen y, con una nueva, la toman entera por notas (y al guardar la
+    entierran en ellas). fix-privacidad guarda el origen de los participantes que sugieren Outlook o Teams al grabar,
+    y con una clave propia (participantes_origen) esas versiones ya no leían la cabecera de una reunión grabada con
+    sugerencias. El origen va detrás de los nombres, «Ana, Luis (sugeridos por Outlook, sin confirmar)»: las publicadas
+    ven los nombres con la nota, y esta, los nombres y su origen."""
+
+    REL = "Alfa/r.wav"
+
+    def app(self):
+        a = server.App.__new__(server.App)
+        a.jobs = bare_jobs([])
+        a.jobs.voice_vectors = {}
+        a.jobs.refresh_prompt = a.jobs.schedule_outputs = lambda rel, delay=4.0: None
+        a.library = server.Library(server.Durations(os.path.join(self.data_dir, "d.json")))
+        a.settings, a.notes_lock, a.rec = settings_store(self.tmp), threading.Lock(), None
+        self.wav(self.REL)
+        return a
+
+    def md(self):
+        return server.read_text(os.path.join(self.root, self.REL[:-4] + ".md"))
+
+    def publicadas(self):
+        return {rev: parse_publicado(rev)(self.md()) for rev in NOTE_KEYS_PUBLICADAS}
+
+    def test_las_publicadas_leen_una_reunion_con_participantes_sugeridos(self):
+        a = self.app()
+        sugeridos = {"participantes": "Ana Pérez,  Luis Gómez", "participantes_origen": "outlook"}
+        a.notes_save({"path": self.REL, "props": dict(sugeridos, estado="Pendiente")})  # como rec_start
+        a.notes_save({"path": self.REL, "body": "notas\n"})
+        for rev, (props, body) in self.publicadas().items():
+            self.assertEqual((props, body), ({"estado": "Pendiente", "participantes": "Ana Pérez, Luis Gómez "
+                                              "(sugeridos por Outlook, sin confirmar)"}, "notas\n"), rev)
+        props = server.parse_notes(self.md())[0]
+        self.assertEqual(props, {"estado": "Pendiente", "participantes": "Ana Pérez, Luis Gómez",
+                                 "participantes_origen": "outlook"})
+        self.assertEqual(server.participantes_confirmados(props), "")  # siguen sin salir del PC
+        a.notes_save({"path": self.REL, "props": {"participantes": "Ana Pérez, Luis Gómez"}})  # «Confirmar»
+        for rev, (props, _) in self.publicadas().items():
+            self.assertEqual(props["participantes"], "Ana Pérez, Luis Gómez", rev)
+        self.assertEqual(server.participantes_confirmados(server.parse_notes(self.md())[0]), "Ana Pérez, Luis Gómez")
+
+    def test_la_clave_propia_se_sigue_leyendo_y_al_guardar_pasa_a_la_nota(self):
+        a = self.app()
+        self.write(self.REL[:-4] + ".md", "---\nparticipantes: Ana\nparticipantes_origen: teams\n---\n\nx\n")
+        self.assertEqual(server.parse_notes(self.md())[0], {"participantes": "Ana", "participantes_origen": "teams"})
+        a.notes_save({"path": self.REL, "props": {"estado": "Revisada"}})
+        self.assertEqual(self.md(), "---\nestado: Revisada\nparticipantes: Ana (sugeridos por Teams, sin confirmar)\n"
+                                    "---\n\nx\n")
+        for rev, (props, body) in self.publicadas().items():
+            self.assertEqual(body, "x\n", rev)
+
+    def test_lo_que_guarde_una_publicada(self):
+        """Una publicada reescribe la cabecera con la nota tal cual (siguen sugeridos) o, si se le quita, con los
+        nombres solos: editados a mano, ya son del usuario."""
+        self.app()
+        self.write(self.REL[:-4] + ".md", "---\nestado: Enviada\nparticipantes: Ana, Luis (sugeridos por Outlook, sin "
+                                          "confirmar)\n---\n\nnotas\n")
+        props = server.parse_notes(self.md())[0]
+        self.assertEqual((props["participantes"], props["participantes_origen"]), ("Ana, Luis", "outlook"))
+        self.write(self.REL[:-4] + ".md", "---\nestado: Enviada\nparticipantes: Ana, Luis\n---\n\nnotas\n")
+        self.assertNotIn("participantes_origen", server.parse_notes(self.md())[0])
+
+    def test_sin_nombres_no_hay_origen(self):
+        props, _ = server.parse_notes("---\nparticipantes: (sugeridos por Teams, sin confirmar)\n---\n\nx\n")
+        self.assertNotIn("participantes_origen", props)
+        props, _ = server.parse_notes("---\nparticipantes: Ana\nparticipantes_origen: cualquiera\n---\n\nx\n")
+        self.assertEqual(props, {"participantes": "Ana"})  # como notes_save: solo outlook o teams
 
 
 if __name__ == "__main__":
