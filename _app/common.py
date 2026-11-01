@@ -18,6 +18,9 @@ WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y
 # compatibilidad con las instalaciones y los datos existentes: la carpeta _app, DATA_DIR (AudiosApp), la cabecera
 # X-Audios, las claves de los .md y la pestana «Notas» (que es la funcion de tomar notas, no la marca).
 APP_NAME = "Chuleta"
+# nombres que tuvo la app: las listas de vocabulario de la raiz se llamaban asi como proyecto, y las reuniones grabadas
+# entonces lo llevan en la cabecera de su .md (server.find_vocab los acepta como alias de la raiz)
+APP_FORMER_NAMES = ("Notas",)
 # AppUserModelID: identifica la ventana en la barra de tareas (agrupa, icono, anclar). La misma cadena va en el
 # acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. Si cambiara,
 # los anclajes hechos dejarian de agrupar la ventana.
@@ -202,6 +205,40 @@ def alert(title, text):
             ctypes.windll.user32.MessageBoxW(None, text, title, 0x10 | 0x10000 | 0x40000)
         except Exception:
             pass
+
+
+# ----------------------------------------------------------------------------- sesion local (token) y loopback
+# Token de sesion: server.py genera uno en cada arranque y lo deja en DATA_DIR\sesion.token (UTF-8, sin salto de
+# linea; lo borra al apagarse). /api/* y /media lo exigen en la cabecera X-Chuleta-Token o en la cookie que recibe la
+# interfaz al abrir /?t=<token>: en un Windows con varias sesiones (escritorio remoto, AVD, Citrix) el 127.0.0.1 es de
+# todos y, sin el, otro usuario podria leer las reuniones o manejar la grabadora. Lo leen el acceso directo (la copia
+# que se abre cuando la app ya corre), el aviso flotante, el instalador y las pruebas.
+TOKEN_FILE = "sesion.token"
+TOKEN_HEADER = "X-Chuleta-Token"
+
+
+def data_dir_default():
+    """La carpeta de datos de la copia que lanzo este proceso: CHULETA_DATOS (server.py la deja en el entorno para sus
+    procesos hijos, tambien con --data) o %LOCALAPPDATA%\\AudiosApp."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.environ.get("CHULETA_DATOS") or os.path.join(base, "AudiosApp")
+
+
+def read_token(data_dir=None):
+    """El token de la sesion que corre, o "" si no hay fichero (la app no esta abierta, o es una version anterior)."""
+    try:
+        with open(os.path.join(data_dir or data_dir_default(), TOKEN_FILE), encoding="utf-8") as f:
+            return f.read().strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def local_opener():
+    """urllib SIN proxy, para hablar con la propia app en 127.0.0.1. urlopen toma el proxy del sistema (el del registro
+    o HTTP_PROXY) y la excepcion <local> no cubre 127.0.0.1: con un proxy fijo de empresa, el acceso directo no
+    encontraba la app abierta (y arrancaba otra copia) y el «Grabar» del aviso flotante fallaba."""
+    import urllib.request
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 # ----------------------------------------------------------------------------- secretos (DPAPI)

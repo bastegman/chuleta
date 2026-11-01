@@ -10,14 +10,17 @@ Chuleta: app local para ordenar, escuchar, leer y transcribir las grabaciones de
 Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Chuleta.bat lo arranca con consola
 para ver los mensajes). La interfaz se abre en una ventana propia (window.py, WebView2) o, si no se puede, en Edge.
 """
+import atexit
 import copy
 import hashlib
+import hmac
 import json
 import logging
 import os
 import platform
 import queue
 import re
+import secrets
 import shutil
 import struct
 import subprocess
@@ -25,6 +28,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 import uuid
 import webbrowser
@@ -39,6 +43,7 @@ import voices
 from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS,  # noqa: F401 (re-exportados)
                     alert, clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key,
                     parse_srt, protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
+from common import TOKEN_FILE, TOKEN_HEADER, local_opener, read_token  # sesion local (P1-02) y loopback sin proxy
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
 from window import Window, set_app_id
 
@@ -151,6 +156,12 @@ def in_app_dir(p):
     return os.path.normcase(p) == a or os.path.normcase(p).startswith(a + os.sep)
 
 
+def in_app_tree(p):
+    """p esta en una carpeta de la app: la de su codigo, su raiz o una carpeta vinculada (donde viven las grabaciones).
+    Ahi no se escriben documentos de los destinos de salida."""
+    return in_app_dir(p) or _inside(p, ROOT) or any(_inside(p, l["path"]) for l in LINKS.values())
+
+
 # ----------------------------------------------------------------------------- paquete para otra persona
 
 EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR CHULETA.bat y LEEME.txt (van a la raiz)
@@ -221,23 +232,27 @@ class Store:
     """JSON en %LOCALAPPDATA%\\AudiosApp (fuera de OneDrive: la API key no se sincroniza).
     Los SECRETS se guardan cifrados con DPAPI (common.protect); en memoria y en get() van en claro. Un fichero
     antiguo con la clave en claro se lee igual y queda cifrado en el primer guardado (migracion transparente).
-    Si no se puede descifrar (otro usuario de Windows, otro PC), la clave queda vacia y se avisa en el log."""
+    Si no se puede descifrar (otro usuario de Windows, otro PC), la clave queda vacia y se avisa en el log.
 
-    SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"))  # un texto o una lista de textos
+    Un settings.json ilegible (JSON mal formado o cortado, o que no es un objeto) no se ignora en silencio, porque el
+    primer guardado lo pisaria con los valores por defecto (API key, carpetas vinculadas y destinos vacios): se copia
+    tal cual como settings.json.roto-<fecha>, se rescata de el lo que mas cuesta volver a poner (todos los SECRETS y
+    RESCUE), se anota en el log y `broken` se lo cuenta a la interfaz. Si ni siquiera se puede hacer la copia, en toda
+    la sesion no se escribe encima del original (`frozen`): los cambios se quedan en memoria."""
+
+    # un texto o una lista de textos; las claves adicionales van por proveedor (engines.EXTRA_KEYS_FIELDS)
+    SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"), ("cloud", "extra_keys_openai"),
+               ("cloud", "extra_keys_azure"), ("cloud", "extra_keys_custom"))
 
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
         self.data = copy.deepcopy(defaults)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            for k, v in saved.items():
-                if isinstance(v, dict) and isinstance(self.data.get(k), dict):
-                    self.data[k].update(v)
-                else:
-                    self.data[k] = v
-        except (OSError, ValueError):
-            pass
+        self.broken, self.frozen = None, False  # settings.json ilegible: {"copia", "error", "recuperado"}
+        for k, v in self._load().items():
+            if isinstance(v, dict) and isinstance(self.data.get(k), dict):
+                self.data[k].update(v)
+            else:
+                self.data[k] = v
         self.lost = []  # secretos que no se pudieron descifrar (la interfaz pide pegarlos otra vez)
         for keys in self.SECRETS:
             d = self.data
@@ -261,6 +276,91 @@ class Store:
                     log(f"   no se pudo descifrar {'.'.join(keys)} de settings.json ({e}): vuelve a pegarla en Ajustes")
             d[keys[-1]] = [x for x in out if x] if isinstance(v, list) else out[0]
 
+    def _load(self):
+        """Lo guardado ({} si no hay fichero). Con BOM tambien (el Bloc de notas lo pone). Si el fichero existe pero no
+        se puede leer o no es un objeto JSON, lo que _broken haya podido rescatar."""
+        try:
+            with open(self.path, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            return {}
+        except OSError as e:  # existe pero no se deja leer: tampoco se pisa a ciegas
+            return self._broken(None, e)
+        try:
+            saved = json.loads(raw.decode("utf-8-sig"))
+            if not isinstance(saved, dict):
+                raise ValueError(f"no es un objeto JSON ({type(saved).__name__})")
+            bad = [k for k, v in saved.items() if isinstance(self.data.get(k), dict) and not isinstance(v, dict)]
+            if bad:  # p. ej. "cloud": null: con eso la app no arranca; lo demas si vale
+                raise ValueError("secciones que no son un objeto: " + ", ".join(bad))
+            return saved
+        except ValueError as e:  # UnicodeDecodeError y JSONDecodeError incluidos
+            return self._broken(raw, e)
+
+    def _broken(self, raw, err):
+        """settings.json ilegible: copia del fichero tal cual, rescate (los SECRETS y RESCUE), log y aviso para la
+        interfaz."""
+        why = f"{err.__class__.__name__}: {err}"[:200]
+        copia = f"{self.path}.roto-{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+        n = 1
+        while os.path.exists(copia):
+            copia, n = f"{self.path}.roto-{time.strftime('%Y-%m-%d_%H-%M-%S')}-{n}", n + 1
+        try:
+            shutil.copy2(self.path, copia)
+        except OSError as e:
+            log(f"   no se pudo copiar settings.json ({e.__class__.__name__}): no se escribirá encima en esta sesión")
+            copia, self.frozen = None, True
+        saved = self._rescue(raw) if raw else {}
+
+        def dig(keys):
+            d = saved
+            for k in keys:
+                d = d.get(k) if isinstance(d, dict) else None
+            return d
+
+        def cuantos(n, uno, varios):
+            return [f"{n} {uno if n == 1 else varios}"] if n else []
+        extra = sum(len(dig(k) or []) for k in self.SECRETS if k != ("cloud", "api_key"))  # de todos los proveedores
+        recuperado = ((["la API key"] if dig(("cloud", "api_key")) else [])
+                      + cuantos(extra, "clave adicional", "claves adicionales")
+                      + cuantos(len(dig(("links",)) or []), "carpeta vinculada", "carpetas vinculadas")
+                      + cuantos(len(dig(("perfil", "outputs")) or []), "destino de salida", "destinos de salida"))
+        self.broken = {"copia": os.path.basename(copia) if copia else None, "error": why, "recuperado": recuperado}
+        log(f"   settings.json no se puede leer ({why})"
+            + (f": copia en {os.path.basename(copia)}" if copia else "")
+            + f"; recuperado: {', '.join(recuperado) or 'nada'}; lo demás vuelve a los valores por defecto")
+        return saved
+
+    RESCUE = (("links",), ("perfil", "outputs"))  # de un settings.json roto, ademas de todos los SECRETS
+
+    @classmethod
+    def _rescue(cls, raw):
+        """De un settings.json roto, los SECRETS (todos: tambien los que se anadan) y lo de RESCUE que se pueda leer
+        entero: cada valor se decodifica con raw_decode desde su clave, asi que vale aunque el fichero este cortado o
+        mal escrito en otra parte."""
+        text = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
+        dec, out = json.JSONDecoder(), {}
+        for keys in cls.SECRETS + cls.RESCUE:
+            for m in re.finditer('"' + re.escape(keys[-1]) + r'"\s*:\s*', text):
+                try:
+                    v, _ = dec.raw_decode(text, m.end())
+                except ValueError:
+                    continue
+                if keys == ("cloud", "api_key"):
+                    ok = isinstance(v, str) and bool(v.strip())
+                elif keys in cls.SECRETS:  # las claves adicionales (las de cada proveedor): listas de textos
+                    ok = isinstance(v, list) and bool(v) and all(isinstance(x, str) for x in v)
+                else:  # links y outputs: listas de {"path": …}
+                    ok = isinstance(v, list) and bool(v) and all(isinstance(x, dict) and isinstance(x.get("path"), str)
+                                                                 for x in v)
+                if ok:
+                    d = out
+                    for k in keys[:-1]:
+                        d = d.setdefault(k, {})
+                    d[keys[-1]] = v
+                    break
+        return out
+
     def get(self):
         with self.lock:
             return copy.deepcopy(self.data)
@@ -277,9 +377,13 @@ class Store:
                     d[keys[-1]] = protect(d[keys[-1]])
                 elif isinstance(d, dict) and isinstance(d.get(keys[-1]), list):
                     d[keys[-1]] = [protect(x) for x in d[keys[-1]] if isinstance(x, str) and x]
+            if self.frozen:  # settings.json ilegible y sin copia: escribir encima perderia lo que tenga
+                return
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(out, f, ensure_ascii=False, indent=1)
+                f.flush()
+                os.fsync(f.fileno())  # en disco antes de sustituir: un corte de luz no deja un settings.json vacio
             os.replace(tmp, self.path)
 
 
@@ -305,6 +409,12 @@ DEFAULT_SETTINGS = {
     "outlook_on": False,      # leer la cita en curso de Outlook clasico (COM, pywin32): nombre, tema y asistentes
     "rec_aviso": True,        # aviso flotante «Grabar / ✕» al detectar una llamada (calendario.py + aviso.py)
     "summary_auto": True,     # resumen con IA al terminar de transcribir una reunion reciente
+    # ...tambien si se transcribio en local (consentimiento: el resumen manda el texto al proveedor de la nube). Sin
+    # el, lo transcrito en local no sale del PC por el resumen automatico (Jobs.auto_summary)
+    "summary_auto_local": False,
+    # aviso unico al actualizar a la version que deja de subir lo local (App._aviso_resumen_local): None = sin decidir,
+    # True = pendiente (la interfaz lo ensena en Inicio), False = visto o no aplica
+    "aviso_resumen_local": None,
     "summary_model": "openai/gpt-oss-120b",
     "summary_lang": "es",     # es / en / same (el de la reunion)
     "summary_extra": "",     # instrucciones extra para el resumen
@@ -327,7 +437,10 @@ DEFAULT_SETTINGS = {
               "azure_endpoint": "", "azure_deployment": "", "azure_api_version": "2024-06-01",
               "chunk_minutes": 10, "parallel": 3,
               # directo en la nube: modelo rapido por trozo y claves de otras cuentas de Groq (rotacion de cupo)
-              "live_model": engines.LIVE_MODEL_DEFAULT, "extra_keys": []},
+              "live_model": engines.LIVE_MODEL_DEFAULT, "extra_keys": [],
+              # «Otra (compatible)»: modelo del directo propio ("" = el de la cola) y sus claves adicionales; las
+              # claves adicionales de cada proveedor solo se usan con el (engines.EXTRA_KEYS_FIELDS)
+              "live_model_custom": "", "extra_keys_openai": [], "extra_keys_azure": [], "extra_keys_custom": []},
     "speed": {},
 }
 
@@ -598,7 +711,8 @@ class Library:
         for a in flat:
             a["recording"] = False
             a["tx_end"] = self._tx_end(a)
-            a["props"], a["has_notes"] = self._props(a)
+            props, a["has_notes"] = self._props(a)
+            a["props"] = with_theme_id(props, a["path"])  # con el id de su tema en este PC (la cache no lo lleva)
             a["speakers"] = self._speakers(a)
             a["has_speakers"] = bool(a["speakers"])
             open_dur = self._recording(a)
@@ -676,6 +790,89 @@ class Library:
         return None
 
 
+CLOUD_TEXT_LOCK = threading.Lock()
+
+
+class CloudText:
+    """Reuniones cuyo texto actual se transcribio entero en la nube: en la cola con la nube, en directo con todos sus
+    trozos en la nube o con el repaso final. El resumen automatico solo sube a la nube estas sin el permiso de Ajustes
+    (summary_auto_local). Lo apunta cada transcripcion al escribir el texto (Jobs._cloud_text) y vive en DATA_DIR, asi
+    que no depende del trabajo que acaba de terminar ni del arranque: un repaso final retomado tras reiniciar que falla
+    o se cancela deja el texto del directo, y cuenta lo que fue el directo. Lo que no esta cuenta como local. Sigue a la
+    reunion si se mueve o se renombra (ella o su carpeta) y se borra con ella (moved, set), y cada entrada lleva la
+    identidad del audio (ident): si en esa ruta hay ahora otro archivo (se movio o se borro fuera de la app y otra
+    reunion llego con ese nombre), no cuenta. Caduca a los 7 dias (el resumen automatico, para las de los ultimos 3)."""
+
+    KEEP_S = 7 * 86400
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.data = {str(k): self._entry(v) for k, v in json.load(f).items()}
+        except (OSError, ValueError, TypeError, AttributeError, IndexError):
+            self.data = {}
+
+    @staticmethod
+    def _entry(v):
+        """[cuando, identidad del audio]; un numero suelto, sin identidad (0)."""
+        t, ino = (v[0], v[1]) if isinstance(v, list) else (v, 0)
+        return [float(t), int(ino)]
+
+    @staticmethod
+    def ident(rel):
+        """La identidad del audio: st_ino, el indice del archivo en NTFS, que se conserva al moverlo o renombrarlo en la
+        misma unidad y es otro en un archivo nuevo; 0 si no se sabe. Una entrada apuntada sin identidad vale por la
+        ruta; una con identidad, solo si el audio que hay ahora en esa ruta es el mismo (__contains__)."""
+        try:
+            return os.stat(safe(rel, "file")).st_ino
+        except (ApiError, OSError):
+            return 0
+
+    def __contains__(self, rel):
+        e = self.data.get(rel)
+        return (e is not None and time.time() - e[0] < self.KEEP_S  # caduca al consultar, no solo al escribir
+                and (not e[1] or e[1] == self.ident(rel)))  # y tiene que ser el mismo audio
+
+    def set(self, rel, cloud):
+        now = time.time()
+        with self.lock:
+            data = {k: e for k, e in self.data.items() if k != rel and now - e[0] < self.KEEP_S}
+            if cloud:
+                data[rel] = [now, self.ident(rel)]
+            self._save(data)
+
+    def moved(self, old, new, folder=False):
+        """La reunion `old` (con folder, la carpeta y lo que tiene dentro) pasa a ser `new`: lo apuntado va con ella, y
+        lo que hubiera en la ruta nueva (de una reunion que ya no esta ahi) se olvida."""
+        now = time.time()
+
+        def dest(k):
+            return new + k[len(old):] if k == old or (folder and k.startswith(old + "/")) else None
+        with self.lock:
+            vivas = {k: e for k, e in self.data.items() if now - e[0] < self.KEEP_S}
+            data = {k: e for k, e in vivas.items()
+                    if dest(k) is None and k != new and not (folder and k.startswith(new + "/"))}
+            data.update({dest(k): e for k, e in vivas.items() if dest(k) is not None})
+            self._save(data)
+
+    def _save(self, data):
+        """Con self.lock: los datos nuevos, en memoria y (si han cambiado) en disco."""
+        if data == self.data:
+            return
+        self.data = data
+        try:
+            with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(self.path + ".tmp", self.path)
+        except OSError as e:  # vale en memoria; sin el fichero, al reiniciar todo cuenta como local
+            log(f"   no se pudo guardar {os.path.basename(self.path)} ({e.__class__.__name__})")
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+
+
 class Complete:
     """Audios cuya transcripcion se sabe completa aunque el texto acabe antes que el audio
     (p. ej. se siguio grabando en silencio al final). Asi no se marcan "a medias"."""
@@ -710,6 +907,67 @@ class Complete:
 
 
 COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
+
+
+class Temas:
+    """El tema de cada reunion por el id de su lista (ruta interna del audio -> id de list_vocab), en este PC: con dos
+    proyectos que se llaman igual, los nombres de la cabecera del .md (proyecto y workstream, que leen todas las
+    versiones) no dicen cual es. No va en la cabecera: las versiones anteriores solo aceptan ahi las claves que
+    conocen y, con una nueva, toman la cabecera entera por notas. El id solo vale mientras su lista se llame como dice
+    la cabecera (si no, otra version u otro PC cambio el tema y mandan los nombres: find_vocab)."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        self.data = {k: v for k, v in data.items() if isinstance(v, str) and v} if isinstance(data, dict) else {}
+
+    def get(self, rel):
+        return self.data.get(rel)
+
+    def _save(self):
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, sort_keys=True)
+        os.replace(tmp, self.path)
+
+    def set(self, rel, vid):
+        with self.lock:
+            if self.data.get(rel) == (vid or None):
+                return
+            if vid:
+                self.data[rel] = vid
+            else:
+                self.data.pop(rel, None)
+            self._save()
+
+    def moved(self, old, new, folder=False):
+        """Una reunion (o, con folder, una carpeta) cambia de ruta: su tema la sigue; con folder, tambien el id de las
+        listas que estan dentro."""
+        with self.lock:
+            out = {}
+            for k, v in self.data.items():
+                k2 = moved_rel(k, old, new, folder)
+                v2 = moved_rel(v, old, new, folder=True) if folder else None
+                out[k if k2 is None else k2] = v if v2 is None else v2
+            if out != self.data:
+                self.data = out
+                self._save()
+
+
+_TEMAS, _TEMAS_LOCK = {}, threading.Lock()
+
+
+def temas():
+    """El almacen Temas de este PC (DATA_DIR/temas.json; uno por DATA_DIR, que los tests cambian)."""
+    path = os.path.join(DATA_DIR, "temas.json")
+    with _TEMAS_LOCK:
+        if path not in _TEMAS:
+            _TEMAS[path] = Temas(path)
+        return _TEMAS[path]
 
 
 def is_partial(a):
@@ -797,9 +1055,47 @@ def public_transcript(data):
 # y debajo las notas en Markdown. Se mueve con el audio igual que el .txt y el .srt.
 # idioma: codigo ("es", "pt", "es-en"…) o "auto" (detectar); sin la clave, el idioma del perfil (Ajustes).
 # contexto: una o dos frases (de que va, quien participa) que reciben Whisper, tras el vocabulario, y el resumen.
-NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "proyecto", "workstream", "idioma",
-             "contexto")
+# El id de la lista del tema no va aqui sino en temas() (ver Temas): las versiones anteriores solo aceptan las claves
+# que conocen y, con una nueva, toman la cabecera entera por notas.
+# participantes_origen: "outlook" o "teams" mientras los participantes son los que sugirio la reunion en curso al
+# grabar y el usuario no los ha confirmado ni editado; mientras tanto no salen del PC (participantes_confirmados). En
+# el .md no va como clave propia sino detras de los nombres (PARTICIPANTES_NOTA), por lo mismo que el id del tema.
+NOTE_KEYS = ("titulo", "icono", "etiquetas", "estado", "participantes", "participantes_origen", "proyecto",
+             "workstream", "idioma", "contexto")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")
+NOTE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*$")  # una clave de la cabecera (las que no conocemos se conservan)
+ICON_BAD = re.compile(r"[<>&\"'\x00-\x1f\x7f]")
+ICON_MAX = 8  # code points: cabe cualquier emoji compuesto (banderas, tonos de piel, familias con ZWJ)
+
+
+def clean_icon(v):
+    """El icono de una reunion es un emoji o un texto corto (como mucho 8 code points) sin < > & " ' ni controles; si
+    no, ninguno. El .md puede venir de una carpeta vinculada compartida (OneDrive, SharePoint) y la interfaz pinta el
+    icono como HTML: un valor con marcado ejecutaria codigo en la app (P0-2)."""
+    v = " ".join(str(v or "").split())
+    return v if len(v) <= ICON_MAX and not ICON_BAD.search(v) else ""
+
+
+PARTICIPANTES_ORIGENES = ("outlook", "teams")
+# «Ana, Luis (sugeridos por Outlook, sin confirmar)»: asi las versiones publicadas (012bb24, 5c55e54), que solo
+# aceptan las claves que conocen, leen la cabecera y ensenan los nombres con la nota. La clave participantes_origen
+# (como la escribia fix-privacidad antes de fusionarse con fix-perfil) se sigue leyendo; al guardar pasa a la nota.
+PARTICIPANTES_NOTA = " (sugeridos por {}, sin confirmar)"
+PARTICIPANTES_NOMBRE = {"outlook": "Outlook", "teams": "Teams"}
+_PARTICIPANTES_NOTA_RE = re.compile(r"^(.*\S)\s*\(sugeridos por (Outlook|Teams), sin confirmar\)$")
+
+
+def participantes_del_md(v):
+    """(nombres, origen) de la linea «participantes» del .md: con la nota del final, su origen; sin ella, None."""
+    m = _PARTICIPANTES_NOTA_RE.match(v or "")
+    return (m.group(1), m.group(2).lower()) if m else (v, None)
+
+
+def participantes_confirmados(props):
+    """Los participantes que pueden ir al resumen en la nube y a los destinos de salida: los escritos o confirmados
+    por el usuario. Los sugeridos por Outlook/Teams (con participantes_origen) se quedan en el .md hasta entonces."""
+    props = props or {}
+    return "" if props.get("participantes_origen") else (props.get("participantes") or "")
 
 
 def parse_notes(text):
@@ -807,23 +1103,39 @@ def parse_notes(text):
     props, body = {}, text
     if lines and lines[0].strip() == "---":
         end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-        # solo es cabecera si todo lo de dentro es "clave: valor" conocido (si no, era un separador)
-        if end and all(not l.strip() or l.partition(":")[0].strip().lower() in NOTE_KEYS for l in lines[1:end]):
+        # es cabecera si todo lo de dentro es "clave: valor" y alguna clave es nuestra (si no, era un separador). Las
+        # claves que no conocemos (las de una version mas nueva) se conservan tal cual: asi esta version no entierra
+        # en las notas la cabecera que escriba otra
+        keys = [l.partition(":")[0].strip().lower() for l in lines[1:end] if l.strip()] if end else []
+        if end and all(":" in l for l in lines[1:end] if l.strip()) and all(NOTE_KEY_RE.match(k) for k in keys) \
+                and (not keys or any(k in NOTE_KEYS for k in keys)):
             for line in lines[1:end]:
                 k, _, v = line.partition(":")
                 k, v = k.strip().lower(), v.strip()
+                if k == "icono":
+                    v = clean_icon(v)
+                elif k == "participantes":
+                    v, origen = participantes_del_md(v)
+                    if origen:
+                        props["participantes_origen"] = origen
+                elif k == "participantes_origen" and v not in PARTICIPANTES_ORIGENES:
+                    v = ""  # como en notes_save: solo outlook o teams
                 if k in NOTE_KEYS and v:
                     props[k] = [t.strip() for t in v.strip("[]").split(",") if t.strip()] if k == "etiquetas" else v
+                elif v and k not in NOTE_KEYS:  # de una version mas nueva: se conserva tal cual (dump_notes la escribe)
+                    props[k] = v
             body = "\n".join(lines[end + 1:]).lstrip("\n")
     return props, body
 
 
 def dump_notes(props, body):
     head = []
-    for k in NOTE_KEYS:
+    for k in list(NOTE_KEYS) + [k for k in props if k not in NOTE_KEYS and NOTE_KEY_RE.match(str(k))]:
         v = props.get(k)
-        if v:
+        if v and k != "participantes_origen":  # el origen va detras de los participantes (PARTICIPANTES_NOTA)
             v = "[" + ", ".join(v) + "]" if k == "etiquetas" else " ".join(str(v).split())
+            if k == "participantes" and props.get("participantes_origen") in PARTICIPANTES_NOMBRE:
+                v += PARTICIPANTES_NOTA.format(PARTICIPANTES_NOMBRE[props["participantes_origen"]])
             head.append(f"{k}: {v}")
     out = ("---\n" + "\n".join(head) + "\n---\n\n" if head else "") + (body or "").strip("\n")
     return out + "\n" if out.strip() else ""
@@ -879,14 +1191,125 @@ def list_vocab():
     return out
 
 
-def find_vocab(project, name, id_=None):
+def _project_dir(v):
+    """La carpeta del proyecto de una lista: la que contiene su carpeta Vocabulario."""
+    return os.path.dirname(os.path.dirname(v["_abs"]))
+
+
+def _is_app_name(project):
+    """El proyecto de las listas de la raiz: el nombre de la app o uno de los que tuvo («Notas»)."""
+    from common import APP_FORMER_NAMES
+    return fold(project or "") in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME,)}
+
+
+def _of_project(v, project):
+    """La lista es del proyecto `project`: se llama asi o, con el nombre de la app (o uno antiguo), es de la raiz."""
+    return fold(v["project"]) == fold(project or "") or (
+        _is_app_name(project) and os.path.normcase(os.path.normpath(_project_dir(v)))
+        == os.path.normcase(os.path.normpath(ROOT)))
+
+
+def _project_known(project, vs):
+    """Algun proyecto se llama `project`: el de la app (la raiz siempre existe) o el de alguna lista de `vs`."""
+    return _is_app_name(project) or any(_of_project(v, project) for v in vs)
+
+
+def _norm_dir(p):
+    return os.path.normcase(os.path.normpath(p))
+
+
+def _closest(lists, near):
+    """De varias listas (proyectos que se llaman igual), la del proyecto que contiene la reunion `near` (el mas
+    cercano); None si no hay una sola."""
+    if not near:
+        return None
+    mine = sorted((v for v in lists if _inside(os.path.dirname(near), _project_dir(v))),
+                  key=lambda v: -len(_norm_dir(_project_dir(v))))
+    if mine and (len(mine) == 1 or len(_norm_dir(_project_dir(mine[0]))) > len(_norm_dir(_project_dir(mine[1])))):
+        return mine[0]
+    return None
+
+
+def find_vocab(project, name, id_=None, near=None):
+    """La lista de un tema. Por id (la ruta interna de la lista: estable aunque otro proyecto se llame igual), si se
+    llama como dicen `project` y `name` (los nombres de la cabecera de la reunion; sin ellos, el id basta, y si ningun
+    proyecto se llama ya como dice la cabecera, basta el tema: la vinculada tiene otro nombre en este PC, o el otro PC
+    escribio el suyo); si no, por nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus
+    nombres antiguos). Si dos
+    proyectos se llaman igual, `near` (la ruta del audio de la reunion) elige la del proyecto que la contiene; si sigue
+    sin estar claro, ninguna. Con proyecto nunca se toma la lista de otro proyecto (antes, si solo habia un tema con
+    ese nombre, se usaba aunque fuera de otro cliente).
+    Si ningun proyecto se llama ya asi (se renombro su carpeta fuera de la app, o la vinculada tiene otro nombre en
+    este PC), vale la lista de ese tema si es la unica fuera de la raiz y la reunion esta en la carpeta de su proyecto
+    (la mas cercana de las que tienen listas): es su proyecto con el nombre nuevo. Con dos o mas no se sabe cual es,
+    porque la reunion puede estar guardada en la carpeta de otro cliente. Con un id guardado que no es el de esa lista
+    (si no, ya se habria devuelto), tampoco: la reunion ya tenia esa ruta cuando se eligio su lista, asi que no estaba
+    dentro de la carpeta renombrada (la ruta de las de dentro ha cambiado con ella y no tienen id)."""
     vs = list_vocab()
     if id_:
-        return next((v for v in vs if v["id"] == id_), None)
+        hit = next((v for v in vs if v["id"] == id_), None)
+        if hit and (not name or (fold(hit["name"]) == fold(name) and (
+                not project or _of_project(hit, project) or not _project_known(project, vs)))):
+            return hit
+        if not name:
+            return None
     if not name:
         return None
     same = [v for v in vs if fold(v["name"]) == fold(name)]
-    return next((v for v in same if fold(v["project"]) == fold(project or "")), same[0] if len(same) == 1 else None)
+    if not project:
+        return same[0] if len(same) == 1 else None
+    named = [v for v in same if _of_project(v, project)]
+    if len(named) == 1:
+        return named[0]
+    if named:  # varios proyectos con ese nombre: el que contiene la reunion
+        return _closest(named, near)
+    if id_ or not near or _project_known(project, vs):
+        return None
+    root = _norm_dir(ROOT)  # la raiz no cuenta: las contiene todas y sus listas solo valen por su nombre
+    cands = [v for v in same if _norm_dir(_project_dir(v)) != root]
+    homes = {_norm_dir(_project_dir(v)) for v in vs} - {root}
+    home = max((d for d in homes if _inside(os.path.dirname(near), d)), key=len, default=None)
+    return cands[0] if len(cands) == 1 and home == _norm_dir(_project_dir(cands[0])) else None
+
+
+def theme_vocab(props, abs_audio, changed=()):
+    """El tema de una reunion cuando la peticion lo cambia (al grabar y en la pagina de la reunion): en `props` (la
+    cabecera de su .md) quedan los nombres, proyecto y workstream, y el id de su lista va a temas() (ver Temas).
+    Por id (`vocabulario` en la peticion; "" = sin tema), proyecto y tema salen de esa lista; por nombres, find_vocab
+    la busca (y el proyecto pasa a llamarse como ahora: «Notas» es el de la raiz), salvo que la que ya tenia se llame
+    asi: con dos proyectos que se llaman igual, los nombres no dicen cual. Al guardar las notas u otra propiedad no
+    cambia nada (una reunion de antes se queda con su cabecera). `changed`: lo que trae la peticion (lo demas viene
+    del .md)."""
+    changed = changed or {}
+    if not {"proyecto", "workstream", "vocabulario"} & set(changed):
+        return
+    rel, store = rel_of(abs_audio), temas()
+    by_id = "vocabulario" in changed
+    vid = str(changed.get("vocabulario") or "") if by_id else ""
+    try:
+        v = find_vocab(None, None, vid) if vid else None
+        if by_id and (v or not vid):  # elegido por id: proyecto y tema salen de esa lista ("" = sin tema)
+            props.pop("proyecto", None)
+            props.pop("workstream", None)
+        elif props.get("workstream"):  # por nombres (o un id que ya no existe: como si no hubiera venido)
+            v = find_vocab(props.get("proyecto"), props["workstream"], store.get(rel), near=abs_audio)
+        else:
+            v = None
+    except OSError:
+        return
+    if v:
+        props.update(proyecto=v["project"], workstream=v["name"])
+    try:
+        store.set(rel, v["id"] if v else None)
+    except OSError:
+        log_exc()
+
+
+def with_theme_id(props, rel):
+    """Las propiedades de una reunion para la interfaz: con `vocabulario`, el id de la lista de su tema en este PC
+    (temas()), aunque no este en el .md. La interfaz lo usa para marcar la lista elegida (vocabOf en notas.js)."""
+    vid = temas().get(rel) if (props or {}).get("workstream") else None
+    return dict(props, vocabulario=vid) if vid else props
 
 
 def vocab_info(v, language):
@@ -922,7 +1345,8 @@ def vocab_for(abs_audio, st, props=None):
     """Vocabulario para Whisper: el del tema de la reunion o, si no tiene, el general de Ajustes."""
     props = md_props(abs_audio) if props is None else props
     try:
-        v = find_vocab(props.get("proyecto"), props.get("workstream"))
+        vid = temas().get(rel_of(abs_audio)) if props.get("workstream") else None  # el id solo desempata
+        v = find_vocab(props.get("proyecto"), props.get("workstream"), vid, near=abs_audio)
         if v:
             return ", ".join(read_vocab(v["_abs"])[1])
     except OSError:
@@ -960,10 +1384,23 @@ def perfil_folder(st):
     return rel
 
 
+def perfil_vocab_fijo(st):
+    """Tema fijo del perfil ("" = sin vocabulario, tambien fijo) si su lista sigue existiendo; None si el perfil esta
+    en automatico o la lista ya no esta (borrada o renombrada fuera de la app): entonces vale lo automatico, como con
+    la carpeta (perfil_folder), y no una grabacion sin vocabulario."""
+    vid = perfil_de(st)["vocab"]
+    if not vid:
+        return vid
+    try:
+        return vid if find_vocab(None, None, vid) else None
+    except OSError:
+        return None
+
+
 def perfil_vocab(st, sugerido=None):
     """Tema de una grabacion nueva: el fijo del perfil (puede ser "" = sin vocabulario); si el perfil lo deja en
     automatico, el que sugiera la reunion en curso y, si no, el ultimo elegido."""
-    fijo = perfil_de(st)["vocab"]
+    fijo = perfil_vocab_fijo(st)
     return fijo if fijo is not None else (sugerido or st.get("rec_vocab") or "")
 
 
@@ -998,7 +1435,8 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
                 out[key], origen[key] = val, origin
                 return
 
-    pick("vocab", ("elegido", elegido.get("vocab")), ("perfil", p["vocab"]), ("reunion", sug.get("vocab") or None),
+    pick("vocab", ("elegido", elegido.get("vocab")), ("perfil", perfil_vocab_fijo(st)),
+         ("reunion", sug.get("vocab") or None),
          ("ultimo", st.get("rec_vocab") or ""))
     pick("folder", ("elegido", elegido.get("folder")), ("perfil", perfil_folder(st)),
          ("ultimo", auto_folder(out["vocab"]) or ""))
@@ -1010,8 +1448,9 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     return dict(out, origen=origen)
 
 
-def check_perfil(b):
-    """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado."""
+def check_perfil(b, known=None):
+    """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado. `known`: los destinos
+    de salida ya guardados (se aceptan aunque ahora no esten disponibles; los nuevos tienen que existir)."""
     out = {}
     if "folder" in b:
         rel = b["folder"]
@@ -1031,7 +1470,9 @@ def check_perfil(b):
     if "context" in b:
         out["context"] = " ".join(str(b["context"] or "").split())[:engines.ABOUT_CHARS]
     if "outputs" in b:
-        out["outputs"] = salidas.check_destinos(b["outputs"], APP_DIR)
+        roots = [ROOT] + [l["path"] for l in LINKS.values()]  # donde viven las grabaciones: ahi no van documentos
+        out["outputs"] = salidas.check_destinos(b["outputs"], APP_DIR, roots,
+                                                [d["path"] for d in salidas.destinos_de(known)])
     if "language" in b:
         lang = str(b["language"] or "").strip().lower()
         if lang and not IDIOMA_RE.match(lang):
@@ -1049,6 +1490,67 @@ def update_perfil(d, cambios):
     d["perfil"] = perfil
     if "language" in cambios:
         d["language"] = cambios["language"]
+
+
+def moved_rel(p, old, new, folder=False):
+    """La ruta interna `p` despues de que `old` pase a ser `new` (con folder, tambien lo que hay dentro); None si no le
+    afecta."""
+    if not isinstance(p, str) or not old:
+        return None
+    if p == old:
+        return new
+    if folder and p.startswith(old + "/"):
+        return new + p[len(old):]
+    return None
+
+
+def settings_moved(d, old, new, folder=False, project=None):
+    """Los ajustes que guardan rutas internas siguen a una carpeta o a un tema renombrados: carpeta y tema fijos del
+    perfil, ultima carpeta y ultimo tema al grabar y la carpeta de cada proyecto. Si no, Ctrl+Alt+R se quedaba sin
+    vocabulario y grabando en la raiz. project=(nombre viejo, nuevo): el proyecto tambien cambia de nombre."""
+    perfil = dict(d.get("perfil") or {})
+    for k in ("folder", "vocab"):
+        m = moved_rel(perfil.get(k), old, new, folder)
+        if m is not None:
+            perfil[k] = m
+    if d.get("perfil") is not None or perfil:
+        d["perfil"] = perfil
+    for k in ("rec_folder", "rec_vocab"):
+        m = moved_rel(d.get(k), old, new, folder)
+        if m is not None:
+            d[k] = m
+    pf = {}
+    for name, rel in (d.get("project_folders") or {}).items():
+        m = moved_rel(rel, old, new, folder)
+        pf[name] = rel if m is None else m
+    if project and project[0] in pf and project[1] not in pf:
+        pf[project[1]] = pf.pop(project[0])
+    d["project_folders"] = pf
+
+
+def theme_moved(props, vid, new, lists, project, ambiguous=False, inside=False):
+    """Lo que cambia en la cabecera de una reunion cuando la carpeta de un proyecto (o la vinculada) pasa de llamarse
+    project[0] a project[1] (`new`: su ruta interna, ya renombrada): si la cabecera dice el nombre viejo, el nuevo,
+    siempre que la reunion sea de ese proyecto: el id de la lista de su tema (`vid`, de temas(), que ya lo ha seguido)
+    esta dentro o, sin id, ningun otro proyecto se sigue llamando asi (`ambiguous` False) o la reunion esta dentro
+    (`inside`). `lists`: id -> lista, ya renombrada. Solo cambia el valor de `proyecto`, que todas las versiones leen;
+    {} si nada cambia."""
+    if not project or not props.get("workstream") or fold(props.get("proyecto") or "") != fold(project[0]) \
+            or props.get("proyecto") == project[1]:
+        return {}
+    v = lists.get(vid) if vid else None
+    if v and fold(v["name"]) == fold(props["workstream"]):  # el id de su tema dice de que proyecto es
+        return {"proyecto": project[1]} if moved_rel(vid, new, new, folder=True) is not None else {}
+    return {"proyecto": project[1]} if inside or not ambiguous else {}
+
+
+def has_vocab_dir(folder):
+    """La carpeta es la de un proyecto: tiene una carpeta Vocabulario (sus listas toman de ella el nombre)."""
+    try:
+        with os.scandir(folder) as it:
+            return any(e.is_dir() and fold(e.name) == VOCAB_FOLDER for e in it)
+    except OSError:
+        return False
 
 
 # ----------------------------------------------------------------------------- importar listas de vocabulario
@@ -1279,6 +1781,57 @@ def preload_model(st, cached=None):
     return None
 
 
+def live_cloud_cfg(st):
+    """Ajustes de la nube para el directo: los de cloud y el modelo del resumen (la traduccion lo usa con una
+    pasarela propia). _run_live los vuelve a leer en cada trozo, no una copia del arranque."""
+    return dict(st.get("cloud") or {}, summary_model=st.get("summary_model"))
+
+
+class PendingPasses(Complete):
+    """Reuniones con el repaso final pendiente (en cola o a medias), en DATA_DIR/repasos_pendientes.json: se apunta
+    al ponerlo en cola y se quita al terminar (bien, con error o cancelado a mano). Lo que siga apuntado al arrancar
+    se quedo a medias al apagar la app (o al cerrar la sesion de Windows) y se retoma.
+
+    Con cada reunion va local_part: si su directo tuvo algun trozo en local (sin el dato, el formato anterior, una lista
+    de rutas, se da por hecho que si). Si el repaso no acaba, el texto que queda es el del directo, y lo transcrito en
+    local no sale del PC por el resumen automatico sin permiso. Quien lo decide es CloudText, que vive en DATA_DIR y
+    sobrevive al reinicio igual que este fichero: local_part queda como constancia en el repaso (Job.local_part)."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = {}
+        if isinstance(raw, list):  # formato anterior: solo las rutas
+            raw = {rel: {} for rel in raw if isinstance(rel, str)}
+        self.data = {rel: v for rel, v in raw.items() if isinstance(v, dict)} if isinstance(raw, dict) else {}
+
+    def _save(self):
+        with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, sort_keys=True)
+        os.replace(self.path + ".tmp", self.path)
+
+    def set(self, rel, done=True, local_part=True):
+        """done: apuntarla (con local_part) o, con False, quitarla."""
+        with self.lock:
+            if done:
+                info = {"local_part": bool(local_part)}
+                if self.data.get(rel) == info:
+                    return
+                self.data[rel] = info
+            elif rel in self.data:
+                del self.data[rel]
+            else:
+                return
+            self._save()
+
+    def local_part(self, rel):
+        """Si el directo de esa reunion tuvo algun trozo en local (sin el dato, si)."""
+        return (self.data.get(rel) or {}).get("local_part") is not False
+
+
 _SALIDAS_LOCK = threading.Lock()  # temporizadores de la reescritura agrupada de los destinos de salida
 
 
@@ -1294,19 +1847,25 @@ class Jobs:
         self.local = engines.LocalEngine(DATA_DIR, "batch", idle_s=keep)
         self.live_worker = engines.WorkerClient("live", DATA_DIR, idle_s=keep)
         self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"), log=log)
+        if self.cloud.purge_tmp():  # trozos de audio de una sesion que se corto (apagado, actualizacion, cuelgue)
+            log("   borrados los trozos de audio temporales que dejó la sesión anterior")
         self.summarizer = engines.Summarizer(keys=self.cloud.keys)  # en la nube (Groq); mismas claves y cupo
         self.queues["resumen"] = queue.Queue()
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
         self._registro, self._salidas_timers = None, {}  # salidas.json (documentos escritos) y reescrituras pendientes
+        self.closing = False  # apagando: un repaso final cancelado queda pendiente para el proximo arranque
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
+        threading.Thread(target=self._resume_final_passes, daemon=True, name="repasos-pendientes").start()
 
     def shutdown(self):
         """Apagar: lo que esta en cola se cancela, lo que corre recibe la senal de cancelar y los procesos de Whisper
-        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan."""
+        (cola y directo) se matan. Los trozos ya escritos (.txt/.srt en directo) se quedan; los de audio que se
+        estaban subiendo a la nube (DATA_DIR/tmp) se borran (lo que siga abierto, al arrancar la proxima vez)."""
         with self.lock:
+            self.closing = True  # un repaso final en cola o a medias queda apuntado: se retoma al volver a abrir
             for j in self.list:
                 if j.status == "queued":
                     j.status = "cancelled"
@@ -1318,6 +1877,11 @@ class Jobs:
                     w.kill()
             except Exception:
                 log_exc()
+        try:
+            if getattr(self, "cloud", None) is not None:
+                self.cloud.purge_tmp()
+        except Exception:
+            log_exc()
 
     def preload(self):
         """Al arrancar: deja cargado el modelo local que va a usar el directo (o, si el directo es en la nube, el de
@@ -1385,6 +1949,12 @@ class Jobs:
             raise ApiError("Ese audio ya se está transcribiendo.")
         job = Job(rel, os.path.basename(rel), preset, meeting_setup(abs_path, st)["language"] or None)
         job.engine, job.live, job.recording = "live", True, True
+        # algun trozo en local (o, al retomar tras un reinicio, lo de antes sin constar que fuera en la nube): el
+        # resumen automatico no lo sube a la nube sin permiso (CloudText, Jobs.auto_summary)
+        retoma = os.path.isfile(os.path.splitext(abs_path)[0] + ".srt")
+        job.local_part = (engines.PRESETS_BY_ID[preset]["engine"] != "cloud"
+                          or (retoma and rel not in self._cloud_text()))
+        self._cloud_text().set(rel, not job.local_part)
         job.status, job.started, job.stage = "running", time.time(), "Empezando en directo…"
         COMPLETE.set(rel, False)  # hasta que termine bien, no se da por completa
         with self.lock:
@@ -1407,13 +1977,76 @@ class Jobs:
             self._cloud_ready()
         except ApiError:
             return False
-        j = Job(job.path, job.name, "nube", job.language)
-        j.final_pass, j.stage = True, "En cola: repaso final en la nube"
+        # local_part del directo: si tuvo algun trozo en local (sin el dato, si: lo seguro)
+        self._queue_final_pass(job.path, job.name, job.language, local_part=getattr(job, "local_part", True))
+        return True
+
+    def _queue_final_pass(self, rel, name, language, local_part=True):
+        """El repaso final de esa reunion a la cola: el del directo que acaba de terminar o, al arrancar, el que quedo
+        apuntado (_resume_final_passes). Queda apuntado en repasos_pendientes.json hasta que termine: si se apaga
+        antes, se retoma al arrancar. local_part: si su directo tuvo algun trozo en local (sin el dato, si: lo seguro).
+        Va con el repaso (j.local_part) y se apunta con el. Si el repaso no acaba, el texto que queda es el del directo,
+        y el resumen automatico mira CloudText (apuntado al empezar el directo): lo transcrito en local no sale del PC
+        sin permiso, tampoco con un repaso retomado tras reiniciar (tests/test_integracion.py)."""
+        j = Job(rel, name, "nube", language)
+        j.final_pass, j.stage, j.local_part = True, "En cola: repaso final en la nube", local_part is not False
+        self._pending().set(rel, local_part=j.local_part)
         with self.lock:
             self.list.append(j)
         self.queues[j.engine].put(j)
-        log(f"↻ {job.name}  repaso final de la grabación entera en la nube")
-        return True
+        log(f"↻ {name}  repaso final de la grabación entera en la nube")
+        return j
+
+    def _pending(self):
+        """Los repasos finales pendientes (PendingPasses), en el DATA_DIR vigente."""
+        path = os.path.join(DATA_DIR, "repasos_pendientes.json")
+        reg = getattr(self, "_pending_reg", None)
+        if reg is None or reg.path != path:
+            reg = self._pending_reg = PendingPasses(path)
+        return reg
+
+    def _final_pass_over(self, rel, keep_live_text=False):
+        """El repaso final de esa reunion ya no esta pendiente. keep_live_text: no se hizo (cancelado a mano o ya no se
+        puede hacer): se queda el texto del directo y con el se hacen los destinos y el resumen."""
+        try:
+            self._pending().set(rel, False)
+        except OSError:
+            log_exc()
+        if keep_live_text:
+            log("   se mantiene el texto del directo")
+            self._after_transcribe(rel)
+
+    def _resume_final_passes(self, delay=3.0):
+        """Al arrancar: los repasos finales que quedaron en cola o a medias al apagar se vuelven a poner en cola, y al
+        terminar se hacen los destinos y el resumen como siempre. Si ya no se puede (sin nube, el repaso apagado en
+        Ajustes, la reunion corregida a mano), se hacen con el texto del directo; si la reunion ya no esta, se
+        olvida."""
+        time.sleep(delay)
+        try:
+            for rel in sorted(self._pending().data):
+                try:
+                    abs_path = safe(rel, "file")
+                except ApiError:
+                    log(f"   repaso final pendiente de {rel}: la reunión ya no está ahí, se olvida")
+                    self._final_pass_over(rel)
+                    continue
+                if self.active_for(rel):
+                    continue
+                ok = self.settings.get().get("live_final_pass", True) and not os.path.isdir(backup_dir(rel))
+                if ok:
+                    try:
+                        self._cloud_ready()
+                    except ApiError:
+                        ok = False
+                if ok:
+                    log(f"   {os.path.basename(abs_path)}: el repaso final se quedó pendiente al apagar; se retoma")
+                    self._queue_final_pass(rel, os.path.basename(abs_path), None,
+                                           local_part=self._pending().local_part(rel))
+                else:
+                    log(f"   {os.path.basename(abs_path)}: el repaso final pendiente ya no se puede hacer")
+                    self._final_pass_over(rel, keep_live_text=True)
+        except Exception:
+            log_exc()
 
     def refresh_prompt(self, rel):
         """Cambio el tema, el idioma o el contexto de una reunion: si se esta transcribiendo en directo, live.run lo
@@ -1443,6 +2076,9 @@ class Jobs:
         if preset:
             self._check_live_preset(preset)
             job.preset = preset
+            if engines.PRESETS_BY_ID[preset]["engine"] != "cloud":
+                job.local_part = True
+                self._cloud_text().set(job.path, False)
             self.settings.update(lambda d: d.update(live_preset=preset))
         if restart:
             job.restart = True
@@ -1460,7 +2096,10 @@ class Jobs:
                 resume = []
         opts = {"preset": job.preset, **meeting_setup(abs_path, st),  # language, prompt (vocabulario) y about
                 "threads": int(st.get("threads") or default_threads()),
-                "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": st["cloud"],
+                "worker": self.live_worker, "cloud": self.cloud, "cloud_cfg": live_cloud_cfg(st),
+                # los ajustes de la nube vigentes en cada trozo (no una copia del arranque): una clave pegada, cambiada
+                # o quitada en Ajustes vale desde el siguiente
+                "cloud_cfg_fn": lambda: live_cloud_cfg(self.settings.get()),
                 "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume, "summarizer": self.summarizer}
         job.opts = opts  # live.run los lee en cada trozo: si cambias tema, idioma o contexto, vale desde el siguiente
         job.out = LiveOutputs(abs_path)
@@ -1480,6 +2119,7 @@ class Jobs:
         try:
             segs, lang = live.run(job, abs_path, opts, writer, log)
             job.detected = lang
+            err = getattr(job, "live_error", None)  # el ultimo trozo de la nube que no salio (live.run lo salta)
             if segs:
                 writer(segs)
                 if job.edits:  # lo que transcribio Whisper, para poder "Restaurar original" despues
@@ -1489,8 +2129,14 @@ class Jobs:
                     self._after_transcribe(job.path)
                 job.status, job.stage, job.progress = "done", "Hecho", 1.0
                 log(f"✔ {job.name}  directo terminado ({job.recorded / 60:.0f} min grabados)")
+            elif self._final_pass(job):  # sin texto del directo (p. ej. fallaron todos los trozos): lo hace el repaso
+                job.status, job.progress = "done", 1.0
+                job.stage = "Sin texto en directo: el repaso final transcribe la grabación entera"
+                log(f"   {job.name}: el directo no dejó texto ({err or 'sin voz'}); lo transcribe el repaso final")
             else:
-                job.status, job.stage, job.error = "error", "Error", "No se ha detectado voz en la grabación."
+                job.status, job.stage = "error", "Error"
+                job.error = (f"No se ha podido transcribir en directo ({err}). El audio se conserva: transcríbelo "
+                             "desde la cola." if err else "No se ha detectado voz en la grabación.")
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Directo detenido"
             log(f"■ {job.name}  directo detenido")
@@ -1498,13 +2144,18 @@ class Jobs:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  {job.error}")
             log_exc()
+            # si la grabacion ya habia terminado, el repaso final (y tras el, los destinos y el resumen) se hace igual
+            if not job.recording and self._final_pass(job):
+                job.stage = "Error en el directo: el repaso final transcribe la grabación entera"
         finally:
             job.recording = False
             job.finished = time.time()
             self.library.at = 0
 
     def submit(self, paths, preset, language, resume=False):
-        """resume: las que se quedaron a medias se continuan desde donde acaba el texto (el resto, enteras)."""
+        """resume: las que se quedaron a medias se continuan desde donde acaba el texto (el resto, enteras).
+        language: "" = detectar, un codigo = ese idioma para todas, None = el de cada reunion (el de su .md o, si no
+        lo fija, el del perfil; «Transcribir todos los pendientes»): lo decide _run con meeting_setup."""
         if preset not in engines.PRESETS_BY_ID:
             raise ApiError("Velocidad desconocida: " + str(preset))
         if engines.PRESETS_BY_ID[preset]["engine"] == "cloud":
@@ -1518,6 +2169,7 @@ class Jobs:
             if a and a.get("recording"):
                 raise ApiError("Se está grabando todavía: usa «Transcribir en directo».")
             job = Job(rel, os.path.basename(rel), preset, language or None)
+            job.per_meeting = language is None
             if resume and a and a.get("partial"):
                 job.resume_from = a["tx_end"]
             with self.lock:
@@ -1533,8 +2185,9 @@ class Jobs:
 
     def submit_summary(self, rel, auto=False):
         abs_path = safe(rel, "file")
-        if not self.summary_ready():
-            raise ApiError("El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+        if not self.summary_ready():  # con Azure OpenAI: que el resumen aun no funciona ahi (no "configura la nube")
+            raise ApiError(engines.chat_missing(self.settings.get()["cloud"])
+                           or "El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
         if not any(os.path.isfile(os.path.splitext(abs_path)[0] + e) for e in (".srt", ".txt")):
             raise ApiError("Primero hay que transcribir la reunión.")
         with self.lock:
@@ -1547,9 +2200,26 @@ class Jobs:
         log(f"✨ {job.name}  resumen{' (automático)' if auto else ''} en cola")
         return job.id
 
+    def _cloud_text(self):
+        """CloudText del DATA_DIR vigente, uno solo aunque lo pidan dos hilos a la vez (con dos, uno podria volver a
+        escribir en disco un «en la nube» que el otro ya habia quitado)."""
+        path = os.path.join(DATA_DIR, "transcritas_en_la_nube.json")
+        with CLOUD_TEXT_LOCK:
+            reg = getattr(self, "_cloud_reg", None)
+            if reg is None or reg.path != path:
+                reg = self._cloud_reg = CloudText(path)
+        return reg
+
+    def _tx_in_cloud(self, rel):
+        """¿El texto que tiene ahora esa reunion se transcribio entero en la nube? Lo dice CloudText, que apunta cada
+        transcripcion al escribir; sin dato, no."""
+        return rel in self._cloud_text()
+
     def auto_summary(self, rel):
         """Al terminar de transcribir: resumen automatico si es una reunion reciente (las antiguas se
-        resumen a mano, para no gastar de golpe el cupo diario de Groq)."""
+        resumen a mano, para no gastar de golpe el cupo diario de Groq). El resumen manda el texto, las notas y el
+        contexto al proveedor de la nube: si el texto no se transcribio entero en la nube (_tx_in_cloud), solo con el
+        consentimiento de Ajustes (summary_auto_local). A mano, siempre."""
         st = self.settings.get()
         if not st.get("summary_auto", True) or not self.summary_ready():
             return
@@ -1562,6 +2232,10 @@ class Jobs:
                 when = None
         when = when or (a or {}).get("mtime") or 0
         if time.time() - when > 3 * 86400:
+            return
+        if not self._tx_in_cloud(rel) and not st.get("summary_auto_local"):
+            log(f"   {os.path.basename(rel)}: transcrita en local, sin resumen automático (no sale del PC; se puede "
+                "resumir a mano)")
             return
         try:
             self.submit_summary(rel, auto=True)
@@ -1585,7 +2259,8 @@ class Jobs:
             meta = {"title": props.get("titulo") or os.path.splitext(job.name)[0],
                     "date": (a.get("date") or "").replace("T", " ")[:16] or "fecha desconocida",
                     "duration": f"{round(d / 60)} min" if d else "duración desconocida",
-                    "participants": props.get("participantes", ""), "notes": notes,
+                    # los sugeridos por Outlook/Teams no salen del PC hasta que el usuario los confirma o edita
+                    "participants": participantes_confirmados(props), "notes": notes,
                     "extra": st.get("summary_extra", ""), "about": props.get("contexto", "")}
             segments = self._with_speakers(abs_path, data["segments"], meta)
             cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"))
@@ -1638,6 +2313,9 @@ class Jobs:
         abs_path = safe(rel, "file")
         base = os.path.splitext(abs_path)[0]
         props, notes = parse_notes(read_text(base + ".md")) if os.path.isfile(base + ".md") else ({}, "")
+        # participantes sugeridos por Outlook/Teams sin confirmar: el destino (quiza sincronizado) no los lleva
+        props = dict(props, participantes=participantes_confirmados(props))
+        props.pop("participantes_origen", None)
         summary, model = "", None
         if os.path.isfile(base + ".resumen.md"):
             text = read_text(base + ".resumen.md")
@@ -1665,9 +2343,18 @@ class Jobs:
                 "duration": f"{round(d / 60)} min" if d else "", "props": props, "source": rel, "summary": summary,
                 "summary_model": model, "notes": notes, "segments": segments, "app_name": APP_NAME}
 
+    @property
+    def registro(self):
+        """salidas.json: que documento de cada destino es de que reunion (y su hash). Se abre al primer uso."""
+        if getattr(self, "_registro", None) is None:
+            self._registro = salidas.Registro(os.path.join(DATA_DIR, "salidas.json"))
+        return self._registro
+
     def write_outputs(self, rel):
         """Escribe la reunion en los destinos de salida del perfil (si hay y la reunion ya tiene transcripcion).
-        Nunca mueve ni toca el original; solo sobrescribe los documentos que genero la propia app (salidas.py)."""
+        Nunca mueve ni toca el original; solo sobrescribe los documentos que genero la propia app (salidas.py). En una
+        carpeta de la app (su raiz o una vinculada, donde viven las grabaciones) no se escribe nunca: un destino
+        guardado antes de que eso se comprobara, o que haya quedado dentro al vincular una carpeta, solo da un aviso."""
         try:
             destinos = perfil_de(self.settings.get())["outputs"]
             if not destinos:
@@ -1675,12 +2362,120 @@ class Jobs:
             base = os.path.splitext(safe(rel, "file"))[0]
             if not any(os.path.isfile(base + e) for e in (".srt", ".txt")):
                 return []
-            if getattr(self, "_registro", None) is None:
-                self._registro = salidas.Registro(os.path.join(DATA_DIR, "salidas.json"))
-            return salidas.write_all(self.document_for(rel), destinos, self._registro, log)
+            done = salidas.write_all(self.document_for(rel), destinos, self.registro, log, blocked=in_app_tree)
+            self._note_outputs(rel, done)
+            return done
         except Exception:
             log_exc()
             return []
+
+    def _note_outputs(self, rel, done):
+        """Lo que no se ha podido escribir queda como aviso para Ajustes (GET /api/perfil): los de esta reunion se
+        sustituyen por los de esta escritura (que cubre todos los destinos), y se guardan como mucho 30."""
+        with _SALIDAS_LOCK:
+            avisos = getattr(self, "_salidas_avisos", None)
+            if avisos is None:
+                avisos = self._salidas_avisos = {}
+            for key in [k for k, a in avisos.items() if a["reunion"] == rel]:
+                del avisos[key]
+            for path, accion in done:
+                if accion not in ("escrito", "igual"):
+                    avisos[os.path.normcase(path)] = {"path": path, "accion": accion, "reunion": rel, "at": time.time()}
+            for key in sorted(avisos, key=lambda k: avisos[k]["at"])[:-30]:
+                del avisos[key]
+
+    def outputs_warnings(self):
+        """Avisos de los destinos de salida, el mas reciente primero (solo de los destinos que siguen en el perfil)."""
+        destinos = perfil_de(self.settings.get())["outputs"]
+        with _SALIDAS_LOCK:
+            avisos = list((getattr(self, "_salidas_avisos", None) or {}).values())
+        avisos = [a for a in avisos if any(salidas.inside(a["path"], d["path"]) for d in destinos)]
+        return sorted(avisos, key=lambda a: -a["at"])
+
+    def flush_outputs(self, budget=15.0):
+        """Al apagar: las reescrituras que esperaban su temporizador (schedule_outputs, 4 s) se hacen ya, y se espera a
+        las que estan en marcha; si no, el ultimo cambio de las notas o de la transcripcion no llegaria a los destinos.
+        Con un tope de `budget` segundos en total. Devuelve las reuniones escritas."""
+        with _SALIDAS_LOCK:
+            timers = getattr(self, "_salidas_timers", None) or {}
+            pending = list(timers.items())
+            timers.clear()
+        t0, done = time.time(), []
+        for rel, t in pending:
+            t.cancel()
+            if time.time() - t0 > budget:
+                log(f"   destinos de salida: no ha dado tiempo a escribir {rel} al apagar")
+                continue
+            self.write_outputs(rel)
+            done.append(rel)
+        for t in threading.enumerate():  # las que ya vencieron y estan escribiendo
+            if getattr(t, "salidas", False) and t is not threading.current_thread():
+                t.join(max(0.0, budget - (time.time() - t0)))
+        return done
+
+    def outputs_moved(self, old, new, folder=False):
+        """Una reunion (o una carpeta entera) cambia de ruta: sus documentos siguen siendo suyos en el registro y la
+        reescritura que estuviera pendiente se hace con la ruta nueva."""
+        try:
+            self.registro.moved(old, new, folder)
+        except OSError:
+            log_exc()
+        with _SALIDAS_LOCK:
+            timers = getattr(self, "_salidas_timers", None) or {}
+            moved = [(r, m) for r in list(timers) for m in [moved_rel(r, old, new, folder)] if m is not None]
+            for r, _ in moved:
+                timers.pop(r).cancel()
+        for _, m in moved:
+            self.schedule_outputs(m)
+
+    def forget_outputs(self, rel):
+        """La reunion se ha borrado: sus documentos de los destinos del perfil que siguen tal cual se escribieron van
+        a la papelera; los que se cambiaron alli (o los de una carpeta que ya no es destino) se quedan. Devuelve cuantos
+        se han mandado a la papelera."""
+        with _SALIDAS_LOCK:
+            t = (getattr(self, "_salidas_timers", None) or {}).pop(rel, None)
+        if t:
+            t.cancel()
+        try:
+            entries = self.registro.entries(rel)
+        except OSError:
+            return 0
+        if not entries:
+            return 0
+        destinos = perfil_de(self.settings.get())["outputs"]
+        intact = []
+        for path, sha in entries:
+            try:
+                if any(salidas.inside(path, d["path"]) for d in destinos) and os.path.isfile(path) \
+                        and salidas.sha256_of(path) == sha:
+                    intact.append(path)
+            except OSError:
+                pass
+        n = 0
+        if intact:
+            try:
+                to_recycle_bin(intact)
+                n = len(intact)
+            except (ApiError, OSError) as e:
+                log(f"   no se pudieron mandar a la papelera los documentos de {rel}: {getattr(e, 'msg', e)}")
+                intact = []
+        self.registro.forget([p for p, _ in entries])  # la reunion ya no existe: ninguno es de nadie
+        return n
+
+    def outputs_for_persona(self, pid=None):
+        """Quien habla cambia de nombre (o se fusiona u olvida): los documentos de las reuniones donde sale (con None,
+        las de cualquier persona reconocida) se reescriben, que llevan los nombres."""
+        if not perfil_de(self.settings.get())["outputs"]:
+            return 0
+        self.library.refresh(max_age=5)
+        n = 0
+        for a in list(self.library.flat):
+            data = voices.read_sidecar(a["_spk"]) if a.get("_spk") else None
+            if data and any(i.get("persona") and (pid is None or i.get("persona") == pid)
+                            for i in (data.get("hablantes") or {}).values()):
+                self.schedule_outputs(a["path"])
+                n += 1
+        return n
 
     def schedule_outputs(self, rel, delay=4.0):
         """Reescritura al guardar cambios en las notas o la transcripcion: agrupada (se guarda mientras se escribe)."""
@@ -1696,7 +2491,7 @@ class Jobs:
             if old:
                 old.cancel()
             t = threading.Timer(delay, lambda: self._fire_outputs(rel, t))
-            t.daemon = True
+            t.daemon, t.salidas = True, True  # flush_outputs las encuentra al apagar
             timers[rel] = t
         t.start()
 
@@ -1902,6 +2697,7 @@ class Jobs:
             job.stage = (f"Voces: {len(real)} {'persona' if len(real) == 1 else 'personas'} · {known} "
                          f"reconocida{'s' if known != 1 else ''}")
             log(f"✔ {job.name}  {job.stage.lower()} ({time.time() - job.started:.0f} s)")
+            self.schedule_outputs(job.path)  # destinos de salida: el documento con quien habla (y participantes)
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Cancelado"
             log(f"■ {job.name}  voces canceladas")
@@ -1917,16 +2713,23 @@ class Jobs:
                 self.auto_summary(job.path)
 
     def cancel(self, job_id):
+        queued_pass = None
         with self.lock:
             for j in self.list:
                 if j.id == job_id and j.status in ("queued", "running"):
                     j.cancel = True
                     if j.status == "queued":
                         j.status, j.stage, j.finished = "cancelled", "Cancelado", time.time()
+                        queued_pass = j.path if getattr(j, "final_pass", False) else None
                     else:
                         j.stage = "Cancelando…"
-                    return True
-        return False
+                    break
+            else:
+                return False
+        if queued_pass:  # el repaso final en cola: se queda el texto del directo (los destinos y el resumen, con el)
+            threading.Thread(target=self._final_pass_over, args=(queued_pass, True), daemon=True,
+                             name="repaso-cancelado").start()
+        return True
 
     def clear(self):
         with self.lock:
@@ -1984,7 +2787,9 @@ class Jobs:
                 log(f"   continuando desde {start / 60:.1f} min")
             ms = meeting_setup(abs_path, st)  # vocabulario del tema (o el general), contexto libre e idioma del .md
             vocab, about = ms["prompt"], ms["about"]
-            if job.final_pass:  # el repaso final usa el idioma que tenga la reunion al terminar (pudo cambiarse)
+            # el repaso final usa el idioma que tenga la reunion al terminar (pudo cambiarse); en lote, «el de cada
+            # reunion»: el de su .md o el del perfil
+            if job.final_pass or getattr(job, "per_meeting", False):
                 job.language = ms["language"] or None
             if preset["engine"] == "local":
                 segs, lang, dur = self.local.transcribe(abs_path, preset, job.language, vocab,
@@ -2009,7 +2814,11 @@ class Jobs:
                     raise engines.EngineError("No se ha detectado voz en el audio.")
                 write_outputs(abs_path, segs)
                 shutil.rmtree(backup_dir(job.path), ignore_errors=True)  # el "original" es ahora este
+            # en la nube solo si lo fue este trabajo y, al continuar una a medias, tambien lo de antes
+            self._cloud_text().set(job.path, job.engine == "cloud" and (not start or job.path in self._cloud_text()))
             COMPLETE.set(job.path)  # aunque el texto acabe antes que el audio, esta completa
+            if job.final_pass:
+                self._final_pass_over(job.path)
             self._after_transcribe(job.path)
             job.duration, job.detected = dur or job.duration, lang
             job.status, job.progress, job.stage, job.eta = "done", 1.0, "Hecho", 0
@@ -2026,12 +2835,18 @@ class Jobs:
         except engines.Cancelled:
             job.status, job.stage = "cancelled", "Cancelado"
             log(f"■ {job.name}  cancelado")
+            if job.final_pass:
+                if getattr(self, "closing", False):  # al apagar: sigue pendiente y se retoma al volver a abrir
+                    log("   el repaso final queda pendiente para el próximo arranque")
+                else:  # cancelado a mano: se queda el texto del directo, y con el los destinos y el resumen
+                    self._final_pass_over(job.path, keep_live_text=True)
         except Exception as e:
             job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
             log(f"✖ {job.name}  {job.error}")
             if not isinstance(e, (engines.EngineError, ApiError)):
                 log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
+                self._final_pass_over(job.path)
                 log("   se mantiene el texto del directo")
                 self.write_outputs(job.path)
                 self.auto_summary(job.path)
@@ -2058,6 +2873,273 @@ def scrub(text, keys=()):
     return KEY_LIKE.sub(lambda m: masked(m.group(0)), text)
 
 
+# ----------------------------------------------------------------------------- diagnostico: lista blanca
+# «Copiar diagnostico» se pega donde se pide ayuda, a veces en un sitio publico. Lleva solo lo que se sabe tecnico:
+# version, Python y sistema, motor y modelo, contadores y, de las ultimas lineas de server.log, lo fijo de los mensajes
+# que escribe la propia app (DIAG_LINES) con sus cifras, modelos y codigos de error. Todo lo demas (nombres de
+# reuniones, carpetas, proyectos, temas y personas, rutas, el texto de un error, lo que no se reconoce) va como
+# «<texto>». No depende de lo que la app sepa de la biblioteca: lo ya borrado, renombrado u olvidado tampoco sale.
+DIAG_FREE = "<texto>"
+# Cada plantilla es un mensaje de log() con sus huecos. {t}: texto libre (siempre «<texto>»); {b}: lo mismo, dentro de
+# unos corchetes; {e}: un error («<texto>» y sus codigos); {n}: una cifra; {m}: un modelo o una velocidad conocidos
+# (DIAG_MODELS); {c}: una excepcion conocida (diag_exceptions); {k}: nombres de ajustes; {l}: un idioma; {a}: la app de
+# la llamada; {u}: la URL local; {v}: una version; {y}: el .py de una traza (solo su nombre); {f}: la funcion de una
+# traza. ⟦…⟧ es opcional y lo demas, literal. Gana la primera que encaja (las concretas van antes que las generales);
+# sin plantilla, la sangria, el icono y «<texto>» (diag_line).
+DIAG_LINES = (
+    # trabajos de la cola, del directo, del resumen y de las voces: «<icono> <reunion>  <que>»
+    "▶ {t}  [{m}]",
+    "● Grabando: {t}⟦ [{b} · {b}]⟧⟦ (solo grabar, sin transcribir)⟧",
+    "■ Grabación parada: {t} ({n} min)",
+    "● {t}  transcripción en directo⟦ (automática)⟧",
+    "↻ {t}  repaso final de la grabación entera en la nube",
+    "✔ {t}  directo terminado ({n} min grabados)",
+    "■ {t}  directo detenido",
+    "✨ {t}  resumen⟦ (automático)⟧ en cola",
+    "✔ {t}  resumen listo ({n} s, {m})",
+    "✖ {t}  resumen: {e}",
+    "🗣 {t}  voces⟦ (automático)⟧ en cola",
+    "✔ {t}  voces: {n} persona⟦s⟧ · {n} reconocida⟦s⟧ ({n} s)",
+    "■ {t}  voces canceladas",
+    "✖ {t}  voces: {e}",
+    "✔ {t}  {n} min⟦  ({n}x tiempo real)⟧",
+    "■ {t}  cancelado",
+    "✖ modelos de voces: {e}",
+    "✖ {t}  {e}",
+    "   {t}: sin repaso final (tiene correcciones a mano)",
+    "   directo {t}: vocabulario, idioma y contexto actualizados",
+    "   directo {t}: rehacer con {m}",
+    "   directo {t}: modelo {m}",
+    "   {t}: transcrita en local, sin resumen automático (no sale del PC; se puede resumir a mano)",
+    "   continuando desde {n} min",
+    "   en lo que faltaba no hay voz: se da por completa",
+    "   se mantiene el texto del directo",
+    "   no se pudo escribir la transcripción todavía ({c})",
+    "   voces: {e}",
+    "   {t}: documento escrito en {n} destino(s)⟦ · sin tocar: {t}⟧",
+    # repaso final pendiente al apagar (fix-directo) y destinos de salida al apagar o borrar (fix-perfil)
+    "   {t}: el repaso final se quedó pendiente al apagar; se retoma",
+    "   {t}: el repaso final pendiente ya no se puede hacer",
+    "   repaso final pendiente de {t}: la reunión ya no está ahí, se olvida",
+    "   el repaso final queda pendiente para el próximo arranque",
+    "   {t}: el directo no dejó texto ({e}); lo transcribe el repaso final",
+    "   destinos de salida: no ha dado tiempo a escribir {t} al apagar",
+    "   no se pudieron mandar a la papelera los documentos de {t}: {e}",
+    # directo (live.py)
+    "   directo: idioma {l} desde el siguiente trozo",
+    "   idioma: {l}⟦ ({n}%)⟧",
+    "   rehaciendo desde el principio con {m}",
+    "   se salta un trozo que Whisper no consigue transcribir",
+    "   directo reanudado: vuelve a haber cupo",
+    "   trozo sin transcribir ({e}); se sigue con el siguiente",
+    "   traducción del directo: {e}",
+    "   trozo de {n} s ({n} s de voz, {n} frases): texto a los {n} s{t}",
+    "   {e} ({n} s de audio, intento {n})",
+    "   directo: no se pudieron releer los ajustes de la nube ({c})",
+    # biblioteca, carpetas, vocabulario y voces
+    "⤓ importado: {t}",
+    "🗑 vocabulario a la papelera: {t}",
+    "🗑 {t} → papelera ({n} archivos⟦ y {n} documentos de los destinos⟧)",
+    "   tema de {n} reuniones: siguen a la carpeta renombrada {t}",
+    "↪ {t}  →  {t}",
+    "↺ {t}: transcripción original restaurada",
+    "🔗 carpeta vinculada: {t}",
+    "🔗 carpeta desvinculada (no se ha tocado nada): {t}",
+    "🔤 vocabulario guardado: {t} ({n} términos)",
+    "🔤 vocabulario importado de {t}: {n} listas copiadas, {n} omitidas ({t})",
+    "   perfil de reunión guardado: {k}",
+    "🗣 huella guardada: {t} ({n} huella⟦s⟧)",
+    "🗣 personas fusionadas ({n} reuniones actualizadas)",
+    "🗣 todas las huellas olvidadas",
+    "🗣 persona olvidada",
+    "🗣 voces activadas",
+    "🗣 voces desactivadas",
+    "   modelos de voces descargados",
+    "   voces.json no se pudo leer ({e}); se aparta como voces.json.ilegible",
+    # arranque, ajustes, grabadora, llamadas y apagado
+    "arranque · {u} · carpeta {t} · datos {t} · Python {v}",
+    "=" * 64,  # el recuadro de main() con la URL, la carpeta y como apagar
+    f"  {APP_NAME.upper()}  ·  {{u}}",
+    "  Carpeta: {t}",
+    f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).",
+    "   sin DPAPI fuera de Windows: los secretos se guardan en claro (plain:base64)",
+    "modelo {m} precargado para el directo en {n} s",
+    "modelo {m} precargado para la cola en {n} s",
+    "no se pudo precargar {m}: {e}",
+    "   borrados los trozos de audio temporales que dejó la sesión anterior",
+    "   no se pudo descifrar {k} de settings.json ({e}): vuelve a pegarla en Ajustes",
+    "   no se pudo copiar settings.json ({c}): no se escribirá encima en esta sesión",
+    "   settings.json no se puede leer ({e})⟦: copia en {t}⟧; recuperado: {t}; lo demás vuelve a los valores por "
+    "defecto",
+    "   aviso pendiente: el resumen automático ya no sube a la nube lo transcrito en local",
+    "   no se pudo guardar {t} ({c})",
+    "   micro silenciado",
+    "   micro reactivado",
+    "   reunión detectada ({a}): aviso flotante abierto",
+    "   reunión detectada ({a}): aviso enviado",
+    "   Outlook: GetDateFormatEx/GetTimeFormatEx han fallado (error {n}): el filtro va con el formato de EE. UU.",
+    "apagar pedido desde la interfaz ({n} trabajos en cola o en marcha)",
+    "apagando ({t})",
+    "apagado",
+    "la app ya estaba abierta: se ensena su ventana",
+    "AppUserModelID {t}: fijado",
+    "AppUserModelID {t}: no disponible",
+    "la ventana se ha cerrado sin apagar: la app sigue en segundo plano",
+    "no se pudo abrir la ventana propia (detalle arriba): se abre en Edge",
+    "la ventana propia necesita WebView2 y pywebview usaría «{t}» (¿falta el runtime de WebView2?): se abre en Edge",
+    "Windows pide cerrar la ventana (WindowsShutDown): se deja cerrar",  # fix-windows: apagar o cerrar sesion
+    "Windows pide cerrar la ventana (TaskManagerClosing): se deja cerrar",
+    "Windows cierra la sesión o se apaga: apagado limpio",
+    "Windows ha pedido cerrar: apagado limpio",
+    # sesion de la API (fix-seguridad): el metodo y la ruta pedidos sin token, como texto
+    "   403 sin token de sesión (navegador): {t} (solo el primero)",
+    "   403 sin token de sesión (programa): {t} (solo el primero)",
+    "   sesión: cookie entregada a la interfaz",
+    "   sesión: /?t= con un token que no es el de esta sesión (sin cookie)",
+    "puerto {n} ocupado ({t}): {e}",
+    "  Interfaz: {u}?t=<el contenido de {t}>",
+    "(no hay server.log)",
+    # trazas (log_exc): el .py, la linea y la funcion; de la excepcion, su tipo y sus codigos
+    "Traceback (most recent call last):",
+    '  File "{y}", line {n}, in {f}',
+    "During handling of the above exception, another exception occurred:",
+    "The above exception was the direct cause of the following exception:",
+    "{c}: {e}",
+    "{c}",
+)
+DIAG_MODELS = frozenset(
+    {x for p in engines.PRESETS for x in (p["id"], p["label"], p.get("live_label"), p.get("model")) if x}
+    | set(engines.SUMMARY_MODELS) | {m for v in engines.PROVIDERS.values() for m in v.get("models") or []}
+    | {engines.LIVE_MODEL_DEFAULT, getattr(engines.Summarizer, "TRANSLATE_MODEL", None), "gpt-4o-mini"} - {None})
+# codigos de error que se pueden ensenar: HTTP de la nube (engines: «HTTP 401: …»), errno y WinError, HRESULT de Windows
+# (COM de Outlook, WebView2), los codigos de error de las APIs compatibles con OpenAI y, de las palabras (exc), solo las
+# excepciones conocidas (diag_codes)
+DIAG_CODES = re.compile(
+    r"\bHTTP ?[1-5]\d\d\b|\[(?:Errno|WinError) -?\d+\]|\b0x[0-9A-Fa-f]{8}\b|(?<!\d)-2147\d{6}\b"
+    r"|\b(?:rate_limit_exceeded|invalid_api_key|insufficient_quota|model_not_found|context_length_exceeded"
+    r"|request_too_large|model_decommissioned|invalid_request_error|authentication_error|permission_denied)\b"
+    r"|(?<![\w.])(?P<exc>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)")
+# lo que puede ser cada hueco (el resto: .+?); {b}, {u} y {v} no pasan de sus separadores, para no probar en balde
+_DIAG_INNER = {"n": r"\d+(?:[.,]\d+)?", "c": r"[A-Za-z_][A-Za-z0-9_.]*", "e": r".*?", "b": r"[^\[\]]+?", "u": r"\S+",
+               "v": r"\S+"}
+_DIAG_HEAD = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [A-Z] ")  # «AAAA-MM-DD HH:MM:SS I » de server.log
+# una linea mas larga (el HTML de un error, p. ej.) no se compara con las plantillas: con varios huecos de texto libre,
+# ver si encaja costaria segundos y bloquearia «Copiar diagnostico». Sale como una sin plantilla (diag_line)
+DIAG_MAX = 2000
+
+
+def _diag_rx(template):
+    """La plantilla como expresion regular: los literales, escapados; cada hueco, un grupo con su tipo delante."""
+    out = []
+    for i, tok in enumerate(re.split(r"(\{[a-z]\}|⟦|⟧)", template)):
+        if tok == "⟦":
+            out.append("(?:")
+        elif tok == "⟧":
+            out.append(")?")
+        elif re.fullmatch(r"\{[a-z]\}", tok):
+            out.append(f"(?P<{tok[1]}{i}>{_DIAG_INNER.get(tok[1], '.+?')})")
+        else:
+            out.append(re.escape(tok))
+    return re.compile("".join(out))
+
+
+_DIAG_RX = tuple(_diag_rx(t) for t in DIAG_LINES)
+
+
+def diag_exceptions():
+    """Las excepciones que el diagnostico ensena, lista cerrada: las clases de excepcion que existen en este proceso
+    (las de Python, las de la app y las de las librerias cargadas; las de requests aunque esta sesion aun no haya usado
+    la nube), por su nombre y con su modulo, como las escribe una traza. Lo que solo tiene su forma (un trozo de un
+    nombre de carpeta o de archivo, «EarlyWarning» o «Omega.FusionError») no esta."""
+    try:
+        import requests.exceptions  # noqa: F401
+    except ImportError:
+        pass
+    seen, todo = {BaseException}, [BaseException]
+    while todo:
+        for sub in type.__subclasses__(todo.pop()):
+            if sub not in seen:
+                seen.add(sub)
+                todo.append(sub)
+    names = set()
+    for cls in seen:
+        names |= {cls.__name__, cls.__qualname__}
+        if cls.__module__ not in ("builtins", "__main__"):
+            names.add(f"{cls.__module__}.{cls.__qualname__}")
+    return names
+
+
+def diag_codes(text):
+    """« (HTTP 401, PermissionError)»: los codigos de error de un texto libre (sin repetir, 4 como mucho; nada si no
+    hay). De las palabras, solo las excepciones conocidas (diag_exceptions), entera o la ultima parte de un nombre con
+    puntos; no un nombre en minusculas sin modulo («error») ni Error, Exception o Warning a secas."""
+    known, codes = diag_exceptions(), []
+    for m in DIAG_CODES.finditer(text or ""):
+        code = m.group(0)
+        if m.group("exc") is not None:
+            code = next((c for c in (code, code.rsplit(".", 1)[-1]) if c in known and ("." in c or c[0].isupper())
+                         and c not in ("Error", "Exception", "Warning")), None)
+        if code and code not in codes:
+            codes.append(code)
+            if len(codes) == 4:
+                break
+    return f" ({', '.join(codes)})" if codes else ""
+
+
+def _diag_meeting_app(v):
+    from recording import MEETING_APPS
+    return v in {label for _, label in MEETING_APPS}
+
+
+# lo que un hueco tiene que ser para ensenarse tal cual (los que no estan, {t}, nunca)
+DIAG_CHECKS = {
+    "m": lambda v: v in DIAG_MODELS,
+    "c": lambda v: v in diag_exceptions(),
+    "k": lambda v: all(re.fullmatch(r"[a-z_.]{2,40}", x) for x in v.split(", ")),
+    "l": lambda v: bool(re.fullmatch(r"auto|detectar|[a-z]{2}(?:-[a-z]{2})?", v)),
+    "a": _diag_meeting_app,
+    "u": lambda v: bool(re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}/", v)),
+    "v": lambda v: bool(re.fullmatch(r"\d+(?:\.\d+){1,3}[a-z0-9]{0,6}", v)),
+    "y": lambda v: bool(re.fullmatch(r"[A-Za-z0-9_.-]+\.pyw?", v)),
+    "f": lambda v: bool(re.fullmatch(r"[A-Za-z_<][A-Za-z0-9_<>.]*", v)),
+}
+
+
+def _diag_value(kind, v):
+    if kind == "n":
+        return v
+    if kind == "e":
+        return DIAG_FREE + diag_codes(v) if v.strip() else v
+    if kind == "y":  # de la ruta de una traza, solo el nombre del .py
+        v = re.split(r"[\\/]", v)[-1]
+    ok = DIAG_CHECKS.get(kind)
+    return v if ok and ok(v) else DIAG_FREE
+
+
+def diag_line(line):
+    """Una linea de server.log para el diagnostico: la fecha y el nivel, y del mensaje lo de su plantilla
+    (DIAG_LINES), con cada hueco segun su tipo. Sin plantilla (o con mas de DIAG_MAX caracteres): la sangria, el icono
+    del principio (●, ✖, 🗣…) y «<texto>» con los codigos de error que lleve."""
+    head = _DIAG_HEAD.match(line)
+    head = head.group(0) if head else ""
+    msg = line[len(head):]
+    for rx in _DIAG_RX if len(msg) <= DIAG_MAX else ():
+        m = rx.fullmatch(msg)
+        if m:
+            out, pos = [], 0
+            for name in sorted((g for g in rx.groupindex if m.start(g) >= 0), key=m.start):
+                out += [msg[pos:m.start(name)], _diag_value(name[0], m.group(name))]
+                pos = m.end(name)
+            return head + "".join(out) + msg[pos:]
+    body = msg.lstrip(" ")
+    indent, first = msg[:len(msg) - len(body)], body.split(" ", 1)[0]
+    icon = first + " " if first and len(first) <= 2 and not re.search(r"\w", first) else ""
+    rest = body[len(icon):]
+    if not rest.strip():
+        return head + indent + body.strip()
+    return head + indent + icon + DIAG_FREE + diag_codes(rest)
+
+
 def license_name():
     """Nombre de la licencia segun la primera linea de LICENSE («MIT License» -> «MIT»); vacio si no hay fichero."""
     try:
@@ -2081,6 +3163,7 @@ class App:
         global COMPLETE
         COMPLETE = Complete(os.path.join(DATA_DIR, "completas.json"))
         self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
+        self._aviso_resumen_local()
         self._load_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
         self.transcripts = Transcripts()
@@ -2121,7 +3204,8 @@ class App:
                                     "language": st.get("language") or "", "folder": self.rec_folder_for(v, st),
                                     "vocab": v["id"] if v else "", "name": b.get("name") or sug.get("name") or "",
                                     "participantes": b.get("participantes")
-                                    or ", ".join(sug.get("participants") or [])})
+                                    or ", ".join(sug.get("participants") or []),
+                                    "sugerido": b.get("sugerido") or sug.get("source") or ""})
                 notify(f"● Grabando en {APP_NAME}", (f"{r['workstream']} · " if r.get("workstream") else "")
                        + "Pulsa Ctrl+Alt+R otra vez para parar")
                 return dict(r, recording=True)
@@ -2194,7 +3278,8 @@ class App:
                 sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
                                                                               outlook=False))
                 b = dict(b, name=sug.get("name") or "", vocab=sug.get("vocab") or "",
-                         participantes=b.get("participantes") or ", ".join(sug.get("participants") or []))
+                         participantes=b.get("participantes") or ", ".join(sug.get("participants") or []),
+                         sugerido=b.get("sugerido") or sug.get("source") or "")
             folder = safe(b.get("folder", ""), "dir")
             if in_app_dir(folder):
                 raise ApiError("No se puede grabar ahí")
@@ -2220,9 +3305,14 @@ class App:
                     raise ApiError("La grabadora no ha podido arrancar (ver %LOCALAPPDATA%\\AudiosApp\\recorder.log).")
                 preset = b.get("preset") or self.settings.get().get("live_preset") or "medium"
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
-                props = {"proyecto": v["project"], "workstream": v["name"]} if v else {}
-                if b.get("participantes"):  # sugeridos por Teams/Outlook: solo a la cabecera del .md, en este PC
+                props = {"proyecto": v["project"], "workstream": v["name"], "vocabulario": v["id"]} if v else {}
+                if b.get("participantes"):  # sugeridos por Teams/Outlook: a la cabecera del .md, con su origen
                     props["participantes"] = " ".join(str(b["participantes"]).split())[:500]
+                    # sin confirmar: ni el resumen en la nube ni los destinos de salida los llevan hasta que el
+                    # usuario los confirme o los edite en la pagina de la reunion (participantes_confirmados)
+                    origen = str(b.get("sugerido") or "").strip().lower()
+                    if origen in PARTICIPANTES_ORIGENES:
+                        props["participantes_origen"] = origen
                 # perfil de la reunion, a la cabecera del .md: idioma y contexto (el directo, la cola y el resumen
                 # los leen de ahi; se pueden cambiar en la pagina de la reunion) y la carpeta a la que copiar textos
                 perfil = perfil_de(self.settings.get())
@@ -2302,6 +3392,10 @@ class App:
                     except Exception:
                         log_exc()
             self.monitor = self.rec = None
+        try:  # destinos de salida: las reescrituras pendientes (4 s) no se pierden al apagar
+            self.jobs.flush_outputs()
+        except Exception:
+            log_exc()
         self.jobs.shutdown()
 
     def apagar(self, b):
@@ -2340,26 +3434,62 @@ class App:
         return {"ok": True}
 
     def diagnostico(self, q):
-        """Texto para pedir ayuda (Acerca de > Copiar diagnostico): version, Python, sistema, motor y modelo, carpetas
-        y las ultimas 30 lineas de server.log con las claves enmascaradas."""
+        """Texto para pedir ayuda (Acerca de > Copiar diagnostico), con lista blanca: version, Python y sistema, motor y
+        modelo, como es la carpeta de la app (sin su ruta), contadores y las ultimas 30 lineas de server.log por
+        diag_line (lo fijo de cada mensaje de la app, cifras y codigos de error; lo demas, «<texto>»). Se pega donde se
+        pide ayuda, a veces en un sitio publico: ni nombres ni rutas ni texto libre, y las claves enmascaradas."""
         st = self.settings.get()
         cloud = st.get("cloud") or {}
         preset = next((p for p in engines.PRESETS if p["id"] == st.get("preset")), None)
+
+        def tech(v):
+            return v if v in DIAG_MODELS else DIAG_FREE
         if preset and preset["engine"] == "cloud":
-            motor = f"nube ({cloud.get('provider') or '?'}) · modelo {cloud.get('model') or '?'}"
+            prov = cloud.get("provider") if cloud.get("provider") in engines.PROVIDERS else DIAG_FREE
+            motor = f"nube ({prov}) · modelo {tech(cloud.get('model'))}"
         else:
-            motor = f"local ({st.get('preset')}) · modelo {preset['model'] if preset else '?'}"
+            motor = f"local ({tech(st.get('preset'))}) · modelo {tech(preset['model']) if preset else DIAG_FREE}"
+        si = lambda c: "sí" if c else "no"  # noqa: E731
+        default = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
+        propia = os.path.normcase(os.path.abspath(DATA_DIR)) == os.path.normcase(os.path.abspath(default))
+        datos = ("en la de siempre (%LOCALAPPDATA%\\AudiosApp)" if os.environ.get("LOCALAPPDATA") else
+                 "en la de siempre (~/AudiosApp)") if propia else "en otra carpeta"
+        en_red, no_ascii = ROOT.startswith(("\\\\", "//")), any(ord(c) > 127 for c in ROOT)
         try:
             lines = read_text(os.path.join(DATA_DIR, "server.log")).splitlines()[-30:]
         except OSError:
             lines = ["(no hay server.log)"]
-        keys = [cloud.get("api_key"), *(cloud.get("extra_keys") or [])]
+        keys = [cloud.get("api_key"), *engines.all_extra_keys(cloud)]  # las adicionales de todos los proveedores
         info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
-                f"Transcripción: {motor} · directo: {st.get('live_preset') or 'medium'}",
-                f"Carpeta: {ROOT}", f"Datos: {DATA_DIR}", "", "server.log (últimas 30 líneas):",
-                scrub("\n".join(lines), keys)]
-        texto = "\n".join(info)
-        return {"texto": texto}
+                f"Transcripción: {motor} · directo: {tech(st.get('live_preset') or 'medium')}",
+                f"Carpeta de {APP_NAME}: en OneDrive: {si('onedrive' in ROOT.lower())} · en una unidad de red: "
+                f"{si(en_red)} · con tildes u otros caracteres no ASCII: {si(no_ascii)} · {len(ROOT)} caracteres",
+                f"Datos: {datos}",
+                f"Carpetas vinculadas: {len(LINKS)} · destinos de salida: {len(perfil_de(st)['outputs'])}",
+                "", f"server.log (últimas 30 líneas; lo que no es técnico va como {DIAG_FREE}):",
+                *map(diag_line, lines)]
+        return {"texto": scrub("\n".join(info), keys)}
+
+    def _aviso_resumen_local(self):
+        """Al arrancar: la primera vez sobre unos ajustes de una version anterior. Antes, el resumen automatico subia a
+        la nube tambien lo transcrito en local; si a quien actualiza le pasaba (resumen automatico activado, nube con
+        API key y transcripcion en local: el modelo de la cola o del directo, o reuniones ya transcritas asi), la
+        interfaz se lo avisa una vez (config -> summary.aviso_local). En una instalacion nueva no hay que avisar."""
+        st = self.settings.get()
+        if st.get("aviso_resumen_local") is not None:
+            return
+        c = st.get("cloud") or {}
+
+        def local(p):
+            return (engines.PRESETS_BY_ID.get(p) or {}).get("engine") == "local"
+        afecta = (os.path.isfile(self.settings.path) and st.get("summary_auto", True)
+                  and not st.get("summary_auto_local") and bool(engines.chat_url(c))
+                  and bool((c.get("api_key") or "").strip())
+                  and (local(st.get("preset")) or local(st.get("live_preset") or "medium")
+                       or any(local(p) for p in st.get("speed") or {})))
+        self.settings.update(lambda d: d.update(aviso_resumen_local=bool(afecta)))
+        if afecta:
+            log("   aviso pendiente: el resumen automático ya no sube a la nube lo transcrito en local")
 
     # --- GET
     def config(self, q):
@@ -2373,8 +3503,12 @@ class App:
         cloud = dict(st["cloud"])
         cloud["has_key"] = bool(cloud.get("api_key"))
         cloud["api_key"] = masked(cloud.get("api_key"))
-        cloud["extra_keys"] = [masked(k) for k in (cloud.get("extra_keys") or []) if k]  # nunca en claro
-        cloud["quota"] = self.jobs.cloud.keys.public(st["cloud"]) if cloud["has_key"] else None
+        # claves adicionales: enmascaradas (nunca en claro) y por proveedor, cada una con el suyo; en extra_keys, las
+        # del proveedor configurado (las unicas que se usan)
+        by = {p: [masked(k) for k in (cloud.pop(f, None) or []) if k] for p, f in engines.EXTRA_KEYS_FIELDS.items()}
+        cloud["extra_keys_by"], cloud["extra_keys"] = by, by.get(cloud.get("provider") or "groq", [])
+        cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
+                          if cloud["has_key"] else None)
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
@@ -2388,13 +3522,16 @@ class App:
                 "rec_folder": st.get("rec_folder") or "", "project_folders": st.get("project_folders") or {},
                 "meeting_detect": bool(st.get("meeting_detect", True)),
                 "outlook_on": bool(st.get("outlook_on")), "rec_aviso": bool(st.get("rec_aviso", True)),
-                "summary": {"auto": bool(st.get("summary_auto", True)), "model": st.get("summary_model"),
+                "summary": {"auto": bool(st.get("summary_auto", True)), "local": bool(st.get("summary_auto_local")),
+                            "aviso_local": bool(st.get("aviso_resumen_local")),  # una vez, tras actualizar
+                            "model": st.get("summary_model"),
                             "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
                             "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()},
                 "voices": {"enabled": bool(st.get("voices_enabled")), "models_ready": voices.models_ready(DATA_DIR)},
                 "worker_keepalive_min": int(st.get("worker_keepalive_min", 30) or 0),
                 "worker_preload": bool(st.get("worker_preload", True)),
                 "lost_secrets": list(getattr(self.settings, "lost", [])),
+                "settings_broken": getattr(self.settings, "broken", None),  # settings.json ilegible al arrancar
                 "perfil": perfil_de(st)}
 
     def tree(self, q):
@@ -2435,7 +3572,7 @@ class App:
         if not os.path.isfile(md):
             return {"props": {}, "body": "", "mtime": 0}
         props, body = parse_notes(read_text(md))
-        return {"props": props, "body": body, "mtime": os.path.getmtime(md)}
+        return {"props": with_theme_id(props, rel_of(abs_path)), "body": body, "mtime": os.path.getmtime(md)}
 
     def notes_save(self, b):
         """Guarda las notas y/o propiedades (solo lo que venga en la peticion)."""
@@ -2452,7 +3589,19 @@ class App:
                         v = v if IDIOMA_RE.match(v) else ""
                     elif k == "contexto":
                         v = " ".join(str(v or "").split())[:engines.ABOUT_CHARS]
+                    elif k == "icono":
+                        v = clean_icon(v)
+                    elif k == "participantes_origen":  # solo «sugeridos por»; vacio = confirmados
+                        v = str(v or "").strip().lower()
+                        v = v if v in PARTICIPANTES_ORIGENES else ""
                     props[k] = v
+            # escribir (o confirmar tal cual) los participantes los hace del usuario: ya pueden ir al resumen y a los
+            # destinos. Solo siguen «sugeridos» si quien los guarda dice de donde vienen (rec_start)
+            if "participantes" in (b.get("props") or {}) and "participantes_origen" not in (b.get("props") or {}):
+                props.pop("participantes_origen", None)
+            if not props.get("participantes"):
+                props.pop("participantes_origen", None)
+            theme_vocab(props, abs_path, b.get("props") or {})  # el tema: nombres a la cabecera, id a temas()
             if "body" in b:
                 body = b.get("body") or ""
             text = dump_notes(props, body)
@@ -2460,11 +3609,12 @@ class App:
                 save_text(md, text, "utf-8")
             elif os.path.isfile(md):
                 os.remove(md)  # sin notas ni propiedades: no se deja un archivo vacio
-        if {"proyecto", "workstream", "idioma", "contexto"} & set(b.get("props") or {}):
+        if {"proyecto", "workstream", "idioma", "contexto", "vocabulario"} & set(b.get("props") or {}):
             self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
         self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento con las notas nuevas
         self.library.at = 0
-        return {"props": props, "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
+        return {"props": with_theme_id(props, rel_of(abs_path)),
+                "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
 
     def tags(self, q):
         self.library.refresh(max_age=5)
@@ -2487,18 +3637,25 @@ class App:
     def link_pick(self, b):
         """Abre el selector de carpetas de Windows (en este PC) y devuelve la que elijas. b.title: lo que dice la
         ventana (por defecto, la carpeta donde grabar; tambien se usa para la carpeta de copias y para importar)."""
+        # la ruta vuelve en bytes UTF-8 escritos a mano: con pythonw (el acceso directo) la salida del hijo iria en
+        # cp1252 y «José» o «Compañía» llegarian con «�» (o el hijo fallaria con «Ł»)
         script = ("import sys, tkinter as tk\nfrom tkinter import filedialog\n"
                   "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
                   "p = filedialog.askdirectory(parent=r, title=sys.argv[1], mustexist=True,"
-                  " initialdir=sys.argv[2] or None)\nsys.stdout.write(p or '')\n")
+                  " initialdir=sys.argv[2] or None)\n"
+                  "sys.stdout.buffer.write((p or '').encode('utf-8', 'surrogatepass')); sys.stdout.flush()\n")
         start = os.path.dirname(ROOT) if not LINKS else os.path.dirname(next(iter(LINKS.values()))["path"])
         try:
             title = " ".join(str(b.get("title") or "").split())[:80] or "Carpeta donde guardar las grabaciones"
             r = subprocess.run([sys.executable, "-c", script, title, start],
-                               capture_output=True, timeout=900, creationflags=engines.NO_WINDOW)
+                               capture_output=True, timeout=900, creationflags=engines.NO_WINDOW,
+                               env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8"))
         except (OSError, subprocess.SubprocessError) as e:
             raise ApiError(f"No se pudo abrir el selector de carpetas ({e.__class__.__name__}); pega la ruta a mano.")
-        path = r.stdout.decode("utf-8", "replace").strip()
+        try:
+            path = r.stdout.decode("utf-8", "surrogatepass").strip()
+        except UnicodeDecodeError:
+            path = r.stdout.decode("utf-8", "replace").strip()
         if r.returncode != 0 and not path:
             raise ApiError("No se pudo abrir el selector de carpetas; pega la ruta a mano.")
         return {"path": os.path.normpath(path) if path else ""}
@@ -2594,6 +3751,8 @@ class App:
         save_text(path, (f"# {desc}\n" if desc else "") + ", ".join(terms) + "\n", "utf-8")
         if moved:  # se ha renombrado (o cambiado de proyecto): fuera el archivo anterior
             os.remove(old["_abs"])
+            # el perfil y el ultimo tema elegido lo siguen (si no, Ctrl+Alt+R se quedaba sin vocabulario)
+            self.settings.update(lambda d: settings_moved(d, old["id"], rel_of(path)))
         self.library.at = 0
         log(f"🔤 vocabulario guardado: {project} · {name} ({len(terms)} términos)")
         return {"id": rel_of(path)}
@@ -2607,16 +3766,22 @@ class App:
     # --- perfil de reunion
     def perfil_get(self, q):
         """GET /api/perfil: el perfil por defecto y lo que se aplicaria ahora mismo a una grabacion (con la reunion
-        en curso, si la hay)."""
+        en curso, si la hay), y los avisos de los destinos de salida (documentos que no se han podido escribir)."""
         st = self.settings.get()
         sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
         auto = lambda vid: self.rec_folder_for(find_vocab(None, None, vid) if vid else None, st)  # noqa: E731
-        return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto)}
+        avisos = getattr(getattr(self, "jobs", None), "outputs_warnings", None)  # sin cola (tests): ninguno
+        return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto),
+                "avisos": avisos() if avisos else []}
 
     def perfil_save(self, b):
         """POST /api/perfil: guarda el perfil por defecto (solo las claves que vengan: folder, vocab, context,
-        outputs, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar."""
-        cambios = check_perfil(b)
+        outputs, language). Lo usan Ajustes y «Guardar como perfil por defecto» del dialogo Grabar.
+        Con "comprobar": solo valida los destinos de salida que vengan (Ajustes, al anadir una carpeta) y los devuelve
+        normalizados, sin guardar nada: asi la interfaz rechaza al momento una carpeta que no vale."""
+        if b.get("comprobar"):
+            return {"outputs": check_perfil({"outputs": b.get("outputs") or []})["outputs"]}
+        cambios = check_perfil(b, perfil_de(self.settings.get())["outputs"])
         self.settings.update(lambda d: update_perfil(d, cambios))
         log("   perfil de reunión guardado: " + ", ".join(sorted(cambios)))
         return {"perfil": perfil_de(self.settings.get())}
@@ -2626,8 +3791,12 @@ class App:
         if not v:
             raise ApiError("Ese tema ya no existe.")
         to_recycle_bin([v["_abs"]])  # a la papelera: se puede recuperar
-        self.settings.update(lambda d: d.update(rec_vocab="" if d.get("rec_vocab") == v["id"]
-                                                else d.get("rec_vocab", "")))
+
+        def upd(d):  # el ultimo tema elegido y el fijo del perfil, si eran este: el perfil vuelve a «automatico»
+            d["rec_vocab"] = "" if d.get("rec_vocab") == v["id"] else d.get("rec_vocab", "")
+            if (d.get("perfil") or {}).get("vocab") == v["id"]:
+                d["perfil"] = dict(d["perfil"], vocab=None)
+        self.settings.update(upd)
         self.library.at = 0
         log(f"🗑 vocabulario a la papelera: {v['project']} · {v['name']}")
         return {"ok": True}
@@ -2697,12 +3866,24 @@ class App:
                     raise
                 time.sleep(0.3)
         COMPLETE.set(rel, False)
+        self.jobs._cloud_text().set(rel, False)  # otra reunion que acabe con este nombre no hereda su origen
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
         self.jobs.voice_vectors.pop(rel, None)
+        try:
+            temas().set(rel, None)
+        except OSError:
+            log_exc()
         self.settings.update(lambda d: d.update(favorites=[f for f in d.get("favorites", []) if f["path"] != rel]))
+        copias = 0
+        if ext.lower() in AUDIO_EXT:  # sus documentos de los destinos de salida que nadie ha cambiado, tambien
+            try:
+                copias = self.jobs.forget_outputs(rel)
+            except Exception:
+                log_exc()
         self.library.at = 0
-        log(f"🗑 {rel} → papelera ({len(group)} archivos)")
-        return {"ok": True, "count": len(group)}
+        log(f"🗑 {rel} → papelera ({len(group)} archivos" + (f" y {copias} documentos de los destinos" if copias else "")
+            + ")")
+        return {"ok": True, "count": len(group), "copias": copias}
 
     def import_file(self, handler, q):
         """Subir un audio (o .txt/.md) arrastrandolo a la ventana: se copia a la carpeta indicada."""
@@ -2738,24 +3919,35 @@ class App:
         while True:
             time.sleep(8)
             try:
-                app = mic_meeting_app()
-                self.meeting = app
-                recording = bool(self.rec and self.rec.alive())
-                st = self.settings.get()
-                # aviso flotante «Grabar / ✕» (calendario.py + aviso.py): una vez por llamada y nunca si ya se graba;
-                # mientras dure la llamada se lee la reunión (Teams y, si está activado, Outlook) para sugerir
-                if self.vigia.tic(app, recording, st, lambda: calendario.reunion_actual(st, self._vocab_terms()),
-                                  PORT, APP_DIR, creationflags=engines.NO_WINDOW):
-                    notified = app  # el aviso flotante sustituye al toast de Windows en esa llamada
-                    log(f"   reunión detectada ({app}): aviso flotante abierto")
-                if app and not recording and notified != app and st.get("meeting_detect", True):
-                    notified = app
-                    notify("¿Quieres tomar notas de la sesión?", "Pulsa Ctrl+Alt+R para empezar a tomar notas.")
-                    log(f"   reunión detectada ({app}): aviso enviado")
-                if not app:
-                    notified = None
+                notified = self._meeting_step(notified)
             except Exception:
                 pass
+
+    def _meeting_step(self, notified):
+        """Un paso del vigilante de llamadas (cada 8 s); devuelve la llamada ya avisada. «Avisarme si estoy en una
+        llamada» (meeting_detect) es el interruptor general: apagado, ni toast, ni aviso flotante (aunque «Aviso
+        flotante» siga marcado), ni el chip de la interfaz, que se pinta con `meeting`."""
+        app = mic_meeting_app()
+        recording = bool(self.rec and self.rec.alive())
+        st = self.settings.get()
+        detect = st.get("meeting_detect", True)
+        self.meeting = app if detect else None
+        if not detect:
+            self.vigia.cerrar_aviso()  # si estaba abierto cuando se desmarco
+        # aviso flotante «Grabar / ✕» (calendario.py + aviso.py): una vez por llamada y nunca si ya se graba;
+        # mientras dure la llamada se lee la reunión (Teams y, si está activado, Outlook) para sugerir
+        if self.vigia.tic(app, recording, st if detect else dict(st, rec_aviso=False),
+                          lambda: calendario.reunion_actual(st, self._vocab_terms()),
+                          PORT, APP_DIR, creationflags=engines.NO_WINDOW):
+            notified = app  # el aviso flotante sustituye al toast de Windows en esa llamada
+            log(f"   reunión detectada ({app}): aviso flotante abierto")
+        if detect and app and not recording and notified != app:
+            notified = app
+            notify("¿Quieres tomar notas de la sesión?", "Pulsa Ctrl+Alt+R para empezar a tomar notas.")
+            log(f"   reunión detectada ({app}): aviso enviado")
+        if not app:
+            notified = None
+        return notified
 
     def _vocab_terms(self):
         """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión."""
@@ -2768,8 +3960,16 @@ class App:
                                                              outlook=True if q.get("outlook") else None))
 
     # --- edicion de transcripciones
+    _tx_save_lock = threading.Lock()
+
     def save_transcript(self, b):
-        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver)."""
+        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver). De uno en uno:
+        al cerrar la pagina el mismo texto llega dos veces a la vez (keepalive y el fetch normal), y el segundo podia
+        escribir lo corregido antes de que el primero copiara el original."""
+        with self._tx_save_lock:
+            return self._save_transcript(b)
+
+    def _save_transcript(self, b):
         abs_path = safe(b.get("path"), "file")
         rel, base = rel_of(abs_path), os.path.splitext(abs_path)[0]
         segs = []
@@ -2840,6 +4040,7 @@ class App:
                     write_bytes(base + ext, f.read())
         shutil.rmtree(bdir, ignore_errors=True)
         self.library.at = 0
+        self.jobs.schedule_outputs(rel)  # destinos de salida: el documento vuelve a la transcripcion original
         log(f"↺ {rel}: transcripción original restaurada")
         return {"ok": True}
 
@@ -2908,7 +4109,8 @@ class App:
         paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
         preset = b.get("preset") or self.settings.get()["preset"]
         ids = self.jobs.submit(paths, preset, b.get("language"), resume=bool(b.get("resume")))
-        self.settings.update(lambda d: d.update(preset=preset, language=b.get("language") or ""))
+        # el idioma elegido es de estas reuniones: el del perfil (Ajustes) no cambia, como al grabar
+        self.settings.update(lambda d: d.update(preset=preset))
         return {"added": ids}
 
     def cancel(self, b):
@@ -2926,6 +4128,10 @@ class App:
     def live_translate(self, b):
         """Traducción al español del directo en la nube, por reunión (apagada por defecto); live.py hace el resto."""
         job = self.jobs._live_job(b.get("id"))
+        if b.get("on"):  # sin servicio de chat (Azure OpenAI) no hay traduccion: se dice, no falla a medias
+            why = engines.chat_missing(self.settings.get()["cloud"], "La traducción del directo")
+            if why:
+                raise ApiError(why)
         job.translate = bool(b.get("on"))
         if isinstance(job.directo, dict):  # que la respuesta ya lo refleje (live.py lo vuelve a publicar en <1 s)
             job.directo = dict(job.directo, translate=job.translate)
@@ -2976,9 +4182,15 @@ class App:
                     time.sleep(0.25)
         self.library.at = 0
         COMPLETE.moved(rel_of(src), rel_of(moves[0][1]))
+        self.jobs._cloud_text().moved(rel_of(src), rel_of(moves[0][1]))  # el origen de su texto va con ella
         if rel_of(src) in self.jobs.voice_vectors:
             self.jobs.voice_vectors[rel_of(moves[0][1])] = self.jobs.voice_vectors.pop(rel_of(src))
+        try:  # su tema la sigue
+            temas().moved(rel_of(src), rel_of(moves[0][1]))
+        except OSError:
+            log_exc()
         self._rename_refs(rel_of(src), rel_of(moves[0][1]))
+        self.jobs.outputs_moved(rel_of(src), rel_of(moves[0][1]))  # sus documentos de los destinos siguen siendo suyos
         old_b, new_b = backup_dir(rel_of(src)), backup_dir(rel_of(moves[0][1]))
         if os.path.isdir(old_b) and not os.path.exists(new_b):  # la copia del original viaja con el audio
             os.replace(old_b, new_b)
@@ -2999,8 +4211,15 @@ class App:
             lid = b["path"].strip("/")[len(LINK):]
             if lid not in LINKS:
                 raise ApiError("Esa carpeta ya no está vinculada.")
-            LINKS[lid]["name"] = clean_name(b.get("name"))
+            old_name, new_name = LINKS[lid]["name"], clean_name(b.get("name"))
+            LINKS[lid]["name"] = new_name
             self._save_links()
+            if has_vocab_dir(LINKS[lid]["path"]):  # sus listas toman el nombre de la carpeta vinculada
+                self.settings.update(lambda d: settings_moved(d, "", "", project=(old_name, new_name)))
+                try:  # y el proyecto de sus reuniones (el nombre ya ha cambiado: si esto falla se anota)
+                    self._themes_moved(LINK + lid, (old_name, new_name))
+                except Exception:
+                    log_exc()
             return {"path": b["path"].strip("/")}
         src = safe(b.get("path"), "dir")
         if os.path.normcase(src) == os.path.normcase(ROOT) or in_app_dir(src):
@@ -3014,9 +4233,99 @@ class App:
         if os.path.normcase(dst) != os.path.normcase(src) and os.path.exists(dst):
             raise ApiError("Ya existe una carpeta con ese nombre")
         os.rename(src, dst)
+        self.jobs._cloud_text().moved(rel_of(src), rel_of(dst), folder=True)  # el origen del texto de sus reuniones
         self._rename_refs(rel_of(src), rel_of(dst), folder=True)
+        try:  # la carpeta ya esta renombrada: si algo de esto falla se anota, pero no se devuelve error
+            self._folder_moved(rel_of(src), rel_of(dst), (os.path.basename(src), os.path.basename(dst))
+                               if has_vocab_dir(dst) else None)
+        except Exception:
+            log_exc()
         self.library.at = 0
         return {"path": rel_of(dst)}
+
+    def _folder_moved(self, old, new, project=None):
+        """Una carpeta renombrada: lo que la app guarda por ruta interna la sigue, como al mover una reunion (move):
+        la copia del original de cada transcripcion corregida, el estado «completa», las huellas de voz en memoria, el
+        tema de cada reunion (temas()), los documentos de los destinos de salida y los ajustes (carpeta y tema del
+        perfil, ultima carpeta y ultimo tema, carpeta de cada proyecto; con `project`, el proyecto tambien cambia de
+        nombre, tambien en la cabecera de sus reuniones: _themes_moved)."""
+        dst = safe(new, "dir")
+        for d, _, files in os.walk(dst):
+            for n in files:
+                if os.path.splitext(n)[1].lower() not in AUDIO_EXT:
+                    continue
+                r_new = rel_of(os.path.join(d, n))
+                r_old = moved_rel(r_new, new, old, folder=True)
+                if r_old is None:
+                    continue
+                old_b, new_b = backup_dir(r_old), backup_dir(r_new)
+                if os.path.isdir(old_b) and not os.path.exists(new_b):
+                    os.replace(old_b, new_b)
+        for r in [r for r in list(COMPLETE.data) if moved_rel(r, old, new, folder=True)]:
+            COMPLETE.moved(r, moved_rel(r, old, new, folder=True))
+        vv = self.jobs.voice_vectors
+        for r in [r for r in list(vv) if moved_rel(r, old, new, folder=True)]:
+            vv[moved_rel(r, old, new, folder=True)] = vv.pop(r)
+        try:  # el tema de sus reuniones y el id de sus listas
+            temas().moved(old, new, folder=True)
+        except OSError:
+            log_exc()
+        self.jobs.outputs_moved(old, new, folder=True)
+        self.settings.update(lambda d: settings_moved(d, old, new, folder=True, project=project))
+        self._themes_moved(new, project)
+
+    def _themes_moved(self, new, project=None):
+        """Al renombrar la carpeta de un proyecto (o la vinculada, que da su nombre a las listas), las reuniones de ese
+        proyecto lo siguen en la cabecera de su .md, esten donde esten (theme_moved): si no, al volver a transcribirlas
+        se quedaban con el vocabulario general, porque nunca se toma la lista de otro proyecto. El id de las que lo
+        tenian ya lo ha seguido temas(); las que no, se quedan con el de la lista de su tema en la carpeta renombrada.
+        Si el nombre nuevo ya es el de otro proyecto (una vinculada que se llama igual), las reuniones de ese otro sin
+        id se quedan con el de la suya. Si no, con dos proyectos que se llaman igual, los nombres de la cabecera ya no
+        dicen cual es: las de fuera de las dos carpetas pasaban al vocabulario general y las del otro que estan dentro
+        de la renombrada tomaban su lista. `new`: la ruta interna de la carpeta, ya renombrada. Devuelve cuantas
+        cabeceras han cambiado."""
+        if not project:
+            return 0  # ningun proyecto cambia de nombre (el de una lista es el de la carpeta que tiene Vocabulario)
+        lists = {v["id"]: v for v in list_vocab()}
+        ambiguous = any(fold(v["project"]) == fold(project[0]) for v in lists.values())
+        own, others = {}, {}  # tema -> ids: las listas del proyecto renombrado y las de otros que ya se llamaban asi
+
+        def renamed(vid):
+            return moved_rel(vid, new, new, folder=True) is not None
+
+        for v in lists.values():
+            if v["folder"] == new:
+                own.setdefault(fold(v["name"]), []).append(v["id"])
+            elif fold(v["project"]) == fold(project[1]) != fold(project[0]) and not renamed(v["id"]):
+                others.setdefault(fold(v["name"]), []).append(v["id"])
+        store = temas()
+        self.library.at = 0
+        self.library.refresh()
+        n = 0
+        for a in list(self.library.flat):
+            if not a.get("_md") or not (a.get("props") or {}).get("workstream"):
+                continue
+            with self.notes_lock:
+                try:
+                    props, body = parse_notes(read_text(a["_md"]))
+                    vid = store.get(a["path"])
+                    ch = theme_moved(props, vid, new, lists, project, ambiguous, renamed(a["path"]))
+                    ids = []
+                    if ch:
+                        save_text(a["_md"], dump_notes(dict(props, **ch), body), "utf-8")
+                        n += 1
+                        ids = own.get(fold(props["workstream"])) or []
+                    elif others and fold(props.get("proyecto") or "") == fold(project[1]) and (
+                            vid not in lists or renamed(vid)):  # su id, si lo tiene, era de una lista que se llamaba
+                        ids = others.get(fold(props["workstream"])) or []  # distinto de su cabecera
+                    if len(ids) == 1:
+                        store.set(a["path"], ids[0])
+                except OSError:
+                    log_exc()
+        if n:
+            self.library.at = 0
+            log(f"   tema de {n} reuniones: siguen a la carpeta renombrada {new}")
+        return n
 
     def reveal(self, b):
         p = safe(b.get("path", ""))
@@ -3045,7 +4354,8 @@ class App:
         return {"ok": True}
 
     def save_settings(self, b):
-        perfil = check_perfil(b["perfil"]) if isinstance(b.get("perfil"), dict) else {}  # valida antes de guardar
+        perfil = (check_perfil(b["perfil"], perfil_de(self.settings.get())["outputs"])  # valida antes de guardar
+                  if isinstance(b.get("perfil"), dict) else {})
 
         def upd(d):
             for k in ("preset", "language", "prompt"):
@@ -3054,6 +4364,10 @@ class App:
             s = b.get("summary") or {}
             if "auto" in s:
                 d["summary_auto"] = bool(s["auto"])
+            if "local" in s:  # consentimiento: resumir solo tambien lo transcrito en local (manda el texto a la nube)
+                d["summary_auto_local"] = bool(s["local"])
+            if s.get("aviso_visto") or s.get("local"):  # el aviso de Inicio, cerrado (o ya no hace falta)
+                d["aviso_resumen_local"] = False
             if s.get("model"):
                 d["summary_model"] = s["model"].strip()
             if s.get("lang") in engines.SUMMARY_LANGS:
@@ -3093,12 +4407,22 @@ class App:
                 d["cloud"]["api_key"] = c["api_key"].strip()
             if c.get("clear_key"):
                 d["cloud"]["api_key"] = ""
-            if "live_model" in c:
-                d["cloud"]["live_model"] = (c["live_model"] or "").strip()[:80]
-            if isinstance(c.get("extra_keys"), list):  # las ya guardadas vuelven enmascaradas: se conservan
-                old = {masked(k): k for k in d["cloud"].get("extra_keys") or []}
-                new = [old.get(k.strip(), k.strip()) for k in c["extra_keys"] if isinstance(k, str) and k.strip()]
-                d["cloud"]["extra_keys"] = [k for k in new if "…" not in k and "•" not in k][:10]
+            for k in ("live_model", "live_model_custom"):  # el del directo en Groq y el de una pasarela propia
+                if k in c:
+                    d["cloud"][k] = (c[k] or "").strip()[:80]
+            # claves adicionales: cada lista es de su proveedor (las de Groq, en extra_keys). La interfaz manda las de
+            # cada proveedor en extra_keys_by; extra_keys a secas son las del proveedor que se guarda. Las ya guardadas
+            # vuelven enmascaradas y se conservan, pero solo dentro de su proveedor: nunca pasan a otro
+            lists = c.get("extra_keys_by") if isinstance(c.get("extra_keys_by"), dict) else {}
+            if not lists and isinstance(c.get("extra_keys"), list):
+                lists = {d["cloud"].get("provider") or "groq": c["extra_keys"]}
+            for prov, incoming in lists.items():
+                field = engines.extra_keys_field(prov)
+                if not field or not isinstance(incoming, list):
+                    continue
+                old = {masked(k): k for k in d["cloud"].get(field) or []}
+                new = [old.get(k.strip(), k.strip()) for k in incoming if isinstance(k, str) and k.strip()]
+                d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
         return self.config({})
 
@@ -3180,6 +4504,7 @@ class App:
         fn(data["hablantes"][h], data)
         voices.write_sidecar(side, data)
         self.library.at = 0
+        self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento lleva quien habla
         return data
 
     def voices_person(self, b):
@@ -3199,10 +4524,15 @@ class App:
             when = time.strftime("%Y-%m-%dT%H:%M:%S") if consent else None
             pid = v.create(nombre or "Yo", bool(b.get("es_usuario")), when)["id"]
         else:
+            renamed = False
             if nombre and nombre != v.find(pid)["nombre"]:
                 v.rename(pid, nombre)
+                renamed = True
             if b.get("es_usuario") is not None:
                 v.set_user(pid, bool(b.get("es_usuario")))
+                renamed = True
+            if renamed:  # destinos de salida: el nombre sale en los documentos de todas sus reuniones
+                self.jobs.outputs_for_persona(pid)
         if abs_path and h:
             self._speaker_update(abs_path, h, lambda info, d: info.update(persona=pid, provisional=False))
         remembered = None
@@ -3238,6 +4568,7 @@ class App:
                     if i.get("persona") == removed:
                         i["persona"] = keep
                 voices.write_sidecar(a["_spk"], data)
+                self.jobs.schedule_outputs(a["path"])  # destinos de salida: el documento con el nombre que queda
                 n += 1
         self.library.at = 0
         log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
@@ -3248,12 +4579,14 @@ class App:
         if b.get("all"):
             v.forget_all()
             log("🗣 todas las huellas olvidadas")
+            self.jobs.outputs_for_persona(None)  # destinos de salida: los documentos ya no llevan esos nombres
         else:
             try:
                 v.forget(b.get("id"))
             except KeyError:
                 raise ApiError("Esa persona ya no existe.")
             log("🗣 persona olvidada")
+            self.jobs.outputs_for_persona(b.get("id"))
         self.library.at = 0
         return {"personas": v.public()}
 
@@ -3294,10 +4627,25 @@ class App:
 
 # ----------------------------------------------------------------------------- HTTP
 
+# P0-2: la interfaz no lleva <script> en linea ni manejadores on…= (todo va en los .js), asi que un script colado en el
+# HTML no llega a ejecutarse; los style="…" de las plantillas si hacen falta ('unsafe-inline' solo en estilos)
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "media-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+DRAIN_MAX = 1 << 20  # P0-1: un cuerpo sin leer de hasta 1 MiB se lee y se descarta antes de responder (el error llega
+# entero y la conexion sigue); uno mayor (una subida rechazada) o sin Content-Length cierra la conexion
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"{APP_NAME}/1.0"
+    # cada conexion es un hilo de ThreadingHTTPServer: una keep-alive ociosa (o que deja de leer o de mandar a medias)
+    # se cierra a los 60 s, y un cliente que deja conexiones abiertas ya no acumula hilos. El plazo es por operacion
+    # del socket, no lo que tarda la app en contestar (el selector de carpetas espera al usuario)
+    timeout = 60
     app = None
+    token = None  # P1-02: el de esta sesion (lo pone main()); sin el, /api/* y /media responden 403
+    body_read = False  # P0-1: el cuerpo de la peticion en curso se ha leido entero
+    denied_logged = set()  # el primer 403 sin token de un navegador y el de un programa van al log, los demas no
 
     def log_message(self, fmt, *args):
         pass
@@ -3305,13 +4653,88 @@ class Handler(BaseHTTPRequestHandler):
     def _host_ok(self):
         return self.headers.get("Host", "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
 
+    def _origin_ok(self):
+        """P0-1: un POST que llega de una pagina web solo vale si es la propia interfaz. El navegador manda Origin en
+        todo POST y Sec-Fetch-Site (same-origin, same-site, cross-site o none); los programas (el acceso directo, el
+        aviso flotante, el instalador, las pruebas) no mandan ninguna de las dos."""
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+            return False
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
+    def _cookie_name(self):
+        return f"audios_sesion_{PORT}"  # con el puerto: las cookies no distinguen puertos (otra copia con --port)
+
+    def _token_matches(self, given):
+        tok = self.token
+        return bool(tok and given) and hmac.compare_digest(str(given).encode("utf-8", "replace"), tok.encode("utf-8"))
+
+    def _token_ok(self):
+        """P1-02: la cabecera X-Chuleta-Token (programas) o la cookie de sesion (la interfaz, que la recibe al abrir
+        /?t=<token>)."""
+        if self._token_matches(self.headers.get(TOKEN_HEADER)):
+            return True
+        for raw in self.headers.get_all("Cookie") or []:
+            for part in raw.split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == self._cookie_name() and self._token_matches(v.strip()):
+                    return True
+        return False
+
+    def _denied(self):
+        quien = "navegador" if self.headers.get("Sec-Fetch-Mode") else "programa"
+        if quien not in Handler.denied_logged:
+            Handler.denied_logged.add(quien)
+            log(f"   403 sin token de sesión ({quien}): {self.command} {urlparse(self.path).path} (solo el primero)")
+        self._json({"error": f"Sesión no válida: vuelve a abrir {APP_NAME} con su acceso directo."}, 403)
+
+    def _session_start(self, t):
+        """GET /?t=<token> (la ventana propia y Edge abren esa direccion): si es el token de esta sesion, la cookie
+        (HttpOnly, SameSite=Strict) y a "/", para que el token no se quede en la direccion; si no, a "/" sin cookie (la
+        interfaz dira que hay que abrir la app con su acceso directo)."""
+        extra = {"Location": "/"}
+        if self._token_matches(t):
+            extra["Set-Cookie"] = f"{self._cookie_name()}={self.token}; Path=/; HttpOnly; SameSite=Strict"
+            log("   sesión: cookie entregada a la interfaz")
+        else:
+            log("   sesión: /?t= con un token que no es el de esta sesión (sin cookie)")
+        self._send(303, b"", "text/plain; charset=utf-8", extra)
+
+    def _close_if_unread(self):
+        """P0-1: si la peticion traia un cuerpo que no se ha leido (un 403, un error antes de leerlo), se lee y se
+        descarta (hasta DRAIN_MAX) o la conexion se cierra tras la respuesta. Con keep-alive, esos bytes se tomarian por
+        la peticion siguiente, con sus propias cabeceras: asi una web podia colar un POST con Host y X-Audios dentro del
+        cuerpo de otro."""
+        te, cl = self.headers.get("Transfer-Encoding"), (self.headers.get("Content-Length") or "0").strip()
+        if self.body_read or (not te and cl == "0"):
+            return
+        if not te and cl.isdigit() and int(cl) <= DRAIN_MAX:
+            left = int(cl)
+            try:
+                self.connection.settimeout(5)
+                while left > 0:
+                    chunk = self.rfile.read(min(1 << 16, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                self.connection.settimeout(self.timeout)  # el de siempre (sin plazo, la conexion ociosa no se cierra)
+            except OSError:
+                left = -1
+            if left == 0:
+                self.body_read = True
+                return
+        self.send_header("Connection", "close")
+
     def _send(self, code, body, ctype, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if ctype.startswith("text/html"):
+            self.send_header("Content-Security-Policy", CSP)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
+        self._close_if_unread()
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -3320,10 +4743,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
     def do_GET(self):
+        self.body_read = False
         if not self._host_ok():
             return self._send(403, b"forbidden", "text/plain")
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if u.path in ("", "/") and "t" in q:
+            return self._session_start(q["t"])
+        if (u.path.startswith("/api/") or u.path == "/media") and not self._token_ok():
+            return self._denied()
         a = self.app
         routes = {"/api/ping": lambda q: {"app": "audios"}, "/api/config": a.config, "/api/tree": a.tree,
                   "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
@@ -3349,8 +4777,11 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
     def do_POST(self):
-        if not self._host_ok() or self.headers.get("X-Audios") != "1":
+        self.body_read = False
+        if not self._host_ok() or not self._origin_ok() or self.headers.get("X-Audios") != "1":
             return self._send(403, b"forbidden", "text/plain")
+        if not self._token_ok():
+            return self._denied()
         a = self.app
         routes = {"/api/transcribe": a.transcribe, "/api/cancel": a.cancel, "/api/jobs/clear": a.clear_jobs,
                   "/api/move": a.move, "/api/mkdir": a.mkdir, "/api/rename-folder": a.rename_folder,
@@ -3374,10 +4805,18 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/acerca/abrir": a.acerca_abrir}
         try:
             u = urlparse(self.path)
+            if self.headers.get("Transfer-Encoding"):  # sin Content-Length no se sabe donde acaba el cuerpo (P0-1)
+                raise ApiError("Cuerpo no válido: falta Content-Length", 411)
             if u.path == "/api/import":  # el cuerpo es el archivo tal cual (puede ser de 1 GB): se copia a trozos
-                return self._json(a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()}))
+                r = a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()})
+                self.body_read = True  # import_file lo ha leido entero (si se corta, lanza ApiError)
+                return self._json(r)
             n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            if n < 0:
+                raise ApiError("Cuerpo no válido")
+            raw = self.rfile.read(n) if n else b""
+            self.body_read = len(raw) == n
+            body = json.loads(raw or b"{}")
             if not isinstance(body, dict):
                 raise ApiError("Cuerpo no válido: se esperaba un objeto JSON")
             route = routes.get(u.path)
@@ -3402,7 +4841,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
 
     def _media(self, p):
-        """Audio con soporte de Range: permite saltar a cualquier minuto al instante."""
+        """Audio con soporte de Range: permite saltar a cualquier minuto al instante. Solo audio y video: un .html, un
+        .js o un .svg de una carpeta vinculada, servido desde este origen, se saltaria la CSP (P0-2)."""
+        if os.path.splitext(p)[1].lower() not in AUDIO_EXT:
+            raise ApiError("Solo se sirven audios", 404)
         size = os.path.getsize(p)
         start, end, code = 0, size - 1, 200
         m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
@@ -3416,6 +4858,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(416)
                 self.send_header("Content-Range", f"bytes */{size}")
                 self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self._close_if_unread()
                 self.end_headers()
                 return
             code = 206
@@ -3423,8 +4867,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", MIME.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
+        # P2-13: el audio de las reuniones no se queda en la cache de WebView2 (su perfil es persistente, en DATA_DIR)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self._close_if_unread()
         self.end_headers()
         if self.command == "HEAD":
             return
@@ -3465,36 +4913,119 @@ class Server(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def open_ui():
+def ui_url(token=None):
+    """La direccion con la que se abre la interfaz: con ?t=<token> el servidor entrega la cookie de sesion y redirige a
+    "/" (P1-02). Sin token (el de esta copia si no se pasa otro), la de siempre."""
+    token = Handler.token if token is None else token
+    return URL + (f"?t={token}" if token else "")
+
+
+def open_ui(token=None):
     """La interfaz en Edge (modo app, sin barra de direcciones) o, sin Edge, en el navegador por defecto. Es el
     camino de siempre y el de reserva cuando no hay ventana propia (window.py)."""
+    url = ui_url(token)
     for exe in (r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
                 r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"):
         exe = os.path.expandvars(exe)
         if os.path.exists(exe):
-            subprocess.Popen([exe, f"--app={URL}", "--window-size=1500,920"])
+            subprocess.Popen([exe, f"--app={url}", "--window-size=1500,920"])
             return
-    webbrowser.open(URL)
+    webbrowser.open(url)
 
 
-def already_running():
+def _local_request(path, token, data=None, timeout=1.5):
+    """Peticion a la copia que corre en este puerto: sin proxy (P1-13) y con el token de DATA_DIR (P1-02)."""
+    headers = {TOKEN_HEADER: token} if token else {}
+    if data is not None:
+        headers.update({"X-Audios": "1", "Content-Type": "application/json"})
+    req = urllib.request.Request(URL + path, data=data, method="POST" if data is not None else "GET", headers=headers)
+    with local_opener().open(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def probe_running(token=None, timeout=1.5):
+    """Que hay en el puerto: "app" (esta app, y acepta nuestro token), "libre" (nadie escucha), "arrancando" (acepta la
+    conexion pero no contesta: otra copia entre reservar el puerto y empezar a servir) u "otro" (otro programa, u otra
+    sesion de Windows con su propio token)."""
+    token = read_token(DATA_DIR) if token is None else token
     try:
-        with urllib.request.urlopen(URL + "api/ping", timeout=1.5) as r:
-            return json.load(r).get("app") == "audios"
+        return "app" if _local_request("api/ping", token, timeout=timeout).get("app") == "audios" else "otro"
+    except urllib.error.HTTPError:
+        return "otro"
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ConnectionRefusedError):
+            return "libre"
+        return "arrancando" if isinstance(e.reason, TimeoutError) else "otro"
+    except TimeoutError:
+        return "arrancando"
     except Exception:
-        return False
+        return "otro"
 
 
-def ask_running_to_show():
+def already_running(token=None):
+    """La app ya corre en este puerto y es la nuestra (contesta con el token de DATA_DIR): no la de otro usuario."""
+    return probe_running(token) == "app"
+
+
+def ask_running_to_show(token=None):
     """Pide a la copia que ya corre que ensene su ventana (POST /api/mostrar). False si no contesta que si (una
     version anterior sin esa ruta): entonces se abre Edge como antes."""
     try:
-        req = urllib.request.Request(URL + "api/mostrar", data=b"{}", method="POST",
-                                     headers={"X-Audios": "1", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return bool(json.load(r).get("ok"))
+        return bool(_local_request("api/mostrar", read_token(DATA_DIR) if token is None else token, b"{}",
+                                   timeout=5).get("ok"))
     except Exception:
         return False
+
+
+PORT_WAIT = 20.0  # s que se espera a otra copia que arranca a la vez (doble clic en el acceso directo)
+
+
+def reserve_port(wait=None):
+    """P1-13: abre el puerto ANTES de crear App() (y sus hilos: atajo Ctrl+Alt+R, vigilante de reuniones, directo).
+    Si ya lo tiene otra copia que esta arrancando a la vez, espera a que conteste y devuelve None (la llamada le pide
+    su ventana); si lo tiene otro programa, el aviso de siempre y fuera."""
+    end = time.time() + (PORT_WAIT if wait is None else wait)
+    while True:
+        try:
+            return Server((HOST, PORT), Handler)
+        except OSError as e:
+            err = e
+        estado = probe_running()
+        if estado == "app":
+            return None
+        if estado == "otro" or time.time() >= end:
+            break
+        time.sleep(0.3)  # "libre" (se acaba de soltar) o "arrancando": otra vuelta
+    log(f"puerto {PORT} ocupado ({estado}): {err}")
+    fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({err}).\n\nCierra ese programa (o arranca "
+          f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
+
+
+def write_token(data_dir, token):
+    """DATA_DIR\\sesion.token (UTF-8, sin salto de linea; DATA_DIR es privado del usuario)."""
+    os.makedirs(data_dir, exist_ok=True)
+    fd = os.open(os.path.join(data_dir, TOKEN_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        f.write(token)
+
+
+def remove_token(data_dir, token):
+    """Al apagar: borra sesion.token si sigue siendo el de esta sesion (no el de otra copia que arrancara despues)."""
+    try:
+        if token and read_token(data_dir) == token:
+            os.remove(os.path.join(data_dir, TOKEN_FILE))
+    except OSError:
+        pass
+
+
+def start_session(data_dir):
+    """P1-02: un token nuevo en cada arranque. Lo exige el Handler en /api/* y /media, y lo leen de DATA_DIR el acceso
+    directo, el aviso flotante, el instalador y las pruebas."""
+    token = secrets.token_urlsafe(32)
+    write_token(data_dir, token)
+    Handler.token = token
+    atexit.register(remove_token, data_dir, token)  # salidas normales (Ctrl+C); shutdown() lo borra antes de _exit
+    return token
 
 
 def shutdown(reason, exit_fn=os._exit):
@@ -3507,6 +5038,7 @@ def shutdown(reason, exit_fn=os._exit):
             Handler.app.shutdown_prepare()
     except Exception:
         log_exc()
+    remove_token(DATA_DIR, Handler.token)  # os._exit no pasa por atexit
     log("apagado")
     logging.shutdown()  # antes de parar el servidor: en cuanto serve_forever vuelve, el hilo principal sale solo
     try:
@@ -3528,6 +5060,11 @@ def schedule_shutdown(reason, delay=0.5):
     t.daemon = True
     t.start()
     return t
+
+
+# Windows apaga, reinicia o cierra la sesion con la ventana propia abierta (o oculta): window.py deja cerrar y llama
+# a este mismo apagado limpio mientras Windows espera
+Window.set_end_session(shutdown)
 
 
 def arg(name, default=None):
@@ -3555,11 +5092,18 @@ def main():
     DATA_DIR = os.path.abspath(arg("--data", DATA_DIR))
     setup_logging(DATA_DIR)
     no_browser = "--no-browser" in sys.argv
-    if already_running():
+    os.environ["CHULETA_DATOS"] = DATA_DIR  # el aviso flotante (proceso hijo) lee ahi sesion.token, tambien con --data
+    srv = None if already_running() else reserve_port()  # el puerto, antes de App() (P1-13)
+    if srv is None:
         log("la app ya estaba abierta: se ensena su ventana")
         if not no_browser and not ask_running_to_show():
-            open_ui()
+            open_ui(read_token(DATA_DIR))
         return
+    try:
+        start_session(DATA_DIR)
+    except OSError as e:
+        log_exc()
+        fatal(f"Error al iniciar: no se puede escribir en {DATA_DIR} ({e}).")
     try:
         import truststore  # usa los certificados de Windows (proxies corporativos), si esta instalado
         truststore.inject_into_ssl()
@@ -3576,17 +5120,14 @@ def main():
     threading.Thread(target=Handler.app.transcripts.warm, args=(Handler.app.library,), daemon=True).start()
     # el modelo local del directo, cargado antes de que empiece la primera reunion (sin bloquear la interfaz)
     threading.Thread(target=Handler.app.jobs.preload, daemon=True, name="preload").start()
-    try:
-        SERVER = srv = Server((HOST, PORT), Handler)
-    except OSError as e:
-        log_exc()
-        fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({e}).\n\nCierra ese programa (o arranca "
-              f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
+    SERVER = srv
     for line in ("=" * 64, f"  {APP_NAME.upper()}  ·  {URL}", f"  Carpeta: {ROOT}",
                  f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).", "=" * 64):
         log(line)
     log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]}")
-    WINDOW = None if no_browser else Window(URL, DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
+    if no_browser:  # para abrirla a mano (desarrollo): el token no va al log, que sale entero en el diagnostico
+        log(f"  Interfaz: {URL}?t=<el contenido de {os.path.join(DATA_DIR, TOKEN_FILE)}>")
+    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
     if WINDOW is not None and WINDOW.available:
         # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar
         threading.Thread(target=srv.serve_forever, daemon=True, name="http").start()

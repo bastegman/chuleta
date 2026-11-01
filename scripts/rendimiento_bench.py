@@ -364,9 +364,11 @@ def bench_biblioteca(n_audios, reps):
         th = threading.Thread(target=srv.serve_forever, daemon=True)
         th.start()
         try:
+            server.Handler.token = "banco"  # la API exige el token de sesion (cabecera X-Chuleta-Token)
+
             def get(path):
                 c = HTTPConnection("127.0.0.1", port, timeout=30)
-                c.request("GET", path, headers={"Host": f"127.0.0.1:{port}"})
+                c.request("GET", path, headers={"Host": f"127.0.0.1:{port}", server.TOKEN_HEADER: "banco"})
                 r = c.getresponse()
                 body = r.read()
                 c.close()

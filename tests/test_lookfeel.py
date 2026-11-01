@@ -139,19 +139,20 @@ class ServidorHttpTests(unittest.TestCase):
         cls.app.jobs = bare_jobs([])
         cls.srv = server.Server(("127.0.0.1", 0), server.Handler)
         cls.port = cls.srv.server_address[1]
-        cls.saved = (server.PORT, server.URL, server.Handler.app, server.WINDOW)
+        cls.saved = (server.PORT, server.URL, server.Handler.app, server.WINDOW, server.Handler.token)
         server.PORT, server.URL = cls.port, f"http://127.0.0.1:{cls.port}/"
         server.Handler.app = cls.app
+        server.Handler.token = "prueba-lookfeel"  # el token de sesion que exige la API (P1-02)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
         cls.srv.server_close()
-        server.PORT, server.URL, server.Handler.app, server.WINDOW = cls.saved
+        server.PORT, server.URL, server.Handler.app, server.WINDOW, server.Handler.token = cls.saved
 
     def call(self, path, body=None, header=True):
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", common.TOKEN_HEADER: server.Handler.token}
         if header:
             headers["X-Audios"] = "1"
         data = json.dumps(body).encode() if body is not None else None
@@ -233,11 +234,17 @@ class ServidorHttpTests(unittest.TestCase):
         self.assertEqual(self.call("/api/ocultar", {}), (200, {"ok": False}))  # sin ventana propia
 
     def test_ask_running_to_show_usa_la_ruta(self):
+        """El acceso directo (la copia que se abre cuando la app ya corre) lee el token de DATA_DIR\\sesion.token."""
         win = mock.Mock()
         win.show.return_value = True
         server.WINDOW = win
+        tmp = tempfile.mkdtemp(prefix="chuleta-token-")
         try:
-            self.assertTrue(server.ask_running_to_show())
+            with patched_paths(DATA_DIR=tmp):
+                self.assertFalse(server.ask_running_to_show())  # sin sesion.token: 403
+                win.show.assert_not_called()
+                server.write_token(tmp, server.Handler.token)
+                self.assertTrue(server.ask_running_to_show())
         finally:
             server.WINDOW = None
         win.show.assert_called_once()
@@ -282,14 +289,15 @@ class ServidorHttpTests(unittest.TestCase):
         self.assertTrue(t.startswith(f"{common.APP_NAME} · versión {server.VERSION}\n"), t.splitlines()[0])
         self.assertIn("Python " + sys.version.split()[0], t)
         self.assertIn("nube (groq) · modelo whisper-large-v3", t)
-        self.assertIn(f"Datos: {tmp}", t)
+        self.assertIn("Datos: en otra carpeta", t)  # sin la ruta (con el usuario de Windows)
+        self.assertNotIn(tmp, t)
         self.assertNotIn(key, t)
         self.assertNotIn(extra, t)
         self.assertNotIn("gsk_QQQQ", t)
-        self.assertIn(server.masked(key), t)
-        self.assertIn("línea 39", t)
-        self.assertNotIn("línea 10", t)  # solo las últimas 30
-        self.assertIn("server.log (últimas 30 líneas):", t)
+        self.assertNotIn(server.masked(key), t)  # la linea entera es texto libre: ni enmascarada
+        self.assertIn("2026-10-31 02:00:39 I <texto>\n2026-10-31 02:01:00 I <texto>", t)
+        self.assertNotIn("02:00:10", t)  # solo las últimas 30
+        self.assertIn("server.log (últimas 30 líneas; lo que no es técnico va como <texto>):", t)
 
     def test_diagnostico_sin_log(self):
         settings = mock.Mock()
@@ -430,7 +438,8 @@ class LogSinConsolaTests(unittest.TestCase):
 
 
 class InstaladorTests(unittest.TestCase):
-    """instalar.ps1 e INSTALAR.bat no se pueden ejecutar aqui: se comprueba el texto (el parseo lo hace pwsh aparte)."""
+    """instalar.ps1 e INSTALAR.bat no se pueden ejecutar aqui: se comprueba el texto. El parseo con Windows PowerShell
+    5.1 lo hace el job de Windows de tests.yml (ParseFile), y la instalacion de verdad, el workflow lookfeel-e2e."""
 
     def read_repo(self, *parts):
         with open(os.path.join(os.path.dirname(APP), *parts), "rb") as f:
@@ -462,7 +471,7 @@ class InstaladorTests(unittest.TestCase):
                   'Rename-Item -LiteralPath $legacy -NewName "$AppName.lnk"',
                   "Se conserva el acceso directo antiguo '$LegacyName'", "pasa a llamarse '$AppName'",
                   '-like "*$LegacyName.bat*"', '@("ABRIR NOTAS.bat", "_app\\Notas.bat")', "ya no hacen falta",
-                  '(Join-Path $app "version.txt")', '"ABRIR CHULETA.bat"'):
+                  '(Join-Path $fromApp "version.txt")', '"ABRIR CHULETA.bat"'):
             self.assertIn(s, ps1, s)
         self.assertNotIn("Remove-Item", ps1)  # el instalador no borra nada del usuario
         self.assertNotIn("NotasLnk", ps1)

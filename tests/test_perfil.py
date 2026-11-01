@@ -546,8 +546,11 @@ class SalidasWriteTests(TempTree):
         with open(ajeno, "w", encoding="utf-8") as f:
             f.write("# mis notas de Obsidian\n")
         done = salidas.write_all(sample_doc(), [self.destinos[0]], self.reg)
-        self.assertEqual(done[0][1], "ajeno")
+        # el fichero ajeno no se toca y el documento va al lado, con un nombre propio y estable para esa reunion
+        alt = salidas.alt_name(self.d1, STEM, sample_doc()["source"], "md")
+        self.assertEqual(done[0], (alt, "escrito"))
         self.assertEqual(self.read(ajeno), "# mis notas de Obsidian\n")
+        self.assertEqual(salidas.write_all(sample_doc(), [self.destinos[0]], self.reg)[0], (alt, "igual"))
         # nuestro, pero editado en el destino (sigue llevando la marca): cambiado, no se toca
         salidas.write_all(sample_doc(), [self.destinos[1]], self.reg)
         mio = os.path.join(self.d2, "Alfa", STEM + ".txt")
@@ -557,21 +560,22 @@ class SalidasWriteTests(TempTree):
         done = salidas.write_all(sample_doc(notes="n2"), [self.destinos[1]], self.reg)
         self.assertEqual(done[0][1], "cambiado")
         self.assertIn("apunte a mano", self.read(mio))
-        # nuestro por la marca pero sin registro (otro PC, reinstalacion): la marca basta y se sobrescribe
+        # nuestro por la marca pero sin registro (otro PC, reinstalacion, salidas.json perdido): no se sabe si se ha
+        # editado alli, asi que se trata como «cambiado» y no se pisa (antes la marca bastaba y se sobrescribia)
         reg2 = salidas.Registro(os.path.join(self.data_dir, "otro.json"))
         x = os.path.join(self.d1, "x.md")
         with open(x, "w", encoding="utf-8") as f:
             f.write(salidas.render_md(sample_doc(stem="x")) + "\neditado\n")
         done = salidas.write_all(sample_doc(stem="x", notes="n2"), [self.destinos[0]], reg2)
-        self.assertEqual(done[0][1], "escrito")
-        self.assertNotIn("editado", self.read(x))
+        self.assertEqual(done[0][1], "cambiado")
+        self.assertIn("editado", self.read(x))
         # carpeta desaparecida: se anota, sin excepcion
         done = salidas.write_all(sample_doc(), [{"path": os.path.join(self.tmp, "no"), "format": "md"}], self.reg)
         self.assertEqual(done[0][1], "sin-carpeta")
         logs = []
         salidas.write_all(sample_doc(notes="n3"), [self.destinos[0], self.destinos[1]], self.reg, logs.append)
+        self.assertIn("documento escrito en 1 destino(s)", logs[0])
         self.assertIn("sin tocar", logs[0])
-        self.assertIn("ajeno", logs[0])
         self.assertIn("cambiado", logs[0])
 
 
@@ -724,15 +728,16 @@ class RutasPerfilTests(TempTree):
     def setUpClass(cls):
         cls.srv = server.Server(("127.0.0.1", 0), server.Handler)
         cls.port = cls.srv.server_address[1]
-        cls._app, cls._port = server.Handler.app, server.PORT
+        cls._app, cls._port, cls._token = server.Handler.app, server.PORT, server.Handler.token
         server.PORT = cls.port
+        server.Handler.token = "prueba-perfil"  # el token de sesion que exige la API (P1-02)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
         cls.srv.server_close()
-        server.Handler.app, server.PORT = cls._app, cls._port
+        server.Handler.app, server.PORT, server.Handler.token = cls._app, cls._port, cls._token
 
     def setUp(self):
         super().setUp()
@@ -748,6 +753,7 @@ class RutasPerfilTests(TempTree):
     def call(self, path, body=None, headers=True):
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method="POST" if data else "GET")
+        req.add_header(server.TOKEN_HEADER, server.Handler.token)
         if data and headers:
             req.add_header("X-Audios", "1")
             req.add_header("Content-Type", "application/json")
@@ -756,7 +762,8 @@ class RutasPerfilTests(TempTree):
 
     def test_get_y_post_perfil(self):
         r = self.call("/api/perfil")
-        self.assertEqual(set(r), {"perfil", "resuelto"})
+        self.assertEqual(set(r), {"perfil", "resuelto", "avisos"})
+        self.assertEqual(r["avisos"], [])
         self.assertEqual(r["perfil"]["language"], "es")
         self.assertEqual(r["resuelto"]["origen"]["folder"], "ultimo")
         r = self.call("/api/perfil", {"folder": "Alfa/Reuniones", "context": "ctx", "language": "es-pt"})

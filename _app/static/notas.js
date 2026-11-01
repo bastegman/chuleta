@@ -16,7 +16,8 @@ const CONSENT_TEXT = 'Aviso: voy a grabar y transcribir esta reunión para tomar
   + 'Aviso: vou gravar e transcrever esta reunião para tomar notas. Se alguém preferir que não, digam-me.';
 
 const titleOf = a => nfc((a && a.props && a.props.titulo) || '');
-const iconOf = a => (a && a.props && a.props.icono) || '';
+// el icono viene del .md (que puede estar en una carpeta compartida) y se pinta como HTML: siempre escapado (P0-2)
+const iconOf = a => esc((a && a.props && a.props.icono) || '');
 const pageTitle = a => titleOf(a) || longTitle(a);
 const fIcon = f => (S.config && S.config.folder_icons && S.config.folder_icons[f.path]) || (f.linked ? '🔗' : '');
 const aDay = a => { const d = aDate(a) || new Date(a.mtime * 1000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
@@ -128,6 +129,11 @@ async function loadVocab(language) {
 function vocabOf(a) {
   const p = a.props || {};
   if (!p.workstream) return null;
+  // primero por el id de la lista (props.vocabulario: lo guarda este PC, no la cabecera del .md; como find_vocab en
+  // server.py, solo si la lista se llama como dice la cabecera): con dos proyectos que se llaman igual, los nombres
+  // no dicen cuál es
+  const byId = p.vocabulario ? S.vocab.find(v => v.id === p.vocabulario) : null;
+  if (byId && fold(byId.name) === fold(p.workstream) && fold(byId.project) === fold(p.proyecto || '')) return byId;
   const same = S.vocab.filter(v => fold(v.name) === fold(p.workstream));
   return same.find(v => fold(v.project) === fold(p.proyecto || '')) || (same.length === 1 ? same[0] : null);
 }
@@ -193,11 +199,14 @@ function wsSelect(a) {
   const lost = p.workstream && !v ? `<option value="__lost" selected>${esc(p.workstream)} (no se encuentra el archivo)</option>` : '';
   return `<select class="pstate pws" data-prop="workstream" title="Vocabulario que recibe Whisper al transcribir esta reunión">${vocabOptions(v ? v.id : (lost ? '__lost' : ''), 'Ninguno')}${lost}</select>`;
 }
+/* el tema elegido en la página va por el id de su lista: por nombres, con dos proyectos que se llaman igual, el
+   servidor tomaría la del proyecto que contiene la reunión y no la elegida ('' = sin tema) */
+function wsPatch(v) { return { vocabulario: v ? v.id : '' }; }
 main.addEventListener('change', e => {
   const a = curAudio();
   if (!a || e.target.dataset.prop !== 'workstream' || e.target.value === '__lost') return;
   const v = S.vocab.find(x => x.id === e.target.value);
-  saveProps(a, { proyecto: v ? v.project : '', workstream: v ? v.name : '' }).then(() => toast(!v ? 'Sin tema: se usará el vocabulario general'
+  saveProps(a, wsPatch(v)).then(() => toast(!v ? 'Sin tema: se usará el vocabulario general'
     : liveJob(a) ? `🗂 ${esc(v.name)}: el directo usa este vocabulario desde el siguiente trozo`
     : (a.txt || a.srt) ? `🗂 ${esc(v.name)} guardado · se aplicará si la vuelves a transcribir` : `🗂 ${esc(v.name)}: se usará al transcribirla`));
 });
@@ -234,6 +243,7 @@ function propsHtml(a) {
     <div class="prow"><span class="pk">${I.state}Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
     <div class="prow"><span class="pk">${I.tag}Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
     <div class="prow"><span class="pk">${I.users}Participantes</span><span class="pv"><input class="pinput" data-prop="participantes" value="${esc(p.participantes || '')}" placeholder="Vacío" autocomplete="off"></span></div>
+    ${window.reunionParticipantesHtml?.(a) || ''}
     <div class="prow"><span class="pk">${I.chat}Transcripción</span><span class="pv">${statusPill(a)}${a.cloud ? ` <span class="pill cloud">${I.cloud}Solo en OneDrive</span>` : ''}</span></div>
   </div><datalist id="tagList"></datalist>`;
 }
@@ -277,7 +287,7 @@ main.addEventListener('focusout', e => {
     if (t !== titleOf(a)) saveProps(a, { titulo: t });
   } else if (e.target.dataset && e.target.dataset.prop === 'participantes') {
     const v = e.target.value.trim();
-    if (v !== ((a.props || {}).participantes || '')) saveProps(a, { participantes: v });
+    if (v !== ((a.props || {}).participantes || '')) saveProps(a, { participantes: v }).then(() => window.reunionParticipantesGuardados?.(a));
   } else if (e.target.dataset && e.target.dataset.prop === 'contexto') {  // perfil.js: Whisper y el resumen lo usan
     const v = e.target.value.trim();
     if (v !== ((a.props || {}).contexto || '')) saveProps(a, { contexto: v }).then(() => { if (typeof perfilSavedText === 'function') toast(perfilSavedText('contexto', !!liveJob(a), !!(a.txt || a.srt))); });
@@ -330,13 +340,17 @@ function renderSummary(a) {
       <div class="sub">Se hace en ${provName()} por partes, al ritmo que permite tu plan · ${Math.round((j.progress || 0) * 100)} %</div></div>
       <button class="btn sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button><div class="pbar${j.progress < 0.02 ? ' indet' : ''}"><i style="width:${(j.progress || 0) * 100}%"></i></div></div>` : '';
   const err = !j && last && last.status === 'error' ? `<div class="notice">No se pudo resumir: ${esc(last.error)}</div>` : '';
+  // con Azure OpenAI solo se configura el deployment de Whisper: el resumen aún no funciona ahí (no es que falte configurar)
+  const azure = S.config?.cloud?.provider === 'azure' && !s.ready;
+  const azureNote = '<div class="muted">El resumen con IA aún no funciona con Azure OpenAI: con Azure solo se transcribe. Para resumir, elige Groq, OpenAI u otra API compatible con OpenAI en Ajustes.</div>';
   if (!s.exists) {
     box.innerHTML = progress + err + `<div class="card sum-empty">
       <div class="se-i">${I.spark}</div>
       <div><b>Resumen con IA de la reunión</b><div class="muted">Resumen, puntos clave, decisiones, próximos pasos y participantes, con el minuto de cada punto. Usa también tus notas.</div></div>
       ${!has ? '<div class="muted">Primero hay que transcribir la reunión.</div>'
-        : !s.ready ? '<button class="btn" data-act="settings">Configurar la nube en Ajustes</button>'
-          : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">${I.spark}Resumir esta reunión</button>`}
+        : azure ? azureNote
+          : !s.ready ? '<button class="btn" data-act="settings">Configurar la nube en Ajustes</button>'
+            : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">${I.spark}Resumir esta reunión</button>`}
     </div>`;
     return;
   }
@@ -346,8 +360,9 @@ function renderSummary(a) {
       <span class="sp"></span>
       <button class="btn sm" data-act="sum-copy">${I.copy}Copiar</button>
       <button class="btn sm" data-act="sum-to-notes">${I.plus}A mis notas</button>
-      ${j ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">${I.refresh}Regenerar</button>`}
+      ${j || azure ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">${I.refresh}Regenerar</button>`}
     </div>
+    ${azure ? azureNote : ''}
     <div class="card docview sumview">${linkStamps(md(s.text).replace(/<li>\[ \]\s?/g, '<li class="todo">☐ ').replace(/<li>\[x\]\s?/gi, '<li class="todo done">☑ '))}</div>`;
 }
 main.addEventListener('click', async e => {
@@ -359,7 +374,7 @@ main.addEventListener('click', async e => {
   if (act.dataset.act === 'summarize' && a) {
     try {
       if (!localStorage.getItem('sumOk') && !await ask(`Resumir con IA en ${provName()}`,
-        `El texto de la transcripción y tus notas se envían a <b>${esc(provName())}</b> para hacer el resumen (el audio no). Si es una reunión de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.`, 'Entendido, resumir')) return;
+        `El texto de la transcripción, tus notas, el contexto y los participantes confirmados se envían a <b>${esc(provName())}</b> para hacer el resumen (el audio no; los participantes que sugirió Outlook o Teams sin confirmar, tampoco). Si es una reunión de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.`, 'Entendido, resumir')) return;
       localStorage.setItem('sumOk', '1');
       await api('/api/summarize', { path: a.path });
       toast(`✨ Resumiendo en ${esc(provName())}… tarda unos minutos en reuniones largas`);
@@ -823,13 +838,16 @@ function openPalette() {
 async function deleteItem(path) {
   const a = S.audios.get(path), d = S.docs.get(path);
   if (!a && !d) return;
+  // destinos de salida: sus documentos que nadie ha cambiado alli van tambien a la papelera; los editados se quedan
+  const outs = a && (S.config.perfil?.outputs || []).length
+    ? ' También van a la papelera sus documentos en los destinos de salida que nadie haya cambiado allí; los que hayas editado se quedan donde están.' : '';
   if (!await ask('¿Mandar a la papelera?', a
-    ? `Se manda a la <b>papelera de Windows</b> la grabación con su transcripción y sus notas (.wav, .txt, .srt, .md). Se puede recuperar desde la papelera.`
+    ? `Se manda a la <b>papelera de Windows</b> la grabación con su transcripción y sus notas (.wav, .txt, .srt, .md). Se puede recuperar desde la papelera.${outs}`
     : 'Se manda a la <b>papelera de Windows</b>. Se puede recuperar desde ahí.', 'Mandar a la papelera')) return;
   if (S.playing === path) { audio.pause(); audio.removeAttribute('src'); audio.load(); S.playing = null; $('#player').classList.add('hidden'); document.body.classList.remove('playing'); }
   try {
-    await api('/api/delete', { path });
-    toast('🗑️ En la papelera de Windows');
+    const r = await api('/api/delete', { path });
+    toast('🗑️ En la papelera de Windows' + (r.copias ? ` (con ${r.copias} ${r.copias === 1 ? 'documento' : 'documentos'} de los destinos de salida)` : ''));
     const parent = (a || d).parent ? (a || d).parent.path : '';
     await refreshTree(true);
     go(parent ? 'f' : 'home', parent, null, true);

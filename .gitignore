@@ -1,3 +1,25 @@
+# Lista blanca en la raíz: en una copia de trabajo el servidor de desarrollo toma esta carpeta como raíz de las
+# reuniones (ROOT), así que lo que se grabe o importe aquí (audio, transcripción .txt/.srt, notas .md, resumen,
+# hablantes) y las carpetas que cree la app («Proyecto Alfa/») no deben acabar en el repo. Solo se versiona lo que
+# está en esta lista; un fichero o una carpeta nuevos en la raíz hay que añadirlos aquí (git add avisa si no).
+/*
+!/.gitignore
+!/.gitattributes
+!/.github/
+!/_app/
+!/design/
+!/scripts/
+!/tests/
+!/ABRIR CHULETA.bat
+!/INSTALAR.bat
+!/CHANGELOG.md
+!/LEEME.txt
+!/LICENSE
+!/README.md
+!/make_icons.py
+!/requirements.txt
+!/requirements-dev.txt
+!/setup.cfg
 # Python
 __pycache__/
 *.pyc
@@ -22,6 +44,10 @@ _app/version.txt
 *.mov
 *.srt
 *.resumen.md
+*.hablantes.*
+# dentro de las carpetas del proyecto, las reuniones se reconocen por el nombre que les ponen la app y OBS
+# («AAAA-MM-DD HH-MM-SS…»): su audio, .txt, .srt, .md y demás sidecars
+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][ _][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*
 # listas de vocabulario: llevan nombres de personas y empresas de cada usuario
 Vocabulario/
 */Vocabulario/

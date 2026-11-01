@@ -278,8 +278,12 @@ class Defecto7Configuracion(unittest.TestCase):
         self.assertLess(ps1.find('"-3.10"'), ps1.find('@("python")'))
         self.assertIn("No matching distribution", ps1)  # distingue "sin wheels" de "proxy"
         self.assertIn("ProxyError", ps1)
-        self.assertIn("LEEME.txt", ps1[ps1.find("actualizo esa"):ps1.find("Buscando Python")])  # copia el manual nuevo
-        self.assertIn('"export"', ps1[ps1.find("actualizo esa"):ps1.find("Buscando Python")])
+        # la actualizacion (y la instalacion en carpeta propia) copian con Copy-AppFiles: el manual nuevo y export
+        update = ps1[ps1.find("actualizo esa"):ps1.find("Buscando Python")]
+        self.assertIn("Copy-AppFiles $app $root $old $oldRoot", update)
+        copia = ps1[ps1.find("function Copy-AppFiles"):ps1.find("function Read-AppVersion")]
+        self.assertIn("LEEME.txt", copia)
+        self.assertIn('"export"', copia)
 
 
 class LogServidor(unittest.TestCase):

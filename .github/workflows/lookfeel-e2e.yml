@@ -1,14 +1,30 @@
 name: lookfeel-e2e
 
-# E2E real en Windows (rama renombrado-chuleta): zip -> INSTALAR.bat en modo ventana (PowerShell 5.1, como en el PC
-# del usuario) -> la app abre su ventana con el titulo «Chuleta» -> acceso directo -> Apagar -> segunda instalacion
-# sobre una copia con el acceso directo antiguo «Notas» (lo detecta, actualiza y renombra) -> tercera con los dos
-# accesos directos (conserva el antiguo) -> instalacion que falla a proposito. Capturas de pantalla cada 5 s. Solo lee
+# E2E real en Windows (main y ramas renombrado-chuleta e instalacion-empresa): zip -> INSTALAR.bat en modo ventana
+# (PowerShell 5.1, como en el PC del usuario) -> se instala en %USERPROFILE%\Chuleta con su entrada de «Aplicaciones
+# instaladas» -> la app abre su ventana con el titulo «Chuleta» -> acceso directo -> Apagar -> reunion falsa ->
+# segunda instalacion (la encuentra por «Aplicaciones instaladas») -> tercera sin esa entrada y con el acceso directo
+# antiguo «Notas» (lo detecta, actualiza y renombra) -> cuarta con los dos accesos directos -> instalacion que falla a
+# proposito -> desinstalador: cancelado, con la app grabando, -Silencioso con la app abierta y, tras reinstalar, con
+# «Borrar tambien mis ajustes». La reunion se compara por sha256 en cada fase. Capturas de pantalla cada 5 s. Solo lee
 # el repo; deja todo como artefacto.
 on:
   workflow_dispatch:
   push:
-    branches: [renombrado-chuleta]
+    # main y las ramas de trabajo del instalador, solo cuando el push toca lo que va en el zip o lo que lo prueba (un
+    # cambio de documentación no gasta los ~10 min de Windows). A mano: Actions -> lookfeel-e2e -> Run workflow.
+    branches: [main, renombrado-chuleta, instalacion-empresa]
+    paths:
+      - "_app/**"
+      - "INSTALAR.bat"
+      - "ABRIR CHULETA.bat"
+      - "LEEME.txt"
+      - "LICENSE"
+      - "requirements.txt"
+      - "scripts/build_zip.py"
+      - "scripts/e2e/**"
+      - "scripts/lookfeel_spike.py"
+      - ".github/workflows/lookfeel-e2e.yml"
 
 permissions:
   contents: read

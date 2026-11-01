@@ -1,4 +1,4 @@
-﻿CHULETA · grabar, transcribir y resumir reuniones              (versión 2026-10-31)
+﻿CHULETA · grabar, transcribir y resumir reuniones              (versión 2026-11-01)
 ==================================================================================
 
 Qué es
@@ -10,19 +10,28 @@ Qué es
 
 INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 ----------------------------------------------------------------------------------
-  1. Descomprime el .zip y deja la carpeta "Chuleta" donde quieras tenerla (Documentos, Escritorio,
-     OneDrive…). Las grabaciones, transcripciones y notas se guardan dentro de esa carpeta.
+  1. Descomprime el .zip donde sea (Descargas vale).
 
   2. Doble clic en INSTALAR.bat
+       - Instala Chuleta en su propia carpeta: C:\Users\<tu usuario>\Chuleta (fuera de Descargas y de
+         OneDrive). Ahí se guardan las grabaciones, transcripciones y notas. Al terminar te dice dónde
+         ha quedado; la carpeta que descomprimiste ya no hace falta y la puedes borrar.
        - Si no tienes Python, lo instala (solo para tu usuario).
        - Instala las librerías y crea el acceso directo "Chuleta" en el escritorio y en el menú Inicio.
+       - Chuleta aparece en Configuración > Aplicaciones > Aplicaciones instaladas, con su versión y
+         su botón Desinstalar.
        - Si Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas formas".
+       - ¿Otra carpeta? Desde una ventana de comandos: INSTALAR.bat -Destino "D:\Reuniones" (una
+         carpeta nueva o vacía). Solo vale la primera vez: si ya la tienes instalada, se actualiza
+         donde está.
 
   3. Se abre Chuleta. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
        - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y deja el modelo
          whisper-large-v3 (el más preciso; whisper-large-v3-turbo es más rápido y algo menos fino).
        - Pasarela o API interna de la empresa: elige "Otra (compatible con OpenAI)" y pon su URL
-         base (la que termina en /v1), la key y el nombre del modelo de Whisper.
+         base (la que termina en /v1), la key y el nombre del modelo de Whisper. En
+         "Modelo del directo" puedes poner otro, más rápido, para la transcripción en directo; si
+         lo dejas vacío, usa el mismo.
        - Pulsa "Probar conexión" y Guardar. Desde ese momento transcribe en la nube por defecto.
      El resumen con IA usa el mismo proveedor y la misma key (Ajustes > Resumen con IA).
 
@@ -30,10 +39,34 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 ACTUALIZAR A UNA VERSIÓN NUEVA
 ----------------------------------------------------------------------------------
   Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Chuleta (o la versión
-  anterior, que se llamaba Notas), el instalador la cierra (salvo que esté grabando) y actualiza la de
-  siempre, en su carpeta, con tus grabaciones; la carpeta recién descomprimida ya no hace falta. El
-  acceso directo "Notas" pasa a llamarse "Chuleta" (no se borra nada). La versión instalada se ve al
-  final de Ajustes, en "Acerca de".
+  anterior, que se llamaba Notas), el instalador la encuentra (por Aplicaciones instaladas o por su
+  acceso directo), la cierra (salvo que esté grabando) y actualiza la de siempre, en su carpeta, con
+  tus grabaciones: nunca las mueve. La carpeta recién descomprimida ya no hace falta. El acceso
+  directo "Notas" pasa a llamarse "Chuleta" (no se borra nada). La versión instalada se ve al final
+  de Ajustes, en "Acerca de", y en Aplicaciones instaladas.
+
+  Si la misma carpeta de reuniones la usan varias copias de Chuleta (en otro PC, o en una carpeta
+  de OneDrive compartida), actualízalas todas a la vez: una copia de una versión anterior envía al
+  resumen con IA y a los destinos de salida los participantes que propuso Outlook o Teams aunque
+  no los hayas confirmado, y la del 30/10 (cuando se llamaba Notas) no entiende el idioma ni el
+  contexto de las reuniones nuevas y mezcla todas sus propiedades con las notas.
+
+
+DESINSTALAR
+----------------------------------------------------------------------------------
+  - Configuración > Aplicaciones > Aplicaciones instaladas > Chuleta > Desinstalar (en el Panel de
+    control: Programas y características > Chuleta).
+  - Quita la aplicación: los accesos directos, su entrada en Aplicaciones instaladas y la carpeta
+    _app. Tus reuniones (audios, transcripciones, notas, resúmenes, hablantes, carpetas de proyecto y
+    listas de vocabulario) NO se borran: se quedan en la carpeta Chuleta, junto a este LEEME.txt.
+    Las carpetas vinculadas tampoco se tocan.
+  - La casilla "Borrar también mis ajustes, claves y voces guardadas" (desmarcada) borra además
+    %LOCALAPPDATA%\AudiosApp: ajustes, API keys, huellas de voz y registros. Es definitivo.
+  - Si Chuleta está grabando, el desinstalador no toca nada: para la grabación y vuelve a empezar.
+  - Python y sus librerías se quedan (los puede usar otro programa); si no los quieres, se quitan
+    aparte, también en Aplicaciones instaladas.
+  - Si vuelves a instalar, Chuleta vuelve a C:\Users\<tu usuario>\Chuleta y enseña otra vez tus
+    reuniones. Si la tenías en otra carpeta: INSTALAR.bat -Destino "esa carpeta".
 
 
 USO DIARIO
@@ -48,9 +81,16 @@ USO DIARIO
   - Al detectar la llamada, abajo en el centro aparece un aviso pequeño con el nombre de la reunión y
     "● Grabar": púlsalo para empezar sin salir de Teams (se cierra solo a los 20 s o con ✕).
   - Al grabar, la app propone el nombre, el tema y los participantes a partir de la ventana de la
-    reunión de Teams y, si lo activas en Ajustes > Reuniones, de tu calendario de Outlook (clásico).
-    Todo se lee en tu PC; los participantes solo van a las notas de esa reunión.
-  - Al parar, termina de transcribir y hace el resumen solo. Cada reunión tiene pestañas
+    reunión de Teams y, si lo activas en Ajustes > Reuniones, de tu calendario de Outlook
+    (clásico). Todo se lee en tu PC. Los participantes que propone se quedan en las notas de esa
+    reunión, marcados como sugeridos, y no van al resumen con IA ni a los destinos de salida hasta
+    que los confirmas en su página ("Confirmar"). El nombre que propone (el asunto de la cita o el
+    título de la reunión de Teams), si lo aceptas, es el nombre de la grabación: va como título
+    con el resumen y a los destinos de salida.
+  - Al parar, termina de transcribir. Si fue en la nube (lo normal en cuanto la conectas), hace
+    también el resumen solo. Lo transcrito en local (si eliges un modelo local para el directo o
+    para la cola) se resume con "Resumir esta reunión", o también solo si lo activas en Ajustes >
+    Resumen con IA (entonces su texto va al proveedor de la nube). Cada reunión tiene pestañas
     Resumen / Transcripción / Notas; la transcripción se puede corregir en la propia página.
   - Ctrl+P busca en todas las reuniones. Puedes arrastrar a la ventana audios que ya tengas
     (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
@@ -65,9 +105,13 @@ USO DIARIO
     siguiente trozo. El resumen también tiene en cuenta el contexto.
   - Destinos de salida (en el mismo apartado): carpetas donde cada reunión se guarda además como
     documento (.md con propiedades, resumen, notas y transcripción; .txt; o Word .docx), por
-    ejemplo un vault de Obsidian o la carpeta del proyecto en OneDrive, con subcarpeta por proyecto
-    si quieres. Se escribe al terminar y al guardar cambios; el audio y los originales no se mueven,
-    y nunca se pisa un archivo ajeno ni uno que hayas cambiado allí.
+    ejemplo un vault de Obsidian o la carpeta de documentos del proyecto en OneDrive, con
+    subcarpeta por proyecto si quieres. No vale la carpeta Chuleta, una carpeta vinculada ni una
+    carpeta con grabaciones: los documentos chocarían con las notas de cada reunión. Se escribe al
+    terminar y al guardar cambios; el audio y los originales no se mueven, y nunca se pisa un
+    archivo ajeno ni uno que hayas cambiado allí (lo que no se ha podido escribir sale como aviso
+    en ese mismo apartado). Los participantes sin confirmar no van. Al borrar una reunión, sus
+    documentos que nadie haya cambiado allí van también a la papelera.
   - Vocabulario por proyecto y tema: en Ajustes > Vocabulario (o en ● Grabar > Nuevo) creas un
     proyecto y sus temas, cada uno con su lista de nombres, siglas y productos separados por
     comas (los más importantes primero). Al grabar eliges el proyecto y el tema y Whisper los
@@ -88,13 +132,15 @@ QUIÉN HABLA (opcional)
     y «Olvidar persona».
   - El resumen con IA usa esos nombres (responsables y participantes) y «Exportar con hablantes»
     guarda <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
-  - Privacidad: todo ocurre en tu PC, nada se envía fuera. Por reunión se guarda
-    <grabación>.hablantes.json junto al audio (tramos y «Persona N», sin datos de voz). Las huellas
-    de voz que decidas recordar van a %LOCALAPPDATA%\AudiosApp\voces.json, cifrado con tu cuenta
-    de Windows, fuera de OneDrive, máximo 5 por persona, y se borran con «Olvidar». Una huella de
-    voz es un dato biométrico: guárdala solo con el consentimiento de esa persona (la casilla te lo
-    recuerda; el consentimiento es responsabilidad tuya). Si no activas la opción no se descarga
-    ni se guarda nada.
+  - Privacidad: las voces se separan y se reconocen en tu PC, y las huellas no salen de él. Los
+    nombres que pongas van con la transcripción: al resumen con IA (si lo usas) y a los destinos
+    de salida. Por reunión se guarda <grabación>.hablantes.json junto al audio (tramos y
+    «Persona N», sin datos de voz). Las huellas de voz que decidas recordar van a
+    %LOCALAPPDATA%\AudiosApp\voces.json, cifrado con tu cuenta de Windows, fuera de OneDrive,
+    máximo 5 por persona, y se borran con «Olvidar». Una huella de voz es un dato biométrico:
+    guárdala solo con el consentimiento de esa persona (la casilla te lo recuerda; el
+    consentimiento es responsabilidad tuya). Si no activas la opción no se descarga ni se guarda
+    nada.
 
 PRIVACIDAD
 ----------------------------------------------------------------------------------
@@ -104,6 +150,13 @@ PRIVACIDAD
   - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que
     configures. Si son reuniones de trabajo, confirma que lo permiten la política de tu empresa y
     el acuerdo con tu cliente, si lo hay.
+  - El resumen automático solo envía las reuniones transcritas en la nube. Lo transcrito en local
+    solo se envía al proveedor si lo resumes a mano o si marcas "Resumir también las reuniones
+    transcritas en local" en Ajustes > Resumen con IA. De cada reunión, el resumen envía el
+    título, la fecha y la duración, la transcripción (con quién habla), tus notas, el contexto,
+    los participantes confirmados y tus instrucciones; el audio, no. Si actualizas desde una
+    versión que sí enviaba lo transcrito en local y te afectaba, Inicio te lo avisa una vez, con
+    un enlace a esa casilla.
   - Sin nube también funciona: transcribe en el propio PC (más lento, y la primera vez descarga
     el modelo de Whisper, entre 0,5 y 3 GB según el que elijas).
 
@@ -117,10 +170,21 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
 SI ALGO FALLA
 ----------------------------------------------------------------------------------
   - INSTALAR.bat se puede volver a ejecutar sin problema.
+  - Si tu empresa no deja añadir programas a Aplicaciones instaladas, el instalador lo avisa y
+    Chuleta funciona igual; para quitarla: clic derecho en _app\desinstalar.ps1 > "Ejecutar con
+    PowerShell".
+  - Registro del desinstalador: %TEMP%\chuleta-desinstalar.log.
   - Si el acceso directo no abre nada, ABRIR CHULETA.bat arranca la app con una ventana de consola
     donde se ven los mensajes (ciérrala para apagar).
-  - Para pedir ayuda: ⚙ Ajustes > Acerca de > "Copiar diagnóstico" copia la versión, el sistema y las
-    últimas líneas del registro (sin tus claves) para pegarlas en un correo o en un issue.
+  - Para pedir ayuda: ⚙ Ajustes > Acerca de > "Copiar diagnóstico" copia solo datos técnicos: la
+    versión, el sistema, el motor y el modelo y, de las últimas líneas del registro, lo fijo de
+    cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas y personas
+    y las rutas salen como <texto>, y las claves no van. Revísalo antes de pegarlo y no lo
+    publiques en un sitio público. Los registros (server.log y los demás) sí llevan nombres y
+    rutas: no los compartas tal cual.
+  - Si sale "Sesión no válida", abre Chuleta con su acceso directo: la dirección 127.0.0.1
+    guardada en el navegador no vale sola.
   - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
     (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.
-  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log, recorder.log, voces.log).
+  - Registros para revisar errores: %LOCALAPPDATA%\AudiosApp (server.log, worker-*.log,
+    recorder.log, voces.log e instalar.log).

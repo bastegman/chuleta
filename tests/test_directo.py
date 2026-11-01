@@ -151,6 +151,7 @@ def pool(log=None, t=1000.0):
 
 CFG2 = {"provider": "groq", "api_key": "gsk_primera_0000000000", "extra_keys": ["gsk_segunda_1111111111"]}
 K1, K2 = CFG2["api_key"], CFG2["extra_keys"][0]
+TURBO = "whisper-large-v3-turbo"  # el modelo de Groq que usa una cfg sin "model" (y el del directo): su cupo es suyo
 
 
 class DurationTests(unittest.TestCase):
@@ -310,8 +311,8 @@ class CloudPostTests(unittest.TestCase):
         self.assertEqual(res["text"], "hola")
         auths = [kw["headers"]["Authorization"] for _, kw in fake.calls]
         self.assertEqual(auths, [f"Bearer {K1}", f"Bearer {K2}"])
-        self.assertTrue(eng.keys.blocked(K1, "whisper"))
-        self.assertEqual(eng.keys.public(CFG2)["active"], 2)
+        self.assertTrue(eng.keys.blocked(K1, "whisper", TURBO))
+        self.assertEqual(eng.keys.public(CFG2, model=TURBO)["active"], 2)
 
     def test_429_largo_sin_otra_clave_falla_rapido(self):
         eng = engines.CloudEngine(self.tmp)
@@ -325,7 +326,7 @@ class CloudPostTests(unittest.TestCase):
         self.assertIn("Groq pide esperar 90 min", str(cm.exception))
         self.assertEqual(len(fake.calls), 1)
         self.assertEqual(sum(sleeps), 0)  # sin esperar 120 s x 6 dentro
-        self.assertIsNone(eng.keys.live_pace(cfg))  # y el directo entra en pausa
+        self.assertIsNone(eng.keys.live_pace(cfg, model=TURBO))  # y el directo entra en pausa
         # un 429 corto sigue esperando y reintentando
         ok = {"text": "x", "segments": [], "language": "spanish"}
         fake = FakeRequests([FakeResponse(429, {"retry-after": "4"}, {}), FakeResponse(200, {}, ok)])
@@ -352,7 +353,9 @@ class CloudPostTests(unittest.TestCase):
         self.assertIsNone(engines.CloudEngine.live_model({"provider": "openai",
                                                           "live_model": "whisper-large-v3-turbo"}))
         self.assertIsNone(engines.CloudEngine.live_model({"provider": "custom"}))
-        self.assertEqual(engines.CloudEngine.live_model({"provider": "custom", "live_model": "x"}), "x")
+        # «Otra (compatible)»: su propio campo; el live_model de Groq (que se guarda con turbo por defecto) no cuenta
+        self.assertIsNone(engines.CloudEngine.live_model({"provider": "custom", "live_model": "x"}))
+        self.assertEqual(engines.CloudEngine.live_model({"provider": "custom", "live_model_custom": " x "}), "x")
 
     def test_traduccion_con_gpt_oss_20b(self):
         s = engines.Summarizer()
@@ -367,7 +370,7 @@ class CloudPostTests(unittest.TestCase):
                          ("openai/gpt-oss-20b", 0.1, "low"))
         self.assertIn("Conserva nombres propios", kw["json"]["messages"][0]["content"])
         self.assertEqual(kw["json"]["messages"][1]["content"], "Bom dia a todos.")
-        self.assertEqual(s.keys.public(CFG2, "chat")["used"], 1)
+        self.assertEqual(s.keys.public(CFG2, "chat", "openai/gpt-oss-20b")["used"], 1)  # cupo por modelo
         self.assertEqual(s.translate(CFG2, "  ", lambda **k: None, lambda: False)[0], "")
 
 
@@ -448,6 +451,9 @@ class LiveTranslateApiTests(unittest.TestCase):
         jobs.list, jobs.lock = [job], threading.Lock()
         app = server.App.__new__(server.App)
         app.jobs = jobs
+        app.settings = server.Store(os.path.join(tempfile.mkdtemp(prefix="notas-tr-"), "s.json"),
+                                    server.DEFAULT_SETTINGS)
+        app.settings.update(lambda d: d["cloud"].update(api_key="gsk_main_000000000"))
         self.assertFalse(job.translate)
         job.directo = {"translate": False, "paused": False}
         out = app.live_translate({"id": job.id, "on": True})
@@ -483,8 +489,9 @@ class FakeSummarizer:
     def __init__(self, fail=False):
         self.calls, self.fail = [], fail
 
-    def translate(self, cfg, text, report, cancelled, model=None):
+    def translate(self, cfg, text, report, cancelled, model=None, **kw):
         self.calls.append(text)
+        self.kw = kw  # el ultimo paso, al terminar el directo, pide un intento corto (timeout, attempts)
         if self.fail:
             raise engines.EngineError("sin cupo")
         return "ES: " + text, "openai/gpt-oss-20b"
@@ -599,9 +606,10 @@ class FakeCloud:
         self.rec, self.latency, self.calls, self.fail_on = rec, latency, [], set(fail_on)
         self.keys = engines.KeyPool()
         self.keys.clock = rec.time
-        if remaining is not None:
+        if remaining is not None:  # el cupo es por modelo: el del directo
             self.keys.note("k1", "whisper", 200,
-                           {"x-ratelimit-remaining-requests": str(remaining), "x-ratelimit-reset-requests": "5h"})
+                           {"x-ratelimit-remaining-requests": str(remaining), "x-ratelimit-reset-requests": "5h"},
+                           engines.LIVE_MODEL_DEFAULT)
 
     def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, context=None,
                          model=None, about=None, timing=None):

@@ -76,30 +76,48 @@ def cue(kind):
     play()
 
 
+# Aviso de Windows (toast) con PowerShell. El script es FIJO: el titulo y el texto le llegan por variables de entorno
+# y nunca se pegan dentro del codigo. Asi un nombre de proyecto o de tema con comillas tipograficas (‘ ’ ‚ ‛, que
+# PowerShell tambien toma por comillas simples), « " », $, ` o saltos de linea no puede cerrar la cadena ni ejecutar
+# nada, y «Pla d’acció» sale tal cual en el aviso.
+TOAST_ENV = ("CHULETA_AVISO_TITULO", "CHULETA_AVISO_TEXTO")
+TOAST_PS = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+            "ContentType = WindowsRuntime] > $null;"
+            "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+            "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+            "$x = $t.GetElementsByTagName('text');"
+            f"$x.Item(0).AppendChild($t.CreateTextNode([string]$env:{TOAST_ENV[0]})) > $null;"
+            f"$x.Item(1).AppendChild($t.CreateTextNode([string]$env:{TOAST_ENV[1]})) > $null;"
+            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+            "'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe')"
+            ".Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+
+
+def toast_text(s, limit=400):
+    """Texto apto para una variable de entorno (sin NUL) y de un largo razonable para un aviso."""
+    return str(s if s is not None else "").replace("\x00", "")[:limit]
+
+
+def toast_command(title, body):
+    """(argv, env) del PowerShell que ensena el aviso: el script no depende de los textos, que van en `env`."""
+    import base64
+    env = dict(os.environ)
+    env[TOAST_ENV[0]], env[TOAST_ENV[1]] = toast_text(title), toast_text(body)
+    argv = ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+            "-EncodedCommand", base64.b64encode(TOAST_PS.encode("utf-16-le")).decode()]
+    return argv, env
+
+
 def notify(title, body):
     """Notificacion de Windows (por si la ventana de la app no esta a la vista)."""
     if not WINDOWS:
         log(f"   aviso: {title} — {body}")
         return
-    import base64
-
-    def q(s):
-        return s.replace("'", "''")
-    ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
-          "ContentType = WindowsRuntime] > $null;"
-          "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-          "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
-          "$x = $t.GetElementsByTagName('text');"
-          f"$x.Item(0).AppendChild($t.CreateTextNode('{q(title)}')) > $null;"
-          f"$x.Item(1).AppendChild($t.CreateTextNode('{q(body)}')) > $null;"
-          "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-          "'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe')"
-          ".Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+    argv, env = toast_command(title, body)
     try:
-        subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                          "-EncodedCommand", base64.b64encode(ps.encode("utf-16-le")).decode()],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=engines.NO_WINDOW)
-    except OSError:
+        subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=engines.NO_WINDOW)
+    except (OSError, ValueError):
         pass
 
 

@@ -346,8 +346,9 @@ async function pollRec() {
   // la app se ha actualizado y reiniciado: se recarga sola (sin cortar un dialogo ni un audio que suena)
   if (S.rec.build) {
     S.build = S.build || S.rec.build;
-    if (S.rec.build !== S.build && $('#modal').classList.contains('hidden') && audio.paused) return location.reload();
+    if (S.rec.build !== S.build && $('#modal').classList.contains('hidden') && audio.paused && await txSavedForReload()) return location.reload();
   }
+  if (S.config && S.config.meeting_detect === false) S.rec.meeting = null;  // «Avisarme si estoy en una llamada» apagado: sin chip
   if (was !== !!S.rec.recording) onRecChange();
   renderRecBtn(); updateMeters(); renderMeetChip();
   recTimer = setTimeout(pollRec, S.rec.recording || recDialog ? 300 : 1500);
@@ -402,7 +403,7 @@ async function stopRec() {
 /* carpetas donde grabar: las de la app, las vinculadas y "otra carpeta…" (se vincula al elegirla) */
 const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulario')
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
-  + '<option value="__pick">Otra carpeta (fuera de Audios)…</option>';
+  + `<option value="__pick">Otra carpeta (fuera de ${esc(APP_NAME)})…</option>`;
 async function openRec() {
   if (S.rec.recording) return stopRec();
   recDialog = true;
@@ -413,7 +414,7 @@ async function openRec() {
   openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar con esta misma configuración desde cualquier programa (aunque estés en Teams) y vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
+      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (carpeta, idioma, tema y contexto) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
       : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
     <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
@@ -750,11 +751,12 @@ function fcard(f) {
 
 /* selector de velocidad + idioma para transcribir una lista de audios */
 let boxSeq = 0;
+const TX_EACH = '__cada';  // idioma «el de cada reunión» (en lote): el servidor recibe null y usa el de cada .md
 /* resume: las que se quedaron a medias se continuan desde donde acaba el texto (se estima solo lo que falta) */
 const remaining = (a, resume) => resume && a.partial ? Math.max(1, estDuration(a) - a.tx_end) : estDuration(a);
 function txBox(list, title, opts = {}) {
-  const id = 'b' + (++boxSeq), resume = !!opts.resume;
-  S.boxes[id] = { paths: list.map(a => a.path), resume };
+  const id = 'b' + (++boxSeq), resume = !!opts.resume, key = list.map(a => a.path).join('\n');
+  S.boxes[id] = { paths: list.map(a => a.path), resume, key };
   const total = sum(list, a => remaining(a, resume));
   const sel = S.selPreset || S.config.preset;
   const cards = S.config.presets.map(p => {
@@ -768,14 +770,16 @@ function txBox(list, title, opts = {}) {
       + `<div class="pe">${cloudOff ? 'Configurar' : fmtEst(est)}</div>`
       + `<div class="pm">${p.engine === 'cloud' ? (cloudOff ? 'falta API key' : esc(S.config.providers[S.config.cloud.provider]?.label || 'nube')) : esc(p.model)}</div></button>`;
   }).join('');
-  const lang = list.length === 1 && typeof perfilLangOf === 'function' ? perfilLangOf(list[0]) : (S.selLang ?? S.config.language);
+  // idioma: lo que hayas elegido en esta caja; si no, en lote «el de cada reunión» y, con una, el suyo (o el del perfil)
+  const each = list.length > 1, langs = each ? [[TX_EACH, 'El de cada reunión (o el del perfil)']].concat(LANGS) : LANGS;
+  const lang = S.txLang?.[key] ?? (each ? TX_EACH : list.length === 1 && typeof perfilLangOf === 'function' ? perfilLangOf(list[0]) : (S.config.language ?? ''));
   const hint = S.presetsById[sel]?.hint || '';
   return `<div class="card txbox" data-box="${id}">
     <div class="head"><b>${esc(title)}</b><span class="muted">${list.length > 1 ? `${list.length} audios · ` : ''}${fmtDur(total)} de audio${resume && list.some(a => a.partial) ? ' por transcribir' : ''}</span></div>
     <div class="presets">${cards}</div>
     <div class="preset-hint" data-hint="${id}">${esc(hint)}</div>
     <div class="foot">
-      <select data-lang="${id}" title="Idioma de la reunión">${LANGS.map(([v, l]) => `<option value="${v}"${v === lang ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      <select data-lang="${id}" title="${each ? 'Idioma de cada reunión' : 'Idioma de la reunión'}">${langs.map(([v, l]) => `<option value="${v}"${v === lang ? ' selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn primary" data-act="tx-go" data-box="${id}">${I.spark}${opts.button || (list.length > 1 ? `Transcribir ${list.length} audios` : 'Transcribir')}</button>
       <span class="muted" style="font-size:12.5px">Se guarda como .txt y .srt junto al audio. Puedes seguir usando la app mientras tanto.</span>
     </div></div>`;
@@ -845,6 +849,22 @@ function viewMissing() {
   main.innerHTML = `<div class="page"><div class="card empty">Esto ya no está aquí (¿se ha movido o renombrado?).<br><br><a class="btn" href="#/">Volver al inicio</a></div></div>`;
 }
 
+/* Tras actualizar: el resumen automático ya no manda a la nube lo transcrito en local (server.py,
+   App._aviso_resumen_local). Se avisa una vez, arriba en Inicio, hasta que se cierra o se va al ajuste. */
+function avisoResumenLocalHtml() {
+  if (!S.config.summary?.aviso_local) return '';
+  return `<div class="notice info" id="avisoSumLocal" style="margin:0 0 14px">${I.info}El resumen automático ya no envía a <b>${esc(provName())}</b> las reuniones transcritas en local. <a href="#" data-act="aviso-sum-ajuste">Actívalo en Ajustes</a> si quieres. <button class="btn sm ghost" type="button" data-act="aviso-sum-ok">Entendido</button></div>`;
+}
+function avisoResumenLocalVisto(irAlAjuste) {
+  S.config.summary = { ...(S.config.summary || {}), aviso_local: false };
+  $('#avisoSumLocal')?.remove();
+  api('/api/settings', { summary: { aviso_visto: true } }).catch(err => toast(esc(err.message), 'err'));
+  if (!irAlAjuste) return;
+  openSettings();
+  const c = $('#sAutoLocal');
+  if (c) { c.scrollIntoView({ block: 'center' }); c.focus(); }
+}
+
 function viewHome() {
   const t = S.tree, all = allAudios();
   const pending = all.filter(a => (!(a.txt || a.srt) || a.partial) && !jobFor(a.path) && !a.recording);
@@ -855,6 +875,7 @@ function viewHome() {
   const lives = liveAudios(), loose = t.audios.filter(a => !isLive(a));
   main.innerHTML = `<div class="page">
     ${lives.map(liveBanner).join('')}
+    ${avisoResumenLocalHtml()}
     <h1>Tus notas de reunión</h1>
     <div class="meta">${esc(S.config.root)} · <a href="#" data-act="palette">Ctrl+P para buscar</a></div>
     ${welcomeCard(all)}
@@ -1010,6 +1031,7 @@ async function appendLive(a) {
 async function loadTranscript(a) {
   if (S.editing && S.tx && S.tx.path === a.path) return liveJob(a) ? appendLive(a) : undefined;  // no pisar lo que se esta corrigiendo
   const want = a.path;
+  try { await txInflight.get(want); } catch { /* lo avisa saveTxNow */ }  // primero, la correccion que aun se guarda
   let t;
   try { t = await api('/api/transcript?path=' + enc(a.path)); } catch (err) { t = { kind: null, segments: [], error: err.message }; }
   if (S.route.kind !== 'a' || S.route.path !== want) return;
@@ -1086,35 +1108,114 @@ function scheduleSave() { clearTimeout(S.saveTimer); setSaveState('Sin guardar�
 function editPayload() {
   return { path: S.tx.path, segments: S.tx.segs.filter(s => s.text.trim()).map(s => ({ start: s.start, end: s.end, text: s.text })) };
 }
-async function saveEdits() {
+/* Correcciones que aun no han llegado al servidor: la ultima version de cada reunion, hasta que el servidor la
+   confirma. Cada version lleva su numero (sin salir en el JSON) y la reunion de la que sale: una version vieja no pisa
+   a una nueva, y los guardados de una misma reunion van en orden. Con alguna pendiente la pagina no se recarga sola y,
+   al cerrarla, se pide confirmacion si no cabe en el ultimo envio. */
+const txPending = new Map(), txInflight = new Map(), txLatest = new Map();
+let txSeq = 0;
+const TX_RETRY_MS = 1000, TX_KEEPALIVE_MAX = 60 * 1024;  // Chromium (WebView2) rechaza keepalive de mas de 64 KiB
+function txVersion() {
+  const p = editPayload();
+  Object.defineProperties(p, { seq: { value: ++txSeq }, tx: { value: S.tx } });
+  txLatest.set(p.path, p.seq);
+  return p;
+}
+const txStale = p => txLatest.get(p.path) !== p.seq;
+function sendTx(payload) {
+  const path = payload.path, prev = txInflight.get(path);
+  txPending.set(path, payload);
+  const p = (prev ? prev.catch(() => { }) : Promise.resolve())
+    .then(() => api('/api/transcript/save', payload))
+    .then(r => {
+      if (txPending.get(path) === payload) txPending.delete(path);
+      const a = S.audios.get(path);
+      if (a) a.tx_mtime = r.tx_mtime;
+      if (S.tx && S.tx === payload.tx) S.tx.mtime = r.tx_mtime;  // si la pagina muestra otra copia, que la recargue
+      return r;
+    })
+    .finally(() => { if (txInflight.get(path) === p) txInflight.delete(path); });
+  txInflight.set(path, p);
+  return p;
+}
+/* guardado al cambiar de reunion: un fetch normal (sin tope de tamano), dos reintentos y, si sigue fallando, aviso */
+async function saveTxNow(payload, tries = 3, quiet = false) {
+  for (let i = 1; ; i++) {
+    if (txStale(payload)) return true;  // ya hay una version mas nueva, que se guarda por su cuenta
+    try { await sendTx(payload); return true; } catch (err) {
+      if (txStale(payload)) return true;
+      if (i >= tries) {
+        const a = S.audios.get(payload.path);
+        if (!quiet) toast(`No se han podido guardar tus correcciones${a ? ` de «${esc(fullTitle(a))}»` : ''}: ${esc(err.message)} · <b>clic para reintentar</b>`, 'err', () => saveTxNow(payload));
+        return false;
+      }
+      await new Promise(res => setTimeout(res, TX_RETRY_MS * i));
+    }
+  }
+}
+/* quiet: la recarga automatica, que lo reintenta en cada sondeo, no repite el aviso de un fallo que ya ha salido */
+async function saveEdits(quiet = false) {
   clearTimeout(S.saveTimer);
-  if (!S.tx) return;
+  if (!S.tx) return true;
   syncEdits();
-  if (!S.dirty) return;
-  S.dirty = false;
+  if (!S.dirty) {  // nada nuevo: si aun va en camino el guardado anterior de este texto, se espera a que se confirme
+    const tx = S.tx;
+    try { await txInflight.get(tx.path); } catch { /* lo dice quien lo lanzo */ }
+    const pend = txPending.get(tx.path);
+    return !(pend && pend.tx === tx);
+  }
+  S.dirty = false;  // lo que se escriba mientras se guarda lo vuelve a marcar (syncEdits)
   setSaveState('Guardando…');
+  const payload = txVersion();
   try {
-    const r = await api('/api/transcript/save', editPayload());
-    S.tx.mtime = r.tx_mtime;
-    const a = S.audios.get(S.tx.path);
-    if (a) a.tx_mtime = r.tx_mtime;
-    if (!r.live) {  // en directo la copia del original se guarda al terminar
-      S.tx.has_backup = true;
-      $('[data-act="tx-restore"]')?.classList.remove('hidden');
+    const r = await sendTx(payload);
+    if (S.tx && S.tx === payload.tx) {
+      S.tx.saveErr = null;
+      if (!r.live) {  // en directo la copia del original se guarda al terminar
+        S.tx.has_backup = true;
+        $('[data-act="tx-restore"]')?.classList.remove('hidden');
+      }
     }
     setSaveState(S.dirty ? 'Sin guardar…' : 'Guardado ✓');
-  } catch (err) { S.dirty = true; setSaveState('No se ha podido guardar'); toast(esc(err.message), 'err'); }
+    return !S.dirty;
+  } catch (err) {
+    if (S.editing && S.tx && S.tx === payload.tx) {  // sigue en la pagina: el siguiente guardado lo reintenta
+      S.dirty = true; setSaveState('No se ha podido guardar');
+      if (!quiet || S.tx.saveErr !== err.message) toast(esc(err.message), 'err');
+      S.tx.saveErr = err.message;
+    } else saveTxNow(payload);  // ya ha cambiado de reunion: reintentos y aviso
+    return false;
+  }
 }
-/* al salir de la pagina o cambiar de reunion: se guarda sin esperar */
+/* al cambiar de reunion: se guarda en el momento, sin esperar al guardado diferido */
 function flushEdits() {
   if (!S.editing || !S.tx) return;
   syncEdits();
   clearTimeout(S.saveTimer);
   if (S.dirty) {
-    fetch('/api/transcript/save', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Audios': '1' }, body: JSON.stringify(editPayload()) });
     S.dirty = false;
+    saveTxNow(txVersion());
   }
   S.editing = false;
+}
+/* al cerrar o recargar la pagina: ultimo intento con keepalive solo si cabe; devuelve cuantas no se han podido mandar.
+   No sale del modo edicion: si tras el aviso se sigue en la pagina, lo que se escriba despues se sigue guardando */
+function flushTxOnUnload() {
+  if (S.editing && S.tx) saveEdits();  // sin esperar: sale ya con un fetch normal y queda pendiente para el keepalive
+  let left = 0;
+  for (const p of txPending.values()) {
+    const body = JSON.stringify(p);
+    if (new TextEncoder().encode(body).length > TX_KEEPALIVE_MAX) { left++; continue; }
+    try { fetch('/api/transcript/save', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Audios': '1' }, body }).catch(() => { }); } catch { left++; }
+  }
+  return left;
+}
+/* antes de la recarga automatica (app actualizada): primero se guarda lo corregido (y se reintenta, sin avisos, lo
+   que hubiera fallado); si algo no se puede guardar, no se recarga. Va en cada sondeo: el mismo fallo se avisa una vez */
+async function txSavedForReload() {
+  if (S.editing && !(await saveEdits(true))) return false;
+  for (const p of [...txPending.values()]) await saveTxNow(p, 1, true);
+  return !txPending.size;
 }
 function startEdit() {
   if (S.tx && S.tx.kind === 'txt') toast('Esta transcripción no tiene tiempos (.txt): se edita igual.');
@@ -1123,7 +1224,8 @@ function startEdit() {
   $('#txBody .s')?.focus();
 }
 async function finishEdit() {
-  await saveEdits();
+  const tx = S.tx;
+  if (!(await saveEdits()) || S.tx !== tx) return;  // no se ha guardado: se sigue editando (el aviso ya ha salido)
   S.editing = false;
   S.tx.segs = S.tx.segs.filter(s => s.text.trim());
   S.tx.starts = S.tx.segs.map(s => s.start ?? 0);
@@ -1150,16 +1252,24 @@ function replaceAll() {
   toast(`${n} ${n === 1 ? 'cambio' : 'cambios'}: «${esc(find)}» → «${esc(rep)}»`);
 }
 async function restoreOriginal() {
-  if (!await ask('¿Restaurar el original?', 'Se descartan todas tus correcciones y vuelve el texto tal como lo transcribió Whisper.', 'Restaurar')) return;
+  if (!await ask('¿Restaurar el original?', 'Se descartan todas tus correcciones y vuelve el texto tal como lo transcribió Whisper.', 'Restaurar') || !S.tx) return;
+  const tx = S.tx, path = tx.path, unsaved = S.dirty || txPending.has(path);
+  // lo corregido que aun no ha llegado al servidor se descarta: no se reintenta ni sale al cerrar o recargar la pagina
+  // (pisaria el original restaurado), y lo que ya va en camino se espera, para que llegue antes que la restauracion
   clearTimeout(S.saveTimer);
+  S.editing = false; S.dirty = false;
+  txPending.delete(path); txLatest.delete(path);
+  for (let p; (p = txInflight.get(path));) { try { await p; } catch { /* descartado */ } }
   try {
-    await api('/api/transcript/restore', { path: S.tx.path });
-    S.editing = false; S.dirty = false;
-    const a = S.audios.get(S.tx.path);
+    await api('/api/transcript/restore', { path });
+    const a = S.audios.get(path);
     S.tx = null;
     if (a) loadTranscript(a);
     toast('Restaurado el texto original de Whisper');
-  } catch (err) { toast(esc(err.message), 'err'); }
+  } catch (err) {
+    if (S.tx === tx) { S.editing = true; S.dirty = unsaved; if (unsaved) scheduleSave(); }  // sin restaurar: se sigue corrigiendo
+    toast(esc(err.message), 'err');
+  }
 }
 
 function paragraphs(segs, who) {
@@ -1422,7 +1532,10 @@ function playBtns() {
     b.innerHTML = `${I.play}${on ? 'Pausa' : 'Reproducir'}`;
   });
 }
-window.addEventListener('beforeunload', () => { savePos(); flushEdits(); });
+window.addEventListener('beforeunload', e => {
+  savePos();
+  if (flushTxOnUnload()) { e.preventDefault(); e.returnValue = ''; }  // correcciones sin guardar: se pide confirmar
+});
 
 /* ---------------------------------------------------------------- acciones (delegadas) */
 main.addEventListener('click', async e => {
@@ -1482,10 +1595,9 @@ main.addEventListener('click', async e => {
     else if (a === 'to-live') { main.scrollTo({ top: main.scrollHeight, behavior: 'smooth' }); S.userScroll = 0; }
     else if (a === 'tx-toggle') { S.txOpen = !S.txOpen; const au = S.audios.get(S.route.path); if (au) { $('#aJob').innerHTML = ''; $('#aJob').dataset.id = ''; renderAudioHead(au); if (S.txOpen) $('#aBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } }
     else if (a === 'tx-go') {
-      const id = act.dataset.box, sel = $(`select[data-lang="${id}"]`);
-      S.selLang = sel ? sel.value : '';
+      const id = act.dataset.box, sel = $(`select[data-lang="${id}"]`), lang = sel ? sel.value : '';
       const box = S.boxes[id] || { paths: [], resume: false };
-      submitTx(box.paths, S.selPreset || S.config.preset, S.selLang, box.resume);
+      submitTx(box.paths, S.selPreset || S.config.preset, lang === TX_EACH ? null : lang, box.resume);
     }
     else if (a === 'move') openMove(p);
     else if (a === 'reveal') api('/api/reveal', { path: p }).catch(err => toast(esc(err.message), 'err'));
@@ -1494,6 +1606,7 @@ main.addEventListener('click', async e => {
     else if (a === 'new-folder') openNewFolder(p);
     else if (a === 'rename-folder') openRenameFolder(p);
     else if (a === 'link-remove') unlinkFolder(p);
+    else if (a === 'aviso-sum-ok' || a === 'aviso-sum-ajuste') { e.preventDefault(); avisoResumenLocalVisto(a === 'aviso-sum-ajuste'); }
     else if (a === 'cancel-job') { await api('/api/cancel', { id: act.dataset.id }); pollJobs(true); }
     else if (a === 'copy-tx') copy(transcriptText(), 'Transcripción copiada');
     else if (a === 'copy-doc') copy(S.docText || '', 'Texto copiado');
@@ -1531,7 +1644,10 @@ main.addEventListener('click', async e => {
 });
 main.addEventListener('change', e => {
   if (e.target.id === 'follow') { S.follow = e.target.checked; localStorage.setItem('follow', S.follow ? '1' : '0'); if (S.follow) { S.userScroll = 0; syncHighlight(); } }
-  if (e.target.dataset.lang) S.selLang = e.target.value;
+  if (e.target.dataset.lang) {  // lo elegido en esa caja se recuerda para esas mismas reuniones (no para las demás)
+    const box = S.boxes[e.target.dataset.lang];
+    if (box) (S.txLang ||= {})[box.key] = e.target.value;
+  }
 });
 let tqTimer;
 main.addEventListener('input', e => {
@@ -1813,6 +1929,7 @@ function openSettings() {
   const ac = S.config.acerca || {};
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
+    ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
     <fieldset><legend>${I.nube}Transcripción en la nube</legend>
       <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
@@ -1836,13 +1953,16 @@ function openSettings() {
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
     </fieldset>
     <fieldset><legend>${I.spark}Resumen con IA</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir en la nube (reuniones de los últimos 3 días)</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAutoLocal" ${S.config.summary?.local ? 'checked' : ''}> Resumir también las reuniones transcritas en local (las envía a ${esc(provName())})</label>
+      <div class="help" id="sAutoLocalQue">De cada reunión se envía a <b>${esc(provName())}</b>: el título (o el nombre del archivo), la fecha y la duración, la transcripción (con quién habla, si se sabe), tus notas, el contexto, los participantes confirmados y tus instrucciones para el resumen. El audio no.</div>
+      <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
       <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
       <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
-    <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
+    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
       <div id="sLinks"></div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
       <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
@@ -1866,7 +1986,8 @@ function openSettings() {
       <div class="help" style="margin-top:0"><b>${esc(APP_NAME)}</b> · versión ${esc(S.config.version || '')}${ac.licencia ? ` · licencia ${esc(ac.licencia)}` : ''}<br>
         Código, novedades y ayuda: <a href="${esc(ac.repo || '#')}" id="aRepo">${esc((ac.repo || '').replace(/^https?:\/\//, ''))}</a><br>
         Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code></div>
-      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro, sin claves: para pedir ayuda</span></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
+      <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas y destinos hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
     </fieldset>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
@@ -1875,7 +1996,7 @@ function openSettings() {
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
     $('#aDiag', d).onclick = async () => {
-      try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: pégalo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
+      try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
     };
     const fields = () => {
       const p = $('#cProv', d).value, info = P[p];
@@ -1898,6 +2019,7 @@ function openSettings() {
     };
     fields();
     $('#cProv', d).onchange = fields;
+    $('#sAutoLocal', d).onchange = e => { $('#sAutoLocalAviso', d).hidden = !e.target.checked; if (e.target.checked) localStorage.setItem('sumOk', '1'); };
     bindVocesSettings(d);
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     window.bindReunionSettings?.(d);
@@ -1916,7 +2038,7 @@ function openSettings() {
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
-        summary: { auto: $('#sAuto', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
+        summary: { auto: $('#sAuto', d).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
     };
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
@@ -1931,7 +2053,7 @@ function openSettings() {
       const box = $('#sLinks', d), ls = S.config.links || [];
       box.innerHTML = ls.length ? `<table class="vtable">${ls.map(l => `<tr><td>${I.link}${esc(nfc(l.name))}</td><td><code>${esc(l.path)}</code></td>
           <td><button class="btn ghost sm" type="button" data-unlink="${esc(l.rel)}">quitar</button></td></tr>`).join('')}</table>`
-        : '<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta Audios.</div>';
+        : `<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta de ${esc(APP_NAME)}${S.config.root ? ` (<code>${esc(S.config.root)}</code>)` : ''}.</div>`;
     };
     drawLinks();
     $('#lnAdd', d).onclick = async () => { if (await linkFolder()) drawLinks(); };
@@ -2024,6 +2146,14 @@ function toast(html, kind = '', onclick) {
 }
 
 /* ---------------------------------------------------------------- arranque */
+/* settings.json no se pudo leer al arrancar (server.py, Store): se copió como settings.json.roto-<fecha> y se rescató
+   lo que se pudo. Se avisa al abrir la app y arriba en Ajustes. */
+function settingsBrokenHtml(b) {
+  const rec = (b.recuperado || []).length ? `Se han recuperado ${esc(b.recuperado.join(', '))}; lo demás vuelve a los valores por defecto.` : 'Tus ajustes vuelven a los valores por defecto.';
+  return `${I.info}No se han podido leer tus ajustes: settings.json estaba dañado. ${b.copia
+    ? `Hay una copia tal como estaba, <b>${esc(b.copia)}</b>, en la carpeta de datos (Ajustes → Acerca de → Abrir).`
+    : 'No se ha podido hacer una copia, así que en esta sesión los cambios de Ajustes no se guardan en disco.'} ${rec} Revisa Ajustes.`;
+}
 function setConfig(c) {
   S.config = c;
   if (c.app_name) APP_NAME = c.app_name;
@@ -2046,6 +2176,7 @@ async function refreshTree(force) {
 async function init() {
   try {
     setConfig(await api('/api/config'));
+    if (S.config.settings_broken) toast(settingsBrokenHtml(S.config.settings_broken), 'err', openSettings);
     const r = await api('/api/tree');
     S.version = r.version;
     indexTree(r.tree);

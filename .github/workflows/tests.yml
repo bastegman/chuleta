@@ -15,6 +15,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
@@ -24,10 +25,43 @@ jobs:
         run: python -m pip install --disable-pip-version-check numpy requests
       - name: Tests (falla si se ejecutan 0)
         run: python tests/run.py
+      - name: Los .ps1 de _app (instalar.ps1 y, si existe, desinstalar.ps1) se parsean en Windows PowerShell 5.1
+        # El mismo PowerShell que lanza INSTALAR.bat en el PC del usuario (pwsh es la 7): un error de sintaxis que en
+        # macOS y Linux no se ve rompe la instalación. Corre aunque fallen los tests (es otra comprobación). El script,
+        # solo en ASCII: si el runner lo guarda sin BOM, PowerShell 5.1 lo lee como ANSI.
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: powershell
+        run: |
+          "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
+          if ($PSVersionTable.PSEdition -ne "Desktop" -or $PSVersionTable.PSVersion.Major -ne 5) {
+            throw "se esperaba Windows PowerShell 5.1"
+          }
+          function Count-ParseErrors([string]$Path, [string]$Label) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+            foreach ($e in $errors) {
+              Write-Host "  ${Label}: linea $($e.Extent.StartLineNumber), columna $($e.Extent.StartColumnNumber): $($e.Message)"
+            }
+            return $errors.Count
+          }
+          # control: un fichero roto a proposito tiene que dar errores; si no, la comprobacion no vale
+          $roto = Join-Path $env:RUNNER_TEMP "roto.ps1"
+          Set-Content -LiteralPath $roto -Value 'if ($a) { "sin cerrar"' -Encoding UTF8
+          if ((Count-ParseErrors $roto "control") -eq 0) { throw "ParseFile no detecta un error de sintaxis de prueba" }
+          $files = @(Get-ChildItem -LiteralPath "_app" -Filter "*.ps1" | Sort-Object Name)
+          if (-not ($files | Where-Object { $_.Name -eq "instalar.ps1" })) { throw "no encuentro _app\instalar.ps1" }
+          $total = 0
+          foreach ($f in $files) {
+            $n = Count-ParseErrors $f.FullName "_app\$($f.Name)"
+            "_app\$($f.Name): $n errores de sintaxis"
+            $total += $n
+          }
+          if ($total -ne 0) { exit 1 }
 
   lint:
     # aparte de la matriz: las versiones recientes de flake8 exigen Python >= 3.11
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
@@ -35,3 +69,28 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - run: python -m flake8
+
+  agnosticismo:
+    # Aparte de lint: una coincidencia con la lista privada sale en rojo con este nombre y no tapa un fallo de flake8.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Agnosticismo con la lista privada (sin el secreto NOTAS_PALABRAS_VETADAS no se ejecuta y lo avisa)
+        # Solo este paso recibe la lista: expresiones regulares separadas por comas o una por línea, en Settings ->
+        # Secrets and variables -> Actions -> New repository secret. Con ella, el test se ejecuta en cada push y en los
+        # pull_request de ramas del repo, y falla si encuentra algo; al fallar dice fichero y línea, nunca la palabra
+        # (el log de un repo público es público). Sin ella (mientras no exista el secreto, o si se vacía, y siempre en
+        # los pull_request de un fork y con Dependabot, que no reciben los secretos de Actions), el test se salta y, con
+        # NOTAS_AVISAR_SIN_VETADAS, él mismo deja un ::warning en el resumen del run que dice que no se ha ejecutado y
+        # cómo ejecutarlo en local (si la lista está vacía lo decide solo el test, que es quien la lee). Ningún job sale
+        # en rojo por eso, tampoco en main: un rojo constante acostumbra a ignorar la CI.
+        env:
+          NOTAS_PALABRAS_VETADAS: ${{ secrets.NOTAS_PALABRAS_VETADAS }}
+          NOTAS_AVISAR_SIN_VETADAS: "1"
+        working-directory: tests
+        run: python -m unittest -v test_package.TemplatesTests.test_sin_rastro_de_clientes
