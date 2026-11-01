@@ -495,7 +495,9 @@ class WorkflowsWindowsTests(unittest.TestCase):
         for nombre, rutas in (("lookfeel-e2e.yml", ("_app/**", "INSTALAR.bat", "ABRIR CHULETA.bat", "requirements.txt",
                                                     "scripts/build_zip.py", "scripts/e2e/**",
                                                     "scripts/lookfeel_spike.py")),  # lo importa scripts/e2e/ventana.py
-                              ("reunion-windows.yml", ("_app/**", "tests/**", "requirements.txt"))):
+                              ("reunion-windows.yml", ("_app/**", "tests/**", "requirements.txt")),
+                              # fix-windows: la suite en Windows con el formato regional español y la ventana real
+                              ("windows-real.yml", ("_app/**", "tests/**", "requirements.txt"))):
             with self.subTest(nombre):
                 on = workflow(nombre)["on"]
                 self.assertIn("workflow_dispatch", eventos(on))  # a mano: Actions -> Run workflow

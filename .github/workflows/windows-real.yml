@@ -3,12 +3,18 @@ name: windows-real
 # Pruebas en Windows de verdad que la suite de tests.yml no cubre sola (auditoria final, grupo Windows): el formato
 # regional español del usuario (Set-Culture es-ES) para el filtro de Outlook (P1-07), y la ventana propia (pywebview
 # sobre WebView2) ante los mensajes con los que Windows apaga o cierra la sesion (P1-09) y sin WebView2 (P2-35). El
-# aviso con PowerShell 5.1 (P1-01) corre aqui y en tests.yml. Se lanza a mano o con cada push de la rama fix-windows;
-# deja server.log y los resultados como artefacto. Solo lee el repo.
+# aviso con PowerShell 5.1 (P1-01) corre aqui y en tests.yml. Se lanza a mano (Actions -> windows-real -> Run
+# workflow) y con cada push a main, o a la rama fix-windows, que toque la app, los tests o este workflow (P2-38); deja
+# server.log y los resultados como artefacto. Solo lee el repo.
 on:
   workflow_dispatch:
   push:
-    branches: [fix-windows]
+    branches: [main, fix-windows]
+    paths:
+      - "_app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/windows-real.yml"
 
 permissions:
   contents: read
