@@ -765,42 +765,6 @@ class Library:
         return None
 
 
-class Complete:
-    """Audios cuya transcripcion se sabe completa aunque el texto acabe antes que el audio
-    (p. ej. se siguio grabando en silencio al final). Asi no se marcan "a medias"."""
-
-    def __init__(self, path):
-        self.path, self.lock = path, threading.Lock()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                self.data = set(json.load(f))
-        except (OSError, ValueError):
-            self.data = set()
-
-    def __contains__(self, rel):
-        return rel in self.data
-
-    def _save(self):
-        with open(self.path + ".tmp", "w", encoding="utf-8") as f:
-            json.dump(sorted(self.data), f, ensure_ascii=False)
-        os.replace(self.path + ".tmp", self.path)
-
-    def set(self, rel, done=True):
-        with self.lock:
-            if done == (rel in self.data):
-                return
-            (self.data.add if done else self.data.discard)(rel)
-            self._save()
-
-    def moved(self, old, new):
-        if old in self:
-            self.set(old, False)
-            self.set(new, True)
-
-
-COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
-
-
 CLOUD_TEXT_LOCK = threading.Lock()
 
 
@@ -844,6 +808,42 @@ class CloudText:
                     os.remove(self.path)
                 except OSError:
                     pass
+
+
+class Complete:
+    """Audios cuya transcripcion se sabe completa aunque el texto acabe antes que el audio
+    (p. ej. se siguio grabando en silencio al final). Asi no se marcan "a medias"."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.data = set(json.load(f))
+        except (OSError, ValueError):
+            self.data = set()
+
+    def __contains__(self, rel):
+        return rel in self.data
+
+    def _save(self):
+        with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(sorted(self.data), f, ensure_ascii=False)
+        os.replace(self.path + ".tmp", self.path)
+
+    def set(self, rel, done=True):
+        with self.lock:
+            if done == (rel in self.data):
+                return
+            (self.data.add if done else self.data.discard)(rel)
+            self._save()
+
+    def moved(self, old, new):
+        if old in self:
+            self.set(old, False)
+            self.set(new, True)
+
+
+COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
 
 
 def is_partial(a):
