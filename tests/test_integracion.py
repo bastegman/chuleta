@@ -220,5 +220,71 @@ class ParticipantesSugeridosCompatTests(TempTree):
         self.assertEqual(props, {"participantes": "Ana"})  # como notes_save: solo outlook o teams
 
 
+# ----------------------------------------------------------------------------- fix-privacidad + las demás ramas
+
+class DiagnosticoOtrasRamasTests(unittest.TestCase):
+    """«Copiar diagnóstico» (fix-privacidad) solo deja pasar lo fijo de los mensajes de la app que tienen plantilla
+    (DIAG_LINES); lo demás sale como <texto>. Las plantillas se hicieron con los mensajes de su rama, y los que escriben
+    fix-seguridad, fix-windows, fix-directo y fix-perfil salían enteros como <texto>: sin saber, por ejemplo, que la
+    interfaz recibía 403 sin token o que Windows había cerrado la app. Con las suyas, lo técnico se queda y los nombres,
+    rutas y textos de error siguen fuera (test_privacidad.DiagnosticoTests prueba cada plantilla con datos en cada
+    hueco)."""
+
+    U = "C:\\Users\\bob.smith\\OneDrive - Initech\\Chuleta"
+    LINEAS = [  # (mensaje de log(), lo que tiene que quedar)
+        # fix-seguridad
+        ("   403 sin token de sesión (navegador): POST /api/settings (solo el primero)",
+         "   403 sin token de sesión (navegador): <texto> (solo el primero)"),
+        ("   403 sin token de sesión (programa): GET /api/omega-kwyjibo (solo el primero)",
+         "   403 sin token de sesión (programa): <texto> (solo el primero)"),
+        ("   sesión: cookie entregada a la interfaz", None),
+        ("   sesión: /?t= con un token que no es el de esta sesión (sin cookie)", None),
+        ("puerto 8765 ocupado (otro): [WinError 10048] Solo se permite un uso de cada dirección (Omega)",
+         "puerto 8765 ocupado (<texto>): <texto> ([WinError 10048])"),
+        (f"  Interfaz: http://127.0.0.1:8765/?t=<el contenido de {U}\\sesion.token>",
+         "  Interfaz: http://127.0.0.1:8765/?t=<el contenido de <texto>>"),
+        # fix-windows
+        ("la ventana propia necesita WebView2 y pywebview usaría «mshtml» (¿falta el runtime de WebView2?): se abre "
+         "en Edge",
+         "la ventana propia necesita WebView2 y pywebview usaría «<texto>» (¿falta el runtime de WebView2?): se abre "
+         "en Edge"),
+        ("Windows pide cerrar la ventana (WindowsShutDown): se deja cerrar", None),
+        ("Windows pide cerrar la ventana (TaskManagerClosing): se deja cerrar", None),
+        ("Windows cierra la sesión o se apaga: apagado limpio", None),
+        ("Windows ha pedido cerrar: apagado limpio", None),
+        ("   Outlook: GetDateFormatEx/GetTimeFormatEx han fallado (error 87): el filtro va con el formato de EE. UU.",
+         None),
+        # fix-directo
+        ("   Junta Omega.wav: el repaso final se quedó pendiente al apagar; se retoma",
+         "   <texto>: el repaso final se quedó pendiente al apagar; se retoma"),
+        ("   Junta Omega.wav: el repaso final pendiente ya no se puede hacer",
+         "   <texto>: el repaso final pendiente ya no se puede hacer"),
+        ("   repaso final pendiente de Clientes Omega/Junta Omega.wav: la reunión ya no está ahí, se olvida",
+         "   repaso final pendiente de <texto>: la reunión ya no está ahí, se olvida"),
+        ("   el repaso final queda pendiente para el próximo arranque", None),
+        ("   Junta Omega.wav: el directo no dejó texto (HTTP 500: Omega no contesta); lo transcribe el repaso final",
+         "   <texto>: el directo no dejó texto (<texto> (HTTP 500)); lo transcribe el repaso final"),
+        ("   directo: no se pudieron releer los ajustes de la nube (KeyError)", None),
+        # fix-perfil
+        ("🗑 Clientes Omega/Junta Omega.m4a → papelera (4 archivos y 2 documentos de los destinos)",
+         "🗑 <texto> → papelera (4 archivos y 2 documentos de los destinos)"),
+        ("   tema de 3 reuniones: siguen a la carpeta renombrada Clientes Omega",
+         "   tema de 3 reuniones: siguen a la carpeta renombrada <texto>"),
+        ("   destinos de salida: no ha dado tiempo a escribir Clientes Omega/Junta.wav al apagar",
+         "   destinos de salida: no ha dado tiempo a escribir <texto> al apagar"),
+        ("   no se pudieron mandar a la papelera los documentos de Clientes Omega/Junta.wav: [WinError 32] El "
+         "proceso no tiene acceso",
+         "   no se pudieron mandar a la papelera los documentos de <texto>: <texto> ([WinError 32])"),
+    ]
+
+    def test_lo_tecnico_de_las_otras_ramas_se_queda(self):
+        h = "2026-11-01 10:00:00 I "
+        for linea, esperado in self.LINEAS:
+            with self.subTest(linea):
+                out = server.diag_line(h + linea)
+                self.assertEqual(out, h + (esperado or linea))
+                self.assertNotRegex(out, r"(?i)omega|kwyjibo|bob\.smith|initech|clientes|junta|settings")
+
+
 if __name__ == "__main__":
     unittest.main()
