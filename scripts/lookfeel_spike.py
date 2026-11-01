@@ -37,9 +37,9 @@ URL = f"http://127.0.0.1:{PORT}/"
 TITLE = "Chuleta"  # = common.APP_NAME (el <title> que sirve index.html)
 
 SVG_HEAD = '<link rel="icon" href="/logo.svg" type="image/svg+xml">\n'
-ICO_HEAD = ('<link rel="icon" href="/notas.ico" sizes="16x16 20x20 24x24 32x32 40x40 48x48 64x64 128x128 256x256">\n'
-            '<link rel="icon" href="/notas.png" type="image/png" sizes="256x256">\n'
-            '<link rel="apple-touch-icon" href="/notas.png">\n')
+ICO_HEAD = ('<link rel="icon" href="/chuleta.ico" sizes="16x16 20x20 24x24 32x32 40x40 48x48 64x64 128x128 256x256">\n'
+            '<link rel="icon" href="/chuleta.png" type="image/png" sizes="256x256">\n'
+            '<link rel="apple-touch-icon" href="/chuleta.png">\n')
 MANIFEST_LINK = '<link rel="manifest" href="/manifest.webmanifest">\n'
 
 user32, gdi32, shell32, ole32, kernel32 = (ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.shell32,
@@ -261,13 +261,13 @@ def make_variant(kind, base):
             name = f"notas-{size}.png"
             try:
                 from PIL import Image
-                Image.open(os.path.join(static, "notas.png")).convert("RGBA").resize((size, size),
-                                                                                     Image.LANCZOS).save(
+                Image.open(os.path.join(static, "chuleta.png")).convert("RGBA").resize((size, size),
+                                                                                       Image.LANCZOS).save(
                     os.path.join(static, name))
                 icons.append({"src": "/" + name, "sizes": f"{size}x{size}", "type": "image/png", "purpose": "any"})
             except Exception as e:  # sin Pillow: se declara el PNG de 256 con ese tamaño
-                print(f"   sin PNG de {size} ({e}); se usa notas.png")
-                icons.append({"src": "/notas.png", "sizes": "256x256", "type": "image/png", "purpose": "any"})
+                print(f"   sin PNG de {size} ({e}); se usa chuleta.png")
+                icons.append({"src": "/chuleta.png", "sizes": "256x256", "type": "image/png", "purpose": "any"})
         manifest = {"name": TITLE, "short_name": TITLE, "start_url": "/", "display": "standalone",
                     "background_color": "#ffffff", "theme_color": "#ffffff", "icons": icons}
         with open(os.path.join(static, "manifest.webmanifest"), "w", encoding="utf-8") as f:

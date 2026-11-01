@@ -754,6 +754,24 @@ class SondasTests(ServidorBase):
         self.assertEqual(len(app), 1, edge[0])
         self.assert_abre_la_interfaz(app[0][len("--app="):])
 
+    def test_las_variantes_del_spike_tienen_los_iconos_de_la_app(self):
+        """make_variant parte de la cabecera de iconos de index.html. Tras el renombrado (chuleta.ico) el spike seguía
+        buscando la de notas.ico: las 4 variantes acababan en AssertionError sin llegar a abrir Edge (run 41212715121
+        del workflow lookfeel-spike), y la sonda de WebView2 cargaba static/notas.ico, que ya no existe."""
+        self.assertTrue(os.path.isfile(self.probe.ICO), self.probe.ICO)
+        base = os.path.join(self.out, "variantes")
+        for kind in ("ico", "ico-udd", "svg", "manifest"):
+            with contextlib.redirect_stdout(io.StringIO()):  # sin Pillow avisa de que usa el PNG de 256
+                static = os.path.join(os.path.dirname(self.spike.make_variant(kind, base)), "static")
+            with open(os.path.join(static, "index.html"), encoding="utf-8") as f:
+                refs = re.findall(r'<link rel="(?:icon|apple-touch-icon|manifest)" href="/([^"]+)"', f.read())
+            if kind == "manifest":
+                with open(os.path.join(static, "manifest.webmanifest"), encoding="utf-8") as f:
+                    refs += [i["src"].lstrip("/") for i in json.load(f)["icons"]]
+            self.assertTrue(refs, kind)
+            for ref in refs:
+                self.assertTrue(os.path.isfile(os.path.join(static, ref)), f"{kind}: /{ref}")
+
     def test_webview_probe_ve_el_servidor_y_abre_la_interfaz_con_token(self):
         write_token_file(os.path.join(self.out, "webview-data"), TOKEN)  # lo que deja el servidor al arrancar
         webview = types.ModuleType("webview")
