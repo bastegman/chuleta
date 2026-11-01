@@ -1504,10 +1504,10 @@ class PendingPasses(Complete):
     al ponerlo en cola y se quita al terminar (bien, con error o cancelado a mano). Lo que siga apuntado al arrancar
     se quedo a medias al apagar la app (o al cerrar la sesion de Windows) y se retoma.
 
-    Con cada reunion va local_part: si su directo tuvo algun trozo en local. Si el repaso no acaba, el texto que queda
-    es el del directo, y lo transcrito en local no sale del PC por el resumen automatico sin permiso: el repaso que se
-    retoma al arrancar lo necesita igual que el de entonces. Sin el dato (el formato anterior, una lista de rutas) se da
-    por hecho que si, que es lo seguro."""
+    Con cada reunion va local_part: si su directo tuvo algun trozo en local (sin el dato, el formato anterior, una lista
+    de rutas, se da por hecho que si). Si el repaso no acaba, el texto que queda es el del directo, y lo transcrito en
+    local no sale del PC por el resumen automatico sin permiso. Quien lo decide es CloudText, que vive en DATA_DIR y
+    sobrevive al reinicio igual que este fichero: local_part queda como constancia en el repaso (Job.local_part)."""
 
     def __init__(self, path):
         self.path, self.lock = path, threading.Lock()
@@ -1697,8 +1697,9 @@ class Jobs:
         """El repaso final de esa reunion a la cola: el del directo que acaba de terminar o, al arrancar, el que quedo
         apuntado (_resume_final_passes). Queda apuntado en repasos_pendientes.json hasta que termine: si se apaga
         antes, se retoma al arrancar. local_part: si su directo tuvo algun trozo en local (sin el dato, si: lo seguro).
-        Va con el repaso (j.local_part) y se apunta con el, porque si el repaso no acaba el texto que queda es el del
-        directo, y lo transcrito en local no sale del PC por el resumen automatico sin permiso."""
+        Va con el repaso (j.local_part) y se apunta con el. Si el repaso no acaba, el texto que queda es el del directo,
+        y el resumen automatico mira CloudText (apuntado al empezar el directo): lo transcrito en local no sale del PC
+        sin permiso, tampoco con un repaso retomado tras reiniciar (tests/test_integracion.py)."""
         j = Job(rel, name, "nube", language)
         j.final_pass, j.stage, j.local_part = True, "En cola: repaso final en la nube", local_part is not False
         self._pending().set(rel, local_part=j.local_part)
