@@ -225,12 +225,11 @@ class Store:
 
     Un settings.json ilegible (JSON mal formado o cortado, o que no es un objeto) no se ignora en silencio, porque el
     primer guardado lo pisaria con los valores por defecto (API key, carpetas vinculadas y destinos vacios): se copia
-    tal cual como settings.json.roto-<fecha>, se rescata de el lo que mas cuesta volver a poner (RESCUE), se anota en
-    el log y `broken` se lo cuenta a la interfaz. Si ni siquiera se puede hacer la copia, en toda la sesion no se
-    escribe encima del original (`frozen`): los cambios se quedan en memoria."""
+    tal cual como settings.json.roto-<fecha>, se rescata de el lo que mas cuesta volver a poner (todos los SECRETS y
+    RESCUE), se anota en el log y `broken` se lo cuenta a la interfaz. Si ni siquiera se puede hacer la copia, en toda
+    la sesion no se escribe encima del original (`frozen`): los cambios se quedan en memoria."""
 
     SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"))  # un texto o una lista de textos
-    RESCUE = (("cloud", "api_key"), ("cloud", "extra_keys"), ("links",), ("perfil", "outputs"))
 
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
@@ -286,7 +285,8 @@ class Store:
             return self._broken(raw, e)
 
     def _broken(self, raw, err):
-        """settings.json ilegible: copia del fichero tal cual, rescate de RESCUE, log y aviso para la interfaz."""
+        """settings.json ilegible: copia del fichero tal cual, rescate (los SECRETS y RESCUE), log y aviso para la
+        interfaz."""
         why = f"{err.__class__.__name__}: {err}"[:200]
         copia = f"{self.path}.roto-{time.strftime('%Y-%m-%d_%H-%M-%S')}"
         n = 1
@@ -298,36 +298,44 @@ class Store:
             log(f"   no se pudo copiar settings.json ({e.__class__.__name__}): no se escribirá encima en esta sesión")
             copia, self.frozen = None, True
         saved = self._rescue(raw) if raw else {}
-        cloud, links = saved.get("cloud") or {}, saved.get("links") or []
-        outs = (saved.get("perfil") or {}).get("outputs") or []
+
+        def dig(keys):
+            d = saved
+            for k in keys:
+                d = d.get(k) if isinstance(d, dict) else None
+            return d
 
         def cuantos(n, uno, varios):
             return [f"{n} {uno if n == 1 else varios}"] if n else []
-        recuperado = ((["la API key"] if cloud.get("api_key") else [])
-                      + cuantos(len(cloud.get("extra_keys") or []), "clave adicional", "claves adicionales")
-                      + cuantos(len(links), "carpeta vinculada", "carpetas vinculadas")
-                      + cuantos(len(outs), "destino de salida", "destinos de salida"))
+        extra = sum(len(dig(k) or []) for k in self.SECRETS if k != ("cloud", "api_key"))  # de todos los proveedores
+        recuperado = ((["la API key"] if dig(("cloud", "api_key")) else [])
+                      + cuantos(extra, "clave adicional", "claves adicionales")
+                      + cuantos(len(dig(("links",)) or []), "carpeta vinculada", "carpetas vinculadas")
+                      + cuantos(len(dig(("perfil", "outputs")) or []), "destino de salida", "destinos de salida"))
         self.broken = {"copia": os.path.basename(copia) if copia else None, "error": why, "recuperado": recuperado}
         log(f"   settings.json no se puede leer ({why})"
             + (f": copia en {os.path.basename(copia)}" if copia else "")
             + f"; recuperado: {', '.join(recuperado) or 'nada'}; lo demás vuelve a los valores por defecto")
         return saved
 
+    RESCUE = (("links",), ("perfil", "outputs"))  # de un settings.json roto, ademas de todos los SECRETS
+
     @classmethod
     def _rescue(cls, raw):
-        """De un settings.json roto, los valores de RESCUE que se puedan leer enteros: cada uno se decodifica con
-        raw_decode desde su clave, asi que vale aunque el fichero este cortado o mal escrito en otra parte."""
+        """De un settings.json roto, los SECRETS (todos: tambien los que se anadan) y lo de RESCUE que se pueda leer
+        entero: cada valor se decodifica con raw_decode desde su clave, asi que vale aunque el fichero este cortado o
+        mal escrito en otra parte."""
         text = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
         dec, out = json.JSONDecoder(), {}
-        for keys in cls.RESCUE:
+        for keys in cls.SECRETS + cls.RESCUE:
             for m in re.finditer('"' + re.escape(keys[-1]) + r'"\s*:\s*', text):
                 try:
                     v, _ = dec.raw_decode(text, m.end())
                 except ValueError:
                     continue
-                if keys[-1] == "api_key":
+                if keys == ("cloud", "api_key"):
                     ok = isinstance(v, str) and bool(v.strip())
-                elif keys[-1] == "extra_keys":
+                elif keys in cls.SECRETS:  # las claves adicionales (las de cada proveedor): listas de textos
                     ok = isinstance(v, list) and bool(v) and all(isinstance(x, str) for x in v)
                 else:  # links y outputs: listas de {"path": …}
                     ok = isinstance(v, list) and bool(v) and all(isinstance(x, dict) and isinstance(x.get("path"), str)
@@ -773,8 +781,10 @@ class CloudText:
     trozos en la nube o con el repaso final. El resumen automatico solo sube a la nube estas sin el permiso de Ajustes
     (summary_auto_local). Lo apunta cada transcripcion al escribir el texto (Jobs._cloud_text) y vive en DATA_DIR, asi
     que no depende del trabajo que acaba de terminar ni del arranque: un repaso final retomado tras reiniciar que falla
-    o se cancela deja el texto del directo, y cuenta lo que fue el directo. Lo que no esta cuenta como local. Se olvida
-    a los 7 dias (el resumen automatico es solo para las reuniones de los ultimos 3)."""
+    o se cancela deja el texto del directo, y cuenta lo que fue el directo. Lo que no esta cuenta como local. Sigue a la
+    reunion si se mueve o se renombra (ella o su carpeta) y se borra con ella (moved, set), y cada entrada lleva la
+    identidad del audio (ident): si en esa ruta hay ahora otro archivo (se movio o se borro fuera de la app y otra
+    reunion llego con ese nombre), no cuenta. Caduca a los 7 dias (el resumen automatico, para las de los ultimos 3)."""
 
     KEEP_S = 7 * 86400
 
@@ -782,32 +792,67 @@ class CloudText:
         self.path, self.lock = path, threading.Lock()
         try:
             with open(path, "r", encoding="utf-8") as f:
-                self.data = {str(k): float(v) for k, v in json.load(f).items()}
-        except (OSError, ValueError, TypeError, AttributeError):
+                self.data = {str(k): self._entry(v) for k, v in json.load(f).items()}
+        except (OSError, ValueError, TypeError, AttributeError, IndexError):
             self.data = {}
 
+    @staticmethod
+    def _entry(v):
+        """[cuando, identidad del audio]; un numero suelto, sin identidad (0)."""
+        t, ino = (v[0], v[1]) if isinstance(v, list) else (v, 0)
+        return [float(t), int(ino)]
+
+    @staticmethod
+    def ident(rel):
+        """La identidad del audio: st_ino, el indice del archivo en NTFS, que se conserva al moverlo o renombrarlo en la
+        misma unidad y es otro en un archivo nuevo. 0 si no se sabe (entonces vale solo la ruta)."""
+        try:
+            return os.stat(safe(rel, "file")).st_ino
+        except (ApiError, OSError):
+            return 0
+
     def __contains__(self, rel):
-        return rel in self.data
+        e = self.data.get(rel)
+        return (e is not None and time.time() - e[0] < self.KEEP_S  # caduca al consultar, no solo al escribir
+                and (not e[1] or e[1] == self.ident(rel)))  # y tiene que ser el mismo audio
 
     def set(self, rel, cloud):
         now = time.time()
         with self.lock:
-            data = {k: t for k, t in self.data.items() if k != rel and now - t < self.KEEP_S}
+            data = {k: e for k, e in self.data.items() if k != rel and now - e[0] < self.KEEP_S}
             if cloud:
-                data[rel] = now
-            if data == self.data:
-                return
-            self.data = data
+                data[rel] = [now, self.ident(rel)]
+            self._save(data)
+
+    def moved(self, old, new, folder=False):
+        """La reunion `old` (con folder, la carpeta y lo que tiene dentro) pasa a ser `new`: lo apuntado va con ella, y
+        lo que hubiera en la ruta nueva (de una reunion que ya no esta ahi) se olvida."""
+        now = time.time()
+
+        def dest(k):
+            return new + k[len(old):] if k == old or (folder and k.startswith(old + "/")) else None
+        with self.lock:
+            vivas = {k: e for k, e in self.data.items() if now - e[0] < self.KEEP_S}
+            data = {k: e for k, e in vivas.items()
+                    if dest(k) is None and k != new and not (folder and k.startswith(new + "/"))}
+            data.update({dest(k): e for k, e in vivas.items() if dest(k) is not None})
+            self._save(data)
+
+    def _save(self, data):
+        """Con self.lock: los datos nuevos, en memoria y (si han cambiado) en disco."""
+        if data == self.data:
+            return
+        self.data = data
+        try:
+            with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(self.path + ".tmp", self.path)
+        except OSError as e:  # vale en memoria; sin el fichero, al reiniciar todo cuenta como local
+            log(f"   no se pudo guardar {os.path.basename(self.path)} ({e.__class__.__name__})")
             try:
-                with open(self.path + ".tmp", "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False)
-                os.replace(self.path + ".tmp", self.path)
-            except OSError as e:  # vale en memoria; sin el fichero, al reiniciar todo cuenta como local
-                log(f"   no se pudo guardar {os.path.basename(self.path)} ({e.__class__.__name__})")
-                try:
-                    os.remove(self.path)
-                except OSError:
-                    pass
+                os.remove(self.path)
+            except OSError:
+                pass
 
 
 class Complete:
@@ -2253,15 +2298,16 @@ def scrub(text, keys=()):
 # reuniones, carpetas, proyectos, temas y personas, rutas, el texto de un error, lo que no se reconoce) va como
 # «<texto>». No depende de lo que la app sepa de la biblioteca: lo ya borrado, renombrado u olvidado tampoco sale.
 DIAG_FREE = "<texto>"
-# Cada plantilla es un mensaje de log() con sus huecos. {t}: texto libre (siempre «<texto>»); {e}: un error («<texto>»
-# y sus codigos); {n}: una cifra; {m}: un modelo o una velocidad conocidos (DIAG_MODELS); {c}: una excepcion de Python;
-# {k}: nombres de ajustes; {l}: un idioma; {a}: la app de la llamada; {u}: la URL local; {v}: una version; {y}: el .py
-# de una traza (solo su nombre); {f}: la funcion de una traza. ⟦…⟧ es opcional y lo demas, literal. Gana la primera que
-# encaja (las concretas van antes que las generales); sin plantilla, la sangria, el icono y «<texto>» (diag_line).
+# Cada plantilla es un mensaje de log() con sus huecos. {t}: texto libre (siempre «<texto>»); {b}: lo mismo, dentro de
+# unos corchetes; {e}: un error («<texto>» y sus codigos); {n}: una cifra; {m}: un modelo o una velocidad conocidos
+# (DIAG_MODELS); {c}: una excepcion conocida (diag_exceptions); {k}: nombres de ajustes; {l}: un idioma; {a}: la app de
+# la llamada; {u}: la URL local; {v}: una version; {y}: el .py de una traza (solo su nombre); {f}: la funcion de una
+# traza. ⟦…⟧ es opcional y lo demas, literal. Gana la primera que encaja (las concretas van antes que las generales);
+# sin plantilla, la sangria, el icono y «<texto>» (diag_line).
 DIAG_LINES = (
     # trabajos de la cola, del directo, del resumen y de las voces: «<icono> <reunion>  <que>»
     "▶ {t}  [{m}]",
-    "● Grabando: {t}⟦ [{t} · {t}]⟧⟦ (solo grabar, sin transcribir)⟧",
+    "● Grabando: {t}⟦ [{b} · {b}]⟧⟦ (solo grabar, sin transcribir)⟧",
     "■ Grabación parada: {t} ({n} min)",
     "● {t}  transcripción en directo⟦ (automática)⟧",
     "↻ {t}  repaso final de la grabación entera en la nube",
@@ -2360,17 +2406,21 @@ DIAG_MODELS = frozenset(
     {x for p in engines.PRESETS for x in (p["id"], p["label"], p.get("live_label"), p.get("model")) if x}
     | set(engines.SUMMARY_MODELS) | {m for v in engines.PROVIDERS.values() for m in v.get("models") or []}
     | {engines.LIVE_MODEL_DEFAULT, getattr(engines.Summarizer, "TRANSLATE_MODEL", None), "gpt-4o-mini"} - {None})
-# codigos de error que se pueden ensenar: HTTP de la nube (engines: «HTTP 401: …»), errno y WinError, excepciones de
-# Python, HRESULT de Windows (COM de Outlook, WebView2) y los codigos de error de las APIs compatibles con OpenAI
+# codigos de error que se pueden ensenar: HTTP de la nube (engines: «HTTP 401: …»), errno y WinError, HRESULT de Windows
+# (COM de Outlook, WebView2), los codigos de error de las APIs compatibles con OpenAI y, de las palabras (exc), solo las
+# excepciones conocidas (diag_codes)
 DIAG_CODES = re.compile(
-    r"\bHTTP ?[1-5]\d\d\b|\[(?:Errno|WinError) -?\d+\]|\b[A-Z][A-Za-z0-9]*(?:Error|Exception|Timeout|Warning|Interrupt"
-    r"|Exit)\b|\b0x[0-9A-Fa-f]{8}\b|(?<!\d)-2147\d{6}\b|\b(?:rate_limit_exceeded|invalid_api_key|insufficient_quota"
-    r"|model_not_found|context_length_exceeded|request_too_large|model_decommissioned|invalid_request_error"
-    r"|authentication_error|permission_denied)\b")
-_DIAG_EXC = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*(?:Error|Exception|Timeout|Warning|Interrupt"
-                       r"|Exit|Cancelled)")
-_DIAG_INNER = {"n": r"\d+(?:[.,]\d+)?", "c": r"[A-Za-z_][A-Za-z0-9_.]*", "e": r".*?"}  # el resto: .+?
+    r"\bHTTP ?[1-5]\d\d\b|\[(?:Errno|WinError) -?\d+\]|\b0x[0-9A-Fa-f]{8}\b|(?<!\d)-2147\d{6}\b"
+    r"|\b(?:rate_limit_exceeded|invalid_api_key|insufficient_quota|model_not_found|context_length_exceeded"
+    r"|request_too_large|model_decommissioned|invalid_request_error|authentication_error|permission_denied)\b"
+    r"|(?<![\w.])(?P<exc>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)")
+# lo que puede ser cada hueco (el resto: .+?); {b}, {u} y {v} no pasan de sus separadores, para no probar en balde
+_DIAG_INNER = {"n": r"\d+(?:[.,]\d+)?", "c": r"[A-Za-z_][A-Za-z0-9_.]*", "e": r".*?", "b": r"[^\[\]]+?", "u": r"\S+",
+               "v": r"\S+"}
 _DIAG_HEAD = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [A-Z] ")  # «AAAA-MM-DD HH:MM:SS I » de server.log
+# una linea mas larga (el HTML de un error, p. ej.) no se compara con las plantillas: con varios huecos de texto libre,
+# ver si encaja costaria segundos y bloquearia «Copiar diagnostico». Sale como una sin plantilla (diag_line)
+DIAG_MAX = 2000
 
 
 def _diag_rx(template):
@@ -2391,9 +2441,43 @@ def _diag_rx(template):
 _DIAG_RX = tuple(_diag_rx(t) for t in DIAG_LINES)
 
 
+def diag_exceptions():
+    """Las excepciones que el diagnostico ensena, lista cerrada: las clases de excepcion que existen en este proceso
+    (las de Python, las de la app y las de las librerias cargadas; las de requests aunque esta sesion aun no haya usado
+    la nube), por su nombre y con su modulo, como las escribe una traza. Lo que solo tiene su forma (un trozo de un
+    nombre de carpeta o de archivo, «EarlyWarning» o «Omega.FusionError») no esta."""
+    try:
+        import requests.exceptions  # noqa: F401
+    except ImportError:
+        pass
+    seen, todo = {BaseException}, [BaseException]
+    while todo:
+        for sub in type.__subclasses__(todo.pop()):
+            if sub not in seen:
+                seen.add(sub)
+                todo.append(sub)
+    names = set()
+    for cls in seen:
+        names |= {cls.__name__, cls.__qualname__}
+        if cls.__module__ not in ("builtins", "__main__"):
+            names.add(f"{cls.__module__}.{cls.__qualname__}")
+    return names
+
+
 def diag_codes(text):
-    """« (HTTP 401, PermissionError)»: los codigos de error de un texto libre (sin repetir; nada si no hay)."""
-    codes = list(dict.fromkeys(m.group(0) for m in DIAG_CODES.finditer(text or "")))[:4]
+    """« (HTTP 401, PermissionError)»: los codigos de error de un texto libre (sin repetir, 4 como mucho; nada si no
+    hay). De las palabras, solo las excepciones conocidas (diag_exceptions), entera o la ultima parte de un nombre con
+    puntos; no un nombre en minusculas sin modulo («error») ni Error, Exception o Warning a secas."""
+    known, codes = diag_exceptions(), []
+    for m in DIAG_CODES.finditer(text or ""):
+        code = m.group(0)
+        if m.group("exc") is not None:
+            code = next((c for c in (code, code.rsplit(".", 1)[-1]) if c in known and ("." in c or c[0].isupper())
+                         and c not in ("Error", "Exception", "Warning")), None)
+        if code and code not in codes:
+            codes.append(code)
+            if len(codes) == 4:
+                break
     return f" ({', '.join(codes)})" if codes else ""
 
 
@@ -2405,7 +2489,7 @@ def _diag_meeting_app(v):
 # lo que un hueco tiene que ser para ensenarse tal cual (los que no estan, {t}, nunca)
 DIAG_CHECKS = {
     "m": lambda v: v in DIAG_MODELS,
-    "c": lambda v: bool(_DIAG_EXC.fullmatch(v)),
+    "c": lambda v: v in diag_exceptions(),
     "k": lambda v: all(re.fullmatch(r"[a-z_.]{2,40}", x) for x in v.split(", ")),
     "l": lambda v: bool(re.fullmatch(r"auto|detectar|[a-z]{2}(?:-[a-z]{2})?", v)),
     "a": _diag_meeting_app,
@@ -2429,12 +2513,12 @@ def _diag_value(kind, v):
 
 def diag_line(line):
     """Una linea de server.log para el diagnostico: la fecha y el nivel, y del mensaje lo de su plantilla
-    (DIAG_LINES), con cada hueco segun su tipo. Sin plantilla: la sangria, el icono del principio (●, ✖, 🗣…) y
-    «<texto>» con los codigos de error que lleve."""
+    (DIAG_LINES), con cada hueco segun su tipo. Sin plantilla (o con mas de DIAG_MAX caracteres): la sangria, el icono
+    del principio (●, ✖, 🗣…) y «<texto>» con los codigos de error que lleve."""
     head = _DIAG_HEAD.match(line)
     head = head.group(0) if head else ""
     msg = line[len(head):]
-    for rx in _DIAG_RX:
+    for rx in _DIAG_RX if len(msg) <= DIAG_MAX else ():
         m = rx.fullmatch(msg)
         if m:
             out, pos = [], 0
@@ -2756,17 +2840,17 @@ class App:
             motor = f"nube ({prov}) · modelo {tech(cloud.get('model'))}"
         else:
             motor = f"local ({tech(st.get('preset'))}) · modelo {tech(preset['model']) if preset else DIAG_FREE}"
-        try:
-            lines = read_text(os.path.join(DATA_DIR, "server.log")).splitlines()[-30:]
-        except OSError:
-            lines = ["(no hay server.log)"]
-        keys = [cloud.get("api_key"), *(cloud.get("extra_keys") or [])]
         si = lambda c: "sí" if c else "no"  # noqa: E731
         default = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
         propia = os.path.normcase(os.path.abspath(DATA_DIR)) == os.path.normcase(os.path.abspath(default))
         datos = ("en la de siempre (%LOCALAPPDATA%\\AudiosApp)" if os.environ.get("LOCALAPPDATA") else
                  "en la de siempre (~/AudiosApp)") if propia else "en otra carpeta"
         en_red, no_ascii = ROOT.startswith(("\\\\", "//")), any(ord(c) > 127 for c in ROOT)
+        try:
+            lines = read_text(os.path.join(DATA_DIR, "server.log")).splitlines()[-30:]
+        except OSError:
+            lines = ["(no hay server.log)"]
+        keys = [cloud.get("api_key"), *(cloud.get("extra_keys") or [])]
         info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
                 f"Transcripción: {motor} · directo: {tech(st.get('live_preset') or 'medium')}",
                 f"Carpeta de {APP_NAME}: en OneDrive: {si('onedrive' in ROOT.lower())} · en una unidad de red: "
@@ -3146,6 +3230,7 @@ class App:
                     raise
                 time.sleep(0.3)
         COMPLETE.set(rel, False)
+        self.jobs._cloud_text().set(rel, False)  # otra reunion que acabe con este nombre no hereda su origen
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
         self.jobs.voice_vectors.pop(rel, None)
         self.settings.update(lambda d: d.update(favorites=[f for f in d.get("favorites", []) if f["path"] != rel]))
@@ -3425,6 +3510,7 @@ class App:
                     time.sleep(0.25)
         self.library.at = 0
         COMPLETE.moved(rel_of(src), rel_of(moves[0][1]))
+        self.jobs._cloud_text().moved(rel_of(src), rel_of(moves[0][1]))  # el origen de su texto va con ella
         if rel_of(src) in self.jobs.voice_vectors:
             self.jobs.voice_vectors[rel_of(moves[0][1])] = self.jobs.voice_vectors.pop(rel_of(src))
         self._rename_refs(rel_of(src), rel_of(moves[0][1]))
@@ -3463,6 +3549,7 @@ class App:
         if os.path.normcase(dst) != os.path.normcase(src) and os.path.exists(dst):
             raise ApiError("Ya existe una carpeta con ese nombre")
         os.rename(src, dst)
+        self.jobs._cloud_text().moved(rel_of(src), rel_of(dst), folder=True)  # el origen del texto de sus reuniones
         self._rename_refs(rel_of(src), rel_of(dst), folder=True)
         self.library.at = 0
         return {"path": rel_of(dst)}

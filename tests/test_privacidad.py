@@ -213,6 +213,82 @@ class ResumenAutomaticoTests(TempTree):
             f.write("[roto")
         self.assertEqual(server.CloudText(path).data, {})
 
+    def app(self, j):
+        """Una App con lo que usan move, rename_folder y delete; sus trabajos son j (el mismo CloudText)."""
+        a = server.App.__new__(server.App)
+        a.jobs, a.rec, a.settings = j, None, j.settings
+        j.voice_vectors = {}
+        a.library = server.Library(server.Durations(os.path.join(self.data_dir, "durations.json")))
+        return a
+
+    def test_mover_renombrar_y_borrar_llevan_el_origen(self):
+        """El caso de la revisión: A se transcribe en la nube y se mueve a otra carpeta; otra reunión, transcrita en
+        local y a medias, acaba con el nombre que tenía A y se continúa en la nube: no sube sin permiso. El origen va
+        con la reunión al moverla o renombrarla (ella o su carpeta) y se olvida al borrarla."""
+        j = self.jobs()
+        a = self.app(j)
+        self.transcribir(j, "nube")  # A = Alfa/r.wav, entera en la nube
+        os.makedirs(os.path.join(self.root, "Beta"))
+        with mock.patch.object(server, "log"):
+            self.assertEqual(a.move({"path": self.REL, "folder": "Beta"})["path"], "Beta/r.wav")
+        self.assertTrue(j._tx_in_cloud("Beta/r.wav"))
+        self.assertFalse(j._tx_in_cloud(self.REL))
+        self.wav("Gamma/c.wav")  # transcrita en local y a medias, se mueve a Alfa con el nombre de A
+        self.write("Gamma/c.srt", srt_text([(0.0, 1.0, "texto transcrito en local")]))
+        with mock.patch.object(server, "log"):
+            a.move({"path": "Gamma/c.wav", "folder": "Alfa", "name": "r"})
+        self.assertFalse(j._tx_in_cloud(self.REL))
+        j.enviados.clear()
+        self.transcribir(j, "nube", start=1.0)  # «continuar» desde donde acaba, en la nube
+        self.assertEqual(j.enviados, [])
+        # una entrada que se quedó en un nombre (su reunión se borró fuera de la app) no pasa a la que llega ahí
+        j._cloud_text().set("Alfa/x.wav", True)
+        self.wav("Gamma/d.wav")
+        with mock.patch.object(server, "log"):
+            a.move({"path": "Gamma/d.wav", "folder": "Alfa", "name": "x"})
+        self.assertFalse(j._tx_in_cloud("Alfa/x.wav"))
+        # renombrar la reunión y luego su carpeta: el origen la sigue, también tras reiniciar (vive en DATA_DIR)
+        with mock.patch.object(server, "log"):
+            a.move({"path": "Beta/r.wav", "folder": "Beta", "name": "s"})
+            self.assertTrue(j._tx_in_cloud("Beta/s.wav"))
+            a.rename_folder({"path": "Beta", "name": "Delta"})
+        self.assertTrue(j._tx_in_cloud("Delta/s.wav"))
+        self.assertFalse(any(j._tx_in_cloud(p) for p in ("Beta/r.wav", "Beta/s.wav")))
+        self.assertTrue(self.jobs()._tx_in_cloud("Delta/s.wav"))
+        # borrarla lo olvida: otra que acabe con ese nombre no lo hereda
+        with mock.patch.object(server, "log"):
+            a.delete({"path": "Delta/s.wav"})
+        self.assertFalse(j._tx_in_cloud("Delta/s.wav"))
+        self.assertFalse(self.jobs()._tx_in_cloud("Delta/s.wav"))
+
+    def test_otro_audio_con_el_mismo_nombre_no_hereda(self):
+        """Igual si los archivos se mueven fuera de la app (en el Explorador): la entrada se queda en la ruta vieja,
+        pero lleva la identidad del audio, y el que llega luego a ese nombre es otro."""
+        j = self.jobs()
+        self.transcribir(j, "nube")
+        base = os.path.join(self.root, self.REL[:-4])
+        os.makedirs(os.path.join(self.root, "Beta"))
+        for e in (".wav", ".srt", ".txt"):
+            if os.path.exists(base + e):
+                shutil.move(base + e, os.path.join(self.root, "Beta", "r" + e))
+        self.wav(self.REL)  # otra reunión, transcrita en local y a medias, con el nombre que tenía A
+        self.write(self.REL[:-4] + ".srt", srt_text([(0.0, 1.0, "texto transcrito en local")]))
+        self.assertFalse(j._tx_in_cloud(self.REL))
+        j.enviados.clear()
+        self.transcribir(j, "nube", start=1.0)  # «continuar» en la nube
+        self.assertEqual(j.enviados, [])
+
+    def test_caduca_al_consultar(self):
+        """Una entrada de hace más de 7 días ya no cuenta aunque no se haya escrito nada después (antes solo se podaba
+        al escribir otra)."""
+        path = os.path.join(self.data_dir, "transcritas_en_la_nube.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"vieja.wav": time.time() - 8 * 86400, "nueva.wav": time.time() - 6 * 86400}, f)
+        reg = server.CloudText(path)
+        self.assertNotIn("vieja.wav", reg)
+        self.assertIn("nueva.wav", reg)
+        self.assertFalse(self.jobs()._tx_in_cloud("vieja.wav"))
+
     def test_ajuste_por_defecto_apagado_y_se_guarda(self):
         self.assertIs(server.DEFAULT_SETTINGS["summary_auto_local"], False)
         a = server.App.__new__(server.App)
@@ -606,7 +682,8 @@ class DiagnosticoTests(TempTree):
     def test_ningun_hueco_deja_pasar_texto(self):
         """Cada plantilla con un dato confidencial en cada hueco (con la forma del hueco, pero sin ser técnico): no
         sale nada de él y el texto fijo de la plantilla se queda tal cual."""
-        dato = {"n": "12", "c": "OmegaKwyjibo", "y": "C:\\Users\\omega\\Kwyjibo Omega.txt"}
+        dato = {"n": "12", "c": "OmegaKwyjibo", "y": "C:\\Users\\omega\\Kwyjibo Omega.txt",
+                "u": "http://omega.kwyjibo:8765/", "v": "omega.kwyjibo"}
         for tpl in server.DIAG_LINES:
             for opcional in (True, False):
                 base = re.sub(r"⟦(.*?)⟧", r"\1" if opcional else "", tpl)
@@ -635,6 +712,37 @@ class DiagnosticoTests(TempTree):
                          ["=" * 64, f"  {app.upper()}  ·  http://127.0.0.1:8765/", "  Carpeta: <texto>", apagar, dpapi])
         self.assertEqual(server.diag_codes("ConnectionResetError, 0x80040154 y -2147221005"),
                          " (ConnectionResetError, 0x80040154, -2147221005)")
+
+    def test_codigos_de_una_lista_cerrada(self):
+        """De un texto libre solo salen las excepciones que existen (las de Python, las de la app y las de las
+        librerías), no cualquier palabra con su forma: un trozo de un nombre de carpeta o de archivo no sale."""
+        f, h = server.diag_line, "2026-10-31 10:00:00 E "
+        self.assertEqual(f(h + "✖ Junta Omega.m4a  PermissionError: [Errno 13] 'D:\\Clientes\\EarlyWarning Plan\\"
+                           "SmartExit.m4a'"), h + "✖ <texto>  <texto> (PermissionError, [Errno 13])")
+        self.assertEqual(f(h + "✖ Junta Omega  resumen: no se pudo con OmegaTimeout ni KrakenError: HTTP 500"),
+                         h + "✖ <texto>  resumen: <texto> (HTTP 500)")
+        self.assertEqual(f("Clientes_Omega.FusionError: algo"), "<texto>: <texto>")
+        self.assertEqual(f("Omega.Kraken.DealError"), "<texto>")
+        self.assertEqual(f("engines.EngineError: No se pudo leer el audio de Omega"), "engines.EngineError: <texto>")
+        self.assertEqual(f("requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='api.groq.com', port=443)"),
+                         "requests.exceptions.ReadTimeout: <texto>")
+        self.assertEqual(server.diag_codes("error y Exception · sin conexión (ConnectionError) · WorkerTimeout · "
+                                           "Omega.PermissionError · KeyboardInterrupt · SystemExit"),
+                         " (ConnectionError, WorkerTimeout, PermissionError, KeyboardInterrupt)")
+
+    def test_lineas_largas_sin_atascarse(self):
+        """Una línea enorme en server.log (el HTML de un error, o una rara) no bloquea «Copiar diagnóstico»: con
+        varios huecos de texto libre, ver si encajaba en su plantilla costaba segundos (21 s con 8 KB)."""
+        h = "2026-10-31 10:00:00 I "
+        lineas = [h + "● Grabando: " + "a [b · c] " * n for n in (190, 800)]
+        lineas += [h + "arranque · " + " · ".join(["carpeta x · datos y"] * n) for n in (90, 400)]
+        self.assertLess(len(lineas[0]) - len(h), server.DIAG_MAX)  # esta, por debajo del tope: con su plantilla
+        t = time.perf_counter()
+        out = [server.diag_line(l) for l in lineas]
+        self.assertLess(time.perf_counter() - t, 0.5)
+        self.assertEqual(out, [h + "● Grabando: <texto>", h + "● <texto>", h + "<texto>", h + "<texto>"])
+        largo = h + "● Grabando: Clientes/" + "x" * 1500 + ".wav [Proyecto · Tema]"
+        self.assertEqual(server.diag_line(largo), h + "● Grabando: <texto> [<texto> · <texto>]")
 
     def test_motor_y_modelo_propios_no_salen(self):
         """Una pasarela de empresa (Azure, otra compatible) puede llevar el nombre del cliente en el modelo."""
@@ -829,6 +937,21 @@ class AjustesRotosTests(unittest.TestCase):
         self.assertEqual(st.get()["cloud"]["api_key"], KEY)
         self.assertEqual(len(st.get()["links"]), 1)
         self.assertEqual(len(self.copias()), 1)
+
+    def test_se_rescatan_todos_los_secretos(self):
+        """Un secreto que se añada a SECRETS (en fix-directo, las claves adicionales de cada proveedor) también se
+        rescata y se cuenta: el rescate lleva todos los SECRETS, no una lista aparte que haya que ampliar a mano."""
+        class ConOtro(server.Store):
+            SECRETS = server.Store.SECRETS + (("cloud", "extra_keys_otro"),)
+        otras = ["sk-" + "o" * 24, "sk-" + "p" * 24]
+        saved = json.loads(json.dumps(self.saved))
+        saved["cloud"]["extra_keys_otro"] = [server.protect(k.encode()) for k in otras]
+        self.write(json.dumps(dict(saved, zzz="x" * 50), ensure_ascii=False)[:-20])  # cortado a mitad
+        with mock.patch.object(server, "log"):
+            st = ConOtro(self.path, server.DEFAULT_SETTINGS)
+        self.assertEqual(st.get()["cloud"].get("extra_keys_otro"), otras)
+        self.assertEqual(st.broken["recuperado"], ["la API key", "3 claves adicionales", "1 carpeta vinculada",
+                                                   "1 destino de salida"])
 
     def test_con_bom_se_lee_bien(self):
         self.write("\ufeff" + json.dumps(self.saved))  # el Bloc de notas puede guardarlo asi
