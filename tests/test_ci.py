@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Los workflows de GitHub Actions (.github/workflows): qué se lanza dónde y qué comprueba la CI en Windows.
 
-PyYAML no está en requirements-dev: `cargar_yaml` lee el subconjunto de YAML que usan estos ficheros (mapas, listas en
-bloque y `[a, b]` en una línea, escalares con o sin comillas, bloques `|` y comentarios) y da ValueError con lo demás,
-para que un workflow escrito de otra forma haga fallar el test en vez de leerse mal."""
+PyYAML no está en requirements-dev: `cargar_yaml` lee el subconjunto de YAML que usan estos ficheros (mapas y listas en
+bloque; listas `[a, b]` y mapas `{a: b}` en línea, anidados y en una o varias líneas; escalares con o sin comillas;
+bloques `|`, `|-`, `>` y `>-`, y comentarios) y da ValueError con lo demás (anclas, alias, etiquetas, escapes en
+comillas dobles, escalares sin comillas en varias líneas…), para que un workflow escrito de otra forma haga fallar el
+test en vez de leerse mal. Los escalares quedan como cadenas: `timeout-minutes: 30` da «30»."""
 import glob
 import os
 import re
@@ -17,6 +19,8 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # sin importar support: aquí no hace falta la app
 WORKFLOWS = os.path.join(REPO, ".github", "workflows")
 _CLAVE = re.compile(r"([A-Za-z0-9_.-]+)\s*:(?:\s+(.*))?$")
+_NO_SOPORTADO = tuple("&*!|>%@`?")  # al principio de un valor: anclas, alias, etiquetas, bloques raros, claves «?»
+_FIN_DE_CLAVE = ("", " ", "\t", ",", "[", "]", "{", "}")  # lo que puede seguir al «:» que cierra una clave sin comillas
 
 
 def _cadena(r, i):
@@ -43,38 +47,108 @@ def _nada_mas(r, j):
         raise ValueError(f"texto de más tras el valor: {r!r}")
 
 
+def _blancos(r, j):
+    while r[j:j + 1] in (" ", "\t"):
+        j += 1
+    return j
+
+
+def _sin_comentario(linea):
+    """(la línea sin su comentario final, cuántos `[` y `{` abre menos los `]` y `}` que cierra), sin contar lo que va
+    entre comillas. Una comilla solo abre una cadena al principio de un escalar (tras un blanco, `[`, `{`, `,` o `:`);
+    en `it's` es una letra más."""
+    prof, q, i = 0, None, 0
+    while i < len(linea):
+        c = linea[i]
+        if q:
+            if q == '"' and c == "\\":
+                raise ValueError(f"escapes en comillas dobles (no soportados): {linea!r}")
+            if c == q and q == "'" and linea[i + 1:i + 2] == "'":
+                i += 1
+            elif c == q:
+                q = None
+        elif c in ("'", '"') and (i == 0 or linea[i - 1] in " \t[{,:"):
+            q = c
+        elif c == "#" and (i == 0 or linea[i - 1] in " \t"):
+            return linea[:i], prof
+        elif c in ("[", "{"):
+            prof += 1
+        elif c in ("]", "}"):
+            prof -= 1
+        i += 1
+    if q:
+        raise ValueError(f"comilla sin cerrar (una cadena en varias líneas no está soportada): {linea!r}")
+    return linea, prof
+
+
+def _elemento(r, j, clave=False):
+    """(valor, posición tras él) de un elemento de `[…]`, o de una clave o un valor de `{…}`, que empieza en r[j]."""
+    c = r[j:j + 1]
+    if c in ("[", "{"):
+        if clave:
+            raise ValueError(f"clave compuesta en un mapa en línea (no soportada): {r!r}")
+        return _flujo(r, j)
+    if c in ("'", '"'):
+        return _cadena(r, j)
+    k = j
+    while j < len(r) and r[j] not in ",[]{}" and not (r[j] == ":" and r[j + 1:j + 2] in _FIN_DE_CLAVE):
+        j += 1
+    v = r[k:j].rstrip()
+    if not v or v.startswith(_NO_SOPORTADO + ("#",)) or v == "-" or v.startswith(("- ", "-\t")):
+        raise ValueError(f"elemento vacío o no soportado en una lista o un mapa en línea: {r!r}")
+    if r[j:j + 1] in ("[", "{"):  # p. ej. ${{ … }} sin comillas: dentro de [ ] o { } va entre comillas
+        raise ValueError(f"[ o {{ dentro de un escalar sin comillas en una lista o un mapa en línea: {r!r}")
+    if r[j:j + 1] == ":" and not clave:  # [a: b] o {a: b: c}: un mapa implícito
+        raise ValueError(f"«: » dentro de un valor de una lista o un mapa en línea (no soportado): {r!r}")
+    return v, j
+
+
+def _flujo(r, j):
+    """(valor, posición tras el cierre) de la lista `[…]` o el mapa `{…}` que empieza en r[j]."""
+    cierre = "]" if r[j] == "[" else "}"
+    out = [] if cierre == "]" else {}
+    j += 1
+    while True:
+        j = _blancos(r, j)
+        if j >= len(r):
+            raise ValueError(f"lista o mapa en línea sin cerrar: {r!r}")
+        if r[j] == cierre:  # también tras una coma final: [a, b,]
+            return out, j + 1
+        if cierre == "]":
+            v, j = _elemento(r, j)
+            out.append(v)
+        else:
+            k, j = _elemento(r, j, clave=True)
+            if k in out:
+                raise ValueError(f"clave repetida {k!r} en un mapa en línea: {r!r}")
+            j = _blancos(r, j)
+            if r[j:j + 1] != ":":
+                raise ValueError(f"clave sin «:» en un mapa en línea: {r!r}")
+            j = _blancos(r, j + 1)
+            if r[j:j + 1] in (",", "}"):
+                out[k] = None
+            else:
+                out[k], j = _elemento(r, j)
+        j = _blancos(r, j)
+        if r[j:j + 1] == ",":
+            j += 1
+        elif r[j:j + 1] != cierre:
+            raise ValueError(f"lista o mapa en línea mal formado: {r!r}")
+
+
 def _en_linea(r):
-    """Escalar o lista `[a, b]` escritos en la misma línea que su clave o su guion (sin el comentario final)."""
+    """Escalar, lista `[…]` o mapa `{…}` escritos tras su clave o su guion (sin el comentario final). Una lista o un
+    mapa que siguen en otras líneas llegan ya unidos en una (_Lector.flujo)."""
     r = r.strip()
     if r[:1] in ("'", '"'):
         v, j = _cadena(r, 0)
         _nada_mas(r, j)
         return v
-    if r.startswith("["):
-        items, j = [], 1
-        while True:
-            while r[j:j + 1] == " ":
-                j += 1
-            if j >= len(r):
-                raise ValueError(f"lista sin cerrar (en varias líneas no está soportada): {r!r}")
-            if r[j] == "]":
-                _nada_mas(r, j + 1)
-                return items
-            if r[j] in ("'", '"'):
-                v, j = _cadena(r, j)
-            else:
-                k = j
-                while j < len(r) and r[j] not in ",]":
-                    j += 1
-                v = r[k:j].strip()
-            items.append(v)
-            while r[j:j + 1] == " ":
-                j += 1
-            if r[j:j + 1] == ",":
-                j += 1
-            elif r[j:j + 1] != "]":
-                raise ValueError(f"lista mal formada: {r!r}")
-    if r[:1] in tuple("{&*!|>%@`?"):
+    if r[:1] in ("[", "{"):
+        v, j = _flujo(r, 0)
+        _nada_mas(r, j)
+        return v
+    if r.startswith(_NO_SOPORTADO):
         raise ValueError(f"YAML no soportado: {r!r}")
     m = re.search(r"\s#", r)
     return (r[:m.start()] if m else r).rstrip()
@@ -101,7 +175,27 @@ class _Lector:
         return s == "-" or s.startswith("- ")
 
     def nodo(self, n):
+        """Lo que empieza en la línea actual, con sangría n: una lista, un mapa, o `[…]`/`{…}` en su propia línea."""
+        s = self.lineas[self.i].strip()
+        if s[:1] in ("[", "{"):
+            self.i += 1
+            return _en_linea(self.flujo(s))
         return self.lista(n) if self.guion() else self.mapa(n)
+
+    def flujo(self, texto):
+        """La lista `[…]` o el mapa `{…}` que empieza en `texto` (lo que sigue a su clave o a su guion, cuya línea ya se
+        ha leído) con las líneas siguientes que hagan falta para cerrarlo, sin comentarios y unidas con un espacio."""
+        partes, prof, primera = [], 0, self.i
+        while True:
+            parte, d = _sin_comentario(texto)
+            partes.append(parte.strip())
+            prof += d
+            if prof <= 0:
+                return " ".join(partes)
+            if self.i >= len(self.lineas):
+                raise ValueError(f"lista o mapa en línea sin cerrar (desde la línea {primera}): {partes[0]!r}")
+            texto = self.lineas[self.i]
+            self.i += 1
 
     def mapa(self, n):
         out = {}
@@ -130,12 +224,15 @@ class _Lector:
                 out.append(self.mapa(col))
             else:
                 self.i += 1
-                out.append(_en_linea(contenido))
+                out.append(_en_linea(self.flujo(contenido) if contenido[:1] in ("[", "{") else contenido))
         return out
 
     def valor(self, resto, n):
-        if resto in ("|", "|-"):
-            return self.bloque(resto, n)
+        indicador = re.sub(r"\s#.*", "", resto).strip()  # «run: |  # comentario» también es un bloque
+        if indicador in ("|", "|-", ">", ">-"):
+            return self.bloque(indicador, n)
+        if resto[:1] in ("[", "{"):
+            return _en_linea(self.flujo(resto))
         if resto and not resto.startswith("#"):
             return _en_linea(resto)
         sig = self.sangria()  # sin valor en la línea: un nodo más sangrado, una lista a la misma altura o nada
@@ -146,7 +243,9 @@ class _Lector:
         return None
 
     def bloque(self, indicador, n):
-        lineas = []
+        """Bloque `|` (literal) o `>` (plegado: dos líneas seguidas se unen con un espacio, y cada línea vacía entre
+        ellas queda como un salto); con `-`, sin el salto final."""
+        lineas, primera = [], self.i
         while self.i < len(self.lineas):
             linea = self.lineas[self.i]
             if linea.strip() and len(linea) - len(linea.lstrip(" ")) <= n:
@@ -157,8 +256,20 @@ class _Lector:
         if not llenas:
             return ""
         b = len(llenas[0]) - len(llenas[0].lstrip(" "))
-        texto = "\n".join(x[b:] if x.strip() else "" for x in lineas).rstrip("\n")
-        return texto + ("\n" if indicador == "|" else "")
+        for k, x in enumerate(lineas):
+            if x.strip() and len(x) - len(x.lstrip(" ")) < b:  # YAML no lo admite; cortarla perdería texto
+                raise ValueError(f"línea {primera + k + 1} menos sangrada que la primera del bloque")
+        filas = [x[b:] if x.strip() else "" for x in lineas]
+        while filas and not filas[-1]:
+            filas.pop()
+        texto = "\n".join(filas)
+        if indicador[0] == ">":
+            if any(f[:1] in (" ", "\t") for f in filas):
+                raise ValueError(f"bloque > con líneas más sangradas (no soportado, desde la línea {primera + 1})")
+            cuerpo = texto.lstrip("\n")  # los saltos de las líneas vacías del principio se quedan como están
+            texto = texto[:len(texto) - len(cuerpo)] + re.sub(
+                r"\n+", lambda m: " " if len(m.group()) == 1 else "\n" * (len(m.group()) - 1), cuerpo)
+        return texto + ("" if indicador.endswith("-") else "\n")
 
 
 def cargar_yaml(texto):
@@ -232,8 +343,80 @@ class CargarYamlTests(unittest.TestCase):
             "jobs": {"j": {"steps": [{"uses": "a@b", "with": {"python-version": "3.13"}},
                                      {"name": "n", "run": "uno\n\n# dos\n", "shell": "powershell"}]}}})
 
+    def test_estilo_flujo(self):
+        """Un workflow de ejemplo en estilo flujo: el `matrix.include` de un diagnóstico con un mapa en línea por
+        variante, listas y mapas anidados, en una línea o en varias (con comentarios dentro), y bloques plegados."""
+        texto = "\n".join((
+            "name: diag",
+            "on:",
+            "  push: {branches: [main, 'rama-x'], paths: []}",
+            "  workflow_dispatch: {}",
+            "jobs:",
+            "  diag:",
+            "    strategy:",
+            "      fail-fast: false",
+            "      matrix:",
+            "        include:",
+            "          # una variante por línea",
+            '          - {nombre: a, ref: 5c55e54, modo: ventana, extra: "--lanzar shell --previo", url: https://x/y}',
+            "          - {nombre: b, ref: 'HEAD', extra: '', nada: , lista: [1, [2, 3], {c: d}],}",
+            "          - {nombre: 'c # no es un comentario', ref: it's}  # esto sí",
+            "    runs-on: windows-latest",
+            "    timeout-minutes: 25",
+            "    env: {",
+            "      A: '1',  # comentario dentro",
+            '      B: "2"',
+            "      }",
+            "    steps:",
+            "      - [uno,",
+            "         dos,",
+            "        ]",
+            "      - run: >",
+            "          python diag.py",
+            "          --seconds 180",
+            "",
+            "          fin",
+            "        shell: >-  # sin el salto final",
+            "          bash",
+            "      -",
+            "        {uses: a@b}",
+            "  otro:",
+            "    timeout-minutes: 5",
+            "    needs:",
+            "      [diag]",
+            ""))
+        self.assertEqual(cargar_yaml(texto), {
+            "name": "diag",
+            "on": {"push": {"branches": ["main", "rama-x"], "paths": []}, "workflow_dispatch": {}},
+            "jobs": {
+                "diag": {
+                    "strategy": {"fail-fast": "false", "matrix": {"include": [
+                        {"nombre": "a", "ref": "5c55e54", "modo": "ventana", "extra": "--lanzar shell --previo",
+                         "url": "https://x/y"},
+                        {"nombre": "b", "ref": "HEAD", "extra": "", "nada": None,
+                         "lista": ["1", ["2", "3"], {"c": "d"}]},
+                        {"nombre": "c # no es un comentario", "ref": "it's"}]}},
+                    "runs-on": "windows-latest", "timeout-minutes": "25", "env": {"A": "1", "B": "2"},
+                    "steps": [["uno", "dos"], {"run": "python diag.py --seconds 180\nfin\n", "shell": "bash"},
+                              {"uses": "a@b"}]},
+                "otro": {"timeout-minutes": "5", "needs": ["diag"]}}})
+
+    def test_bloques(self):
+        """`|` guarda los saltos y `>` los pliega (una línea vacía, un salto); con `-`, sin el salto final; las líneas
+        vacías del principio se quedan."""
+        for texto, esperado in (("a: |\n  uno\n  dos\n", "uno\ndos\n"), ("a: |-\n  uno\n    dos\n", "uno\n  dos"),
+                                ("a: >\n  uno\n  dos\n\n\n  tres\n", "uno dos\n\ntres\n"),
+                                ("a: >-\n\n  uno\n  dos\n\nb: 1\n", "\nuno dos"), ("a: >\nb: 1\n", "")):
+            with self.subTest(texto):
+                self.assertEqual(cargar_yaml(texto)["a"], esperado)
+
     def test_lo_que_no_sabe_leer_falla(self):
-        for texto in ("a: {b: 1}", "a: [b,\n  c]", "a: 1\na: 2", "a: &x 1", "a: >\n  b", "a:\n\tb: 1", "a: 'b"):
+        for texto in ("a: 1\na: 2", "a: &x 1", "a: *x", "a: !!str 1", "a:\n\tb: 1", "a: 'b", 'a: "\\n"', "a: |+\n  b",
+                      "a: >\n  b\n    c",  # plegado con una línea más sangrada
+                      "a: |\n    b\n   c",  # una línea menos sangrada que la primera del bloque
+                      "a: {b}", "a: {b: 1, b: 2}", "a: [b: c]", "a: {b: c: d}", "a: {[b]: c}", "a: [b,,c]",
+                      "a: [x${{ y }}]", "a: {b: 1} c", "a: [- b]", "a: [b, [c]", "a: [b,\n  c", "a: [b\n  # c]",
+                      "a: [ -f x ] && echo"):
             with self.subTest(texto), self.assertRaises(ValueError):
                 cargar_yaml(texto)
 
@@ -242,7 +425,10 @@ class CargarYamlTests(unittest.TestCase):
         self.assertIn("tests.yml", nombres)
         for nombre in nombres:
             with self.subTest(nombre):
-                wf = workflow(nombre)
+                try:
+                    wf = workflow(nombre)
+                except ValueError as e:  # GitHub lo leería: hay que ampliar el lector, no saltarse el fichero
+                    self.fail(f"cargar_yaml (tests/test_ci.py) no sabe leer {nombre}: {e}")
                 self.assertTrue(wf["name"] and wf["on"] and wf["jobs"])
                 for job in wf["jobs"].values():  # sin tope, un cuelgue gasta los 360 min por defecto del runner
                     self.assertGreater(int(job["timeout-minutes"]), 0)
