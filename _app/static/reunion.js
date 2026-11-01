@@ -48,21 +48,30 @@ function reunionCollect(d) {
   return o && a ? { outlook_on: o.checked, rec_aviso: a.checked } : {};
 }
 
-/* Diálogo Grabar: precarga nombre, tema y participantes si hay reunión en curso, con una nota y «Quitar». */
+/* Diálogo Grabar: precarga nombre, tema y participantes si hay reunión en curso, con una nota y «Quitar». La consulta
+   puede tardar unos segundos: lo que hayas elegido tú entretanto (tema, proyecto o carpeta) no se pisa. */
 async function reunionPrefill(d) {
+  const tocado = {};  // selectores que has cambiado tú (los cambios que hace la propia app no cuentan: isTrusted)
+  ['rVocab', 'rProj', 'rFolder'].forEach(id => $('#' + id, d)?.addEventListener('change', e => { if (e.isTrusted) tocado[id] = true; }));
   let r;
   try { r = await api('/api/reunion/actual'); } catch { return; }
   const s = (r && r.sugerencia) || {};
   if (!s.source || !document.body.contains(d)) return;
-  const name = $('#rName', d), sel = $('#rVocab', d);
+  const name = $('#rName', d), sel = $('#rVocab', d), fsel = $('#rFolder', d);
   const prev = { name: name ? name.value : '', vocab: sel ? sel.value : '' };
   if (name && !name.value && s.name) name.value = s.name;
+  // la carpeta que elegiste tú (o aquella desde la que abriste el diálogo) no cambia con el tema sugerido
+  const keepFolder = fn => {
+    const f = fsel && (tocado.rFolder || S.route?.kind === 'f') ? [fsel.value, fsel.dataset.prev] : null;
+    fn();
+    if (f) { fsel.value = f[0]; fsel.dataset.prev = f[1]; }
+  };
   let vocabOk = false;
   // perfil.js marca pfVocab cuando el perfil fija el tema: entonces la sugerencia no lo cambia (el nombre y los
-  // participantes sí se sugieren, porque el perfil no los fija)
-  if (sel && s.vocab && !d.dataset.pfVocab && [...sel.options].some(o => o.value === s.vocab)) {
-    sel.value = s.vocab;
-    sel.dispatchEvent(new Event('change'));  // carpeta del proyecto y aviso de cuánto cabe, como si lo eligieras tú
+  // participantes sí se sugieren, porque el perfil no los fija); tampoco si ya has elegido tú el tema o el proyecto
+  if (sel && s.vocab && !d.dataset.pfVocab && !tocado.rVocab && !tocado.rProj && [...sel.options].some(o => o.value === s.vocab)) {
+    // carpeta del proyecto y aviso de cuánto cabe, como si lo eligieras tú
+    keepFolder(() => { sel.value = s.vocab; sel.dispatchEvent(new Event('change')); });
     vocabOk = true;
   }
   d.dataset.rnParticipantes = (s.participants || []).join(', ');
@@ -80,7 +89,7 @@ async function reunionPrefill(d) {
   $('#rnQuitar', nota).onclick = e => {
     e.preventDefault();
     if (name) name.value = prev.name;
-    if (sel && vocabOk) { sel.value = prev.vocab; sel.dispatchEvent(new Event('change')); }
+    if (sel && vocabOk) keepFolder(() => { sel.value = prev.vocab; sel.dispatchEvent(new Event('change')); });
     delete d.dataset.rnParticipantes;
     delete d.dataset.rnSource;
     nota.remove();

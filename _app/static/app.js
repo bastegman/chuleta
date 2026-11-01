@@ -403,7 +403,7 @@ async function stopRec() {
 /* carpetas donde grabar: las de la app, las vinculadas y "otra carpeta…" (se vincula al elegirla) */
 const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulario')
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
-  + '<option value="__pick">Otra carpeta (fuera de Audios)…</option>';
+  + `<option value="__pick">Otra carpeta (fuera de ${esc(APP_NAME)})…</option>`;
 async function openRec() {
   if (S.rec.recording) return stopRec();
   recDialog = true;
@@ -414,7 +414,7 @@ async function openRec() {
   openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar con esta misma configuración desde cualquier programa (aunque estés en Teams) y vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
+      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (carpeta, idioma, tema y contexto) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
       : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
     <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
@@ -751,11 +751,12 @@ function fcard(f) {
 
 /* selector de velocidad + idioma para transcribir una lista de audios */
 let boxSeq = 0;
+const TX_EACH = '__cada';  // idioma «el de cada reunión» (en lote): el servidor recibe null y usa el de cada .md
 /* resume: las que se quedaron a medias se continuan desde donde acaba el texto (se estima solo lo que falta) */
 const remaining = (a, resume) => resume && a.partial ? Math.max(1, estDuration(a) - a.tx_end) : estDuration(a);
 function txBox(list, title, opts = {}) {
-  const id = 'b' + (++boxSeq), resume = !!opts.resume;
-  S.boxes[id] = { paths: list.map(a => a.path), resume };
+  const id = 'b' + (++boxSeq), resume = !!opts.resume, key = list.map(a => a.path).join('\n');
+  S.boxes[id] = { paths: list.map(a => a.path), resume, key };
   const total = sum(list, a => remaining(a, resume));
   const sel = S.selPreset || S.config.preset;
   const cards = S.config.presets.map(p => {
@@ -769,14 +770,16 @@ function txBox(list, title, opts = {}) {
       + `<div class="pe">${cloudOff ? 'Configurar' : fmtEst(est)}</div>`
       + `<div class="pm">${p.engine === 'cloud' ? (cloudOff ? 'falta API key' : esc(S.config.providers[S.config.cloud.provider]?.label || 'nube')) : esc(p.model)}</div></button>`;
   }).join('');
-  const lang = list.length === 1 && typeof perfilLangOf === 'function' ? perfilLangOf(list[0]) : (S.selLang ?? S.config.language);
+  // idioma: lo que hayas elegido en esta caja; si no, en lote «el de cada reunión» y, con una, el suyo (o el del perfil)
+  const each = list.length > 1, langs = each ? [[TX_EACH, 'El de cada reunión (o el del perfil)']].concat(LANGS) : LANGS;
+  const lang = S.txLang?.[key] ?? (each ? TX_EACH : list.length === 1 && typeof perfilLangOf === 'function' ? perfilLangOf(list[0]) : (S.config.language ?? ''));
   const hint = S.presetsById[sel]?.hint || '';
   return `<div class="card txbox" data-box="${id}">
     <div class="head"><b>${esc(title)}</b><span class="muted">${list.length > 1 ? `${list.length} audios · ` : ''}${fmtDur(total)} de audio${resume && list.some(a => a.partial) ? ' por transcribir' : ''}</span></div>
     <div class="presets">${cards}</div>
     <div class="preset-hint" data-hint="${id}">${esc(hint)}</div>
     <div class="foot">
-      <select data-lang="${id}" title="Idioma de la reunión">${LANGS.map(([v, l]) => `<option value="${v}"${v === lang ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      <select data-lang="${id}" title="${each ? 'Idioma de cada reunión' : 'Idioma de la reunión'}">${langs.map(([v, l]) => `<option value="${v}"${v === lang ? ' selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn primary" data-act="tx-go" data-box="${id}">${I.spark}${opts.button || (list.length > 1 ? `Transcribir ${list.length} audios` : 'Transcribir')}</button>
       <span class="muted" style="font-size:12.5px">Se guarda como .txt y .srt junto al audio. Puedes seguir usando la app mientras tanto.</span>
     </div></div>`;
@@ -1592,10 +1595,9 @@ main.addEventListener('click', async e => {
     else if (a === 'to-live') { main.scrollTo({ top: main.scrollHeight, behavior: 'smooth' }); S.userScroll = 0; }
     else if (a === 'tx-toggle') { S.txOpen = !S.txOpen; const au = S.audios.get(S.route.path); if (au) { $('#aJob').innerHTML = ''; $('#aJob').dataset.id = ''; renderAudioHead(au); if (S.txOpen) $('#aBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } }
     else if (a === 'tx-go') {
-      const id = act.dataset.box, sel = $(`select[data-lang="${id}"]`);
-      S.selLang = sel ? sel.value : '';
+      const id = act.dataset.box, sel = $(`select[data-lang="${id}"]`), lang = sel ? sel.value : '';
       const box = S.boxes[id] || { paths: [], resume: false };
-      submitTx(box.paths, S.selPreset || S.config.preset, S.selLang, box.resume);
+      submitTx(box.paths, S.selPreset || S.config.preset, lang === TX_EACH ? null : lang, box.resume);
     }
     else if (a === 'move') openMove(p);
     else if (a === 'reveal') api('/api/reveal', { path: p }).catch(err => toast(esc(err.message), 'err'));
@@ -1642,7 +1644,10 @@ main.addEventListener('click', async e => {
 });
 main.addEventListener('change', e => {
   if (e.target.id === 'follow') { S.follow = e.target.checked; localStorage.setItem('follow', S.follow ? '1' : '0'); if (S.follow) { S.userScroll = 0; syncHighlight(); } }
-  if (e.target.dataset.lang) S.selLang = e.target.value;
+  if (e.target.dataset.lang) {  // lo elegido en esa caja se recuerda para esas mismas reuniones (no para las demás)
+    const box = S.boxes[e.target.dataset.lang];
+    if (box) (S.txLang ||= {})[box.key] = e.target.value;
+  }
 });
 let tqTimer;
 main.addEventListener('input', e => {
@@ -1957,7 +1962,7 @@ function openSettings() {
       <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
-    <fieldset><legend>${I.folder}Carpetas fuera de Audios</legend>
+    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
       <div id="sLinks"></div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
       <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
@@ -2048,7 +2053,7 @@ function openSettings() {
       const box = $('#sLinks', d), ls = S.config.links || [];
       box.innerHTML = ls.length ? `<table class="vtable">${ls.map(l => `<tr><td>${I.link}${esc(nfc(l.name))}</td><td><code>${esc(l.path)}</code></td>
           <td><button class="btn ghost sm" type="button" data-unlink="${esc(l.rel)}">quitar</button></td></tr>`).join('')}</table>`
-        : '<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta Audios.</div>';
+        : `<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta de ${esc(APP_NAME)}${S.config.root ? ` (<code>${esc(S.config.root)}</code>)` : ''}.</div>`;
     };
     drawLinks();
     $('#lnAdd', d).onclick = async () => { if (await linkFolder()) drawLinks(); };

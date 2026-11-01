@@ -129,6 +129,11 @@ async function loadVocab(language) {
 function vocabOf(a) {
   const p = a.props || {};
   if (!p.workstream) return null;
+  // primero por el id de la lista (props.vocabulario: lo guarda este PC, no la cabecera del .md; como find_vocab en
+  // server.py, solo si la lista se llama como dice la cabecera): con dos proyectos que se llaman igual, los nombres
+  // no dicen cuál es
+  const byId = p.vocabulario ? S.vocab.find(v => v.id === p.vocabulario) : null;
+  if (byId && fold(byId.name) === fold(p.workstream) && fold(byId.project) === fold(p.proyecto || '')) return byId;
   const same = S.vocab.filter(v => fold(v.name) === fold(p.workstream));
   return same.find(v => fold(v.project) === fold(p.proyecto || '')) || (same.length === 1 ? same[0] : null);
 }
@@ -194,11 +199,14 @@ function wsSelect(a) {
   const lost = p.workstream && !v ? `<option value="__lost" selected>${esc(p.workstream)} (no se encuentra el archivo)</option>` : '';
   return `<select class="pstate pws" data-prop="workstream" title="Vocabulario que recibe Whisper al transcribir esta reunión">${vocabOptions(v ? v.id : (lost ? '__lost' : ''), 'Ninguno')}${lost}</select>`;
 }
+/* el tema elegido en la página va por el id de su lista: por nombres, con dos proyectos que se llaman igual, el
+   servidor tomaría la del proyecto que contiene la reunión y no la elegida ('' = sin tema) */
+function wsPatch(v) { return { vocabulario: v ? v.id : '' }; }
 main.addEventListener('change', e => {
   const a = curAudio();
   if (!a || e.target.dataset.prop !== 'workstream' || e.target.value === '__lost') return;
   const v = S.vocab.find(x => x.id === e.target.value);
-  saveProps(a, { proyecto: v ? v.project : '', workstream: v ? v.name : '' }).then(() => toast(!v ? 'Sin tema: se usará el vocabulario general'
+  saveProps(a, wsPatch(v)).then(() => toast(!v ? 'Sin tema: se usará el vocabulario general'
     : liveJob(a) ? `🗂 ${esc(v.name)}: el directo usa este vocabulario desde el siguiente trozo`
     : (a.txt || a.srt) ? `🗂 ${esc(v.name)} guardado · se aplicará si la vuelves a transcribir` : `🗂 ${esc(v.name)}: se usará al transcribirla`));
 });
@@ -830,13 +838,16 @@ function openPalette() {
 async function deleteItem(path) {
   const a = S.audios.get(path), d = S.docs.get(path);
   if (!a && !d) return;
+  // destinos de salida: sus documentos que nadie ha cambiado alli van tambien a la papelera; los editados se quedan
+  const outs = a && (S.config.perfil?.outputs || []).length
+    ? ' También van a la papelera sus documentos en los destinos de salida que nadie haya cambiado allí; los que hayas editado se quedan donde están.' : '';
   if (!await ask('¿Mandar a la papelera?', a
-    ? `Se manda a la <b>papelera de Windows</b> la grabación con su transcripción y sus notas (.wav, .txt, .srt, .md). Se puede recuperar desde la papelera.`
+    ? `Se manda a la <b>papelera de Windows</b> la grabación con su transcripción y sus notas (.wav, .txt, .srt, .md). Se puede recuperar desde la papelera.${outs}`
     : 'Se manda a la <b>papelera de Windows</b>. Se puede recuperar desde ahí.', 'Mandar a la papelera')) return;
   if (S.playing === path) { audio.pause(); audio.removeAttribute('src'); audio.load(); S.playing = null; $('#player').classList.add('hidden'); document.body.classList.remove('playing'); }
   try {
-    await api('/api/delete', { path });
-    toast('🗑️ En la papelera de Windows');
+    const r = await api('/api/delete', { path });
+    toast('🗑️ En la papelera de Windows' + (r.copias ? ` (con ${r.copias} ${r.copias === 1 ? 'documento' : 'documentos'} de los destinos de salida)` : ''));
     const parent = (a || d).parent ? (a || d).parent.path : '';
     await refreshTree(true);
     go(parent ? 'f' : 'home', parent, null, true);
