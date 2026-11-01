@@ -3,9 +3,9 @@
 
 PyYAML no está en requirements-dev: `cargar_yaml` lee el subconjunto de YAML que usan estos ficheros (mapas y listas en
 bloque; listas `[a, b]` y mapas `{a: b}` en línea, anidados y en una o varias líneas; escalares con o sin comillas;
-bloques `|`, `|-`, `>` y `>-`, y comentarios) y da ValueError con lo demás (anclas, alias, etiquetas, escapes en
-comillas dobles, escalares sin comillas en varias líneas…), para que un workflow escrito de otra forma haga fallar el
-test en vez de leerse mal. Los escalares quedan como cadenas: `timeout-minutes: 30` da «30»."""
+bloques `|`, `|-`, `>` y `>-`, y comentarios) y da ValueError con lo demás (anclas, alias, etiquetas, claves entre
+comillas, escapes en comillas dobles, escalares en varias líneas…), para que un workflow escrito de otra forma haga
+fallar el test en vez de leerse mal. Los escalares quedan como cadenas: `timeout-minutes: 30` da «30»."""
 import glob
 import os
 import re
@@ -55,8 +55,8 @@ def _blancos(r, j):
 
 def _sin_comentario(linea):
     """(la línea sin su comentario final, cuántos `[` y `{` abre menos los `]` y `}` que cierra), sin contar lo que va
-    entre comillas. Una comilla solo abre una cadena al principio de un escalar (tras un blanco, `[`, `{`, `,` o `:`);
-    en `it's` es una letra más."""
+    entre comillas. Una comilla solo abre una cadena donde puede empezar un valor (al principio de la línea o tras `[`,
+    `{`, `,` o `:`, con o sin blancos en medio); en `it's` o en `a '` es un carácter más."""
     prof, q, i = 0, None, 0
     while i < len(linea):
         c = linea[i]
@@ -67,7 +67,7 @@ def _sin_comentario(linea):
                 i += 1
             elif c == q:
                 q = None
-        elif c in ("'", '"') and (i == 0 or linea[i - 1] in " \t[{,:"):
+        elif c in ("'", '"') and linea[:i].rstrip(" \t")[-1:] in ("", "[", "{", ",", ":"):
             q = c
         elif c == "#" and (i == 0 or linea[i - 1] in " \t"):
             return linea[:i], prof
@@ -218,10 +218,13 @@ class _Lector:
                 self.i += 1
                 sig = self.sangria()
                 out.append(self.nodo(sig) if sig > n else None)
-            elif _CLAVE.match(contenido):  # «- clave: valor»: un mapa con las claves a la altura de «clave»
-                col = len(linea) - len(linea.lstrip(" ")) + linea.strip().index(contenido)
+            elif _CLAVE.match(contenido) or contenido == "-" or contenido.startswith("- "):
+                # «- clave: valor» o «- - x»: un mapa o una lista que empiezan en la misma línea, a la altura de lo que
+                # sigue al guion
+                tras_guion = linea.strip()[1:]
+                col = len(linea) - len(linea.lstrip(" ")) + 1 + len(tras_guion) - len(tras_guion.lstrip())
                 self.lineas[self.i] = " " * col + contenido
-                out.append(self.mapa(col))
+                out.append(self.mapa(col) if _CLAVE.match(contenido) else self.lista(col))
             else:
                 self.i += 1
                 out.append(_en_linea(self.flujo(contenido) if contenido[:1] in ("[", "{") else contenido))
@@ -328,7 +331,7 @@ class CargarYamlTests(unittest.TestCase):
             "          # una variante por línea",
             '          - {nombre: a, ref: 5c55e54, modo: ventana, extra: "--lanzar shell --previo", url: https://x/y}',
             "          - {nombre: b, ref: 'HEAD', extra: '', nada: , lista: [1, [2, 3], {c: d}],}",
-            "          - {nombre: 'c # no es un comentario', ref: it's}  # esto sí",
+            "          - {nombre: 'c # no es un comentario', ref: it's, cita: a 'b}  # esto sí",
             "    runs-on: windows-latest",
             "    timeout-minutes: 25",
             "    env: {",
@@ -363,11 +366,19 @@ class CargarYamlTests(unittest.TestCase):
                          "url": "https://x/y"},
                         {"nombre": "b", "ref": "HEAD", "extra": "", "nada": None,
                          "lista": ["1", ["2", "3"], {"c": "d"}]},
-                        {"nombre": "c # no es un comentario", "ref": "it's"}]}},
+                        {"nombre": "c # no es un comentario", "ref": "it's", "cita": "a 'b"}]}},
                     "runs-on": "windows-latest", "timeout-minutes": "25", "env": {"A": "1", "B": "2"},
                     "steps": [["uno", "dos"], {"run": "python diag.py --seconds 180\nfin\n", "shell": "bash"},
                               {"uses": "a@b"}]},
                 "otro": {"timeout-minutes": "5", "needs": ["diag"]}}})
+
+    def test_listas_compactas(self):
+        """`- - x`: una lista dentro de otra que empieza en la misma línea que el guion de fuera (antes se leía como la
+        cadena «- x»)."""
+        self.assertEqual(cargar_yaml("a:\n- - x\n"), {"a": [["x"]]})
+        texto = "a:\n- - x\n  - y\n- - - z\n  - {b: c}\n- -\n  - e\n- - k: 1\n    l: 2\n"
+        esperado = {"a": [["x", "y"], [["z"], {"b": "c"}], [None, "e"], [{"k": "1", "l": "2"}]]}
+        self.assertEqual(cargar_yaml(texto), esperado)
 
     def test_bloques(self):
         """`|` guarda los saltos y `>` los pliega (una línea vacía, un salto); con `-`, sin el salto final; las líneas
