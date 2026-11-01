@@ -801,6 +801,9 @@ class Complete:
 COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
 
 
+CLOUD_TEXT_LOCK = threading.Lock()
+
+
 class CloudText:
     """Reuniones cuyo texto actual se transcribio entero en la nube: en la cola con la nube, en directo con todos sus
     trozos en la nube o con el repaso final. El resumen automatico solo sube a la nube estas sin el permiso de Ajustes
@@ -1706,11 +1709,13 @@ class Jobs:
         return job.id
 
     def _cloud_text(self):
-        """CloudText del DATA_DIR vigente."""
+        """CloudText del DATA_DIR vigente, uno solo aunque lo pidan dos hilos a la vez (con dos, uno podria volver a
+        escribir en disco un «en la nube» que el otro ya habia quitado)."""
         path = os.path.join(DATA_DIR, "transcritas_en_la_nube.json")
-        reg = getattr(self, "_cloud_reg", None)
-        if reg is None or reg.path != path:
-            reg = self._cloud_reg = CloudText(path)
+        with CLOUD_TEXT_LOCK:
+            reg = getattr(self, "_cloud_reg", None)
+            if reg is None or reg.path != path:
+                reg = self._cloud_reg = CloudText(path)
         return reg
 
     def _tx_in_cloud(self, rel):

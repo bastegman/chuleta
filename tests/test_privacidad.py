@@ -179,6 +179,22 @@ class ResumenAutomaticoTests(TempTree):
             self.assertIs(self.directo(otra, "nube").local_part, local, primero)
             self.assertIs(otra._tx_in_cloud(self.REL), not local, primero)
 
+    def test_un_solo_registro_aunque_lo_pidan_dos_hilos(self):
+        j = self.jobs()
+        real, creados = server.CloudText, []
+
+        def lento(path):
+            time.sleep(0.05)  # dos hilos dentro de la creacion a la vez
+            creados.append(path)
+            return real(path)
+        with mock.patch.object(server, "CloudText", side_effect=lento):
+            hilos = [threading.Thread(target=j._cloud_text) for _ in range(4)]
+            for h in hilos:
+                h.start()
+            for h in hilos:
+                h.join()
+        self.assertEqual(len(creados), 1)
+
     def test_el_origen_se_guarda_en_datos_y_se_olvida(self):
         path = os.path.join(self.data_dir, "transcritas_en_la_nube.json")
         reg = server.CloudText(path)
