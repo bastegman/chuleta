@@ -1,0 +1,44 @@
+name: windows-real
+
+# Pruebas en Windows de verdad que la suite de tests.yml no cubre sola (auditoria final, grupo Windows): el formato
+# regional español del usuario (Set-Culture es-ES) para el filtro de Outlook (P1-07), y la ventana propia (pywebview
+# sobre WebView2) ante los mensajes con los que Windows apaga o cierra la sesion (P1-09) y sin WebView2 (P2-35). El
+# aviso con PowerShell 5.1 (P1-01) corre aqui y en tests.yml. Se lanza a mano o con cada push de la rama fix-windows;
+# deja server.log y los resultados como artefacto. Solo lee el repo.
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix-windows]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      NOTAS_ARTEFACTOS: ${{ github.workspace }}\artefactos
+      NOTAS_LOCALE_ESPERADO: es-ES
+      NOTAS_VENTANA_REAL: "1"
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: numpy y requests (tests), pywebview (la ventana) y pywin32 (Outlook, opcional en la app)
+        run: python -m pip install --disable-pip-version-check numpy requests pywebview==6.2.1 pywin32==312
+      - name: Formato regional español para el usuario del runner (lo leen los procesos que arrancan despues)
+        shell: powershell
+        run: |
+          Set-Culture es-ES
+          [System.Environment]::OSVersion.VersionString
+          Get-ItemProperty 'HKCU:\Control Panel\International' | Format-List LocaleName, sShortDate, sTimeFormat
+      - name: Tests (toda la suite, con la ventana real)
+        run: python tests/run.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: windows-real-artefactos
+          path: artefactos
+          if-no-files-found: warn

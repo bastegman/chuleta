@@ -2506,18 +2506,25 @@ class App:
     def link_pick(self, b):
         """Abre el selector de carpetas de Windows (en este PC) y devuelve la que elijas. b.title: lo que dice la
         ventana (por defecto, la carpeta donde grabar; tambien se usa para la carpeta de copias y para importar)."""
+        # la ruta vuelve en bytes UTF-8 escritos a mano: con pythonw (el acceso directo) la salida del hijo iria en
+        # cp1252 y «José» o «Compañía» llegarian con «�» (o el hijo fallaria con «Ł»)
         script = ("import sys, tkinter as tk\nfrom tkinter import filedialog\n"
                   "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
                   "p = filedialog.askdirectory(parent=r, title=sys.argv[1], mustexist=True,"
-                  " initialdir=sys.argv[2] or None)\nsys.stdout.write(p or '')\n")
+                  " initialdir=sys.argv[2] or None)\n"
+                  "sys.stdout.buffer.write((p or '').encode('utf-8', 'surrogatepass')); sys.stdout.flush()\n")
         start = os.path.dirname(ROOT) if not LINKS else os.path.dirname(next(iter(LINKS.values()))["path"])
         try:
             title = " ".join(str(b.get("title") or "").split())[:80] or "Carpeta donde guardar las grabaciones"
             r = subprocess.run([sys.executable, "-c", script, title, start],
-                               capture_output=True, timeout=900, creationflags=engines.NO_WINDOW)
+                               capture_output=True, timeout=900, creationflags=engines.NO_WINDOW,
+                               env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8"))
         except (OSError, subprocess.SubprocessError) as e:
             raise ApiError(f"No se pudo abrir el selector de carpetas ({e.__class__.__name__}); pega la ruta a mano.")
-        path = r.stdout.decode("utf-8", "replace").strip()
+        try:
+            path = r.stdout.decode("utf-8", "surrogatepass").strip()
+        except UnicodeDecodeError:
+            path = r.stdout.decode("utf-8", "replace").strip()
         if r.returncode != 0 and not path:
             raise ApiError("No se pudo abrir el selector de carpetas; pega la ruta a mano.")
         return {"path": os.path.normpath(path) if path else ""}
@@ -2757,24 +2764,35 @@ class App:
         while True:
             time.sleep(8)
             try:
-                app = mic_meeting_app()
-                self.meeting = app
-                recording = bool(self.rec and self.rec.alive())
-                st = self.settings.get()
-                # aviso flotante «Grabar / ✕» (calendario.py + aviso.py): una vez por llamada y nunca si ya se graba;
-                # mientras dure la llamada se lee la reunión (Teams y, si está activado, Outlook) para sugerir
-                if self.vigia.tic(app, recording, st, lambda: calendario.reunion_actual(st, self._vocab_terms()),
-                                  PORT, APP_DIR, creationflags=engines.NO_WINDOW):
-                    notified = app  # el aviso flotante sustituye al toast de Windows en esa llamada
-                    log(f"   reunión detectada ({app}): aviso flotante abierto")
-                if app and not recording and notified != app and st.get("meeting_detect", True):
-                    notified = app
-                    notify("¿Quieres tomar notas de la sesión?", "Pulsa Ctrl+Alt+R para empezar a tomar notas.")
-                    log(f"   reunión detectada ({app}): aviso enviado")
-                if not app:
-                    notified = None
+                notified = self._meeting_step(notified)
             except Exception:
                 pass
+
+    def _meeting_step(self, notified):
+        """Un paso del vigilante de llamadas (cada 8 s); devuelve la llamada ya avisada. «Avisarme si estoy en una
+        llamada» (meeting_detect) es el interruptor general: apagado, ni toast, ni aviso flotante (aunque «Aviso
+        flotante» siga marcado), ni el chip de la interfaz, que se pinta con `meeting`."""
+        app = mic_meeting_app()
+        recording = bool(self.rec and self.rec.alive())
+        st = self.settings.get()
+        detect = st.get("meeting_detect", True)
+        self.meeting = app if detect else None
+        if not detect:
+            self.vigia.cerrar_aviso()  # si estaba abierto cuando se desmarco
+        # aviso flotante «Grabar / ✕» (calendario.py + aviso.py): una vez por llamada y nunca si ya se graba;
+        # mientras dure la llamada se lee la reunión (Teams y, si está activado, Outlook) para sugerir
+        if self.vigia.tic(app, recording, st if detect else dict(st, rec_aviso=False),
+                          lambda: calendario.reunion_actual(st, self._vocab_terms()),
+                          PORT, APP_DIR, creationflags=engines.NO_WINDOW):
+            notified = app  # el aviso flotante sustituye al toast de Windows en esa llamada
+            log(f"   reunión detectada ({app}): aviso flotante abierto")
+        if detect and app and not recording and notified != app:
+            notified = app
+            notify("¿Quieres tomar notas de la sesión?", "Pulsa Ctrl+Alt+R para empezar a tomar notas.")
+            log(f"   reunión detectada ({app}): aviso enviado")
+        if not app:
+            notified = None
+        return notified
 
     def _vocab_terms(self):
         """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión."""
@@ -2787,8 +2805,16 @@ class App:
                                                              outlook=True if q.get("outlook") else None))
 
     # --- edicion de transcripciones
+    _tx_save_lock = threading.Lock()
+
     def save_transcript(self, b):
-        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver)."""
+        """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver). De uno en uno:
+        al cerrar la pagina el mismo texto llega dos veces a la vez (keepalive y el fetch normal), y el segundo podia
+        escribir lo corregido antes de que el primero copiara el original."""
+        with self._tx_save_lock:
+            return self._save_transcript(b)
+
+    def _save_transcript(self, b):
         abs_path = safe(b.get("path"), "file")
         rel, base = rel_of(abs_path), os.path.splitext(abs_path)[0]
         segs = []
@@ -3742,6 +3768,11 @@ def schedule_shutdown(reason, delay=0.5):
     t.daemon = True
     t.start()
     return t
+
+
+# Windows apaga, reinicia o cierra la sesion con la ventana propia abierta (o oculta): window.py deja cerrar y llama
+# a este mismo apagado limpio mientras Windows espera
+Window.set_end_session(shutdown)
 
 
 def arg(name, default=None):

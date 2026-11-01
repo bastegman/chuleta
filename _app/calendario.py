@@ -10,6 +10,7 @@ Nada sale del PC: los nombres de los asistentes van, como mucho, a la cabecera d
 Fuera de Windows (y en los tests) cada lectura devuelve None con su motivo; la lógica pura (parse_title,
 pick_meeting_window, elegir_cita, suggest, decidir_aviso) se prueba con dobles.
 """
+import ctypes
 import os
 import re
 import subprocess
@@ -18,7 +19,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from common import BAD_NAME, WINDOWS, fold, log_exc
+from common import BAD_NAME, WINDOWS, fold, log, log_exc
 
 # ----------------------------------------------------------------------------- nivel 1: ventana de Teams
 
@@ -153,20 +154,44 @@ _HRESULT = {
 _COM_LOCK = threading.Lock()  # una consulta a la vez: si una se cuelga, las siguientes no se amontonan
 
 
-def fecha_jet(dt):
+class SYSTEMTIME(ctypes.Structure):
+    """SYSTEMTIME de Win32: 8 WORD. `ctypes.wintypes` no la trae (con `wintypes.SYSTEMTIME` el AttributeError caía en
+    el `except` y el filtro de Outlook iba siempre con el formato de EE. UU.)."""
+    _fields_ = [(n, ctypes.c_ushort) for n in ("wYear", "wMonth", "wDayOfWeek", "wDay", "wHour", "wMinute",
+                                               "wSecond", "wMilliseconds")]
+
+
+_NLS = []  # (GetDateFormatEx, GetTimeFormatEx) con sus prototipos, en un kernel32 propio (no se tocan los de windll)
+
+
+def _nls():
+    if not _NLS:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        fd, ft = k32.GetDateFormatEx, k32.GetTimeFormatEx
+        fd.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.POINTER(SYSTEMTIME), ctypes.c_wchar_p,
+                       ctypes.c_wchar_p, ctypes.c_int, ctypes.c_wchar_p]
+        ft.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.POINTER(SYSTEMTIME), ctypes.c_wchar_p,
+                       ctypes.c_wchar_p, ctypes.c_int]
+        fd.restype = ft.restype = ctypes.c_int
+        _NLS.append((fd, ft))
+    return _NLS[0]
+
+
+def fecha_jet(dt, locale=None):
     """La fecha como la espera el filtro de Outlook: formato regional corto del usuario y hora SIN segundos
-    (docs: «Filtering Items Using a Date-time Comparison»). Fuera de Windows, el formato de EE. UU."""
+    (docs: «Filtering Items Using a Date-time Comparison»), p. ej. «31/10/2026 14:05» con el formato español.
+    `locale` («es-ES»…): otro formato regional en vez del del usuario (None). Fuera de Windows, el de EE. UU."""
     dt = dt.replace(second=0, microsecond=0)
     if WINDOWS:
         try:
-            import ctypes
-            from ctypes import wintypes
-            k32 = ctypes.windll.kernel32
-            st = wintypes.SYSTEMTIME(dt.year, dt.month, dt.isoweekday() % 7, dt.day, dt.hour, dt.minute, 0, 0)
+            get_date, get_time = _nls()
+            st = SYSTEMTIME(dt.year, dt.month, dt.isoweekday() % 7, dt.day, dt.hour, dt.minute, 0, 0)
             d, t = ctypes.create_unicode_buffer(80), ctypes.create_unicode_buffer(80)
-            if (k32.GetDateFormatEx(None, 0x1, ctypes.byref(st), None, d, 80, None)  # DATE_SHORTDATE
-                    and k32.GetTimeFormatEx(None, 0x2, ctypes.byref(st), None, t, 80)):  # TIME_NOSECONDS
+            if (get_date(locale, 0x1, ctypes.byref(st), None, d, 80, None)  # DATE_SHORTDATE
+                    and get_time(locale, 0x2, ctypes.byref(st), None, t, 80)):  # TIME_NOSECONDS
                 return f"{d.value} {t.value}"
+            log(f"   Outlook: GetDateFormatEx/GetTimeFormatEx han fallado (error {ctypes.get_last_error()}): "
+                "el filtro va con el formato de EE. UU.")
         except Exception:
             log_exc()
     return dt.strftime("%m/%d/%Y %H:%M")
