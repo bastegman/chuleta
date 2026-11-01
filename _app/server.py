@@ -1209,6 +1209,11 @@ def _of_project(v, project):
         == os.path.normcase(os.path.normpath(ROOT)))
 
 
+def _project_known(project, vs):
+    """Algun proyecto se llama `project`: el de la app (la raiz siempre existe) o el de alguna lista de `vs`."""
+    return _is_app_name(project) or any(_of_project(v, project) for v in vs)
+
+
 def _norm_dir(p):
     return os.path.normcase(os.path.normpath(p))
 
@@ -1227,8 +1232,10 @@ def _closest(lists, near):
 
 def find_vocab(project, name, id_=None, near=None):
     """La lista de un tema. Por id (la ruta interna de la lista: estable aunque otro proyecto se llame igual), si se
-    llama como dicen `project` y `name` (los nombres de la cabecera de la reunion; sin ellos, el id basta); si no, por
-    nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus nombres antiguos). Si dos
+    llama como dicen `project` y `name` (los nombres de la cabecera de la reunion; sin ellos, el id basta, y si ningun
+    proyecto se llama ya como dice la cabecera, basta el tema: la vinculada tiene otro nombre en este PC, o el otro PC
+    escribio el suyo); si no, por nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus
+    nombres antiguos). Si dos
     proyectos se llaman igual, `near` (la ruta del audio de la reunion) elige la del proyecto que la contiene; si sigue
     sin estar claro, ninguna. Con proyecto nunca se toma la lista de otro proyecto (antes, si solo habia un tema con
     ese nombre, se usaba aunque fuera de otro cliente).
@@ -1241,7 +1248,8 @@ def find_vocab(project, name, id_=None, near=None):
     vs = list_vocab()
     if id_:
         hit = next((v for v in vs if v["id"] == id_), None)
-        if hit and (not name or (fold(hit["name"]) == fold(name) and (not project or _of_project(hit, project)))):
+        if hit and (not name or (fold(hit["name"]) == fold(name) and (
+                not project or _of_project(hit, project) or not _project_known(project, vs)))):
             return hit
         if not name:
             return None
@@ -1255,7 +1263,7 @@ def find_vocab(project, name, id_=None, near=None):
         return named[0]
     if named:  # varios proyectos con ese nombre: el que contiene la reunion
         return _closest(named, near)
-    if id_ or not near or _is_app_name(project) or any(_of_project(v, project) for v in vs):
+    if id_ or not near or _project_known(project, vs):
         return None
     root = _norm_dir(ROOT)  # la raiz no cuenta: las contiene todas y sus listas solo valen por su nombre
     cands = [v for v in same if _norm_dir(_project_dir(v)) != root]

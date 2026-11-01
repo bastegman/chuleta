@@ -809,6 +809,35 @@ class TemaPorIdTests(TempTree):
         self.write("Beta/Vocabulario/Otro.txt", "beta\n")
         self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")
 
+    def test_id_correcto_con_la_cabecera_de_otro_pc(self):
+        """Regresión de 828143c: la reunión tiene guardado el id de su lista (una carpeta vinculada que en este PC se
+        llama «Cliente»), pero la cabecera dice el nombre que esa carpeta tiene en el otro PC («Externo»). Ningún
+        proyecto se llama así aquí, de modo que la cabecera no puede contradecir al id: la lista es la suya. Antes el
+        id, en vez de resolverla, la mandaba al vocabulario general (sin id salía bien)."""
+        ext = os.path.join(self.tmp, "Ext")
+        os.makedirs(os.path.join(ext, "Vocabulario"))
+        with open(os.path.join(ext, "Vocabulario", "Comité.txt"), "w", encoding="utf-8") as f:
+            f.write("externo\n")
+        server.LINKS[server.link_id(ext)] = {"name": "Cliente", "path": ext}
+        dentro = os.path.join(ext, "r.wav")
+        with open(dentro, "wb") as f:
+            f.write(b"RIFF")
+        with open(os.path.join(ext, "r.md"), "w", encoding="utf-8") as f:
+            f.write("---\nproyecto: Externo\nworkstream: Comité\n---\n")
+        lista = server.find_vocab("", "Comité")
+        self.assertEqual(lista["project"], "Cliente")
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "externo")  # sin id ya salía bien
+        server.temas().set(server.rel_of(dentro), lista["id"])
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "externo")  # 828143c: «general»
+        self.assertEqual(server.find_vocab("Externo", "Comité", id_=lista["id"], near=dentro)["id"], lista["id"])
+        # si el proyecto de la cabecera sí existe aquí, el id de una lista de otro no manda: la regla de siempre
+        self.write("Externo/Vocabulario/Otro.txt", "otro\n")
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "general")
+        # y con el tema cambiado en la cabecera, el id viejo tampoco
+        with open(os.path.join(ext, "r.md"), "w", encoding="utf-8") as f:
+            f.write("---\nproyecto: Externo\nworkstream: Dirección\n---\n")
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "general")
+
     def test_proyecto_renombrado_nunca_la_lista_de_otro_cliente(self):
         """Regresión del recurso de arriba: con el proyecto de la cabecera renombrado fuera de la app, una reunión
         guardada en la carpeta de otro proyecto que tiene un tema con ese nombre usaba la lista de ese otro cliente

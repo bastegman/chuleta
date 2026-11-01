@@ -161,6 +161,9 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
   tema de todas sus reuniones. Renombrar desde la app un proyecto con el nombre de otro que ya existe (por ejemplo,
   una carpeta vinculada que se llama igual) no deja sin tema a las reuniones de ninguno de los dos ni hace que las de
   uno usen la lista del otro.
+- Con el tema guardado por su lista, una cabecera escrita por otro PC (el nombre que allí tiene una carpeta vinculada
+  que aquí se llama distinto) ya no manda la reunión al vocabulario general: si ningún proyecto se llama como dice la
+  cabecera, vale la lista guardada, siempre que el tema sea el mismo.
 - Renombrar o borrar el tema o la carpeta fijos del perfil actualiza el perfil, el último tema y la última carpeta y
   las carpetas por proyecto; un tema fijo que ya no existe vale como «automático» (P2-27).
 - «Transcribir todos los pendientes» usa por defecto el idioma de cada reunión (P2-28).
