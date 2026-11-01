@@ -57,13 +57,20 @@ function Wait-Http($url, $seconds) {
     # contestar en Windows (en macOS, sin ventana, 20 ms). Lo que tarda queda en $script:ultimaEspera
     $t0 = Get-Date
     $end = $t0.AddSeconds($seconds)
+    $script:erroresHttp = @()
     while ((Get-Date) -lt $end) {
         try {
             $left = [int][Math]::Max(1, [Math]::Min(30, ($end - (Get-Date)).TotalSeconds))  # sin pasarse del total
             $r = Invoke-RestMethod $url -Headers (Api-Headers $false) -TimeoutSec $left
             $script:ultimaEspera = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
             return $r
-        } catch { Start-Sleep -Milliseconds 500 }
+        } catch {
+            # DIAG: tipo y mensaje de cada fallo (el token no va en el mensaje)
+            $ex = $_.Exception
+            $st = ""; try { if ($ex.Response) { $st = [int]$ex.Response.StatusCode } } catch {}
+            $script:erroresHttp += ("{0:N1}s {1} {2}: {3}" -f ((Get-Date) - $t0).TotalSeconds, $st, $ex.GetType().FullName, $ex.Message)
+            Start-Sleep -Milliseconds 500
+        }
     }
     $script:ultimaEspera = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
     return $null
@@ -222,6 +229,36 @@ function Diag-Lenta($label) {
     $wv = @($procs | Where-Object { $_.Name -eq "msedgewebview2.exe" }).Count
     $con = @(Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue | Group-Object State | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ","
     Note "$label.diag" (($out -join " | ") + " || webview2=$wv || puerto: $con")
+    # DIAG: los fallos de Wait-Http y la misma peticion por otros caminos (curl.exe, HttpWebRequest sin keep-alive,
+    # Invoke-RestMethod -DisableKeepAlive) y el estado del ServicePoint de .NET para 127.0.0.1
+    $errs = @($script:erroresHttp)
+    Note "$label.errores_n" $errs.Count
+    Note "$label.errores" (($errs | Select-Object -First 3) -join " | ")
+    Note "$label.errores_ultimos" (($errs | Select-Object -Last 2) -join " | ")
+    try {
+        $sp = [System.Net.ServicePointManager]::FindServicePoint([Uri]"$Base/api/config")
+        Note "$label.servicepoint" ("limite=$($sp.ConnectionLimit) actuales=$($sp.CurrentConnections) idle=$($sp.MaxIdleTime) defecto=$([System.Net.ServicePointManager]::DefaultConnectionLimit)")
+    } catch { Note "$label.servicepoint" $_.Exception.Message }
+    $h = Api-Headers $false
+    $tokArg = @(); if ($h["X-Chuleta-Token"]) { $tokArg = @("-H", "X-Chuleta-Token: $($h['X-Chuleta-Token'])") }
+    try { $c = & curl.exe -s -o NUL -m 10 -w "%{http_code} %{time_total}s" @tokArg "$Base/api/config" 2>&1; Note "$label.curl" "$c" } catch { Note "$label.curl" $_.Exception.Message }
+    try {
+        $t = Get-Date
+        $req = [System.Net.HttpWebRequest]::Create("$Base/api/config"); $req.KeepAlive = $false; $req.Timeout = 10000
+        foreach ($k in $h.Keys) { $req.Headers.Add($k, $h[$k]) }
+        $resp = $req.GetResponse(); $code = [int]$resp.StatusCode; $resp.Close()
+        Note "$label.webrequest_sin_keepalive" ("$code " + [Math]::Round(((Get-Date) - $t).TotalSeconds, 2) + "s")
+    } catch { Note "$label.webrequest_sin_keepalive" ($_.Exception.GetType().FullName + ": " + $_.Exception.Message) }
+    try {
+        $t = Get-Date
+        $r = Invoke-RestMethod "$Base/api/config" -Headers $h -TimeoutSec 10 -DisableKeepAlive
+        Note "$label.irm_sin_keepalive" ("root=$($r.root) " + [Math]::Round(((Get-Date) - $t).TotalSeconds, 2) + "s")
+    } catch { Note "$label.irm_sin_keepalive" ($_.Exception.GetType().FullName + ": " + $_.Exception.Message) }
+    try {
+        $t = Get-Date
+        $r = Invoke-RestMethod "$Base/api/config" -Headers $h -TimeoutSec 10
+        Note "$label.irm_otra_vez" ("root=$($r.root) " + [Math]::Round(((Get-Date) - $t).TotalSeconds, 2) + "s")
+    } catch { Note "$label.irm_otra_vez" ($_.Exception.GetType().FullName + ": " + $_.Exception.Message) }
 }
 function Wait-Tree($text, $seconds) {
     # el arbol de la app (/api/tree) en JSON en cuanto contiene $text (la biblioteca se lee en segundo plano al arrancar)

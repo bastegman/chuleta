@@ -1,6 +1,7 @@
 name: diag-bloqueo
 
-# Solo diagnostico (rama desechable diag-correcciones, desde correcciones): con una reunion en la carpeta, en Windows y
+# Ronda 2: solo el trabajo e2e, con el E2E instrumentado (fallos de Wait-Http, curl.exe, HttpWebRequest sin
+# keep-alive y el ServicePoint de .NET). Solo diagnostico (rama desechable diag-correcciones, desde correcciones): con una reunion en la carpeta, en Windows y
 # con la ventana abierta, la API deja de contestar (E2E de correcciones, run 41341410510: /api/config sin respuesta en
 # 150 s en cada fase con la reunion falsa, el proceso sin CPU y con 25 hilos). Workflow y scripts de fix-bloqueo, con
 # el _app de esta rama. Cada trabajo de diag monta la carpeta con una reunion falsa, arranca server.py y sondea la API
@@ -15,38 +16,6 @@ permissions:
   contents: read
 
 jobs:
-  diag:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {nombre: corr-shell-defecto-previo, ref: HEAD, modo: ventana, reunion: completa, extra: "--lanzar shell --datos-por-defecto --previo"}
-          - {nombre: corr-shell-completa, ref: HEAD, modo: ventana, reunion: completa, extra: "--lanzar shell"}
-          - {nombre: corr-sin-ventana-completa, ref: HEAD, modo: sin-ventana, reunion: completa, extra: ""}
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-        with:
-          ref: ${{ matrix.ref == 'HEAD' && github.sha || matrix.ref }}
-          path: app
-      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
-        with:
-          python-version: "3.13"
-      - name: Dependencias de la app (como el instalador) y py-spy (solo diagnostico)
-        run: python -m pip install --disable-pip-version-check -r app/requirements.txt py-spy
-      - name: Versiones
-        run: python -m pip list --disable-pip-version-check
-      - name: Reproducir y volcar pilas
-        run: python scripts/diag/diag_bloqueo.py --app app --modo ${{ matrix.modo }} --reunion ${{ matrix.reunion }} --out diag-out --seconds 180 ${{ matrix.extra }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: always()
-        with:
-          name: diag-${{ matrix.nombre }}
-          path: diag-out
-          if-no-files-found: warn
-
   e2e:
     # el E2E de instalacion-empresa tal cual (instala con INSTALAR.bat y arranca la app como el usuario) y, en segundo
     # plano, un vigia que vuelca las pilas del servidor con py-spy en cuanto /api/config deja de contestar
