@@ -805,7 +805,8 @@ class CloudText:
     @staticmethod
     def ident(rel):
         """La identidad del audio: st_ino, el indice del archivo en NTFS, que se conserva al moverlo o renombrarlo en la
-        misma unidad y es otro en un archivo nuevo. 0 si no se sabe (entonces vale solo la ruta)."""
+        misma unidad y es otro en un archivo nuevo; 0 si no se sabe. Una entrada apuntada sin identidad vale por la
+        ruta; una con identidad, solo si el audio que hay ahora en esa ruta es el mismo (__contains__)."""
         try:
             return os.stat(safe(rel, "file")).st_ino
         except (ApiError, OSError):
