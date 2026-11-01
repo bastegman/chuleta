@@ -845,6 +845,22 @@ function viewMissing() {
   main.innerHTML = `<div class="page"><div class="card empty">Esto ya no está aquí (¿se ha movido o renombrado?).<br><br><a class="btn" href="#/">Volver al inicio</a></div></div>`;
 }
 
+/* Tras actualizar: el resumen automático ya no manda a la nube lo transcrito en local (server.py,
+   App._aviso_resumen_local). Se avisa una vez, arriba en Inicio, hasta que se cierra o se va al ajuste. */
+function avisoResumenLocalHtml() {
+  if (!S.config.summary?.aviso_local) return '';
+  return `<div class="notice info" id="avisoSumLocal" style="margin:0 0 14px">${I.info}El resumen automático ya no envía a <b>${esc(provName())}</b> las reuniones transcritas en local. <a href="#" data-act="aviso-sum-ajuste">Actívalo en Ajustes</a> si quieres. <button class="btn sm ghost" type="button" data-act="aviso-sum-ok">Entendido</button></div>`;
+}
+function avisoResumenLocalVisto(irAlAjuste) {
+  S.config.summary = { ...(S.config.summary || {}), aviso_local: false };
+  $('#avisoSumLocal')?.remove();
+  api('/api/settings', { summary: { aviso_visto: true } }).catch(err => toast(esc(err.message), 'err'));
+  if (!irAlAjuste) return;
+  openSettings();
+  const c = $('#sAutoLocal');
+  if (c) { c.scrollIntoView({ block: 'center' }); c.focus(); }
+}
+
 function viewHome() {
   const t = S.tree, all = allAudios();
   const pending = all.filter(a => (!(a.txt || a.srt) || a.partial) && !jobFor(a.path) && !a.recording);
@@ -855,6 +871,7 @@ function viewHome() {
   const lives = liveAudios(), loose = t.audios.filter(a => !isLive(a));
   main.innerHTML = `<div class="page">
     ${lives.map(liveBanner).join('')}
+    ${avisoResumenLocalHtml()}
     <h1>Tus notas de reunión</h1>
     <div class="meta">${esc(S.config.root)} · <a href="#" data-act="palette">Ctrl+P para buscar</a></div>
     ${welcomeCard(all)}
@@ -1494,6 +1511,7 @@ main.addEventListener('click', async e => {
     else if (a === 'new-folder') openNewFolder(p);
     else if (a === 'rename-folder') openRenameFolder(p);
     else if (a === 'link-remove') unlinkFolder(p);
+    else if (a === 'aviso-sum-ok' || a === 'aviso-sum-ajuste') { e.preventDefault(); avisoResumenLocalVisto(a === 'aviso-sum-ajuste'); }
     else if (a === 'cancel-job') { await api('/api/cancel', { id: act.dataset.id }); pollJobs(true); }
     else if (a === 'copy-tx') copy(transcriptText(), 'Transcripción copiada');
     else if (a === 'copy-doc') copy(S.docText || '', 'Texto copiado');
@@ -1838,8 +1856,9 @@ function openSettings() {
     </fieldset>
     <fieldset><legend>${I.spark}Resumen con IA</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir en la nube (reuniones de los últimos 3 días)</label>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAutoLocal" ${S.config.summary?.local ? 'checked' : ''}> Resumir también las reuniones transcritas en local (envía el texto a ${esc(provName())})</label>
-      <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>El texto de la transcripción, tus notas, el contexto y los participantes confirmados de cada reunión que transcribas en este PC se enviarán a <b>${esc(provName())}</b> para hacer el resumen (el audio no). Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAutoLocal" ${S.config.summary?.local ? 'checked' : ''}> Resumir también las reuniones transcritas en local (las envía a ${esc(provName())})</label>
+      <div class="help" id="sAutoLocalQue">De cada reunión se envía a <b>${esc(provName())}</b>: el título (o el nombre del archivo), la fecha y la duración, la transcripción (con quién habla, si se sabe), tus notas, el contexto, los participantes confirmados y tus instrucciones para el resumen. El audio no.</div>
+      <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
       <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
       <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
       <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>

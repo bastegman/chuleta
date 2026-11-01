@@ -35,106 +35,167 @@ def static(name):
 # ----------------------------------------------------------------------------- P1-03: resumen automatico
 
 class ResumenAutomaticoTests(TempTree):
-    """auto_summary solo sube a la nube lo que ya se transcribio en la nube, salvo consentimiento en Ajustes."""
+    """auto_summary solo sube a la nube el texto que se transcribio entero en la nube, salvo consentimiento en
+    Ajustes. El origen lo apunta cada transcripcion al escribir (CloudText, en DATA_DIR), no el trabajo: asi vale
+    igual para un repaso final retomado tras reiniciar (fix-directo lo crea con _queue_final_pass, sin el directo)."""
+
+    REL = "Alfa/r.wav"
 
     def jobs(self, *list_, **st):
         j = bare_jobs(list_)
         j.settings = settings_store(self.tmp, cloud=CLOUD, **st)
-        j.library = types.SimpleNamespace(find=lambda rel: {"date": NOW()}, at=1)
+        j.library = types.SimpleNamespace(find=lambda rel: {"date": NOW(), "duration": 2.0}, at=1)
         j.enviados = []
         j.submit_summary = lambda rel, auto=False: j.enviados.append(rel)
         return j
 
-    def job(self, preset, live=False, local_part=False, status="running"):
-        jb = server.Job("Alfa/r.wav", "r.wav", preset, None)
-        jb.status = status
-        if live:
-            jb.engine, jb.live, jb.local_part = "live", True, local_part
+    def transcribir(self, j, preset, start=None, final_pass=False):
+        """Jobs._run de verdad con un motor de mentira (local o nube): escribe el texto y llega al resumen."""
+        if not os.path.isfile(os.path.join(self.root, self.REL)):
+            self.wav(self.REL)
+        jb = server.Job(self.REL, "r.wav", preset, None)
+        jb.resume_from, jb.final_pass = start, final_pass
+        motor = types.SimpleNamespace(transcribe=lambda *a, **k: ([(0.0, 1.0, "hola"), (1.0, 1.9, "adiós")], "es",
+                                                                  2.0))
+        j.local = j.cloud = motor
+        with j.lock:
+            j.list.append(jb)
+        with mock.patch.object(server, "log") as log:
+            j._run(jb)
+        self.assertEqual(jb.status, "done", jb.error)
+        jb.logged = [c[0][0] for c in log.call_args_list]
         return jb
 
+    def directo(self, j, preset):
+        if not os.path.isfile(os.path.join(self.root, self.REL)):
+            self.wav(self.REL)
+        with mock.patch.object(server.threading, "Thread"), mock.patch.object(server, "log"):
+            j.start_live(self.REL, preset)
+        job = j.list[-1]
+        job.status = "done"
+        return job
+
     def test_transcrita_en_local_no_se_resume_sola(self):
-        j = self.jobs(self.job("rapido"))
-        with mock.patch.object(server, "log") as log:
-            j._after_transcribe("Alfa/r.wav")
+        j = self.jobs()
+        jb = self.transcribir(j, "rapido")
         self.assertEqual(j.enviados, [])
-        self.assertIn("transcrita en local", log.call_args[0][0])
+        self.assertTrue(any("transcrita en local, sin resumen automático" in m for m in jb.logged), jb.logged)
 
     def test_transcrita_en_la_nube_si(self):
-        j = self.jobs(self.job("nube"))
-        j._after_transcribe("Alfa/r.wav")
-        self.assertEqual(j.enviados, ["Alfa/r.wav"])
+        j = self.jobs()
+        self.transcribir(j, "nube")
+        self.assertEqual(j.enviados, [self.REL])
 
     def test_con_el_consentimiento_de_ajustes_tambien_lo_local(self):
-        j = self.jobs(self.job("medium"), summary_auto_local=True)
-        j._after_transcribe("Alfa/r.wav")
-        self.assertEqual(j.enviados, ["Alfa/r.wav"])
+        j = self.jobs(summary_auto_local=True)
+        self.transcribir(j, "medium")
+        self.assertEqual(j.enviados, [self.REL])
 
     def test_apagado_no_se_resume_nada(self):
-        j = self.jobs(self.job("nube"), summary_auto=False, summary_auto_local=True)
-        j._after_transcribe("Alfa/r.wav")
+        j = self.jobs(summary_auto=False, summary_auto_local=True)
+        self.transcribir(j, "nube")
         self.assertEqual(j.enviados, [])
 
     def test_directo_entero_en_la_nube_si_y_con_un_tramo_local_no(self):
-        j = self.jobs(self.job("nube", live=True))
-        j._after_transcribe("Alfa/r.wav")
-        self.assertEqual(j.enviados, ["Alfa/r.wav"])
-        j = self.jobs(self.job("nube", live=True, local_part=True))
+        j = self.jobs()
+        self.directo(j, "nube")
+        j._after_transcribe(self.REL)
+        self.assertEqual(j.enviados, [self.REL])
+        j = self.jobs()
+        job = self.directo(j, "nube")
+        job.status = "running"
         with mock.patch.object(server, "log"):
-            j._after_transcribe("Alfa/r.wav")
+            j.set_live_preset(job.id, "rapido")  # se pasa a local a mitad de reunion
+            j._after_transcribe(self.REL)
+        self.assertTrue(job.local_part)
         self.assertEqual(j.enviados, [])
 
-    def test_repaso_final(self):
-        """El repaso final sube la grabacion entera: si acaba, cuenta como nube; si falla o se cancela, el texto que
-        queda es el del directo (y cuenta lo que fue el directo)."""
-        for local_part, status, esperado in ((True, "running", True), (False, "error", True), (True, "error", False),
-                                             (True, "cancelled", False)):
-            fp = self.job("nube", status=status)
-            fp.final_pass, fp.local_part = True, local_part
-            j = self.jobs(self.job("rapido", status="done"), fp)
-            self.assertIs(j._tx_in_cloud("Alfa/r.wav"), esperado, (local_part, status))
-        directo = self.job("nube", live=True, local_part=True)
-        j = self.jobs(directo)
-        j.settings.update(lambda d: d.update(live_final_pass=True))
-        j.queues = {"cloud": types.SimpleNamespace(put=lambda job: None)}
-        directo.recorded = 60
+    def test_repaso_final_retomado_tras_reiniciar(self):
+        """El escenario de la revisión: directo con un tramo local que acaba en la nube, se apaga con el repaso final
+        en cola y, al volver a abrir, el repaso retomado (un Job nuevo, sin nada del directo) falla o se cancela: el
+        texto que queda es el del directo y no sube a la nube sin permiso."""
+        j = self.jobs()
+        job = self.directo(j, "medium")
+        job.status = "running"
         with mock.patch.object(server, "log"):
-            self.assertTrue(j._final_pass(directo))
-        self.assertTrue(j.list[-1].final_pass)
-        self.assertTrue(j.list[-1].local_part)
+            j.set_live_preset(job.id, "nube")
+        for status in ("error", "cancelled"):
+            otra = self.jobs()  # la app vuelve a arrancar: otra lista de trabajos, el mismo DATA_DIR
+            repaso = server.Job(self.REL, "r.wav", "nube", None)  # como _queue_final_pass(rel, name, language)
+            repaso.final_pass, repaso.status = True, status
+            otra.list.append(repaso)
+            with mock.patch.object(server, "log"):
+                otra.auto_summary(self.REL)
+            self.assertEqual(otra.enviados, [], status)
+        # si el directo fue entero en la nube, el texto que queda también lo es
+        j = self.jobs()
+        self.directo(j, "nube")
+        otra = self.jobs()
+        otra.auto_summary(self.REL)
+        self.assertEqual(otra.enviados, [self.REL])
+
+    def test_repaso_final_terminado_cuenta_como_nube(self):
+        j = self.jobs()
+        self.directo(j, "medium")
+        self.transcribir(j, "nube", final_pass=True)  # la grabacion entera, otra vez, en la nube
+        self.assertEqual(j.enviados, [self.REL])
 
     def test_tras_las_voces_vale_como_se_transcribio(self):
         """Con «Quién habla» el resumen llega al acabar las voces (_run_voices llama a auto_summary sin más)."""
-        for cloud, esperado in ((False, []), (True, ["Alfa/r.wav"])):
+        for preset, esperado in (("rapido", []), ("nube", [self.REL])):
             j = self.jobs()
             j.auto_voices = lambda rel: True  # se queda en cola para identificar voces
-            j._after_transcribe("Alfa/r.wav", cloud=cloud)
+            self.transcribir(j, preset)
             self.assertEqual(j.enviados, [])
             with mock.patch.object(server, "log"):
-                j.auto_summary("Alfa/r.wav")  # lo que hace _run_voices al terminar
+                j.auto_summary(self.REL)  # lo que hace _run_voices al terminar
             self.assertEqual(j.enviados, esperado)
 
-    def test_sin_trabajo_conocido_cuenta_como_local(self):
+    def test_sin_dato_cuenta_como_local(self):
         j = self.jobs()
         with mock.patch.object(server, "log"):
-            j.auto_summary("Alfa/r.wav")
+            j.auto_summary(self.REL)
         self.assertEqual(j.enviados, [])
-        j.auto_summary("Alfa/r.wav", cloud=True)
-        self.assertEqual(j.enviados, ["Alfa/r.wav"])
 
-    def test_el_directo_apunta_si_algun_tramo_fue_en_local(self):
-        self.wav("Alfa/r.wav")
-        j = self.jobs()
-        with mock.patch.object(server.threading, "Thread"), mock.patch.object(server, "log"):
-            j.start_live("Alfa/r.wav", "medium")
-            self.assertTrue(j.list[-1].local_part)
-            j.list[-1].status = "done"
-            j.start_live("Alfa/r.wav", "nube")
-            job = j.list[-1]
-            self.assertFalse(job.local_part)
-            self.assertTrue(j._tx_in_cloud("Alfa/r.wav"))
-            j.set_live_preset(job.id, "rapido")  # se pasa a local a mitad de reunion
-        self.assertTrue(job.local_part)
-        self.assertFalse(j._tx_in_cloud("Alfa/r.wav"))
+    def test_continuar_una_a_medias(self):
+        """Continuar desde donde se quedó: en la nube solo si también lo fue lo de antes."""
+        for antes, despues, esperado in (("rapido", "nube", []), ("nube", "nube", [self.REL]),
+                                         ("nube", "rapido", [])):
+            j = self.jobs()
+            self.transcribir(j, antes)
+            j.enviados.clear()
+            self.transcribir(j, despues, start=1.0)
+            self.assertEqual(j.enviados, esperado, (antes, despues))
+
+    def test_retomar_un_directo_tras_reiniciar(self):
+        """La app se reinicia a mitad de grabación: lo que ya había escrito cuenta como lo que fuera."""
+        srt = os.path.join(self.root, self.REL[:-4] + ".srt")
+        for primero, local in (("medium", True), ("nube", False)):
+            if os.path.exists(srt):
+                os.remove(srt)
+            self.directo(self.jobs(), primero)
+            self.write(self.REL[:-4] + ".srt", srt_text([(0.0, 1.0, "hola")]))  # lo escrito antes de cortarse
+            otra = self.jobs()  # la app vuelve a arrancar y retoma el directo en la nube
+            self.assertIs(self.directo(otra, "nube").local_part, local, primero)
+            self.assertIs(otra._tx_in_cloud(self.REL), not local, primero)
+
+    def test_el_origen_se_guarda_en_datos_y_se_olvida(self):
+        path = os.path.join(self.data_dir, "transcritas_en_la_nube.json")
+        reg = server.CloudText(path)
+        reg.set("a.wav", True)
+        reg.set("b.wav", True)
+        reg.set("b.wav", False)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(sorted(json.load(f)), ["a.wav"])
+        self.assertIn("a.wav", server.CloudText(path))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"vieja.wav": time.time() - 8 * 86400, "a.wav": time.time()}, f)
+        reg = server.CloudText(path)
+        reg.set("c.wav", True)
+        self.assertEqual(sorted(reg.data), ["a.wav", "c.wav"])  # la de hace 8 dias ya no hace falta
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("[roto")
+        self.assertEqual(server.CloudText(path).data, {})
 
     def test_ajuste_por_defecto_apagado_y_se_guarda(self):
         self.assertIs(server.DEFAULT_SETTINGS["summary_auto_local"], False)
@@ -147,12 +208,101 @@ class ResumenAutomaticoTests(TempTree):
         self.assertIs(a.settings.get()["summary_auto_local"], False)
         self.assertIn('"local": bool(st.get("summary_auto_local"))', open(server.__file__, encoding="utf-8").read())
 
-    def test_casilla_y_aviso_en_ajustes(self):
+    def test_casilla_y_lo_que_se_envia(self):
         app = static("app.js")
-        for s in ('id="sAutoLocal"', "Resumir también las reuniones transcritas en local (envía el texto a "
+        for s in ('id="sAutoLocal"', "Resumir también las reuniones transcritas en local (las envía a "
                   "${esc(provName())})", "local: $('#sAutoLocal', d).checked", 'id="sAutoLocalAviso"',
-                  "la política de tu empresa y el acuerdo con tu cliente", "transcribir en la nube (reuniones"):
+                  "la política de tu empresa y el acuerdo con tu cliente", "transcribir en la nube (reuniones",
+                  "De cada reunión se envía a <b>${esc(provName())}</b>: el título (o el nombre del archivo), la fecha "
+                  "y la duración, la transcripción (con quién habla, si se sabe), tus notas, el contexto, los "
+                  "participantes confirmados y tus instrucciones para el resumen. El audio no."):
             self.assertIn(s, app, s)
+        self.assertNotIn("(envía el texto a ${esc(provName())})", app)
+        # lo que dice la lista es lo que lleva meta en _run_summary (y nada más)
+        with open(server.__file__, encoding="utf-8") as f:
+            src = f.read()
+        meta = re.search(r"meta = \{(.*?)\}\n", src, re.S).group(1)
+        self.assertEqual(re.findall(r'"(\w+)":', meta),
+                         ["title", "date", "duration", "participants", "notes", "extra", "about"])
+
+
+class AvisoResumenLocalTests(TempTree):
+    """Tras actualizar, quien tenía el resumen automático con la nube y transcribe en local deja de recibir esos
+    resúmenes: la interfaz se lo dice una vez, en Inicio, con un enlace al ajuste."""
+
+    def app(self, saved=None):
+        path = os.path.join(self.data_dir, "settings.json")
+        if saved is not None:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(saved, f)
+        a = server.App.__new__(server.App)
+        a.settings = server.Store(path, server.DEFAULT_SETTINGS)
+        a.config = lambda q: {}
+        with mock.patch.object(server, "log"):
+            a._aviso_resumen_local()
+        return a
+
+    def aviso(self, a):
+        return a.settings.get()["aviso_resumen_local"]
+
+    def test_quien_actualiza_y_le_afecta(self):
+        antes = {"cloud": {"api_key": KEY}, "preset": "rapido", "live_preset": "nube"}
+        self.assertIs(self.aviso(self.app(antes)), True)
+        self.assertIs(self.aviso(self.app()), True)  # ya decidido: el siguiente arranque no lo cambia
+        # tambien si la cola y el directo van en la nube pero ya transcribió en local
+        os.remove(os.path.join(self.data_dir, "settings.json"))
+        nube = {"cloud": {"api_key": KEY}, "preset": "nube", "live_preset": "nube", "speed": {"medium": 1.2}}
+        self.assertIs(self.aviso(self.app(nube)), True)
+
+    def test_a_quien_no_le_afecta_no_se_le_avisa(self):
+        for saved in ({"preset": "rapido"},  # sin API key: el resumen automático no hacía nada
+                      {"cloud": {"api_key": KEY}, "preset": "rapido", "summary_auto": False},
+                      {"cloud": {"api_key": KEY}, "preset": "nube", "live_preset": "nube", "speed": {"nube": 9}},
+                      {"cloud": {"api_key": KEY}, "preset": "rapido", "summary_auto_local": True}):
+            os.path.isfile(os.path.join(self.data_dir, "settings.json")) and os.remove(
+                os.path.join(self.data_dir, "settings.json"))
+            self.assertIs(self.aviso(self.app(saved)), False, saved)
+
+    def test_instalacion_nueva_sin_aviso(self):
+        a = self.app()  # no habia settings.json
+        self.assertIs(self.aviso(a), False)
+        with open(a.settings.path, encoding="utf-8") as f:
+            self.assertIn('"aviso_resumen_local": false', f.read())
+
+    def test_se_cierra_y_no_vuelve(self):
+        a = self.app({"cloud": {"api_key": KEY}, "preset": "rapido"})
+        a.save_settings({"summary": {"local": False}})  # guardar Ajustes sin marcarla no lo cierra
+        self.assertIs(self.aviso(a), True)
+        a.save_settings({"summary": {"aviso_visto": True}})
+        self.assertIs(self.aviso(a), False)
+        a.settings.update(lambda d: d.update(aviso_resumen_local=True))
+        a.save_settings({"summary": {"local": True}})  # activarlo tambien lo cierra
+        self.assertIs(self.aviso(a), False)
+        with open(server.__file__, encoding="utf-8") as f:
+            self.assertIn('"aviso_local": bool(st.get("aviso_resumen_local"))', f.read())
+
+    def test_la_interfaz_lo_ensena_en_inicio(self):
+        app = static("app.js")
+        self.assertIn("${avisoResumenLocalHtml()}\n    <h1>Tus notas de reunión</h1>", app)
+        self.assertIn("api('/api/settings', { summary: { aviso_visto: true } })", app)
+        self.assertIn("else if (a === 'aviso-sum-ok' || a === 'aviso-sum-ajuste')", app)
+
+    @unittest.skipUnless(shutil.which("node"), "node no instalado")
+    def test_texto_del_aviso(self):
+        src = static("app.js")
+        fn = re.search(r"^function avisoResumenLocalHtml\(.*?^}", src, re.S | re.M).group(0)
+        code = ("const I = {info: '(i)'}; const esc = s => String(s); const provName = () => 'Groq';\n"
+                "let S = {config: {summary: {aviso_local: true}}};\n" + fn + """
+const con = avisoResumenLocalHtml(); S.config.summary.aviso_local = false;
+console.log(JSON.stringify([con, avisoResumenLocalHtml()]));
+""")
+        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        con, sin = json.loads(r.stdout)
+        self.assertIn("El resumen automático ya no envía a <b>Groq</b> las reuniones transcritas en local. "
+                      '<a href="#" data-act="aviso-sum-ajuste">Actívalo en Ajustes</a> si quieres.', con)
+        self.assertIn('data-act="aviso-sum-ok">Entendido</button>', con)
+        self.assertEqual(sin, "")
 
 
 # ----------------------------------------------------------------------------- P1-04 / P2-12: participantes

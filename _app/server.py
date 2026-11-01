@@ -391,6 +391,9 @@ DEFAULT_SETTINGS = {
     # ...tambien si se transcribio en local (consentimiento: el resumen manda el texto al proveedor de la nube). Sin
     # el, lo transcrito en local no sale del PC por el resumen automatico (Jobs.auto_summary)
     "summary_auto_local": False,
+    # aviso unico al actualizar a la version que deja de subir lo local (App._aviso_resumen_local): None = sin decidir,
+    # True = pendiente (la interfaz lo ensena en Inicio), False = visto o no aplica
+    "aviso_resumen_local": None,
     "summary_model": "openai/gpt-oss-120b",
     "summary_lang": "es",     # es / en / same (el de la reunion)
     "summary_extra": "",     # instrucciones extra para el resumen
@@ -796,6 +799,48 @@ class Complete:
 
 
 COMPLETE = None  # se crea al arrancar (necesita DATA_DIR)
+
+
+class CloudText:
+    """Reuniones cuyo texto actual se transcribio entero en la nube: en la cola con la nube, en directo con todos sus
+    trozos en la nube o con el repaso final. El resumen automatico solo sube a la nube estas sin el permiso de Ajustes
+    (summary_auto_local). Lo apunta cada transcripcion al escribir el texto (Jobs._cloud_text) y vive en DATA_DIR, asi
+    que no depende del trabajo que acaba de terminar ni del arranque: un repaso final retomado tras reiniciar que falla
+    o se cancela deja el texto del directo, y cuenta lo que fue el directo. Lo que no esta cuenta como local. Se olvida
+    a los 7 dias (el resumen automatico es solo para las reuniones de los ultimos 3)."""
+
+    KEEP_S = 7 * 86400
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.data = {str(k): float(v) for k, v in json.load(f).items()}
+        except (OSError, ValueError, TypeError, AttributeError):
+            self.data = {}
+
+    def __contains__(self, rel):
+        return rel in self.data
+
+    def set(self, rel, cloud):
+        now = time.time()
+        with self.lock:
+            data = {k: t for k, t in self.data.items() if k != rel and now - t < self.KEEP_S}
+            if cloud:
+                data[rel] = now
+            if data == self.data:
+                return
+            self.data = data
+            try:
+                with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False)
+                os.replace(self.path + ".tmp", self.path)
+            except OSError as e:  # vale en memoria; sin el fichero, al reiniciar todo cuenta como local
+                log(f"   no se pudo guardar {os.path.basename(self.path)} ({e.__class__.__name__})")
+                try:
+                    os.remove(self.path)
+                except OSError:
+                    pass
 
 
 def is_partial(a):
@@ -1392,7 +1437,6 @@ class Jobs:
         self.cloud = engines.CloudEngine(os.path.join(DATA_DIR, "tmp"), log=log)
         if self.cloud.purge_tmp():  # trozos de audio de una sesion que se corto (apagado, actualizacion, cuelgue)
             log("   borrados los trozos de audio temporales que dejó la sesión anterior")
-        self._tx_cloud = {}  # reunion -> si su ultima transcripcion fue en la nube (lo mira auto_summary)
         self.summarizer = engines.Summarizer(keys=self.cloud.keys)  # en la nube (Groq); mismas claves y cupo
         self.queues["resumen"] = queue.Queue()
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
@@ -1490,8 +1534,12 @@ class Jobs:
             raise ApiError("Ese audio ya se está transcribiendo.")
         job = Job(rel, os.path.basename(rel), preset, meeting_setup(abs_path, st)["language"] or None)
         job.engine, job.live, job.recording = "live", True, True
-        # algun trozo en local: el resumen automatico no lo sube a la nube sin permiso (Jobs.auto_summary)
-        job.local_part = engines.PRESETS_BY_ID[preset]["engine"] != "cloud"
+        # algun trozo en local (o, al retomar tras un reinicio, lo de antes sin constar que fuera en la nube): el
+        # resumen automatico no lo sube a la nube sin permiso (CloudText, Jobs.auto_summary)
+        retoma = os.path.isfile(os.path.splitext(abs_path)[0] + ".srt")
+        job.local_part = (engines.PRESETS_BY_ID[preset]["engine"] != "cloud"
+                          or (retoma and rel not in self._cloud_text()))
+        self._cloud_text().set(rel, not job.local_part)
         job.status, job.started, job.stage = "running", time.time(), "Empezando en directo…"
         COMPLETE.set(rel, False)  # hasta que termine bien, no se da por completa
         with self.lock:
@@ -1516,7 +1564,6 @@ class Jobs:
             return False
         j = Job(job.path, job.name, "nube", job.language)
         j.final_pass, j.stage = True, "En cola: repaso final en la nube"
-        j.local_part = getattr(job, "local_part", False)  # si el repaso no acaba, el texto que queda es el del directo
         with self.lock:
             self.list.append(j)
         self.queues[j.engine].put(j)
@@ -1553,6 +1600,7 @@ class Jobs:
             job.preset = preset
             if engines.PRESETS_BY_ID[preset]["engine"] != "cloud":
                 job.local_part = True
+                self._cloud_text().set(job.path, False)
             self.settings.update(lambda d: d.update(live_preset=preset))
         if restart:
             job.restart = True
@@ -1657,25 +1705,24 @@ class Jobs:
         log(f"✨ {job.name}  resumen{' (automático)' if auto else ''} en cola")
         return job.id
 
-    def _tx_in_cloud(self, rel):
-        """¿La ultima transcripcion de esa reunion (la que acaba de terminar) fue en la nube? Un directo solo cuenta si
-        todos sus trozos fueron a la nube (local_part), y un repaso final que no acabo, lo que diga su directo; sin
-        trabajo conocido, no."""
-        with self.lock:
-            j = next((j for j in reversed(self.list) if j.path == rel and j.kind == "transcribe"), None)
-        if j is None:
-            return False
-        if j.live or (j.final_pass and j.status in ("error", "cancelled")):
-            nube = engines.PRESETS_BY_ID.get(j.preset, {}).get("engine") == "cloud"
-            return nube and not getattr(j, "local_part", False)
-        return j.engine == "cloud"
+    def _cloud_text(self):
+        """CloudText del DATA_DIR vigente."""
+        path = os.path.join(DATA_DIR, "transcritas_en_la_nube.json")
+        reg = getattr(self, "_cloud_reg", None)
+        if reg is None or reg.path != path:
+            reg = self._cloud_reg = CloudText(path)
+        return reg
 
-    def auto_summary(self, rel, cloud=None):
+    def _tx_in_cloud(self, rel):
+        """¿El texto que tiene ahora esa reunion se transcribio entero en la nube? Lo dice CloudText, que apunta cada
+        transcripcion al escribir; sin dato, no."""
+        return rel in self._cloud_text()
+
+    def auto_summary(self, rel):
         """Al terminar de transcribir: resumen automatico si es una reunion reciente (las antiguas se
         resumen a mano, para no gastar de golpe el cupo diario de Groq). El resumen manda el texto, las notas y el
-        contexto al proveedor de la nube: si la reunion se transcribio en local (cloud False; None = la ultima
-        transcripcion conocida), solo con el consentimiento de Ajustes (summary_auto_local). A mano, siempre."""
-        known = getattr(self, "_tx_cloud", {}).pop(rel, None)  # lo apunta _after_transcribe (y se consume aqui)
+        contexto al proveedor de la nube: si el texto no se transcribio entero en la nube (_tx_in_cloud), solo con el
+        consentimiento de Ajustes (summary_auto_local). A mano, siempre."""
         st = self.settings.get()
         if not st.get("summary_auto", True) or not self.summary_ready():
             return
@@ -1689,9 +1736,7 @@ class Jobs:
         when = when or (a or {}).get("mtime") or 0
         if time.time() - when > 3 * 86400:
             return
-        if cloud is None:
-            cloud = known if known is not None else self._tx_in_cloud(rel)
-        if not cloud and not st.get("summary_auto_local"):
+        if not self._tx_in_cloud(rel) and not st.get("summary_auto_local"):
             log(f"   {os.path.basename(rel)}: transcrita en local, sin resumen automático (no sale del PC; se puede "
                 "resumir a mano)")
             return
@@ -1757,16 +1802,9 @@ class Jobs:
     def voices_on(self):
         return voices.enabled(self.settings.get())
 
-    def _after_transcribe(self, rel, cloud=None):
+    def _after_transcribe(self, rel):
         """Transcripcion terminada: primero las voces (si estan activas) y el resumen al acabar estas, para que
-        lleve los nombres; si no, el resumen directamente. Antes, el documento en los destinos de salida.
-        cloud: si se transcribio en la nube (None = lo dice el trabajo que acaba de terminar); el resumen automatico
-        lo necesita, tambien cuando llega despues de las voces."""
-        if cloud is None:
-            cloud = self._tx_in_cloud(rel)
-        if getattr(self, "_tx_cloud", None) is None:
-            self._tx_cloud = {}
-        self._tx_cloud[rel] = bool(cloud)
+        lleve los nombres; si no, el resumen directamente. Antes, el documento en los destinos de salida."""
         self.write_outputs(rel)
         if not self.auto_voices(rel):
             self.auto_summary(rel)
@@ -2152,6 +2190,8 @@ class Jobs:
                     raise engines.EngineError("No se ha detectado voz en el audio.")
                 write_outputs(abs_path, segs)
                 shutil.rmtree(backup_dir(job.path), ignore_errors=True)  # el "original" es ahora este
+            # en la nube solo si lo fue este trabajo y, al continuar una a medias, tambien lo de antes
+            self._cloud_text().set(job.path, job.engine == "cloud" and (not start or job.path in self._cloud_text()))
             COMPLETE.set(job.path)  # aunque el texto acabe antes que el audio, esta completa
             self._after_transcribe(job.path)
             job.duration, job.detected = dur or job.duration, lang
@@ -2289,6 +2329,7 @@ class App:
         global COMPLETE
         COMPLETE = Complete(os.path.join(DATA_DIR, "completas.json"))
         self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
+        self._aviso_resumen_local()
         self._load_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
         self.transcripts = Transcripts()
@@ -2640,6 +2681,27 @@ class App:
         texto = pseudonymize(scrub("\n".join(info), keys), paths, names)
         return {"texto": texto}
 
+    def _aviso_resumen_local(self):
+        """Al arrancar: la primera vez sobre unos ajustes de una version anterior. Antes, el resumen automatico subia a
+        la nube tambien lo transcrito en local; si a quien actualiza le pasaba (resumen automatico activado, nube con
+        API key y transcripcion en local: el modelo de la cola o del directo, o reuniones ya transcritas asi), la
+        interfaz se lo avisa una vez (config -> summary.aviso_local). En una instalacion nueva no hay que avisar."""
+        st = self.settings.get()
+        if st.get("aviso_resumen_local") is not None:
+            return
+        c = st.get("cloud") or {}
+
+        def local(p):
+            return (engines.PRESETS_BY_ID.get(p) or {}).get("engine") == "local"
+        afecta = (os.path.isfile(self.settings.path) and st.get("summary_auto", True)
+                  and not st.get("summary_auto_local") and bool(engines.chat_url(c))
+                  and bool((c.get("api_key") or "").strip())
+                  and (local(st.get("preset")) or local(st.get("live_preset") or "medium")
+                       or any(local(p) for p in st.get("speed") or {})))
+        self.settings.update(lambda d: d.update(aviso_resumen_local=bool(afecta)))
+        if afecta:
+            log("   aviso pendiente: el resumen automático ya no sube a la nube lo transcrito en local")
+
     # --- GET
     def config(self, q):
         st = self.settings.get()
@@ -2668,6 +2730,7 @@ class App:
                 "meeting_detect": bool(st.get("meeting_detect", True)),
                 "outlook_on": bool(st.get("outlook_on")), "rec_aviso": bool(st.get("rec_aviso", True)),
                 "summary": {"auto": bool(st.get("summary_auto", True)), "local": bool(st.get("summary_auto_local")),
+                            "aviso_local": bool(st.get("aviso_resumen_local")),  # una vez, tras actualizar
                             "model": st.get("summary_model"),
                             "lang": st.get("summary_lang") or "es", "extra": st.get("summary_extra") or "",
                             "models": engines.SUMMARY_MODELS, "ready": self.jobs.summary_ready()},
@@ -3346,6 +3409,8 @@ class App:
                 d["summary_auto"] = bool(s["auto"])
             if "local" in s:  # consentimiento: resumir solo tambien lo transcrito en local (manda el texto a la nube)
                 d["summary_auto_local"] = bool(s["local"])
+            if s.get("aviso_visto") or s.get("local"):  # el aviso de Inicio, cerrado (o ya no hace falta)
+                d["aviso_resumen_local"] = False
             if s.get("model"):
                 d["summary_model"] = s["model"].strip()
             if s.get("lang") in engines.SUMMARY_LANGS:
