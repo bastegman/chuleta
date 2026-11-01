@@ -584,24 +584,49 @@ def alt_for(registro, folder, stem, rel, fmt):
     return alt
 
 
-def _own_doc(entries, folder, stem, fmt, first):
-    """De los documentos que el registro da por de esta reunion, el que sigue en esta carpeta con su nombre
-    (<stem>.<fmt> o <stem> (<6 hex>).<fmt>); con varios, primero los de `first` (el normal y el propio de ahora)."""
-    name = re.compile(re.escape(stem) + r"( \([0-9a-f]{6}\))?\." + re.escape(fmt), re.I if os.name == "nt" else 0)
-    here = os.path.normcase(os.path.normpath(folder))
+def _doc_name(stem, fmt):
+    """Los nombres que puede tener el documento de una reunion en una carpeta: <stem>.<fmt> o <stem> (<6 hex>).<fmt>."""
+    return re.compile(re.escape(stem) + r"( \([0-9a-f]{6}\))?\." + re.escape(fmt), re.I if os.name == "nt" else 0)
+
+
+def _first_key(first):
+    """Orden de los candidatos: primero los de `first` (el normal y el propio de ahora), luego por nombre."""
     first = [os.path.normcase(p) for p in first]
+    return lambda p: (first.index(os.path.normcase(p)) if os.path.normcase(p) in first else len(first), p)
+
+
+def _own_doc(entries, folder, stem, fmt, first):
+    """De los documentos que el registro da por de esta reunion, el que sigue en esta carpeta con su nombre; con
+    varios, primero los de `first`."""
+    name, here = _doc_name(stem, fmt), os.path.normcase(os.path.normpath(folder))
     hits = [p for p, _ in entries if os.path.normcase(os.path.normpath(os.path.dirname(p))) == here
             and name.fullmatch(os.path.basename(p)) and os.path.isfile(p)]
-    hits.sort(key=lambda p: (first.index(os.path.normcase(p)) if os.path.normcase(p) in first else len(first), p))
-    return hits[0] if hits else None
+    return min(hits, key=_first_key(first), default=None)
+
+
+def _doc_by_origin(registro, folder, stem, rel, fmt, first):
+    """Sin el registro (otro PC, reinstalacion): el documento de esta carpeta, con uno de sus nombres, cuyo origen (lo
+    que dice el propio documento) es esta reunion. Tambien el de un nombre propio que salio de su ruta de antes (la
+    reunion se movio o se renombro su carpeta), que alt_for ya no prueba. Nunca uno que el registro da por de otra
+    reunion: es de la que estuvo antes en esta ruta y se movio con el."""
+    name = _doc_name(stem, fmt)
+    try:
+        names = [n for n in os.listdir(folder) if name.fullmatch(n)]
+    except OSError:
+        return None
+    for p in sorted((os.path.join(folder, n) for n in names), key=_first_key(first)):
+        if os.path.isfile(p) and registro.rel_of(p) in (None, rel) and is_ours(p, fmt) and origin_of(p, fmt) == rel:
+            return p
+    return None
 
 
 def dest_path(destino, doc, registro=None):
     """Carpeta final (con la subcarpeta del proyecto si el destino lo pide y la reunion tiene proyecto) y fichero.
     Con el registro: el documento que ya es de esta reunion si sigue ahi, tambien el que tenia antes de moverla o de
-    renombrar su carpeta (Registro.moved lo sigue, aunque alt_name, que sale de la ruta, ya no sea el mismo); si no,
-    <stem>.<fmt> salvo que ese nombre sea de otra reunion (registro u origen que dice el propio documento) o de un
-    fichero ajeno: entonces alt_for."""
+    renombrar su carpeta (Registro.moved lo sigue, aunque alt_name, que sale de la ruta, ya no sea el mismo). Si el
+    registro no lo sabe (otro PC, reinstalacion), el de esta carpeta cuyo origen es esta reunion (_doc_by_origin). Si
+    no, <stem>.<fmt>, salvo que ese nombre sea de otra reunion (registro u origen que dice el propio documento) o de
+    un fichero ajeno: entonces alt_for."""
     folder = destino["path"]
     project = (doc.get("props") or {}).get("proyecto")
     if destino.get("by_project") and project:
@@ -613,7 +638,9 @@ def dest_path(destino, doc, registro=None):
     plain = os.path.join(folder, f"{stem}.{fmt}")
     if registro is None or not rel:
         return folder, plain
-    own = _own_doc(registro.entries(rel), folder, stem, fmt, (plain, alt_name(folder, stem, rel, fmt)))
+    first = (plain, alt_name(folder, stem, rel, fmt))
+    own = _own_doc(registro.entries(rel), folder, stem, fmt, first) or _doc_by_origin(registro, folder, stem, rel,
+                                                                                      fmt, first)
     if own:
         return folder, own
     alt = alt_for(registro, folder, stem, rel, fmt)

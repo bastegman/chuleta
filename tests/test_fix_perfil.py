@@ -322,7 +322,8 @@ class NombresUnicosTests(TempTree):
 
     def test_mover_una_reunion_que_ya_tiene_nombre_propio(self):
         """La reunión que escribe «Kickoff (<hash>)» porque «Kickoff» es de otra sigue escribiendo en ese mismo
-        documento al moverla o al renombrar su carpeta, aunque el hash, que sale de la ruta, cambie."""
+        documento al moverla o al renombrar su carpeta, aunque el hash, que sale de la ruta, cambie. También sin el
+        registro (otro PC, reinstalación): antes escribía otro «Kickoff (<hash nuevo>)» al lado."""
         for fmt in ("md", "docx"):
             for folder in (False, True):
                 d = os.path.join(self.tmp, f"vault-{fmt}-{folder}")
@@ -353,11 +354,19 @@ class NombresUnicosTests(TempTree):
                 self.assertRegex(os.path.basename(po), r"^Kickoff \([0-9a-f]{6}\)\." + fmt + "$")
                 self.assertIn("BETA 2", self.body(pb, fmt))
                 self.assertIn("NUEVA", self.body(po, fmt))
-                # y cada una sigue en el suyo, también sin registro (otro PC)
+                # y cada una sigue en el suyo, también sin registro (otro PC, reinstalación): la movida también, por
+                # el origen que dice su documento, aunque su nombre propio salga de la ruta de antes
                 self.assertEqual(salidas.write_all(new, dest, reg), [(pb, "igual")])
                 self.assertEqual(salidas.write_all(otra, dest, reg), [(po, "igual")])
                 otro_pc = salidas.Registro(os.path.join(self.data_dir, f"otro-{fmt}-{folder}.json"))
+                self.assertEqual(salidas.write_all(new, dest, otro_pc), [(pb, "igual")], (fmt, folder))
                 self.assertEqual(salidas.write_all(otra, dest, otro_pc), [(po, "igual")])
+                self.assertEqual(sorted(os.listdir(d)), sorted(["Kickoff." + fmt] + [os.path.basename(p)
+                                                                                     for p in (pb, po)]))
+                self.assertEqual(otro_pc.rel_of(pb), new["source"])
+                reinstalada = salidas.Registro(os.path.join(self.data_dir, f"nuevo-{fmt}-{folder}.json"))
+                self.assertEqual(salidas.write_all(dict(new, notes="BETA 3"), dest, reinstalada), [(pb, "cambiado")])
+                self.assertEqual(len(os.listdir(d)), 3)  # ni un documento nuevo al lado
 
     def test_sin_nombre_libre_nunca_encima_de_otra_reunion(self):
         """Si todos los nombres propios que se prueban (alt_for) ya son de otras reuniones, el documento se queda sin
@@ -778,26 +787,62 @@ class TemaPorIdTests(TempTree):
         audio = self.wav("Gamma/Reuniones/r.wav")
         self.write("Gamma/Reuniones/r.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
         self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "gamma, uno")
-        server.temas().set("Gamma/Reuniones/r.wav", "Beta/Vocabulario/Kick.txt")  # el id de antes, que ya no existe
+        # el id que guardó este PC antes de renombrarla está con la ruta de antes de la reunión, que ya no es la suya
+        server.temas().set("Beta/Reuniones/r.wav", "Beta/Vocabulario/Kick.txt")
         self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "gamma, uno")
         fuera = self.wav("Reuniones/r.wav")  # fuera de su carpeta no hay de dónde sacarla
         self.write("Reuniones/r.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
         self.assertEqual(server.vocab_for(fuera, {"prompt": "general"}), "general")
-        # una carpeta vinculada con listas que se renombra en la app: sus listas toman el nombre nuevo
+        # una carpeta vinculada con listas que en este PC tiene otro nombre: sus listas lo toman
         ext = os.path.join(self.tmp, "Ext")
         os.makedirs(os.path.join(ext, "Vocabulario"))
-        with open(os.path.join(ext, "Vocabulario", "Kick.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(ext, "Vocabulario", "Comité.txt"), "w", encoding="utf-8") as f:
             f.write("externo\n")
-        server.LINKS[server.link_id(ext)] = {"name": "Cliente", "path": ext}  # antes «Externo»
+        server.LINKS[server.link_id(ext)] = {"name": "Cliente", "path": ext}  # en el otro PC, «Externo»
         dentro = os.path.join(ext, "r.wav")
         with open(dentro, "wb") as f:
             f.write(b"RIFF")
         with open(os.path.join(ext, "r.md"), "w", encoding="utf-8") as f:
-            f.write("---\nproyecto: Externo\nworkstream: Kick\n---\n")
+            f.write("---\nproyecto: Externo\nworkstream: Comité\n---\n")
         self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "externo")
         # pero si el proyecto existe (con otras listas), nunca la de otro: la regla de siempre
         self.write("Beta/Vocabulario/Otro.txt", "beta\n")
         self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")
+
+    def test_proyecto_renombrado_nunca_la_lista_de_otro_cliente(self):
+        """Regresión del recurso de arriba: con el proyecto de la cabecera renombrado fuera de la app, una reunión
+        guardada en la carpeta de otro proyecto que tiene un tema con ese nombre usaba la lista de ese otro cliente
+        (5c55e54 daba el vocabulario general). La carpeta de la reunión solo vale si su lista es la única de ese tema
+        fuera de la raíz, si es la del proyecto más cercano a la reunión y si la reunión no tiene guardado el id de
+        otra lista."""
+        self.write("Beta/Vocabulario/Kick.txt", "beta\n")
+        self.write("Delta/Vocabulario/Kick.txt", "delta (otro cliente)\n")
+        audio = self.wav("Delta/Actas/r.wav")
+        self.write("Delta/Actas/r.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "beta")
+        os.rename(os.path.join(self.root, "Beta"), os.path.join(self.root, "Gamma"))  # desde el Explorador
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")
+        # con dos listas de ese tema, la de dentro de la carpeta renombrada tampoco: está igual que la de Delta si la
+        # renombrada hubiera sido Delta
+        dentro = self.wav("Gamma/r2.wav")
+        self.write("Gamma/r2.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "general")
+        guardada = os.path.join(self.tmp, "vocabulario de Delta")
+        shutil.move(os.path.join(self.root, "Delta", "Vocabulario"), guardada)
+        self.assertEqual(server.vocab_for(dentro, {"prompt": "general"}), "beta")  # ya es la única
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")  # y Delta no es su carpeta
+        # con Beta borrado, sin id no se distingue de haber renombrado Beta a Delta (como en 5c55e54); con el id que
+        # guardó este PC al grabarla, sí: ya estaba en Delta cuando su lista estaba en Beta
+        shutil.move(guardada, os.path.join(self.root, "Delta", "Vocabulario"))
+        shutil.move(os.path.join(self.root, "Gamma"), os.path.join(self.tmp, "Gamma borrada"))
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "delta (otro cliente)")
+        server.temas().set("Delta/Actas/r.wav", "Beta/Vocabulario/Kick.txt")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "general")
+        # un proyecto dentro de la carpeta de otro: el que cuenta es el más cercano a la reunión
+        self.write("Delta/Sigma/Vocabulario/Otro.txt", "sigma\n")
+        sub = self.wav("Delta/Sigma/Actas/r3.wav")
+        self.write("Delta/Sigma/Actas/r3.md", "---\nproyecto: Beta\nworkstream: Kick\n---\n")
+        self.assertEqual(server.vocab_for(sub, {"prompt": "general"}), "general")
 
     def test_la_copia_es_la_publicada(self):
         """PARSE_NOTES_PUBLICADO y NOTE_KEYS_PUBLICADAS son los de esas versiones (en la CI, que clona sin historia,
@@ -946,6 +991,36 @@ class PerfilSigueAlRenombrarTests(TempTree):
         for r, txt in (("r3", "beta, uno"), ("r4", "ext"), ("r1", "ext")):  # r1: sin id, el Beta que queda
             self.assertEqual(server.vocab_for(os.path.join(self.root, "Reuniones", r + ".wav"), {"prompt": "general"}),
                              txt, r)
+
+    def test_renombrar_con_el_nombre_de_otro_proyecto(self):
+        """Renombrar en la app un proyecto con el nombre que ya tiene otro (una vinculada «Gamma» con el mismo tema).
+        Las reuniones sin id de los dos se quedan con su lista: el id va a temas(). Antes, con dos «Gamma», la de Beta
+        de fuera de las dos carpetas y la de la vinculada de fuera pasaban al vocabulario general, y la de la vinculada
+        guardada en la carpeta de Beta tomaba la lista de Beta."""
+        self.write("Beta/Vocabulario/Kick.txt", "beta\n")
+        ext = os.path.join(self.tmp, "Ext")
+        os.makedirs(os.path.join(ext, "Vocabulario"))
+        with open(os.path.join(ext, "Vocabulario", "Kick.txt"), "w", encoding="utf-8") as f:
+            f.write("gamma vinculada\n")
+        lid = server.link_id(ext)
+        server.LINKS[lid] = {"name": "Gamma", "path": ext}
+        heads = {"Reuniones/r1": "Beta", "Beta/r2": "Beta", "Reuniones/r3": "Gamma", "Beta/r4": "Gamma"}
+        for base, p in heads.items():
+            self.wav(base + ".wav")
+            self.write(base + ".md", f"---\nproyecto: {p}\nworkstream: Kick\n---\n")
+        antes = {"Reuniones/r1": "beta", "Gamma/r2": "beta", "Reuniones/r3": "gamma vinculada",
+                 "Gamma/r4": "gamma vinculada"}
+        for base, txt in antes.items():
+            audio = os.path.join(self.root, base.replace("Gamma/", "Beta/") + ".wav")
+            self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), txt, base)
+        with mock.patch.object(server, "log"):
+            self.assertEqual(self.app().rename_folder({"path": "Beta", "name": "Gamma"}), {"path": "Gamma"})
+        self.assertEqual(self.props("Reuniones/r1.md"), {"proyecto": "Gamma", "workstream": "Kick"})
+        self.assertEqual(server.temas().get("Reuniones/r1.wav"), "Gamma/Vocabulario/Kick.txt")
+        self.assertEqual(server.temas().get("Reuniones/r3.wav"), f":{lid}/Vocabulario/Kick.txt")
+        self.assertEqual(server.temas().get("Gamma/r4.wav"), f":{lid}/Vocabulario/Kick.txt")
+        for base, txt in antes.items():
+            self.assertEqual(server.vocab_for(os.path.join(self.root, base + ".wav"), {"prompt": "general"}), txt, base)
 
     def test_renombrar_una_vinculada_lleva_sus_reuniones(self):
         ext = os.path.join(self.tmp, "Ext")

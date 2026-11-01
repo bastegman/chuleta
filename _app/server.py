@@ -974,15 +974,35 @@ def _of_project(v, project):
         == os.path.normcase(os.path.normpath(ROOT)))
 
 
+def _norm_dir(p):
+    return os.path.normcase(os.path.normpath(p))
+
+
+def _closest(lists, near):
+    """De varias listas (proyectos que se llaman igual), la del proyecto que contiene la reunion `near` (el mas
+    cercano); None si no hay una sola."""
+    if not near:
+        return None
+    mine = sorted((v for v in lists if _inside(os.path.dirname(near), _project_dir(v))),
+                  key=lambda v: -len(_norm_dir(_project_dir(v))))
+    if mine and (len(mine) == 1 or len(_norm_dir(_project_dir(mine[0]))) > len(_norm_dir(_project_dir(mine[1])))):
+        return mine[0]
+    return None
+
+
 def find_vocab(project, name, id_=None, near=None):
     """La lista de un tema. Por id (la ruta interna de la lista: estable aunque otro proyecto se llame igual), si se
     llama como dicen `project` y `name` (los nombres de la cabecera de la reunion; sin ellos, el id basta); si no, por
     nombres: proyecto + tema (el proyecto de las listas de la raiz tambien con sus nombres antiguos). Si dos
     proyectos se llaman igual, `near` (la ruta del audio de la reunion) elige la del proyecto que la contiene; si sigue
     sin estar claro, ninguna. Con proyecto nunca se toma la lista de otro proyecto (antes, si solo habia un tema con
-    ese nombre, se usaba aunque fuera de otro cliente). Si ningun proyecto se llama ya asi (se renombro su carpeta o la
-    vinculada, tambien desde fuera de la app), vale la de ese tema en la carpeta de proyecto que contiene la reunion:
-    es su proyecto con el nombre nuevo."""
+    ese nombre, se usaba aunque fuera de otro cliente).
+    Si ningun proyecto se llama ya asi (se renombro su carpeta fuera de la app, o la vinculada tiene otro nombre en
+    este PC), vale la lista de ese tema si es la unica fuera de la raiz y la reunion esta en la carpeta de su proyecto
+    (la mas cercana de las que tienen listas): es su proyecto con el nombre nuevo. Con dos o mas no se sabe cual es,
+    porque la reunion puede estar guardada en la carpeta de otro cliente. Con un id guardado que no es el de esa lista
+    (si no, ya se habria devuelto), tampoco: la reunion ya tenia esa ruta cuando se eligio su lista, asi que no estaba
+    dentro de la carpeta renombrada (la ruta de las de dentro ha cambiado con ella y no tienen id)."""
     vs = list_vocab()
     if id_:
         hit = next((v for v in vs if v["id"] == id_), None)
@@ -995,21 +1015,18 @@ def find_vocab(project, name, id_=None, near=None):
     same = [v for v in vs if fold(v["name"]) == fold(name)]
     if not project:
         return same[0] if len(same) == 1 else None
-    root = os.path.normcase(os.path.normpath(ROOT))
     named = [v for v in same if _of_project(v, project)]
     if len(named) == 1:
         return named[0]
-    if not named and not _is_app_name(project) and not any(_of_project(v, project) for v in vs):
-        # ese proyecto ya no existe con ese nombre: la de la carpeta que contiene la reunion (la raiz no cuenta, que
-        # las contiene todas y sus listas solo valen por su nombre o el de antes de la app)
-        named = [v for v in same if os.path.normcase(os.path.normpath(_project_dir(v))) != root]
-    if near and named:  # varios proyectos con ese nombre (o renombrado): el que contiene la reunion (el mas cercano)
-        mine = sorted((v for v in named if _inside(os.path.dirname(near), _project_dir(v))),
-                      key=lambda v: -len(os.path.normpath(_project_dir(v))))
-        if mine and (len(mine) == 1 or len(os.path.normpath(_project_dir(mine[0])))
-                     > len(os.path.normpath(_project_dir(mine[1])))):
-            return mine[0]
-    return None
+    if named:  # varios proyectos con ese nombre: el que contiene la reunion
+        return _closest(named, near)
+    if id_ or not near or _is_app_name(project) or any(_of_project(v, project) for v in vs):
+        return None
+    root = _norm_dir(ROOT)  # la raiz no cuenta: las contiene todas y sus listas solo valen por su nombre
+    cands = [v for v in same if _norm_dir(_project_dir(v)) != root]
+    homes = {_norm_dir(_project_dir(v)) for v in vs} - {root}
+    home = max((d for d in homes if _inside(os.path.dirname(near), d)), key=len, default=None)
+    return cands[0] if len(cands) == 1 and home == _norm_dir(_project_dir(cands[0])) else None
 
 
 def theme_vocab(props, abs_audio, changed=()):
@@ -3465,12 +3482,27 @@ class App:
     def _themes_moved(self, new, project=None):
         """Al renombrar la carpeta de un proyecto (o la vinculada, que da su nombre a las listas), las reuniones de ese
         proyecto lo siguen en la cabecera de su .md, esten donde esten (theme_moved): si no, al volver a transcribirlas
-        se quedaban con el vocabulario general, porque nunca se toma la lista de otro proyecto. El id de cada una ya lo
-        ha seguido temas(). `new`: la ruta interna de la carpeta, ya renombrada. Devuelve cuantas han cambiado."""
+        se quedaban con el vocabulario general, porque nunca se toma la lista de otro proyecto. El id de las que lo
+        tenian ya lo ha seguido temas(); las que no, se quedan con el de la lista de su tema en la carpeta renombrada.
+        Si el nombre nuevo ya es el de otro proyecto (una vinculada que se llama igual), las reuniones de ese otro sin
+        id se quedan con el de la suya. Si no, con dos proyectos que se llaman igual, los nombres de la cabecera ya no
+        dicen cual es: las de fuera de las dos carpetas pasaban al vocabulario general y las del otro que estan dentro
+        de la renombrada tomaban su lista. `new`: la ruta interna de la carpeta, ya renombrada. Devuelve cuantas
+        cabeceras han cambiado."""
         if not project:
             return 0  # ningun proyecto cambia de nombre (el de una lista es el de la carpeta que tiene Vocabulario)
         lists = {v["id"]: v for v in list_vocab()}
         ambiguous = any(fold(v["project"]) == fold(project[0]) for v in lists.values())
+        own, others = {}, {}  # tema -> ids: las listas del proyecto renombrado y las de otros que ya se llamaban asi
+
+        def renamed(vid):
+            return moved_rel(vid, new, new, folder=True) is not None
+
+        for v in lists.values():
+            if v["folder"] == new:
+                own.setdefault(fold(v["name"]), []).append(v["id"])
+            elif fold(v["project"]) == fold(project[1]) != fold(project[0]) and not renamed(v["id"]):
+                others.setdefault(fold(v["name"]), []).append(v["id"])
         store = temas()
         self.library.at = 0
         self.library.refresh()
@@ -3478,14 +3510,21 @@ class App:
         for a in list(self.library.flat):
             if not a.get("_md") or not (a.get("props") or {}).get("workstream"):
                 continue
-            inside = moved_rel(a["path"], new, new, folder=True) is not None
             with self.notes_lock:
                 try:
                     props, body = parse_notes(read_text(a["_md"]))
-                    ch = theme_moved(props, store.get(a["path"]), new, lists, project, ambiguous, inside)
+                    vid = store.get(a["path"])
+                    ch = theme_moved(props, vid, new, lists, project, ambiguous, renamed(a["path"]))
+                    ids = []
                     if ch:
                         save_text(a["_md"], dump_notes(dict(props, **ch), body), "utf-8")
                         n += 1
+                        ids = own.get(fold(props["workstream"])) or []
+                    elif others and fold(props.get("proyecto") or "") == fold(project[1]) and (
+                            vid not in lists or renamed(vid)):  # su id, si lo tiene, era de una lista que se llamaba
+                        ids = others.get(fold(props["workstream"])) or []  # distinto de su cabecera
+                    if len(ids) == 1:
+                        store.set(a["path"], ids[0])
                 except OSError:
                     log_exc()
         if n:
