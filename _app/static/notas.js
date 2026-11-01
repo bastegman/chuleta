@@ -235,6 +235,7 @@ function propsHtml(a) {
     <div class="prow"><span class="pk">${I.state}Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
     <div class="prow"><span class="pk">${I.tag}Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
     <div class="prow"><span class="pk">${I.users}Participantes</span><span class="pv"><input class="pinput" data-prop="participantes" value="${esc(p.participantes || '')}" placeholder="Vacío" autocomplete="off"></span></div>
+    ${window.reunionParticipantesHtml?.(a) || ''}
     <div class="prow"><span class="pk">${I.chat}Transcripción</span><span class="pv">${statusPill(a)}${a.cloud ? ` <span class="pill cloud">${I.cloud}Solo en OneDrive</span>` : ''}</span></div>
   </div><datalist id="tagList"></datalist>`;
 }
@@ -278,7 +279,7 @@ main.addEventListener('focusout', e => {
     if (t !== titleOf(a)) saveProps(a, { titulo: t });
   } else if (e.target.dataset && e.target.dataset.prop === 'participantes') {
     const v = e.target.value.trim();
-    if (v !== ((a.props || {}).participantes || '')) saveProps(a, { participantes: v });
+    if (v !== ((a.props || {}).participantes || '')) saveProps(a, { participantes: v }).then(() => window.reunionParticipantesGuardados?.(a));
   } else if (e.target.dataset && e.target.dataset.prop === 'contexto') {  // perfil.js: Whisper y el resumen lo usan
     const v = e.target.value.trim();
     if (v !== ((a.props || {}).contexto || '')) saveProps(a, { contexto: v }).then(() => { if (typeof perfilSavedText === 'function') toast(perfilSavedText('contexto', !!liveJob(a), !!(a.txt || a.srt))); });
@@ -360,7 +361,7 @@ main.addEventListener('click', async e => {
   if (act.dataset.act === 'summarize' && a) {
     try {
       if (!localStorage.getItem('sumOk') && !await ask(`Resumir con IA en ${provName()}`,
-        `El texto de la transcripción y tus notas se envían a <b>${esc(provName())}</b> para hacer el resumen (el audio no). Si es una reunión de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.`, 'Entendido, resumir')) return;
+        `El texto de la transcripción, tus notas, el contexto y los participantes confirmados se envían a <b>${esc(provName())}</b> para hacer el resumen (el audio no; los participantes que sugirió Outlook o Teams sin confirmar, tampoco). Si es una reunión de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.`, 'Entendido, resumir')) return;
       localStorage.setItem('sumOk', '1');
       await api('/api/summarize', { path: a.path });
       toast(`✨ Resumiendo en ${esc(provName())}… tarda unos minutos en reuniones largas`);

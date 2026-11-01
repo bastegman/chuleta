@@ -763,6 +763,24 @@ class CloudEngine:
         self.tmp_root = tmp_root
         self.keys = keys or KeyPool(log)
 
+    def purge_tmp(self):
+        """Borra lo que haya en tmp_root (trozos FLAC/WAV de la reunion que se estaban subiendo): al arrancar quedan los
+        de una sesion que se corto (apagado, actualizacion, cuelgue) y al apagar, los de las subidas en marcha. Lo que
+        siga abierto (Windows no deja borrarlo) se queda para la proxima vez. Devuelve cuantas entradas ha borrado."""
+        try:
+            entries = list(os.scandir(self.tmp_root))
+        except OSError:
+            return 0
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    shutil.rmtree(e.path, ignore_errors=True)
+                else:
+                    os.remove(e.path)
+            except OSError:
+                pass
+        return sum(1 for e in entries if not os.path.lexists(e.path))
+
     @staticmethod
     def endpoint(cfg, key=None, model=None):
         """(url, cabeceras, modelo). key: una clave concreta del KeyPool (por defecto la principal);
@@ -927,14 +945,20 @@ class CloudEngine:
                 # cada hilo escribe el FLAC de su parte justo antes de subirla: la primera subida empieza en cuanto
                 # esta su parte (no cuando estan las n) y las demas se codifican mientras otras ya suben
                 path = os.path.join(work, f"part_{i:03d}.flac")
-                write_flac(path, buf["y"][int(a * 16000):int(b * 16000)])
-                with enc_lock:
-                    encoded[0] += 1
-                    if encoded[0] == n:
-                        buf["y"] = None
-                if stop():
-                    raise Cancelled()
-                res = self._post(cfg, path, language, prompt, report, stop, about=about)
+                try:
+                    write_flac(path, buf["y"][int(a * 16000):int(b * 16000)])
+                    with enc_lock:
+                        encoded[0] += 1
+                        if encoded[0] == n:
+                            buf["y"] = None
+                    if stop():
+                        raise Cancelled()
+                    res = self._post(cfg, path, language, prompt, report, stop, about=about)
+                finally:  # subido, fallido o cancelado: el trozo de la reunion no se queda en disco
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
                 return i, parse_verbose(res, a, b), res.get("language")
 
             results, langs, done = {}, [], 0
@@ -1191,7 +1215,9 @@ class Summarizer:
                           temperature=0.1, timeout=60)
 
     def summarize(self, segments, meta, cfg, report, cancelled):
-        """meta: title, date, duration, participants, notes, lang, extra. Devuelve (markdown, modelo)."""
+        """meta: title, date, duration, participants, notes, lang, extra. Devuelve (markdown, modelo).
+        Todo lo de meta va en el prompt al proveedor: participants son solo los que el usuario escribio o confirmo
+        (los sugeridos por Outlook/Teams se quedan en el PC hasta entonces: server.participantes_confirmados)."""
         code = cfg.get("summary_lang") or "es"
         lang = SUMMARY_LANGS.get(code, SUMMARY_LANGS["es"])
         h = SUMMARY_HEADINGS.get(code, SUMMARY_HEADINGS["es"])

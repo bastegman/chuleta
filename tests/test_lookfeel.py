@@ -289,14 +289,15 @@ class ServidorHttpTests(unittest.TestCase):
         self.assertTrue(t.startswith(f"{common.APP_NAME} · versión {server.VERSION}\n"), t.splitlines()[0])
         self.assertIn("Python " + sys.version.split()[0], t)
         self.assertIn("nube (groq) · modelo whisper-large-v3", t)
-        self.assertIn(f"Datos: {tmp}", t)
+        self.assertIn("Datos: en otra carpeta", t)  # sin la ruta (con el usuario de Windows)
+        self.assertNotIn(tmp, t)
         self.assertNotIn(key, t)
         self.assertNotIn(extra, t)
         self.assertNotIn("gsk_QQQQ", t)
-        self.assertIn(server.masked(key), t)
-        self.assertIn("línea 39", t)
-        self.assertNotIn("línea 10", t)  # solo las últimas 30
-        self.assertIn("server.log (últimas 30 líneas):", t)
+        self.assertNotIn(server.masked(key), t)  # la linea entera es texto libre: ni enmascarada
+        self.assertIn("2026-10-31 02:00:39 I <texto>\n2026-10-31 02:01:00 I <texto>", t)
+        self.assertNotIn("02:00:10", t)  # solo las últimas 30
+        self.assertIn("server.log (últimas 30 líneas; lo que no es técnico va como <texto>):", t)
 
     def test_diagnostico_sin_log(self):
         settings = mock.Mock()
