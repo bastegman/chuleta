@@ -541,8 +541,9 @@ _EN_LOCAL = 'NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/pyt
 
 class AgnosticismoCITests(unittest.TestCase):
     """P2-39: el test de agnosticismo corre en la CI con la lista privada (el secreto NOTAS_PALABRAS_VETADAS) y falla si
-    encuentra algo. Sin el secreto no se ejecuta, y el paso lo avisa en el resumen del run sin poner ningún job en rojo,
-    ni en las ramas ni en main. Si un día se exige el secreto (NOTAS_EXIGIR_VETADAS), hay que cambiar estos tests."""
+    encuentra algo. Sin el secreto no se ejecuta, y el propio test lo avisa en el resumen del run (::warning, con
+    NOTAS_AVISAR_SIN_VETADAS) sin poner ningún job en rojo, ni en las ramas ni en main. Si un día se exige el secreto
+    (NOTAS_EXIGIR_VETADAS), hay que cambiar estos tests."""
 
     def paso(self):
         """(job, paso) de tests.yml que recibe la lista; tiene que haber exactamente uno."""
@@ -565,8 +566,8 @@ class AgnosticismoCITests(unittest.TestCase):
     def test_sin_el_secreto_avisa_y_no_falla(self):
         """Nada exige el secreto (NOTAS_EXIGIR_VETADAS no está en ningún env de tests.yml), así que su falta no pone en
         rojo ningún push, tampoco a main; y nada deja en verde una coincidencia ni salta el paso (continue-on-error, if,
-        `|| true`, exit). Sin la lista, un ::warning dice en el resumen del run que no se ha ejecutado y cómo
-        ejecutarlo en local."""
+        `|| true`, exit). Sin la lista, el propio test deja el ::warning (NOTAS_AVISAR_SIN_VETADAS): el paso no repite
+        en bash cuándo está vacía (con blancos que no son ASCII, bash y Python no coincidían)."""
         wf = workflow("tests.yml")
         self.assertIn("push", eventos(wf["on"]))
         job, paso = self.paso()
@@ -575,21 +576,21 @@ class AgnosticismoCITests(unittest.TestCase):
         for d in (job, paso):
             self.assertNotIn("continue-on-error", d)
             self.assertNotIn("if", d)
+        self.assertIn(paso["env"].get("NOTAS_AVISAR_SIN_VETADAS"), ("1", "true"))
         run = paso["run"]
-        self.assertIn(_AVISO, run)
-        self.assertIn("no se ha ejecutado", run)
-        self.assertIn(_EN_LOCAL, run)
-        self.assertNotIn("::error", run)
+        self.assertNotIn("NOTAS_PALABRAS_VETADAS", run)
+        self.assertNotIn("::", run)
         self.assertNotIn("|| true", run)
         self.assertNotRegex(run, r"\bexit\b")
         self.assertTrue(run.rstrip().endswith("test_package.TemplatesTests.test_sin_rastro_de_clientes"))
 
     @unittest.skipIf(os.name == "nt" or not shutil.which("bash"), "el paso corre con bash, en ubuntu-latest")
     def test_paso_de_agnosticismo_en_bash(self):
-        """El `run` del paso con `bash -e`, como en el runner y en un push a main (lo más estricto): sin la lista, o con
-        una que solo trae comas y blancos (el secreto vaciado al rotarlo), sale en verde con el aviso y el test saltado;
-        con una que no casa con nada, el test se ejecuta y pasa, sin aviso; con una que casa, sale en rojo con fichero y
-        línea, sin el texto encontrado."""
+        """El `run` del paso con `bash -e` y su `env` como lo rellena GitHub (sin el secreto, la expresión da «»), en un
+        push a main (lo más estricto): sin la lista, o con una que solo trae comas y blancos (el secreto vaciado al
+        rotarlo), también blancos que no son ASCII, sale en verde con el aviso al principio de una línea de la salida y
+        el test saltado; con una que no casa con nada, el test se ejecuta y pasa, sin aviso; con una que casa, sale en
+        rojo con fichero y línea, sin el texto encontrado."""
         _, paso = self.paso()
         tmp = tempfile.mkdtemp(prefix="chuleta-ci-")
         self.addCleanup(shutil.rmtree, tmp, True)
@@ -601,18 +602,30 @@ class AgnosticismoCITests(unittest.TestCase):
         with open(script, "w", encoding="utf-8") as f:
             f.write(paso["run"])
         base = {k: v for k, v in os.environ.items() if not k.startswith(("NOTAS_", "GIT_"))}
-        base.update(PATH=tmp + os.pathsep + base.get("PATH", ""),
+        base.update(PATH=tmp + os.pathsep + base.get("PATH", ""), GITHUB_ACTIONS="true",
                     GITHUB_EVENT_NAME="push", GITHUB_REF="refs/heads/main")
-        for caso, lista, esperado in (("sin el secreto", None, "aviso"), ("con el secreto vacío", "", "aviso"),
+        secreto = "${{ secrets.NOTAS_PALABRAS_VETADAS }}"
+        for caso, lista, esperado in (("sin el secreto", "", "aviso"), ("sin la variable", None, "aviso"),
                                       ("con solo comas y blancos", " , \n\t,", "aviso"),
+                                      ("con blancos que no son ASCII", "\x1c,\xa0\n\u202f", "aviso"),
                                       ("con una lista que no casa con nada", "(?!)", "ok"),
                                       ("con una lista que casa", r"^name: tests\b", "rojo")):
             with self.subTest(caso):
-                env = dict(base) if lista is None else dict(base, NOTAS_PALABRAS_VETADAS=lista)
+                env = dict(base)
+                for k, v in paso["env"].items():
+                    self.assertTrue(v == secreto or "${{" not in v, v)  # otra expresión: hay que simularla aquí
+                    if v != secreto:
+                        env[k] = v
+                    elif lista is not None:
+                        env[k] = lista
                 r = subprocess.run(["bash", "-e", script], cwd=os.path.join(REPO, "tests"), env=env,
                                    capture_output=True, encoding="utf-8", errors="replace", timeout=300)
                 salida = (r.stdout + r.stderr).replace("::", ": :")  # que un fallo no deje anotaciones en el run
-                self.assertEqual(_AVISO in r.stdout, esperado == "aviso", salida)
+                aviso = re.search("(?m)^" + re.escape(_AVISO) + ".*$", r.stdout)
+                self.assertEqual(bool(aviso), esperado == "aviso", salida)
+                if aviso:
+                    self.assertIn("no se ha ejecutado", aviso.group(), salida)
+                    self.assertIn(_EN_LOCAL, aviso.group(), salida)
                 self.assertNotIn("::error", r.stdout, salida)
                 if esperado == "rojo":
                     self.assertNotEqual(r.returncode, 0, salida)

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Paquete instalable (build_package), plantillas de _app/export y coherencia de requirements/instalador."""
 import importlib.util
+import io
 import os
 import re
 import tempfile
@@ -137,8 +138,9 @@ class TemplatesTests(unittest.TestCase):
         # mayúsculas y con ^ y $ en cada línea. Sin ella, el test se salta, salvo con NOTAS_EXIGIR_VETADAS=1, que lo
         # hace fallar (así una ruta mal escrita no lo deja saltado entre los demás). En la CI, tests.yml pone la lista
         # solo en el paso de este test, desde el secreto de Actions del mismo nombre, y no la exige: sin el secreto, el
-        # paso lo avisa con un ::warning y sale en verde. En local, con la lista en un fichero fuera del repo (escrita
-        # en la orden quedaría en el historial):
+        # test se salta y, con NOTAS_AVISAR_SIN_VETADAS, deja él mismo el ::warning del resumen del run
+        # (AVISO_SIN_VETADAS), y el paso sale en verde. En local, con la lista en un fichero fuera del repo (escrita en
+        # la orden quedaría en el historial):
         #   macOS/Linux:
         #     NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py
         #   Windows (PowerShell, desde la raíz del repo):
@@ -153,6 +155,8 @@ class TemplatesTests(unittest.TestCase):
                 self.fail("NOTAS_PALABRAS_VETADAS falta o está vacía y NOTAS_EXIGIR_VETADAS la exige: revisa la ruta "
                           "del fichero con la lista (en la CI, el secreto de Actions del mismo nombre); sin ella no se "
                           "revisa nada")
+            if avisar_sin_vetadas():  # el paso de tests.yml: que se vea en el resumen del run, no solo en su log
+                print(AVISO_SIN_VETADAS, flush=True)
             self.skipTest("NOTAS_PALABRAS_VETADAS sin definir")
         hits = buscar_palabras(patrones, ficheros_del_repo())
         if hits:
@@ -233,6 +237,32 @@ class TemplatesTests(unittest.TestCase):
                 else:
                     self.assertEqual((resultado.failures, len(resultado.skipped)), ([], 1))
 
+    def test_agnosticismo_sin_lista_avisa_si_se_pide(self):
+        """Con NOTAS_AVISAR_SIN_VETADAS (el paso de tests.yml), una lista sin ningún patrón deja en la salida estándar,
+        en una línea, el ::warning que GitHub enseña en el resumen del run, y el test se salta. Lo decide la misma
+        palabras_vetadas() que lee la lista, también con blancos que no son ASCII (str.strip() quita \\x1c o el espacio
+        duro, y bash con [[:space:]] no los veía). Sin ella (en local y en los jobs de la matriz) se salta callado."""
+        for lista in (None, "", " , \n\t,", "\x1c,\xa0\n\u202f\x85"):
+            for avisar in ("1", None):
+                with self.subTest(lista=lista, avisar=avisar):
+                    entorno = {k: v for k, v in os.environ.items() if not k.startswith("NOTAS_")}
+                    if lista is not None:
+                        entorno["NOTAS_PALABRAS_VETADAS"] = lista
+                    if avisar:
+                        entorno["NOTAS_AVISAR_SIN_VETADAS"] = avisar
+                    resultado = unittest.TestResult()
+                    with mock.patch.dict(os.environ, entorno, clear=True), \
+                            mock.patch("sys.stdout", new_callable=io.StringIO) as salida:
+                        TemplatesTests("test_sin_rastro_de_clientes").run(resultado)
+                    self.assertEqual((resultado.testsRun, resultado.failures, resultado.errors, len(resultado.skipped)),
+                                     (1, [], [], 1))
+                    self.assertEqual(salida.getvalue(), AVISO_SIN_VETADAS + "\n" if avisar else "")
+        self.assertTrue(AVISO_SIN_VETADAS.startswith("::warning title=Agnosticismo sin ejecutar::"))
+        self.assertNotRegex(AVISO_SIN_VETADAS, "[%\r\n]")  # GitHub cortaría el mensaje (o habría que escaparlos)
+        for texto in ("no se ha ejecutado", 'NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python '
+                                            "tests/run.py"):
+            self.assertIn(texto, AVISO_SIN_VETADAS)
+
     def test_agnosticismo_ancla_por_linea(self):
         """^ y $ de un patrón marcan el principio y el fin de cada línea, no solo los del fichero, también en los
         ficheros con CRLF (.bat, .ps1 y LEEME.txt)."""
@@ -252,10 +282,25 @@ def palabras_vetadas():
 
 def vetadas_exigidas():
     """NOTAS_EXIGIR_VETADAS («true» o «1»): sin lista, el test de agnosticismo falla en vez de saltarse. Es para
-    ejecutarlo en local: tests.yml no la pone (sin el secreto, el paso avisa y no falla). Para exigir el secreto en la
+    ejecutarlo en local: tests.yml no la pone (sin el secreto, el test avisa y no falla). Para exigir el secreto en la
     CI iría en ese paso, solo en los push del repo propio (un fork y Dependabot no reciben los secretos), y habría que
     cambiar también AgnosticismoCITests (tests/test_ci.py)."""
     return os.environ.get("NOTAS_EXIGIR_VETADAS", "").strip().lower() in ("true", "1")
+
+
+AVISO_SIN_VETADAS = (
+    "::warning title=Agnosticismo sin ejecutar::El test de agnosticismo no se ha ejecutado: no ha llegado la lista "
+    "del secreto NOTAS_PALABRAS_VETADAS o no trae ningún patrón (no existe o está vacío en Settings -> Secrets and "
+    "variables -> Actions, o el run es de un fork o de Dependabot, que no reciben los secretos). En local, con la "
+    "lista en un fichero fuera del repo: "
+    'NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py '
+    "(en Windows, ver test_sin_rastro_de_clientes en tests/test_package.py)")
+
+
+def avisar_sin_vetadas():
+    """NOTAS_AVISAR_SIN_VETADAS («true» o «1»), solo en el paso de tests.yml: sin lista, el test de agnosticismo deja
+    AVISO_SIN_VETADAS en la salida estándar (GitHub lo enseña en el resumen del run) antes de saltarse."""
+    return os.environ.get("NOTAS_AVISAR_SIN_VETADAS", "").strip().lower() in ("true", "1")
 
 
 _RAIZ_SIN_GIT = ("CHANGELOG.md", "README.md", "LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat",
