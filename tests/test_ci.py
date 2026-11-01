@@ -2,10 +2,12 @@
 """Los workflows de GitHub Actions (.github/workflows): qué se lanza dónde y qué comprueba la CI en Windows.
 
 PyYAML no está en requirements-dev: `cargar_yaml` lee el subconjunto de YAML que usan estos ficheros (mapas y listas en
-bloque; listas `[a, b]` y mapas `{a: b}` en línea, anidados y en una o varias líneas; escalares con o sin comillas;
-bloques `|`, `|-`, `>` y `>-`, y comentarios) y da ValueError con lo demás (anclas, alias, etiquetas, claves entre
-comillas, escapes en comillas dobles, escalares en varias líneas…), para que un workflow escrito de otra forma haga
-fallar el test en vez de leerse mal. Los escalares quedan como cadenas: `timeout-minutes: 30` da «30»."""
+bloque, con claves sin comillas de letras, cifras y `_.-`; listas `[a, b]` y mapas `{a: b}` en línea, anidados y en una
+o varias líneas; escalares con o sin comillas; bloques `|`, `|-`, `>` y `>-`, y comentarios) y da ValueError con lo
+demás (anclas, alias, etiquetas, claves entre comillas o con otros caracteres, también en un elemento de una lista,
+escapes en comillas dobles, escalares en varias líneas…) y con lo que YAML no admite (`a: b: c`, `a: - b`, tabuladores
+fuera de comillas y de comentarios…), para que un workflow escrito de otra forma haga fallar el test en vez de leerse
+mal. Los escalares quedan como cadenas: `timeout-minutes: 30` da «30»."""
 import glob
 import os
 import re
@@ -18,9 +20,9 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # sin importar support: aquí no hace falta la app
 WORKFLOWS = os.path.join(REPO, ".github", "workflows")
-_CLAVE = re.compile(r"([A-Za-z0-9_.-]+)\s*:(?:\s+(.*))?$")
+_CLAVE = re.compile(r"([A-Za-z0-9_.-]+) *:(?: +(.*))?$")  # con espacios: un tabulador ahí no es YAML
 _NO_SOPORTADO = tuple("&*!|>%@`?")  # al principio de un valor: anclas, alias, etiquetas, bloques raros, claves «?»
-_FIN_DE_CLAVE = ("", " ", "\t", ",", "[", "]", "{", "}")  # lo que puede seguir al «:» que cierra una clave sin comillas
+_FIN_DE_CLAVE = ("", " ", "\n", ",", "[", "]", "{", "}")  # lo que puede seguir al «:» que cierra una clave sin comillas
 
 
 def _cadena(r, i):
@@ -42,13 +44,16 @@ def _cadena(r, i):
 
 
 def _nada_mas(r, j):
-    resto = r[j:].strip()
-    if resto and not resto.startswith("#"):
+    """Tras un valor, solo espacios y el comentario (un tabulador tampoco: YAML no lo admite)."""
+    j = _blancos(r, j)
+    if j < len(r) and r[j] != "#":
         raise ValueError(f"texto de más tras el valor: {r!r}")
 
 
-def _blancos(r, j):
-    while r[j:j + 1] in (" ", "\t"):
+def _blancos(r, j, saltos=False):
+    """Salta los espacios y, con `saltos`, los \\n que unen las líneas de una lista o un mapa en línea
+    (_Lector.flujo)."""
+    while r[j:j + 1] == " " or (saltos and r[j:j + 1] == "\n"):
         j += 1
     return j
 
@@ -56,7 +61,8 @@ def _blancos(r, j):
 def _sin_comentario(linea):
     """(la línea sin su comentario final, cuántos `[` y `{` abre menos los `]` y `}` que cierra), sin contar lo que va
     entre comillas. Una comilla solo abre una cadena donde puede empezar un valor (al principio de la línea o tras `[`,
-    `{`, `,` o `:`, con o sin blancos en medio); en `it's` o en `a '` es un carácter más."""
+    `{`, `,` o `:`, con o sin blancos en medio); en `it's` o en `a '` es un carácter más. Un tabulador fuera de comillas
+    y del comentario da ValueError: YAML no lo admite."""
     prof, q, i = 0, None, 0
     while i < len(linea):
         c = linea[i]
@@ -67,9 +73,11 @@ def _sin_comentario(linea):
                 i += 1
             elif c == q:
                 q = None
-        elif c in ("'", '"') and linea[:i].rstrip(" \t")[-1:] in ("", "[", "{", ",", ":"):
+        elif c in ("'", '"') and linea[:i].rstrip(" ")[-1:] in ("", "[", "{", ",", ":"):
             q = c
-        elif c == "#" and (i == 0 or linea[i - 1] in " \t"):
+        elif c == "\t":
+            raise ValueError(f"tabulador fuera de comillas (YAML no lo admite): {linea!r}")
+        elif c == "#" and (i == 0 or linea[i - 1] == " "):
             return linea[:i], prof
         elif c in ("[", "{"):
             prof += 1
@@ -91,10 +99,14 @@ def _elemento(r, j, clave=False):
     if c in ("'", '"'):
         return _cadena(r, j)
     k = j
-    while j < len(r) and r[j] not in ",[]{}" and not (r[j] == ":" and r[j + 1:j + 2] in _FIN_DE_CLAVE):
+    # sin comillas, un escalar acaba en su línea (YAML lo plegaría con la de debajo: no soportado) y en un «?» (PyYAML
+    # lo lee como una clave «?»)
+    while j < len(r) and r[j] not in ",[]{}?\n" and not (r[j] == ":" and r[j + 1:j + 2] in _FIN_DE_CLAVE):
         j += 1
-    v = r[k:j].rstrip()
-    if not v or v.startswith(_NO_SOPORTADO + ("#",)) or v == "-" or v.startswith(("- ", "-\t")):
+    v = r[k:j].rstrip(" ")
+    if r[j:j + 1] == "\n" and r[_blancos(r, j, saltos=True):][:1] not in (",", "]", "}"):
+        raise ValueError(f"escalar sin comillas en varias líneas en una lista o un mapa en línea (no soportado): {r!r}")
+    if not v or v.startswith(_NO_SOPORTADO + ("#", ":")) or v == "-" or v.startswith(("- ", "-\t")):
         raise ValueError(f"elemento vacío o no soportado en una lista o un mapa en línea: {r!r}")
     if r[j:j + 1] in ("[", "{"):  # p. ej. ${{ … }} sin comillas: dentro de [ ] o { } va entre comillas
         raise ValueError(f"[ o {{ dentro de un escalar sin comillas en una lista o un mapa en línea: {r!r}")
@@ -109,7 +121,7 @@ def _flujo(r, j):
     out = [] if cierre == "]" else {}
     j += 1
     while True:
-        j = _blancos(r, j)
+        j = _blancos(r, j, saltos=True)
         if j >= len(r):
             raise ValueError(f"lista o mapa en línea sin cerrar: {r!r}")
         if r[j] == cierre:  # también tras una coma final: [a, b,]
@@ -121,15 +133,15 @@ def _flujo(r, j):
             k, j = _elemento(r, j, clave=True)
             if k in out:
                 raise ValueError(f"clave repetida {k!r} en un mapa en línea: {r!r}")
-            j = _blancos(r, j)
+            j = _blancos(r, j)  # el «:» de la clave, en su misma línea
             if r[j:j + 1] != ":":
                 raise ValueError(f"clave sin «:» en un mapa en línea: {r!r}")
-            j = _blancos(r, j + 1)
+            j = _blancos(r, j + 1, saltos=True)
             if r[j:j + 1] in (",", "}"):
                 out[k] = None
             else:
                 out[k], j = _elemento(r, j)
-        j = _blancos(r, j)
+        j = _blancos(r, j, saltos=True)
         if r[j:j + 1] == ",":
             j += 1
         elif r[j:j + 1] != cierre:
@@ -138,8 +150,10 @@ def _flujo(r, j):
 
 def _en_linea(r):
     """Escalar, lista `[…]` o mapa `{…}` escritos tras su clave o su guion (sin el comentario final). Una lista o un
-    mapa que siguen en otras líneas llegan ya unidos en una (_Lector.flujo)."""
-    r = r.strip()
+    mapa que siguen en otras líneas llegan ya unidos en una (_Lector.flujo). Sin comillas, YAML no admite tabuladores,
+    «: » ni «:» al final (sería un mapa: `- a b: c` es {"a b": "c"}, y `a: b: c`, un error), ni «- », «,», «]» o «}»
+    al principio."""
+    r = r.strip(" ")
     if r[:1] in ("'", '"'):
         v, j = _cadena(r, 0)
         _nada_mas(r, j)
@@ -150,33 +164,41 @@ def _en_linea(r):
         return v
     if r.startswith(_NO_SOPORTADO):
         raise ValueError(f"YAML no soportado: {r!r}")
-    m = re.search(r"\s#", r)
-    return (r[:m.start()] if m else r).rstrip()
+    m = re.search(" #", r)
+    v = (r[:m.start()] if m else r).rstrip(" ")
+    if "\t" in v or re.search(r":( |$)", v) or v == "-" or v.startswith(("- ", ",", "]", "}")):
+        raise ValueError(f"escalar sin comillas que YAML no admite o que no es un escalar: {r!r}")
+    return v
 
 
 class _Lector:
     def __init__(self, texto):
-        self.lineas = texto.replace("\r\n", "\n").split("\n")
+        texto = texto.replace("\r\n", "\n")
+        if re.search("[\r\x85\u2028\u2029]", texto):  # YAML también los cuenta como saltos de línea
+            raise ValueError("salto de línea que no es \\n ni \\r\\n (\\r suelto, NEL, U+2028 o U+2029)")
+        self.lineas = texto.split("\n")
         self.i = 0
 
     def sangria(self):
-        """Sangría de la siguiente línea con contenido (salta vacías y comentarios), o -1 al final."""
+        """Sangría de la siguiente línea con contenido (salta vacías y comentarios), o -1 al final. Un tabulador en la
+        sangría, también en la de una línea en blanco o la de un comentario, da ValueError: YAML no lo admite."""
         while self.i < len(self.lineas):
             linea = self.lineas[self.i]
-            if linea.strip() and not linea.strip().startswith("#"):
-                if linea[:len(linea) - len(linea.lstrip())].strip(" "):
-                    raise ValueError(f"tabulador en la sangría (línea {self.i + 1})")
-                return len(linea) - len(linea.lstrip(" "))
+            resto = linea.lstrip(" ")
+            if resto[:1] == "\t":
+                raise ValueError(f"tabulador en la sangría (línea {self.i + 1})")
+            if resto and not resto.startswith("#"):
+                return len(linea) - len(resto)
             self.i += 1
         return -1
 
     def guion(self):
-        s = self.lineas[self.i].strip()
+        s = self.lineas[self.i].strip(" ")
         return s == "-" or s.startswith("- ")
 
     def nodo(self, n):
         """Lo que empieza en la línea actual, con sangría n: una lista, un mapa, o `[…]`/`{…}` en su propia línea."""
-        s = self.lineas[self.i].strip()
+        s = self.lineas[self.i].strip(" ")
         if s[:1] in ("[", "{"):
             self.i += 1
             return _en_linea(self.flujo(s))
@@ -184,14 +206,14 @@ class _Lector:
 
     def flujo(self, texto):
         """La lista `[…]` o el mapa `{…}` que empieza en `texto` (lo que sigue a su clave o a su guion, cuya línea ya se
-        ha leído) con las líneas siguientes que hagan falta para cerrarlo, sin comentarios y unidas con un espacio."""
+        ha leído) con las líneas siguientes que hagan falta para cerrarlo, sin comentarios y unidas con un \\n."""
         partes, prof, primera = [], 0, self.i
         while True:
             parte, d = _sin_comentario(texto)
-            partes.append(parte.strip())
+            partes.append(parte.strip(" "))
             prof += d
             if prof <= 0:
-                return " ".join(partes)
+                return "\n".join(partes)
             if self.i >= len(self.lineas):
                 raise ValueError(f"lista o mapa en línea sin cerrar (desde la línea {primera}): {partes[0]!r}")
             texto = self.lineas[self.i]
@@ -200,29 +222,31 @@ class _Lector:
     def mapa(self, n):
         out = {}
         while self.sangria() == n and not self.guion():
-            m = _CLAVE.match(self.lineas[self.i].strip())
+            m = _CLAVE.match(self.lineas[self.i].strip(" "))
             if not m:
                 raise ValueError(f"no sé leer la línea {self.i + 1}: {self.lineas[self.i].strip()!r}")
             if m.group(1) in out:
                 raise ValueError(f"clave repetida {m.group(1)!r} (línea {self.i + 1})")
             self.i += 1
-            out[m.group(1)] = self.valor((m.group(2) or "").strip(), n)
+            out[m.group(1)] = self.valor(m.group(2) or "", n)
         return out
 
     def lista(self, n):
         out = []
         while self.sangria() == n and self.guion():
             linea = self.lineas[self.i]
-            contenido = linea.strip()[1:].strip()
-            if not contenido:  # «-» solo: el elemento sigue en las líneas de debajo, más sangrado
+            tras_guion = linea.strip(" ")[1:]
+            contenido = tras_guion.lstrip(" ")
+            if not contenido or contenido.startswith("#"):
+                # «-» solo o con un comentario: el elemento sigue en las líneas de debajo, más sangrado
                 self.i += 1
                 sig = self.sangria()
                 out.append(self.nodo(sig) if sig > n else None)
             elif _CLAVE.match(contenido) or contenido == "-" or contenido.startswith("- "):
                 # «- clave: valor» o «- - x»: un mapa o una lista que empiezan en la misma línea, a la altura de lo que
-                # sigue al guion
-                tras_guion = linea.strip()[1:]
-                col = len(linea) - len(linea.lstrip(" ")) + 1 + len(tras_guion) - len(tras_guion.lstrip())
+                # sigue al guion. Una clave que no es de _CLAVE («- a b: c») acaba en _en_linea, que da ValueError
+                # como mapa() con la misma clave fuera de una lista
+                col = len(linea) - len(linea.lstrip(" ")) + 1 + len(tras_guion) - len(contenido)
                 self.lineas[self.i] = " " * col + contenido
                 out.append(self.mapa(col) if _CLAVE.match(contenido) else self.lista(col))
             else:
@@ -231,7 +255,7 @@ class _Lector:
         return out
 
     def valor(self, resto, n):
-        indicador = re.sub(r"\s#.*", "", resto).strip()  # «run: |  # comentario» también es un bloque
+        indicador = re.sub(" #.*", "", resto).rstrip(" ")  # «run: |  # comentario» también es un bloque
         if indicador in ("|", "|-", ">", ">-"):
             return self.bloque(indicador, n)
         if resto[:1] in ("[", "{"):
@@ -247,24 +271,30 @@ class _Lector:
 
     def bloque(self, indicador, n):
         """Bloque `|` (literal) o `>` (plegado: dos líneas seguidas se unen con un espacio, y cada línea vacía entre
-        ellas queda como un salto); con `-`, sin el salto final."""
+        ellas queda como un salto); con `-`, sin el salto final, que tampoco hay si el bloque acaba el fichero sin él.
+        Como en YAML, la sangría del bloque es la de su primera línea con algo más que espacios (un tabulador cuenta), y
+        una línea con solo espacios queda vacía si no pasa de esa sangría y, si pasa, guarda los espacios de más."""
         lineas, primera = [], self.i
         while self.i < len(self.lineas):
             linea = self.lineas[self.i]
-            if linea.strip() and len(linea) - len(linea.lstrip(" ")) <= n:
+            if linea.strip(" ") and len(linea) - len(linea.lstrip(" ")) <= n:
                 break
             lineas.append(linea)
             self.i += 1
-        llenas = [x for x in lineas if x.strip()]
+        sangrias = [len(x) - len(x.lstrip(" ")) for x in lineas]
+        llenas = [k for k, x in enumerate(lineas) if x.strip(" ")]
         if not llenas:
             return ""
-        b = len(llenas[0]) - len(llenas[0].lstrip(" "))
+        b = sangrias[llenas[0]]
         for k, x in enumerate(lineas):
-            if x.strip() and len(x) - len(x.lstrip(" ")) < b:  # YAML no lo admite; cortarla perdería texto
+            if x.strip(" ") and sangrias[k] < b:  # YAML no lo admite; cortarla perdería texto
                 raise ValueError(f"línea {primera + k + 1} menos sangrada que la primera del bloque")
-        filas = [x[b:] if x.strip() else "" for x in lineas]
+            if k < llenas[0] and sangrias[k] > b:
+                raise ValueError(f"línea en blanco {primera + k + 1} con más espacios que la primera del bloque")
+        filas = [x[b:] for x in lineas]
         while filas and not filas[-1]:
             filas.pop()
+        sin_salto = indicador.endswith("-") or primera + len(filas) == len(self.lineas)  # el fichero acaba sin \n
         texto = "\n".join(filas)
         if indicador[0] == ">":
             if any(f[:1] in (" ", "\t") for f in filas):
@@ -272,7 +302,7 @@ class _Lector:
             cuerpo = texto.lstrip("\n")  # los saltos de las líneas vacías del principio se quedan como están
             texto = texto[:len(texto) - len(cuerpo)] + re.sub(
                 r"\n+", lambda m: " " if len(m.group()) == 1 else "\n" * (len(m.group()) - 1), cuerpo)
-        return texto + ("" if indicador.endswith("-") else "\n")
+        return texto + ("" if sin_salto else "\n")
 
 
 def cargar_yaml(texto):
@@ -389,13 +419,58 @@ class CargarYamlTests(unittest.TestCase):
             with self.subTest(texto):
                 self.assertEqual(cargar_yaml(texto)["a"], esperado)
 
+    def test_bloques_con_lineas_de_espacios(self):
+        """Como en YAML (y en PyYAML): una línea de un bloque con solo espacios, más que la sangría del bloque, guarda
+        los que le sobran (antes quedaba vacía), y un tabulador tras la sangría es texto; si el fichero acaba en el
+        bloque sin \\n, el bloque tampoco lo lleva. Una línea en blanco del principio con más espacios que la primera
+        con texto, o un tabulador dentro de la sangría, no es YAML válido; y en un bloque > no está soportado."""
+        for texto, esperado in (("a: |\n  uno\n      \n  dos\n", "uno\n    \ndos\n"),
+                                ("a: |\n  uno\n      \nb: 1\n", "uno\n    \n"), ("a: |-\n  uno\n      \n", "uno\n    "),
+                                ("a: |\n  uno\n  \t\n  dos\n", "uno\n\t\ndos\n"), ("a: |\n  \n  uno\n", "\nuno\n"),
+                                ("a: |\n  uno", "uno"), ("a: >\n  uno\n  dos", "uno dos"),
+                                ("a: |\n  uno\n  ", "uno\n")):
+            with self.subTest(texto):
+                self.assertEqual(cargar_yaml(texto)["a"], esperado)
+        for texto in ("a: |\n   \n  uno\n", "a: |\n  uno\n \t\n  dos\n", "a: |\n  uno\n\t\nb: 1\n",
+                      "a: >\n  uno\n      \n  dos\n"):
+            with self.subTest(texto), self.assertRaises(ValueError):
+                cargar_yaml(texto)
+
+    def test_claves_en_una_lista_como_en_un_mapa(self):
+        """Una clave que el lector no admite (con espacios, «/», `${{ }}`, «#»…) da ValueError tanto en un mapa como en
+        un elemento de una lista. Antes, en la lista, `- a b: c` se leía como la cadena «a b: c», y PyYAML da
+        {"a b": "c"}. Tras « #» empieza un comentario, también en un elemento."""
+        for texto in ("a b: c", "a:\n- a b: c", "a:\n- x/y: c", "steps:\n  - ${{ x }}: c", "- - a b: c", "- a#b: c"):
+            with self.subTest(texto), self.assertRaises(ValueError):
+                cargar_yaml(texto)
+        self.assertEqual(cargar_yaml("- a #b: c\n- a: b #c: d\n"), ["a", {"a": "b"}])
+
+    def test_guion_con_comentario(self):
+        """`- # comentario` es como `-` solo: el elemento sigue en las líneas de debajo, o está vacío (antes era la
+        cadena «# comentario»)."""
+        self.assertEqual(cargar_yaml("a:\n- # c\n- y\n"), {"a": [None, "y"]})
+        self.assertEqual(cargar_yaml("a:\n  - # c\n    k: v\n  - - # d\n    - z\n"), {"a": [{"k": "v"}, [None, "z"]]})
+
+    def test_lo_que_yaml_no_admite_falla(self):
+        """Lo que PyYAML rechaza da ValueError en vez de leerse como otra cosa: «: » o «- » dentro de un valor sin
+        comillas, «,» o «]» al principio, un tabulador fuera de comillas y de comentarios (también en una línea en
+        blanco o antes de un comentario), un salto de línea que no es \\n ni \\r\\n, y «:x» o «?» en [ ] o { }."""
+        for texto in ("a: b: c", "- a: b: c", "a: b:", "a: - b", "a: -", "a: ,b", "a: ]", "a:\tb", "a\t: b",
+                      "a: b\t# c", "a: 'b'\t# c", "a: b\t", "- a\t", "a: [b,\tc]", "a: 1\n\t\nb: 2",
+                      "a: 1\n\t# c\nb: 2", "a: |\t\n  x", "a: b\rc: d", "a: b\u2028c", "a: [x, :y]", "a: [b?c]"):
+            with self.subTest(texto), self.assertRaises(ValueError):
+                cargar_yaml(texto)
+
     def test_lo_que_no_sabe_leer_falla(self):
         for texto in ("a: 1\na: 2", "a: &x 1", "a: *x", "a: !!str 1", "a:\n\tb: 1", "a: 'b", 'a: "\\n"', "a: |+\n  b",
                       "a: >\n  b\n    c",  # plegado con una línea más sangrada
                       "a: |\n    b\n   c",  # una línea menos sangrada que la primera del bloque
                       "a: {b}", "a: {b: 1, b: 2}", "a: [b: c]", "a: {b: c: d}", "a: {[b]: c}", "a: [b,,c]",
                       "a: [x${{ y }}]", "a: {b: 1} c", "a: [- b]", "a: [b, [c]", "a: [b,\n  c", "a: [b\n  # c]",
-                      "a: [ -f x ] && echo"):
+                      "a: [ -f x ] && echo",
+                      # un escalar sin comillas partido en dos líneas dentro de [ ] o { }: YAML lo pliega (antes se unía
+                      # con un espacio, mal si había una línea vacía o un comentario en medio)
+                      "a: [u\n\n  dos]", "a: {b: c\n  d}", "a: [u\n  # c\n  dos]"):
             with self.subTest(texto), self.assertRaises(ValueError):
                 cargar_yaml(texto)
 
