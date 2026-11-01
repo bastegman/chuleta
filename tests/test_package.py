@@ -134,12 +134,15 @@ class TemplatesTests(unittest.TestCase):
         scripts, workflows, CHANGELOG, README y LEEME)."""
         # La lista es privada (los clientes de cada usuario) y nunca se escribe en el repo: expresiones regulares
         # separadas por comas (o una por línea) en la variable de entorno NOTAS_PALABRAS_VETADAS, sin distinguir
-        # mayúsculas y con ^ y $ en cada línea. Sin ella, el test se salta, salvo con NOTAS_EXIGIR_VETADAS=true, que
-        # lo hace fallar. En la CI, tests.yml pone las dos solo en el paso de este test: la lista, desde el secreto de
-        # Actions del mismo nombre, y la exigencia, en los push a main del repo propio, donde el secreto tiene que
-        # estar. En local, con la lista en un fichero fuera del repo (escrita en la orden quedaría en el historial):
-        #   macOS/Linux:  NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py
+        # mayúsculas y con ^ y $ en cada línea. Sin ella, el test se salta, salvo con NOTAS_EXIGIR_VETADAS=1, que lo
+        # hace fallar (así una ruta mal escrita no lo deja saltado entre los demás). En la CI, tests.yml pone la lista
+        # solo en el paso de este test, desde el secreto de Actions del mismo nombre, y no la exige: sin el secreto, el
+        # paso lo avisa con un ::warning y sale en verde. En local, con la lista en un fichero fuera del repo (escrita
+        # en la orden quedaría en el historial):
+        #   macOS/Linux:
+        #     NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py
         #   Windows (PowerShell, desde la raíz del repo):
+        #     $env:NOTAS_EXIGIR_VETADAS = "1"
         #     $env:NOTAS_PALABRAS_VETADAS = Get-Content -Raw "$HOME\chuleta-vetadas.txt"; python tests\run.py
         # Revisa lo que git tiene en el índice (un fichero nuevo cuenta desde su `git add`); sin git, la raíz y _app,
         # tests, scripts, .github y design. Al fallar da fichero, línea y número de patrón, nunca el texto encontrado:
@@ -147,8 +150,9 @@ class TemplatesTests(unittest.TestCase):
         patrones = palabras_vetadas()
         if not patrones:
             if vetadas_exigidas():
-                self.fail("NOTAS_PALABRAS_VETADAS falta o está vacía y NOTAS_EXIGIR_VETADAS la exige: en la CI, crea "
-                          "el secreto de Actions NOTAS_PALABRAS_VETADAS con la lista (sin ella no se revisa nada)")
+                self.fail("NOTAS_PALABRAS_VETADAS falta o está vacía y NOTAS_EXIGIR_VETADAS la exige: revisa la ruta "
+                          "del fichero con la lista (en la CI, el secreto de Actions del mismo nombre); sin ella no se "
+                          "revisa nada")
             self.skipTest("NOTAS_PALABRAS_VETADAS sin definir")
         hits = buscar_palabras(patrones, ficheros_del_repo())
         if hits:
@@ -208,12 +212,11 @@ class TemplatesTests(unittest.TestCase):
         self.assertIn("patrón 2", str(cm.exception))
 
     def test_agnosticismo_exigido_sin_lista_falla(self):
-        """Con NOTAS_EXIGIR_VETADAS (la CI, en los push a main del repo propio) una lista que falta o está vacía hace
-        fallar el test en vez de saltarlo: borrar el secreto, o vaciarlo al rotarlo, no deja main en verde sin revisar
-        nada."""
+        """Con NOTAS_EXIGIR_VETADAS (en local, para no dar por revisado lo que se ha saltado) una lista que falta o está
+        vacía hace fallar el test en vez de saltarlo; sin ella, como en la CI, se salta."""
         casos = (({"NOTAS_EXIGIR_VETADAS": "true"}, "falla"),
                  ({"NOTAS_EXIGIR_VETADAS": "1", "NOTAS_PALABRAS_VETADAS": " , \n "}, "falla"),
-                 ({"NOTAS_EXIGIR_VETADAS": "false", "NOTAS_PALABRAS_VETADAS": ""}, "salta"),  # otra rama, PR, fork, bot
+                 ({"NOTAS_EXIGIR_VETADAS": "false", "NOTAS_PALABRAS_VETADAS": ""}, "salta"),  # la CI sin el secreto
                  ({}, "salta"))  # en local, sin la lista
         for env, esperado in casos:
             with self.subTest(env=env):
@@ -248,8 +251,10 @@ def palabras_vetadas():
 
 
 def vetadas_exigidas():
-    """NOTAS_EXIGIR_VETADAS («true» o «1»): sin lista, el test de agnosticismo falla en vez de saltarse. tests.yml la
-    pone en los push a main del repo propio, donde el secreto tiene que estar."""
+    """NOTAS_EXIGIR_VETADAS («true» o «1»): sin lista, el test de agnosticismo falla en vez de saltarse. Es para
+    ejecutarlo en local: tests.yml no la pone (sin el secreto, el paso avisa y no falla). Para exigir el secreto en la
+    CI iría en ese paso, solo en los push del repo propio (un fork y Dependabot no reciben los secretos), y habría que
+    cambiar también AgnosticismoCITests (tests/test_ci.py)."""
     return os.environ.get("NOTAS_EXIGIR_VETADAS", "").strip().lower() in ("true", "1")
 
 
