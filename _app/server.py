@@ -2241,69 +2241,204 @@ def scrub(text, keys=()):
     return KEY_LIKE.sub(lambda m: masked(m.group(0)), text)
 
 
-# «Copiar diagnostico» lleva las ultimas lineas de server.log, que nombran reuniones, carpetas, proyectos, temas y
-# personas y llevan rutas con el usuario de Windows y la empresa. pseudonymize las cambia por marcadores («<reunión 1>»,
-# «<carpeta 2>», «<usuario>»…): primero lo que la app conoce (rutas y nombres) y despues, por su forma, lo que no.
-_MARKER = r"<[^<>\r\n]{1,60}>"  # un marcador ya puesto no se vuelve a tocar
-DIAG_APP_DOCS = ("LEEME.", "README.", "CHANGELOG.", "requirements")  # documentos de la propia app: se quedan
-_DIAG_EXTS = "|".join(sorted({e.lstrip(".") for e in AUDIO_EXT | TEXT_EXT} | {"docx", "json"}, key=len, reverse=True))
-DIAG_PATTERNS = (
-    # carpeta de usuario: C:\Users\<usuario>\…, /Users/<usuario>/…, /home/<usuario>/…
-    (re.compile(r"(?i)((?:\b[a-z]:)?[\\/](?:users|usuarios|documents and settings|home)[\\/])(?!<)"
-                r"[^\\/\r\n\"'<>|:*?]+"), r"\1<usuario>"),
-    (re.compile(r"(?i)(onedrive\s*-\s*)(?!<)[^\\/\r\n\"'<>|:*?]+"), r"\1<empresa>"),  # OneDrive - <empresa>
-    (re.compile(r"\\\\(?!<)[^\\/\s\"'<>|]+\\[^\\/\s\"'<>|]+"), r"\\\\<servidor>\\<recurso>"),  # \\servidor\recurso
-    (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "<correo>"),
-    # grabaciones que ya no estan en la biblioteca: «AAAA-MM-DD HH-MM-SS - <nombre>.wav»
-    (re.compile(r"(\d{4}-\d{2}-\d{2}[ _]\d{2}-\d{2}-\d{2})\s*-\s*(?!<)[^\\/\r\n]+?(?=\.(?:%s)\b)" % _DIAG_EXTS),
-     r"\1 - <nombre>"),
-    # «huella guardada: <nombre> (n huellas)» de una persona ya olvidada
-    (re.compile(r"(huella guardada: )(?!<).+?( \(\d+ huellas?\))"), r"\1<persona>\2"),
-    # el token de la sesion, si alguna linea lo llevara (/?t=… o la cabecera): con el, una web podria hablar con la app
-    (re.compile(r"(?i)([?&]t=|x-chuleta-token:\s*)[A-Za-z0-9_\-]{16,}"), r"\1<token>"),
+# ----------------------------------------------------------------------------- diagnostico: lista blanca
+# «Copiar diagnostico» se pega donde se pide ayuda, a veces en un sitio publico. Lleva solo lo que se sabe tecnico:
+# version, Python y sistema, motor y modelo, contadores y, de las ultimas lineas de server.log, lo fijo de los mensajes
+# que escribe la propia app (DIAG_LINES) con sus cifras, modelos y codigos de error. Todo lo demas (nombres de
+# reuniones, carpetas, proyectos, temas y personas, rutas, el texto de un error, lo que no se reconoce) va como
+# «<texto>». No depende de lo que la app sepa de la biblioteca: lo ya borrado, renombrado u olvidado tampoco sale.
+DIAG_FREE = "<texto>"
+# Cada plantilla es un mensaje de log() con sus huecos. {t}: texto libre (siempre «<texto>»); {e}: un error («<texto>»
+# y sus codigos); {n}: una cifra; {m}: un modelo o una velocidad conocidos (DIAG_MODELS); {c}: una excepcion de Python;
+# {k}: nombres de ajustes; {l}: un idioma; {a}: la app de la llamada; {u}: la URL local; {v}: una version; {y}: el .py
+# de una traza (solo su nombre); {f}: la funcion de una traza. ⟦…⟧ es opcional y lo demas, literal. Gana la primera que
+# encaja (las concretas van antes que las generales); sin plantilla, la sangria, el icono y «<texto>» (diag_line).
+DIAG_LINES = (
+    # trabajos de la cola, del directo, del resumen y de las voces: «<icono> <reunion>  <que>»
+    "▶ {t}  [{m}]",
+    "● Grabando: {t}⟦ [{t} · {t}]⟧⟦ (solo grabar, sin transcribir)⟧",
+    "■ Grabación parada: {t} ({n} min)",
+    "● {t}  transcripción en directo⟦ (automática)⟧",
+    "↻ {t}  repaso final de la grabación entera en la nube",
+    "✔ {t}  directo terminado ({n} min grabados)",
+    "■ {t}  directo detenido",
+    "✨ {t}  resumen⟦ (automático)⟧ en cola",
+    "✔ {t}  resumen listo ({n} s, {m})",
+    "✖ {t}  resumen: {e}",
+    "🗣 {t}  voces⟦ (automático)⟧ en cola",
+    "✔ {t}  voces: {n} persona⟦s⟧ · {n} reconocida⟦s⟧ ({n} s)",
+    "■ {t}  voces canceladas",
+    "✖ {t}  voces: {e}",
+    "✔ {t}  {n} min⟦  ({n}x tiempo real)⟧",
+    "■ {t}  cancelado",
+    "✖ modelos de voces: {e}",
+    "✖ {t}  {e}",
+    "   {t}: sin repaso final (tiene correcciones a mano)",
+    "   directo {t}: vocabulario, idioma y contexto actualizados",
+    "   directo {t}: rehacer con {m}",
+    "   directo {t}: modelo {m}",
+    "   {t}: transcrita en local, sin resumen automático (no sale del PC; se puede resumir a mano)",
+    "   continuando desde {n} min",
+    "   en lo que faltaba no hay voz: se da por completa",
+    "   se mantiene el texto del directo",
+    "   no se pudo escribir la transcripción todavía ({c})",
+    "   voces: {e}",
+    "   {t}: documento escrito en {n} destino(s)⟦ · sin tocar: {t}⟧",
+    # directo (live.py)
+    "   directo: idioma {l} desde el siguiente trozo",
+    "   idioma: {l}⟦ ({n}%)⟧",
+    "   rehaciendo desde el principio con {m}",
+    "   se salta un trozo que Whisper no consigue transcribir",
+    "   directo reanudado: vuelve a haber cupo",
+    "   trozo sin transcribir ({e}); se sigue con el siguiente",
+    "   traducción del directo: {e}",
+    "   trozo de {n} s ({n} s de voz, {n} frases): texto a los {n} s{t}",
+    "   {e} ({n} s de audio, intento {n})",
+    # biblioteca, carpetas, vocabulario y voces
+    "⤓ importado: {t}",
+    "🗑 vocabulario a la papelera: {t}",
+    "🗑 {t} → papelera ({n} archivos)",
+    "↪ {t}  →  {t}",
+    "↺ {t}: transcripción original restaurada",
+    "🔗 carpeta vinculada: {t}",
+    "🔗 carpeta desvinculada (no se ha tocado nada): {t}",
+    "🔤 vocabulario guardado: {t} ({n} términos)",
+    "🔤 vocabulario importado de {t}: {n} listas copiadas, {n} omitidas ({t})",
+    "   perfil de reunión guardado: {k}",
+    "🗣 huella guardada: {t} ({n} huella⟦s⟧)",
+    "🗣 personas fusionadas ({n} reuniones actualizadas)",
+    "🗣 todas las huellas olvidadas",
+    "🗣 persona olvidada",
+    "🗣 voces activadas",
+    "🗣 voces desactivadas",
+    "   modelos de voces descargados",
+    "   voces.json no se pudo leer ({e}); se aparta como voces.json.ilegible",
+    # arranque, ajustes, grabadora, llamadas y apagado
+    "arranque · {u} · carpeta {t} · datos {t} · Python {v}",
+    "modelo {m} precargado para el directo en {n} s",
+    "modelo {m} precargado para la cola en {n} s",
+    "no se pudo precargar {m}: {e}",
+    "   borrados los trozos de audio temporales que dejó la sesión anterior",
+    "   no se pudo descifrar {k} de settings.json ({e}): vuelve a pegarla en Ajustes",
+    "   no se pudo copiar settings.json ({c}): no se escribirá encima en esta sesión",
+    "   settings.json no se puede leer ({e})⟦: copia en {t}⟧; recuperado: {t}; lo demás vuelve a los valores por "
+    "defecto",
+    "   aviso pendiente: el resumen automático ya no sube a la nube lo transcrito en local",
+    "   no se pudo guardar {t} ({c})",
+    "   micro silenciado",
+    "   micro reactivado",
+    "   reunión detectada ({a}): aviso flotante abierto",
+    "   reunión detectada ({a}): aviso enviado",
+    "apagar pedido desde la interfaz ({n} trabajos en cola o en marcha)",
+    "apagando ({t})",
+    "apagado",
+    "la app ya estaba abierta: se ensena su ventana",
+    "AppUserModelID {t}: fijado",
+    "AppUserModelID {t}: no disponible",
+    "la ventana se ha cerrado sin apagar: la app sigue en segundo plano",
+    "no se pudo abrir la ventana propia (detalle arriba): se abre en Edge",
+    "(no hay server.log)",
+    # trazas (log_exc): el .py, la linea y la funcion; de la excepcion, su tipo y sus codigos
+    "Traceback (most recent call last):",
+    '  File "{y}", line {n}, in {f}',
+    "During handling of the above exception, another exception occurred:",
+    "The above exception was the direct cause of the following exception:",
+    "{c}: {e}",
+    "{c}",
 )
+DIAG_MODELS = frozenset(
+    {x for p in engines.PRESETS for x in (p["id"], p["label"], p.get("live_label"), p.get("model")) if x}
+    | set(engines.SUMMARY_MODELS) | {m for v in engines.PROVIDERS.values() for m in v.get("models") or []}
+    | {engines.LIVE_MODEL_DEFAULT, getattr(engines.Summarizer, "TRANSLATE_MODEL", None), "gpt-4o-mini"} - {None})
+# codigos de error que se pueden ensenar: HTTP de la nube (engines: «HTTP 401: …»), errno y WinError, excepciones de
+# Python, HRESULT de Windows (COM de Outlook, WebView2) y los codigos de error de las APIs compatibles con OpenAI
+DIAG_CODES = re.compile(
+    r"\bHTTP ?[1-5]\d\d\b|\[(?:Errno|WinError) -?\d+\]|\b[A-Z][A-Za-z0-9]*(?:Error|Exception|Timeout|Warning|Interrupt"
+    r"|Exit)\b|\b0x[0-9A-Fa-f]{8}\b|(?<!\d)-2147\d{6}\b|\b(?:rate_limit_exceeded|invalid_api_key|insufficient_quota"
+    r"|model_not_found|context_length_exceeded|request_too_large|model_decommissioned|invalid_request_error"
+    r"|authentication_error|permission_denied)\b")
+_DIAG_EXC = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*(?:Error|Exception|Timeout|Warning|Interrupt"
+                       r"|Exit|Cancelled)")
+_DIAG_INNER = {"n": r"\d+(?:[.,]\d+)?", "c": r"[A-Za-z_][A-Za-z0-9_.]*", "e": r".*?"}  # el resto: .+?
+_DIAG_HEAD = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [A-Z] ")  # «AAAA-MM-DD HH:MM:SS I » de server.log
 
 
-def pseudonymize(text, paths=(), names=()):
-    """El texto sin datos de las reuniones ni del usuario. paths y names: [(texto, clase, clave)]; las rutas se buscan
-    sin distinguir mayusculas y con «/» o «\\», los nombres como palabra entera. Con clave, el marcador es
-    «<clase n>», numerado por clase en orden de aparicion y el mismo para la misma clave (en rutas y nombres); con
-    clave None, `clase` es el texto que lo sustituye tal cual («<usuario>»). Despues, DIAG_PATTERNS."""
-    counters, assigned = {}, {}
+def _diag_rx(template):
+    """La plantilla como expresion regular: los literales, escapados; cada hueco, un grupo con su tipo delante."""
+    out = []
+    for i, tok in enumerate(re.split(r"(\{[a-z]\}|⟦|⟧)", template)):
+        if tok == "⟦":
+            out.append("(?:")
+        elif tok == "⟧":
+            out.append(")?")
+        elif re.fullmatch(r"\{[a-z]\}", tok):
+            out.append(f"(?P<{tok[1]}{i}>{_DIAG_INNER.get(tok[1], '.+?')})")
+        else:
+            out.append(re.escape(tok))
+    return re.compile("".join(out))
 
-    def marker(cls, key):
-        if key is None:
-            return cls
-        if (cls, key) not in assigned:
-            counters[cls] = counters.get(cls, 0) + 1
-            assigned[(cls, key)] = counters[cls]
-        return f"<{cls} {assigned[(cls, key)]}>"
-    text = unicodedata.normalize("NFC", text)
-    low = text.lower()
-    found, forms = {}, set()  # ruta (minusculas, con «\\») -> (clase, clave); formas que salen en el texto
-    for p, cls, key in paths:
-        p = unicodedata.normalize("NFC", str(p or "")).rstrip("\\/")
-        if len(p) < 4:
-            continue
-        for v in {p, p.replace("\\", "/"), p.replace("/", "\\")}:
-            if v.lower() in low:
-                found.setdefault(v.lower().replace("/", "\\"), (cls, key))
-                forms.add(v)
-    if forms:
-        alts = "|".join(re.escape(v) for v in sorted(forms, key=len, reverse=True))
-        text = re.sub(f"({_MARKER})|({alts})", lambda m: m.group(1) or marker(*found[m.group(2).lower().replace(
-            "/", "\\")]), text, flags=re.I)
-    terms = {}
-    for t, cls, key in names:
-        t = " ".join(unicodedata.normalize("NFC", str(t or "")).split())
-        if len(t) >= 3 and not t.isdigit() and t in text and t not in terms:
-            terms[t] = (cls, key)
-    if terms:
-        alts = "|".join(re.escape(t) for t in sorted(terms, key=len, reverse=True))
-        text = re.sub(rf"({_MARKER})|(?<!\w)({alts})(?!\w)", lambda m: m.group(1) or marker(*terms[m.group(2)]), text)
-    for rx, repl in DIAG_PATTERNS:
-        text = rx.sub(repl, text)
-    return text
+
+_DIAG_RX = tuple(_diag_rx(t) for t in DIAG_LINES)
+
+
+def diag_codes(text):
+    """« (HTTP 401, PermissionError)»: los codigos de error de un texto libre (sin repetir; nada si no hay)."""
+    codes = list(dict.fromkeys(m.group(0) for m in DIAG_CODES.finditer(text or "")))[:4]
+    return f" ({', '.join(codes)})" if codes else ""
+
+
+def _diag_meeting_app(v):
+    from recording import MEETING_APPS
+    return v in {label for _, label in MEETING_APPS}
+
+
+# lo que un hueco tiene que ser para ensenarse tal cual (los que no estan, {t}, nunca)
+DIAG_CHECKS = {
+    "m": lambda v: v in DIAG_MODELS,
+    "c": lambda v: bool(_DIAG_EXC.fullmatch(v)),
+    "k": lambda v: all(re.fullmatch(r"[a-z_.]{2,40}", x) for x in v.split(", ")),
+    "l": lambda v: bool(re.fullmatch(r"auto|detectar|[a-z]{2}(?:-[a-z]{2})?", v)),
+    "a": _diag_meeting_app,
+    "u": lambda v: bool(re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}/", v)),
+    "v": lambda v: bool(re.fullmatch(r"\d+(?:\.\d+){1,3}[a-z0-9]{0,6}", v)),
+    "y": lambda v: bool(re.fullmatch(r"[A-Za-z0-9_.-]+\.pyw?", v)),
+    "f": lambda v: bool(re.fullmatch(r"[A-Za-z_<][A-Za-z0-9_<>.]*", v)),
+}
+
+
+def _diag_value(kind, v):
+    if kind == "n":
+        return v
+    if kind == "e":
+        return DIAG_FREE + diag_codes(v) if v.strip() else v
+    if kind == "y":  # de la ruta de una traza, solo el nombre del .py
+        v = re.split(r"[\\/]", v)[-1]
+    ok = DIAG_CHECKS.get(kind)
+    return v if ok and ok(v) else DIAG_FREE
+
+
+def diag_line(line):
+    """Una linea de server.log para el diagnostico: la fecha y el nivel, y del mensaje lo de su plantilla
+    (DIAG_LINES), con cada hueco segun su tipo. Sin plantilla: la sangria, el icono del principio (●, ✖, 🗣…) y
+    «<texto>» con los codigos de error que lleve."""
+    head = _DIAG_HEAD.match(line)
+    head = head.group(0) if head else ""
+    msg = line[len(head):]
+    for rx in _DIAG_RX:
+        m = rx.fullmatch(msg)
+        if m:
+            out, pos = [], 0
+            for name in sorted((g for g in rx.groupindex if m.start(g) >= 0), key=m.start):
+                out += [msg[pos:m.start(name)], _diag_value(name[0], m.group(name))]
+                pos = m.end(name)
+            return head + "".join(out) + msg[pos:]
+    body = msg.lstrip(" ")
+    indent, first = msg[:len(msg) - len(body)], body.split(" ", 1)[0]
+    icon = first + " " if first and len(first) <= 2 and not re.search(r"\w", first) else ""
+    rest = body[len(icon):]
+    if not rest.strip():
+        return head + indent + body.strip()
+    return head + indent + icon + DIAG_FREE + diag_codes(rest)
 
 
 def license_name():
@@ -2595,91 +2730,42 @@ class App:
             raise ApiError("No sé qué abrir")
         return {"ok": True}
 
-    def _diag_terms(self, st):
-        """(rutas, nombres) que el diagnostico cambia por marcadores (ver pseudonymize): la carpeta de la app, la de
-        datos, las vinculadas y los destinos; reuniones (nombre de fichero, titulo), carpetas, documentos, proyectos,
-        temas, etiquetas y personas (participantes, voces y la reunion en curso) y el usuario de Windows."""
-        default = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
-        datos = (("%LOCALAPPDATA%\\AudiosApp" if os.environ.get("LOCALAPPDATA") else "~/AudiosApp")
-                 if os.path.normcase(os.path.abspath(DATA_DIR)) == os.path.normcase(os.path.abspath(default))
-                 else "<datos>")
-        paths = [(ROOT, f"<carpeta de {APP_NAME}>", None), (DATA_DIR, datos, None)]
-        paths += [(l.get("path"), "vinculada", LINK + lid) for lid, l in LINKS.items()]
-        paths += [(d.get("path"), "destino", d.get("path")) for d in perfil_de(st)["outputs"]]
-        names = []
-
-        def people(text, *more):
-            for n in [*re.split(r"[,;]", str(text or "")), *more]:
-                if str(n or "").strip():
-                    names.append((n, "persona", fold(str(n).strip())))
-        lib = getattr(self, "library", None)
-        try:
-            if lib is not None and hasattr(lib, "refresh"):
-                lib.refresh(max_age=30)
-        except Exception:
-            log_exc()
-        for a in list(getattr(lib, "flat", None) or []):
-            p = a.get("props") or {}
-            names += [(t, "reunión", a.get("path")) for t in (a.get("stem"), a.get("label"), p.get("titulo"))]
-            people(p.get("participantes"))
-            names += [(p.get("proyecto"), "proyecto", fold(p.get("proyecto") or "")),
-                      (p.get("workstream"), "tema", fold(p.get("workstream") or ""))]
-            names += [(t, "etiqueta", fold(t)) for t in p.get("etiquetas") or []]
-        stack = [getattr(lib, "tree", None) or {}]
-        while stack:  # carpetas (las vinculadas, con su nombre en Chuleta) y documentos sueltos
-            node = stack.pop()
-            if node.get("path"):
-                names.append((node.get("name"), "vinculada" if node.get("linked") else "carpeta", node["path"]))
-            names += [(os.path.splitext(d.get("name") or "")[0], "documento", d.get("path"))
-                      for d in node.get("docs") or [] if not d.get("name", "").startswith(DIAG_APP_DOCS)]
-            stack += node.get("folders") or []
-        try:
-            for v in list_vocab():
-                names += [(v.get("project"), "proyecto", fold(v.get("project") or "")),
-                          (v.get("name"), "tema", fold(v.get("name") or ""))]
-        except Exception:
-            log_exc()
-        try:  # personas de «Quién habla» (solo si ya se abrio voces.json: aqui no se descifra nada nuevo)
-            if getattr(getattr(self, "jobs", None), "_voices", None) is not None:
-                people("", *self.jobs.voices.names().values())
-        except Exception:
-            log_exc()
-        r = getattr(getattr(self, "vigia", None), "ultimo", None) or {}
-        cita = r.get("outlook") or {}
-        names += [(t, "reunión", "en curso") for t in ((r.get("teams") or {}).get("title"), cita.get("subject"),
-                                                       (r.get("sugerencia") or {}).get("name"))]
-        people("", cita.get("organizer"), *(cita.get("attendees") or []))
-        for u in {os.environ.get("USERNAME"), os.environ.get("USER"), os.path.basename(os.path.expanduser("~"))}:
-            names.append((u, "<usuario>", None))
-        return paths, names
-
     def diagnostico(self, q):
-        """Texto para pedir ayuda (Acerca de > Copiar diagnostico): version, Python, sistema, motor y modelo, como es
-        la carpeta de la app y las ultimas 30 lineas de server.log, con las claves enmascaradas y sin nombres de
-        reuniones, carpetas, proyectos, temas ni personas, ni rutas con el usuario de Windows (pseudonymize): se pega
-        donde se pide ayuda, a veces en un sitio publico."""
+        """Texto para pedir ayuda (Acerca de > Copiar diagnostico), con lista blanca: version, Python y sistema, motor y
+        modelo, como es la carpeta de la app (sin su ruta), contadores y las ultimas 30 lineas de server.log por
+        diag_line (lo fijo de cada mensaje de la app, cifras y codigos de error; lo demas, «<texto>»). Se pega donde se
+        pide ayuda, a veces en un sitio publico: ni nombres ni rutas ni texto libre, y las claves enmascaradas."""
         st = self.settings.get()
         cloud = st.get("cloud") or {}
         preset = next((p for p in engines.PRESETS if p["id"] == st.get("preset")), None)
+
+        def tech(v):
+            return v if v in DIAG_MODELS else DIAG_FREE
         if preset and preset["engine"] == "cloud":
-            motor = f"nube ({cloud.get('provider') or '?'}) · modelo {cloud.get('model') or '?'}"
+            prov = cloud.get("provider") if cloud.get("provider") in engines.PROVIDERS else DIAG_FREE
+            motor = f"nube ({prov}) · modelo {tech(cloud.get('model'))}"
         else:
-            motor = f"local ({st.get('preset')}) · modelo {preset['model'] if preset else '?'}"
+            motor = f"local ({tech(st.get('preset'))}) · modelo {tech(preset['model']) if preset else DIAG_FREE}"
         try:
             lines = read_text(os.path.join(DATA_DIR, "server.log")).splitlines()[-30:]
         except OSError:
             lines = ["(no hay server.log)"]
         keys = [cloud.get("api_key"), *(cloud.get("extra_keys") or [])]
-        paths, names = self._diag_terms(st)
         si = lambda c: "sí" if c else "no"  # noqa: E731
+        default = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
+        propia = os.path.normcase(os.path.abspath(DATA_DIR)) == os.path.normcase(os.path.abspath(default))
+        datos = ("en la de siempre (%LOCALAPPDATA%\\AudiosApp)" if os.environ.get("LOCALAPPDATA") else
+                 "en la de siempre (~/AudiosApp)") if propia else "en otra carpeta"
+        en_red, no_ascii = ROOT.startswith(("\\\\", "//")), any(ord(c) > 127 for c in ROOT)
         info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
-                f"Transcripción: {motor} · directo: {st.get('live_preset') or 'medium'}",
-                f"Carpeta de {APP_NAME}: {ROOT} (en OneDrive: {si('onedrive' in ROOT.lower())} · con tildes u otros "
-                f"caracteres no ASCII: {si(any(ord(c) > 127 for c in ROOT))})", f"Datos: {DATA_DIR}",
+                f"Transcripción: {motor} · directo: {tech(st.get('live_preset') or 'medium')}",
+                f"Carpeta de {APP_NAME}: en OneDrive: {si('onedrive' in ROOT.lower())} · en una unidad de red: "
+                f"{si(en_red)} · con tildes u otros caracteres no ASCII: {si(no_ascii)} · {len(ROOT)} caracteres",
+                f"Datos: {datos}",
                 f"Carpetas vinculadas: {len(LINKS)} · destinos de salida: {len(perfil_de(st)['outputs'])}",
-                "", "server.log (últimas 30 líneas):", "\n".join(lines)]
-        texto = pseudonymize(scrub("\n".join(info), keys), paths, names)
-        return {"texto": texto}
+                "", f"server.log (últimas 30 líneas; lo que no es técnico va como {DIAG_FREE}):",
+                *map(diag_line, lines)]
+        return {"texto": scrub("\n".join(info), keys)}
 
     def _aviso_resumen_local(self):
         """Al arrancar: la primera vez sobre unos ajustes de una version anterior. Antes, el resumen automatico subia a

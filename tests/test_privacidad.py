@@ -445,6 +445,11 @@ class ParticipantesTextosTests(unittest.TestCase):
     def test_la_interfaz_dice_la_verdad(self):
         js, notas = static("reunion.js"), static("notas.js")
         self.assertNotIn("Todo se queda en este PC", js)
+        # el asunto de la cita sí sale (como nombre de la grabación y título del resumen y de los destinos)
+        self.assertNotIn("no se envía a ningún sitio", js)
+        self.assertIn("El nombre que se sugiere al grabar (el asunto de la cita o el título de la reunión de Teams), "
+                      "si lo aceptas, es el nombre de la grabación: va como título al resumen con IA y a los destinos "
+                      "de salida.", js)
         self.assertNotIn("(irán a las notas de la reunión)`", js)
         for s in ("como participantes <b>sugeridos</b>: no van al resumen con IA ni a los destinos de salida hasta "
                   "que los confirmes o los edites", "no se envían al resumen ni a los destinos hasta que los confirmes",
@@ -477,106 +482,156 @@ console.log(JSON.stringify([reunionParticipantesHtml({props: {participantes: 'An
 # ----------------------------------------------------------------------------- P1-06 / P2-11: diagnostico
 
 class DiagnosticoTests(TempTree):
-    MEET = "Clientes ACME/2026-10-31 10-10-10 - Comite ACME.wav"
+    """Lista blanca: del registro solo sale lo fijo de cada mensaje de la app, con sus cifras, modelos y códigos de
+    error; lo demás va como <texto>. Un server.log como el de verdad, con títulos, rutas y nombres, también de lo que
+    la app ya no conoce (importado y borrado, tema a la papelera, carpeta desvinculada, persona olvidada)."""
+
+    U = "C:\\Users\\bob.smith\\OneDrive - Initech\\Chuleta"
+    LOG = [  # (linea de server.log, lo que tiene que quedar)
+        ("I ⤓ importado: Clientes Omega/Entrevista CEO Omega.m4a", "I ⤓ importado: <texto>"),
+        ("I ▶ Entrevista CEO Omega.m4a  [Nube]", "I ▶ <texto>  [Nube]"),
+        ("I ✔ Entrevista CEO Omega.m4a  3.2 min  (18.5x tiempo real)",
+         "I ✔ <texto>  3.2 min  (18.5x tiempo real)"),
+        ("I 🗑 Clientes Omega/Entrevista CEO Omega.m4a → papelera (3 archivos)", "I 🗑 <texto> → papelera (3 archivos)"),
+        ("I 🗑 vocabulario a la papelera: Proyecto Delta · Due Diligence Omega",
+         "I 🗑 vocabulario a la papelera: <texto>"),
+        ("I ● Grabando: Clientes Omega/2026-10-29 09-00-00 - Comité Fusión Omega.wav [Proyecto Delta · Due Diligence "
+         "Omega]", "I ● Grabando: <texto> [<texto> · <texto>]"),
+        ("I 🔗 carpeta desvinculada (no se ha tocado nada): D:\\Clientes\\Banco Omega",
+         "I 🔗 carpeta desvinculada (no se ha tocado nada): <texto>"),
+        ("I 🔤 vocabulario importado de D:\\Backup\\Banco Omega: 3 listas copiadas, 1 omitidas (Proyecto Delta, "
+         "Proyecto Kappa)", "I 🔤 vocabulario importado de <texto>: 3 listas copiadas, 1 omitidas (<texto>)"),
+        ("I ✔ Comité Fusión Omega  resumen listo (12 s, openai/gpt-oss-120b)",
+         "I ✔ <texto>  resumen listo (12 s, openai/gpt-oss-120b)"),
+        ("I ↪ Clientes Omega/Junta Omega.m4a  →  Clientes Omega/Despido Gamma.m4a", "I ↪ <texto>  →  <texto>"),
+        ("I 🗣 huella guardada: Marta Olvidada (3 huellas)", "I 🗣 huella guardada: <texto> (3 huellas)"),
+        (f"I arranque · http://127.0.0.1:8765/ · carpeta {U} · datos C:\\Users\\bob.smith\\AppData\\Local\\AudiosApp "
+         "· Python 3.13.1", "I arranque · http://127.0.0.1:8765/ · carpeta <texto> · datos <texto> · Python 3.13.1"),
+        ("I ✖ 2026-10-30 09-00-00 - Reunión con Bravo.wav  HTTP 401: Invalid API Key provided: gsk_abc",
+         "I ✖ <texto>  <texto> (HTTP 401)"),
+        ("I ✖ Comité Fusión Omega  resumen: HTTP 429: Rate limit reached in organization `org_omega` "
+         "(rate_limit_exceeded)", "I ✖ <texto>  resumen: <texto> (HTTP 429, rate_limit_exceeded)"),
+        ("E Traceback (most recent call last):", "E Traceback (most recent call last):"),
+        (f'  File "{U}\\_app\\server.py", line 2100, in _run', '  File "server.py", line 2100, in _run'),
+        ("    segs, lang, dur = self.local.transcribe(abs_path, preset, job.language, vocab,", "    <texto>"),
+        ("PermissionError: [WinError 32] El proceso no tiene acceso al archivo: "
+         f"'{U}\\Clientes Omega\\Junta Omega.m4a'", "PermissionError: <texto> ([WinError 32])"),
+        ("I    reunión detectada (Teams): aviso flotante abierto",
+         "I    reunión detectada (Teams): aviso flotante abierto"),
+        ("I    2026-10-31 10-10-10 - Comite ACME: documento escrito en 1 destino(s) · sin tocar: Comite ACME.md: "
+         "cambiado a mano", "I    <texto>: documento escrito en 1 destino(s) · sin tocar: <texto>"),
+        ("I    perfil de reunión guardado: idioma, workstream", "I    perfil de reunión guardado: idioma, workstream"),
+        ("I modelo small precargado para la cola en 2.1 s", "I modelo small precargado para la cola en 2.1 s"),
+        ("I    directo Junta Omega.wav: modelo nube", "I    directo <texto>: modelo nube"),
+        ("I ✔ Junta Omega.wav  voces: 3 personas · 1 reconocida (40 s)",
+         "I ✔ <texto>  voces: 3 personas · 1 reconocida (40 s)"),
+        ("I    Junta Omega.wav: transcrita en local, sin resumen automático (no sale del PC; se puede resumir a mano)",
+         "I    <texto>: transcrita en local, sin resumen automático (no sale del PC; se puede resumir a mano)"),
+        # lo que no es de la app (o que la app escribe sin plantilla): <texto>, con el icono si lo hay
+        ("I aviso de ana.perez@contoso.com y Eva Sanz con Iker Mora", "I <texto>"),
+        ("I \\\\fileserver01\\finanzas\\informe Omega.docx", "I <texto>"),
+        ("I ventana http://127.0.0.1:8765/?t=AbCdEfGh0123456789_-xyzXYZ · X-Chuleta-Token: QwErTy0123456789abcdEF",
+         "I <texto>"),
+        (f"I petición con {KEY}", "I <texto>"),
+        ("I 🔗 Proyecto Faro (OneDrive - Contoso SA)", "I 🔗 <texto>"),
+    ]
+    SECRETOS = ("Omega", "Delta", "Kappa", "Due Diligence", "Entrevista", "CEO", "Comité", "Fusión", "Junta", "Despido",
+                "Gamma", "Bravo", "Marta", "Olvidada", "bob.smith", "Initech", "Banco", "Clientes", "Backup", "ACME",
+                "Comite", "Contoso", "ana.perez", "Eva Sanz", "Iker Mora", "fileserver01", "finanzas", "informe",
+                "org_omega", "Faro", "Nebula", KEY, "AbCdEfGh0123456789", "QwErTy0123456789", "C:\\Users", "D:\\",
+                "gsk_abc", "Invalid API Key", "El proceso no tiene acceso")
 
     def setUp(self):
         super().setUp()
-        self.wav(self.MEET)
-        self.write(self.MEET[:-4] + ".md", "---\ntitulo: Kick-off Zafiro\netiquetas: [Confidencial]\n"
-                                           "participantes: Ana Perez, Luis Gomez\nproyecto: Proyecto Zeta\n"
-                                           "workstream: Fusiones\n---\n\nnotas\n")
-        self.write("Proyecto Zeta/Vocabulario/Fusiones.txt", "Zafiro\n")
-        self.write("Clientes ACME/Propuesta Orion.md", "doc suelto\n")
-        self.link = os.path.join(self.tmp, "OneDrive - Contoso SA", "Proyecto Faro")
-        os.makedirs(self.link)
-        server.LINKS["l1"] = {"name": "Faro", "path": self.link}
+        self.assertEqual(len(self.LOG), 30)  # diagnostico lee las 30 ultimas
+        # una biblioteca con nombres que coinciden con las etiquetas del propio diagnostico (P1-06, punto 3)
+        self.wav("Datos/2026-10-31 10-10-10 - Python.wav")
+        self.write("Datos/2026-10-31 10-10-10 - Python.md",
+                   "---\ntitulo: Chuleta\netiquetas: [Datos, Nube]\nproyecto: Python\nworkstream: Transcripción\n---\n")
+        link = os.path.join(self.tmp, "OneDrive - Contoso SA", "Proyecto Faro")
+        os.makedirs(link)
+        server.LINKS["l1"] = {"name": "Faro", "path": link}
+        self.addCleanup(server.LINKS.pop, "l1", None)
         self.app = server.App.__new__(server.App)
-        self.app.settings = settings_store(self.tmp, cloud=CLOUD, perfil={"outputs": [
-            {"path": os.path.join(self.tmp, "Vault Nebula"), "format": "md", "by_project": False}]})
-        self.app.library = server.Library(server.Durations(os.path.join(self.data_dir, "durations.json")))
-        self.app.jobs = bare_jobs([])
-        self.app.vigia = types.SimpleNamespace(ultimo={
-            "teams": {"title": "Comite ACME"},
-            "outlook": {"subject": "Comite ACME", "organizer": "Eva Sanz", "attendees": ["Iker Mora", "Alba Ruiz"]},
-            "sugerencia": {"name": "Comite ACME"}})
-        meet_abs = os.path.join(self.root, self.MEET)
-        lines = [
-            f"● Grabando: {self.MEET} [Proyecto Zeta · Fusiones]",
-            f"▶ {os.path.basename(self.MEET)}  [Nube]",
-            "✔ Kick-off Zafiro  resumen listo (12 s, m1)",
-            "✖ 2026-10-30 09-00-00 - Reunion borrada con Bravo.wav  sin conexión",
-            f"arranque · http://127.0.0.1:8765/ · carpeta {self.root} · datos {self.data_dir} · Python 3.13",
-            f'Traceback: File "{os.path.join(self.root, "_app", "server.py")}", line 10, in x',
-            'File "C:\\Users\\bob.smith\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\json.py", line 1',
-            "carpeta vinculada: C:\\Users\\bob.smith\\OneDrive - Initech\\Otra",
-            f"🔗 carpeta vinculada: {self.link}",
-            "   2026-10-31 10-10-10 - Comite ACME: documento escrito en 1 destino(s) · "
-            + os.path.join(self.tmp, "Vault Nebula"),
-            "🗣 huella guardada: Marta Olvidada (3 huellas)",
-            "aviso de ana.perez@contoso.com y Eva Sanz con Iker Mora",
-            "\\\\fileserver01\\finanzas\\informe.docx",
-            f"no se pudo leer {meet_abs}: PermissionError",
-            "/Users/carlos/Library/x y /home/carlos/x",
-            "Faro · Propuesta Orion · Confidencial · Comite ACME",
-            f"petición con {KEY}",
-            "ventana http://127.0.0.1:8765/?t=AbCdEfGh0123456789_-xyzXYZ · X-Chuleta-Token: QwErTy0123456789abcdEF",
-        ]
+        self.app.settings = settings_store(self.tmp, cloud=dict(CLOUD, model="whisper-large-v3-turbo"), preset="nube",
+                                           perfil={"outputs": [{"path": os.path.join(self.tmp, "Vault Nebula"),
+                                                                "format": "md", "by_project": False}]})
         with open(os.path.join(self.data_dir, "server.log"), "w", encoding="utf-8") as f:
-            for i, l in enumerate(lines):
-                f.write(f"2026-10-31 10:00:{i:02d} I {l}\n")
+            for i, (line, _) in enumerate(self.LOG):
+                f.write((line if line.startswith(" ") or not line[1:2] == " " else
+                         f"2026-10-31 10:00:{i:02d} {line}") + "\n")
 
     def texto(self):
         with mock.patch.object(server, "log"):
             return self.app.diagnostico({})["texto"]
 
-    def test_sin_nombres_ni_rutas_personales(self):
+    def test_un_registro_real_sin_nombres_ni_rutas(self):
         t = self.texto()
-        for s in ("ACME", "Comite", "Zafiro", "Ana Perez", "Luis Gomez", "Proyecto Zeta", "Fusiones", "Confidencial",
-                  "Propuesta Orion", "Faro", "Contoso", "Initech", "Nebula", "bob.smith", "carlos", "Eva Sanz",
-                  "Iker Mora", "Bravo", "Marta Olvidada", "ana.perez", "fileserver01", "finanzas", self.root,
-                  self.data_dir, self.tmp, KEY, "AbCdEfGh0123456789", "QwErTy0123456789"):
+        for s in self.SECRETOS + (self.root, self.data_dir, self.tmp):
             self.assertNotIn(s, t, s)
 
-    def test_marcadores_que_dejan_entender_el_registro(self):
+    def test_lo_tecnico_se_queda(self):
         t = self.texto()
+        lines = t.split("\n")
         app = server.APP_NAME
-        for s in ("● Grabando: <carpeta 1>/<reunión 1>.wav [<proyecto 1> · <tema 1>]", "▶ <reunión 1>.wav  [Nube]",
-                  "✔ <reunión 1>  resumen listo", "✖ 2026-10-30 09-00-00 - <nombre>.wav  sin conexión",
-                  f"carpeta <carpeta de {app}> · datos <datos> · Python", f"<carpeta de {app}>",
-                  "C:\\Users\\<usuario>\\AppData\\Local\\Programs\\Python\\Python313", "OneDrive - <empresa>",
-                  "🔗 carpeta vinculada: <vinculada 1>", "<destino 1>", "huella guardada: <persona> (3 huellas)",
-                  "aviso de <correo> y <persona", "\\\\<servidor>\\<recurso>\\informe.docx", "/Users/<usuario>/",
-                  "/home/<usuario>/", f"Carpeta de {app}: <carpeta de {app}> (en OneDrive: no", "Datos: <datos>",
-                  "Carpetas vinculadas: 1 · destinos de salida: 1", server.masked(KEY), "server.log (últimas 30",
-                  "8765/?t=<token> · X-Chuleta-Token: <token>"):
-            self.assertIn(s, t, s)
-        self.assertIn(os.path.join("_app", "server.py"), t)  # la ruta del codigo dentro de la app se queda
+        self.assertEqual(lines[:8], [
+            f"{app} · versión {server.VERSION}", f"Python {server.sys.version.split()[0]} · "
+            f"{server.platform.platform()}",
+            "Transcripción: nube (groq) · modelo whisper-large-v3-turbo · directo: medium",
+            f"Carpeta de {app}: en OneDrive: no · en una unidad de red: no · con tildes u otros caracteres no ASCII: "
+            f"no · {len(server.ROOT)} caracteres",
+            "Datos: en otra carpeta", "Carpetas vinculadas: 1 · destinos de salida: 1", "",
+            "server.log (últimas 30 líneas; lo que no es técnico va como <texto>):"])
+        salida = [l.split(" ", 2)[2] if l[:4].isdigit() else l for l in lines[8:]]  # sin la fecha y la hora
+        self.assertEqual(salida, [esperado for _, esperado in self.LOG])
+        self.assertTrue(all(l.startswith("2026-10-31 10:00:") for l, (orig, _) in zip(lines[8:], self.LOG)
+                            if orig[1:2] == " " and not orig.startswith(" ")))
 
-    def test_pseudonymize(self):
-        f = server.pseudonymize
-        self.assertEqual(f("nada que ver"), "nada que ver")
-        names = [("Ana", "persona", "ana"), ("Ana Pérez", "persona", "ana p"), ("Alfa", "carpeta", "Alfa")]
-        self.assertEqual(f("Ana Pérez y Ana y Ana Pérez en Alfa/x; Alfabeto", names=names),
-                         "<persona 1> y <persona 2> y <persona 1> en <carpeta 1>/x; Alfabeto")
-        self.assertEqual(f("C:/DATOS/Chuleta/x y c:\\datos\\chuleta\\y", paths=[("C:\\Datos\\Chuleta", "<app>", None)]),
-                         "<app>/x y <app>\\y")
-        self.assertEqual(f("<app> y app", names=[("app", "carpeta", 1)]), "<app> y <carpeta 1>")  # marcador intacto
-        self.assertEqual(f("Reunio\u0301n Alfa", names=[("Reunión Alfa", "reunión", 1)]), "<reunión 1>")  # NFD
-        self.assertEqual(f("bob en C:\\Users\\bob\\x", names=[("bob", "<usuario>", None)]),
-                         "<usuario> en C:\\Users\\<usuario>\\x")
-        # la ruta y el nombre de una carpeta vinculada llevan el mismo marcador, por orden de aparicion
-        paths = [("/v/g", "vinculada", ":g"), ("/v/b", "vinculada", ":b")]
-        names = [("Beta", "vinculada", ":b"), ("Gamma", "vinculada", ":g")]
-        self.assertEqual(f("Beta en /v/b; Gamma en /v/g y otra vez Beta", paths=paths, names=names),
-                         "<vinculada 1> en <vinculada 1>; <vinculada 2> en <vinculada 2> y otra vez <vinculada 1>")
+    def test_ningun_hueco_deja_pasar_texto(self):
+        """Cada plantilla con un dato confidencial en cada hueco (con la forma del hueco, pero sin ser técnico): no
+        sale nada de él y el texto fijo de la plantilla se queda tal cual."""
+        dato = {"n": "12", "c": "OmegaSecreto", "y": "C:\\Users\\omega\\Secreto Omega.txt"}
+        for tpl in server.DIAG_LINES:
+            for opcional in (True, False):
+                base = re.sub(r"⟦(.*?)⟧", r"\1" if opcional else "", tpl)
+                linea = re.sub(r"\{([a-z])\}", lambda m: dato.get(m.group(1), "Omega Secreto · C:\\Users\\omega"),
+                               base)
+                self.assertIsNotNone(server._diag_rx(tpl).fullmatch(linea), tpl)
+                out = server.diag_line(linea)
+                self.assertNotRegex(out, r"(?i)omega|secreto|users", (tpl, out))
+                self.assertEqual(out, re.sub(r"\{([a-z])\}", lambda m: "12" if m.group(1) == "n" else "<texto>",
+                                             base), tpl)  # ninguna plantilla anterior se la come
+
+    def test_sin_plantilla(self):
+        f = server.diag_line
+        self.assertEqual(f("2026-10-31 10:00:00 I 🔗 Proyecto Faro"), "2026-10-31 10:00:00 I 🔗 <texto>")
+        self.assertEqual(f("   Reunión Omega: algo nuevo [WinError 5] y HTTP 503 y otra vez HTTP 503"),
+                         "   <texto> ([WinError 5], HTTP 503)")
+        self.assertEqual(f("2026-10-31 10:00:00 I ●"), "2026-10-31 10:00:00 I ●")
+        self.assertEqual((f(""), f("Omega"), f("Omega: [Errno 13] x")),
+                         ("", "<texto>", "<texto>: <texto> ([Errno 13])"))
+        self.assertEqual(server.diag_codes("ConnectionResetError, 0x80040154 y -2147221005"),
+                         " (ConnectionResetError, 0x80040154, -2147221005)")
+
+    def test_motor_y_modelo_propios_no_salen(self):
+        """Una pasarela de empresa (Azure, otra compatible) puede llevar el nombre del cliente en el modelo."""
+        self.app.settings.update(lambda d: d["cloud"].update(provider="azure", model="omega-whisper-prod"))
+        self.assertIn("Transcripción: nube (azure) · modelo <texto> · directo: medium", self.texto())
+        self.app.settings.update(lambda d: d.update(preset="rapido", live_preset="omega"))
+        self.assertIn("Transcripción: local (rapido) · modelo small · directo: <texto>", self.texto())
 
     def test_aviso_junto_al_boton(self):
         app = static("app.js")
         i = app.index('id="aDiag"')
-        cerca = app[i:i + 900]
-        self.assertIn("revísalo antes de pegarlo y no lo publiques en un sitio público", cerca)
-        self.assertIn("&lt;reunión 1&gt;", cerca)
+        cerca = app[i:i + 1400]
+        self.assertIn("Solo lleva datos técnicos", cerca)
+        self.assertIn("van como &lt;texto&gt;, y las claves no van", cerca)
+        self.assertIn("El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal "
+                      "cual", cerca)
+        self.assertIn("no lo publiques en un sitio público", cerca)
+        self.assertNotIn("cambiados por marcadores", app)
         self.assertIn("'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'", app)
+        self.assertFalse(hasattr(server, "pseudonymize"))  # nada de lista negra: lo que no esta en la lista, no sale
 
 
 # ----------------------------------------------------------------------------- P2-14: trozos de audio temporales
