@@ -438,7 +438,8 @@ class LogSinConsolaTests(unittest.TestCase):
 
 
 class InstaladorTests(unittest.TestCase):
-    """instalar.ps1 e INSTALAR.bat no se pueden ejecutar aqui: se comprueba el texto (el parseo lo hace pwsh aparte)."""
+    """instalar.ps1 e INSTALAR.bat no se pueden ejecutar aqui: se comprueba el texto. El parseo con Windows PowerShell
+    5.1 lo hace el job de Windows de tests.yml (ParseFile), y la instalacion de verdad, el workflow lookfeel-e2e."""
 
     def read_repo(self, *parts):
         with open(os.path.join(os.path.dirname(APP), *parts), "rb") as f:

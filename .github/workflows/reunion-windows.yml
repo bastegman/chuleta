@@ -1,11 +1,17 @@
 name: reunion-windows
 
 # Pruebas de escritorio en Windows (ventana de Teams simulada, aviso flotante, captura de pantalla, pywin32 sin
-# Outlook). Se lanza a mano o con cada push de la rama reunion-teams-outlook; los artefactos llevan las capturas.
+# Outlook). Se lanza a mano (Actions -> reunion-windows -> Run workflow) y con cada push a main, o a la rama
+# reunion-teams-outlook, que toque la app, los tests o este workflow; los artefactos llevan las capturas.
 on:
   workflow_dispatch:
   push:
-    branches: [reunion-teams-outlook]
+    branches: [main, reunion-teams-outlook]
+    paths:
+      - "_app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/reunion-windows.yml"
 
 permissions:
   contents: read
