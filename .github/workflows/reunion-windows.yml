@@ -27,8 +27,8 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
         with:
           python-version: "3.12"
-      - name: numpy (tests) y pywin32 (Outlook, opcional en la app)
-        run: python -m pip install --disable-pip-version-check numpy pywin32==312
+      - name: numpy y requests (tests, como tests.yml) y pywin32 (Outlook, opcional en la app)
+        run: python -m pip install --disable-pip-version-check numpy requests pywin32==312
       - name: Pantalla del runner (para interpretar las capturas)
         shell: pwsh
         run: |

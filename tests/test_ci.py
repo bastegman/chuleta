@@ -541,6 +541,26 @@ _AVISO = "::warning title=Agnosticismo sin ejecutar::"
 _EN_LOCAL = 'NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py'
 
 
+class WorkflowsDependenciasTests(unittest.TestCase):
+    def test_quien_ejecuta_la_suite_instala_numpy_y_requests(self):
+        """La suite necesita numpy y requests, que es lo que instala tests.yml. Un workflow que la ejecuta sin
+        requests da un error en test_directo_auditoria (resumen con Azure) y un fallo en el diagnóstico (las
+        excepciones de requests). Pasó con reunion-windows, que desde P2-38 corre también con los push a main."""
+        vistos = []
+        for nombre in sorted(n for n in os.listdir(WORKFLOWS) if n.endswith((".yml", ".yaml"))):
+            for jname, job in workflow(nombre)["jobs"].items():
+                runs = [str(p.get("run") or "") for p in job.get("steps") or []]
+                i = next((k for k, r in enumerate(runs) if "tests/run.py" in r), None)
+                if i is None:
+                    continue
+                vistos.append(nombre)
+                with self.subTest(f"{nombre}: {jname}"):
+                    instala = " ".join(r for r in runs[:i] if "pip install" in r)
+                    for paquete in ("numpy", "requests"):
+                        self.assertRegex(instala, rf"(?<![\w.-]){paquete}(?![\w.-])", paquete)
+        self.assertIn("tests.yml", vistos)
+
+
 class AgnosticismoCITests(unittest.TestCase):
     """P2-39: el test de agnosticismo corre en la CI con la lista privada (el secreto NOTAS_PALABRAS_VETADAS) y falla si
     encuentra algo. Sin el secreto no se ejecuta, y el propio test lo avisa en el resumen del run (::warning, con
