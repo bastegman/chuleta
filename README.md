@@ -33,16 +33,32 @@ notas) se queda en la carpeta donde descomprimas la app.
 
 ## Instalar (Windows, sin permisos de administrador)
 
-1. Descarga el zip (`Chuleta - instalador.zip`) o este repositorio y descomprímelo donde quieras tener tus
-   reuniones (Documentos, Escritorio, OneDrive…).
-2. Doble clic en `INSTALAR.bat`. Si no hay Python lo instala, instala las librerías (`requirements.txt`) y
-   crea el acceso directo «Chuleta» en el escritorio y en el menú Inicio.
+1. Descarga el zip (`Chuleta - instalador.zip`) o este repositorio y descomprímelo donde sea (Descargas vale).
+2. Doble clic en `INSTALAR.bat`. Copia la app a su carpeta propia, `%USERPROFILE%\Chuleta` (fuera de Descargas y de
+   OneDrive; si esa carpeta ya existe con otras cosas, `Chuleta (2)`; `INSTALAR.bat -Destino <carpeta>` para otra
+   nueva o vacía), donde se guardarán las reuniones. Si no hay Python lo instala, instala las librerías
+   (`requirements.txt`), crea el acceso directo «Chuleta» en el escritorio y en el menú Inicio y la añade a
+   **Aplicaciones instaladas** (`HKCU\…\Uninstall\Chuleta`, sin administrador). Al terminar dice dónde ha quedado;
+   la carpeta descomprimida ya se puede borrar.
 3. Se abre Chuleta. Para transcribir en la nube: ⚙ Ajustes → Transcripción en la nube → tu API key.
    Sin nube también funciona (transcribe en el propio PC, más lento).
 4. Cerrar la ventana deja Chuleta en segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando); el acceso directo la
    vuelve a abrir. Para apagarla del todo: ⚙ Ajustes → Apagar Chuleta.
-5. Si ya tenías la versión anterior (se llamaba «Notas»), el mismo `INSTALAR.bat` la encuentra por su acceso directo,
-   la actualiza en su carpeta (con tus grabaciones) y renombra el acceso directo «Notas» a «Chuleta»; no borra nada.
+5. Para actualizar, descomprime el zip nuevo y ejecuta su `INSTALAR.bat`: encuentra la instalación anterior (por
+   Aplicaciones instaladas, por su acceso directo «Chuleta» o «Notas», el nombre anterior, o en
+   `%USERPROFILE%\Chuleta`), la actualiza en su carpeta con tus grabaciones (nunca las mueve) y renombra el acceso
+   directo «Notas» a «Chuleta»; no borra nada.
+
+### Desinstalar
+
+**Configuración → Aplicaciones → Aplicaciones instaladas → Chuleta → Desinstalar** (o Panel de control → Programas y
+características). Quita los accesos directos, la entrada de Aplicaciones instaladas y la carpeta `_app` (solo lo que
+es de la app). **Las reuniones se quedan**: audios, transcripciones, notas, resúmenes, hablantes, carpetas de proyecto
+y listas de vocabulario siguen en la carpeta de Chuleta, junto al `LEEME.txt`; una reinstalación vuelve a
+`%USERPROFILE%\Chuleta` (si estaba en otra carpeta, `INSTALAR.bat -Destino <esa carpeta>`). Una casilla, desmarcada por defecto, borra además `%LOCALAPPDATA%\AudiosApp` (ajustes, API keys, huellas de
+voz y registros). Si la app está grabando, no toca nada. Sin ventana: `QuietUninstallString` (`desinstalar.ps1
+-Silencioso`, que no borra `AudiosApp` salvo con `-BorrarDatos`); registro en `%TEMP%\chuleta-desinstalar.log`.
+Python y sus librerías se quedan.
 
 El manual completo está en `LEEME.txt`.
 

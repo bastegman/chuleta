@@ -10,13 +10,19 @@ Qué es
 
 INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 ----------------------------------------------------------------------------------
-  1. Descomprime el .zip y deja la carpeta "Chuleta" donde quieras tenerla (Documentos, Escritorio,
-     OneDrive…). Las grabaciones, transcripciones y notas se guardan dentro de esa carpeta.
+  1. Descomprime el .zip donde sea (Descargas vale).
 
   2. Doble clic en INSTALAR.bat
+       - Instala Chuleta en su propia carpeta: C:\Users\<tu usuario>\Chuleta (fuera de Descargas y de
+         OneDrive). Ahí se guardan las grabaciones, transcripciones y notas. Al terminar te dice dónde
+         ha quedado; la carpeta que descomprimiste ya no hace falta y la puedes borrar.
        - Si no tienes Python, lo instala (solo para tu usuario).
        - Instala las librerías y crea el acceso directo "Chuleta" en el escritorio y en el menú Inicio.
+       - Chuleta aparece en Configuración > Aplicaciones > Aplicaciones instaladas, con su versión y
+         su botón Desinstalar.
        - Si Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas formas".
+       - ¿Otra carpeta? Desde una ventana de comandos: INSTALAR.bat -Destino "D:\Reuniones" (una
+         carpeta nueva o vacía).
 
   3. Se abre Chuleta. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
        - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y deja el modelo
@@ -30,10 +36,27 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 ACTUALIZAR A UNA VERSIÓN NUEVA
 ----------------------------------------------------------------------------------
   Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Chuleta (o la versión
-  anterior, que se llamaba Notas), el instalador la cierra (salvo que esté grabando) y actualiza la de
-  siempre, en su carpeta, con tus grabaciones; la carpeta recién descomprimida ya no hace falta. El
-  acceso directo "Notas" pasa a llamarse "Chuleta" (no se borra nada). La versión instalada se ve al
-  final de Ajustes, en "Acerca de".
+  anterior, que se llamaba Notas), el instalador la encuentra (por Aplicaciones instaladas o por su
+  acceso directo), la cierra (salvo que esté grabando) y actualiza la de siempre, en su carpeta, con
+  tus grabaciones: nunca las mueve. La carpeta recién descomprimida ya no hace falta. El acceso
+  directo "Notas" pasa a llamarse "Chuleta" (no se borra nada). La versión instalada se ve al final
+  de Ajustes, en "Acerca de", y en Aplicaciones instaladas.
+
+
+DESINSTALAR
+----------------------------------------------------------------------------------
+  - Configuración > Aplicaciones > Aplicaciones instaladas > Chuleta > Desinstalar (en el Panel de
+    control: Programas y características > Chuleta).
+  - Quita la aplicación: los accesos directos, su entrada en Aplicaciones instaladas y la carpeta
+    _app. Tus reuniones (audios, transcripciones, notas, resúmenes, hablantes, carpetas de proyecto y
+    listas de vocabulario) NO se borran: se quedan en la carpeta Chuleta, junto a este LEEME.txt.
+  - La casilla "Borrar también mis ajustes, claves y voces guardadas" (desmarcada) borra además
+    %LOCALAPPDATA%\AudiosApp: ajustes, API keys, huellas de voz y registros. Es definitivo.
+  - Si Chuleta está grabando, el desinstalador no toca nada: para la grabación y vuelve a empezar.
+  - Python y sus librerías se quedan (los puede usar otro programa); si no los quieres, se quitan
+    aparte, también en Aplicaciones instaladas.
+  - Si vuelves a instalar, Chuleta vuelve a C:\Users\<tu usuario>\Chuleta y enseña otra vez tus
+    reuniones. Si la tenías en otra carpeta: INSTALAR.bat -Destino "esa carpeta".
 
 
 USO DIARIO
@@ -117,6 +140,10 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
 SI ALGO FALLA
 ----------------------------------------------------------------------------------
   - INSTALAR.bat se puede volver a ejecutar sin problema.
+  - Si tu empresa no deja añadir programas a Aplicaciones instaladas, el instalador lo avisa y
+    Chuleta funciona igual; para quitarla: clic derecho en _app\desinstalar.ps1 > "Ejecutar con
+    PowerShell".
+  - Registro del desinstalador: %TEMP%\chuleta-desinstalar.log.
   - Si el acceso directo no abre nada, ABRIR CHULETA.bat arranca la app con una ventana de consola
     donde se ven los mensajes (ciérrala para apagar).
   - Para pedir ayuda: ⚙ Ajustes > Acerca de > "Copiar diagnóstico" copia la versión, el sistema y las

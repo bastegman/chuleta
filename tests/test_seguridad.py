@@ -634,13 +634,25 @@ class AvisoTests(unittest.TestCase):
 
 class ScriptsTests(unittest.TestCase):
     def test_instalador_manda_el_token(self):
-        ps1 = read("instalar.ps1")
-        self.assertIn('AudiosApp\\sesion.token', ps1)
-        self.assertIn('$api["X-Chuleta-Token"] = $t', ps1)
-        calls = [l for l in ps1.splitlines() if "Invoke-RestMethod" in l and "127.0.0.1:$Port/api/" in l]
-        self.assertGreaterEqual(len(calls), 4)
-        for l in calls:
-            self.assertTrue("-Headers $api" in l or "-Headers ($api + " in l, l)
+        """instalar.ps1 y desinstalar.ps1 (instalacion-empresa) hablan con la app abierta solo por Invoke-Api, que pone
+        las cabeceras de Get-ApiHeaders: X-Chuleta-Token con el contenido de AudiosApp\\sesion.token (el DATA_DIR de la
+        app) y X-Audios en los POST. Ninguna otra llamada HTTP se salta ese camino."""
+        for name, fichero in (("instalar.ps1", 'Join-Path $env:LOCALAPPDATA "AudiosApp\\sesion.token"'),
+                              ("desinstalar.ps1", 'Join-Path $Datos "sesion.token"')):
+            with self.subTest(name):
+                ps1 = read(name)
+                cabeceras = re.search(r"^function Get-ApiHeaders\(\$post\) \{$(.*?)^\}$", ps1, re.S | re.M).group(1)
+                self.assertIn(fichero, cabeceras)
+                self.assertIn('$h["X-Chuleta-Token"] = $tok', cabeceras)
+                self.assertIn('if ($post) { $h["X-Audios"] = "1" }', cabeceras)
+                api = re.search(r"^function Invoke-Api\(.*?^\}$", ps1, re.S | re.M).group(0)
+                self.assertIn('Uri = "http://127.0.0.1:$Port$path"', api)
+                self.assertIn("Headers = (Get-ApiHeaders $post)", api)
+                fuera = ps1.replace(api, "")
+                self.assertNotRegex(fuera, r"Invoke-(RestMethod|WebRequest)")
+                self.assertGreaterEqual(len(re.findall(r'Invoke-Api "/api/(?:ping|rec/status|apagar)"', fuera)), 3)
+        self.assertIn('$Datos = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "AudiosApp" }',
+                      read("desinstalar.ps1"))
 
     def test_e2e_manda_el_token(self):
         with open(os.path.join(REPO, "scripts", "e2e", "lookfeel_e2e.ps1"), encoding="utf-8") as f:
