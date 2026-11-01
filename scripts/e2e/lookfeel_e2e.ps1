@@ -251,12 +251,12 @@ function Diag-Lenta($label) {
     } catch { Note "$label.webrequest_sin_keepalive" ($_.Exception.GetType().FullName + ": " + $_.Exception.Message) }
     try {
         $t = Get-Date
-        $r = Invoke-RestMethod "$Base/api/config" -Headers $h -TimeoutSec 10 -DisableKeepAlive
+        $r = Invoke-RestMethod "$Base/api/config" -Headers (Api-Headers $false) -TimeoutSec 10 -DisableKeepAlive
         Note "$label.irm_sin_keepalive" ("root=$($r.root) " + [Math]::Round(((Get-Date) - $t).TotalSeconds, 2) + "s")
     } catch { Note "$label.irm_sin_keepalive" ($_.Exception.GetType().FullName + ": " + $_.Exception.Message) }
     try {
         $t = Get-Date
-        $r = Invoke-RestMethod "$Base/api/config" -Headers $h -TimeoutSec 10
+        $r = Invoke-RestMethod "$Base/api/config" -Headers (Api-Headers $false) -TimeoutSec 10
         Note "$label.irm_otra_vez" ("root=$($r.root) " + [Math]::Round(((Get-Date) - $t).TotalSeconds, 2) + "s")
     } catch { Note "$label.irm_otra_vez" ($_.Exception.GetType().FullName + ": " + $_.Exception.Message) }
 }
