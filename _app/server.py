@@ -2315,6 +2315,11 @@ DIAG_LINES = (
     "   voces.json no se pudo leer ({e}); se aparta como voces.json.ilegible",
     # arranque, ajustes, grabadora, llamadas y apagado
     "arranque · {u} · carpeta {t} · datos {t} · Python {v}",
+    "=" * 64,  # el recuadro de main() con la URL, la carpeta y como apagar
+    f"  {APP_NAME.upper()}  ·  {{u}}",
+    "  Carpeta: {t}",
+    f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).",
+    "   sin DPAPI fuera de Windows: los secretos se guardan en claro (plain:base64)",
     "modelo {m} precargado para el directo en {n} s",
     "modelo {m} precargado para la cola en {n} s",
     "no se pudo precargar {m}: {e}",

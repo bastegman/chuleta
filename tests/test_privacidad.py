@@ -590,15 +590,15 @@ class DiagnosticoTests(TempTree):
     def test_ningun_hueco_deja_pasar_texto(self):
         """Cada plantilla con un dato confidencial en cada hueco (con la forma del hueco, pero sin ser técnico): no
         sale nada de él y el texto fijo de la plantilla se queda tal cual."""
-        dato = {"n": "12", "c": "OmegaSecreto", "y": "C:\\Users\\omega\\Secreto Omega.txt"}
+        dato = {"n": "12", "c": "OmegaKwyjibo", "y": "C:\\Users\\omega\\Kwyjibo Omega.txt"}
         for tpl in server.DIAG_LINES:
             for opcional in (True, False):
                 base = re.sub(r"⟦(.*?)⟧", r"\1" if opcional else "", tpl)
-                linea = re.sub(r"\{([a-z])\}", lambda m: dato.get(m.group(1), "Omega Secreto · C:\\Users\\omega"),
+                linea = re.sub(r"\{([a-z])\}", lambda m: dato.get(m.group(1), "Omega Kwyjibo · C:\\Users\\omega"),
                                base)
                 self.assertIsNotNone(server._diag_rx(tpl).fullmatch(linea), tpl)
                 out = server.diag_line(linea)
-                self.assertNotRegex(out, r"(?i)omega|secreto|users", (tpl, out))
+                self.assertNotRegex(out, r"(?i)omega|kwyjibo|users", (tpl, out))
                 self.assertEqual(out, re.sub(r"\{([a-z])\}", lambda m: "12" if m.group(1) == "n" else "<texto>",
                                              base), tpl)  # ninguna plantilla anterior se la come
 
@@ -610,6 +610,13 @@ class DiagnosticoTests(TempTree):
         self.assertEqual(f("2026-10-31 10:00:00 I ●"), "2026-10-31 10:00:00 I ●")
         self.assertEqual((f(""), f("Omega"), f("Omega: [Errno 13] x")),
                          ("", "<texto>", "<texto>: <texto> ([Errno 13])"))
+        # el recuadro del arranque (main) y lo que escribe common.py fuera de Windows
+        app = server.APP_NAME
+        apagar = f"  Apagar: Ajustes > Apagar {app} (con consola, también cerrándola o Ctrl+C)."
+        dpapi = "   sin DPAPI fuera de Windows: los secretos se guardan en claro (plain:base64)"
+        self.assertEqual([f(l) for l in ("=" * 64, f"  {app.upper()}  ·  http://127.0.0.1:8765/",
+                                         "  Carpeta: C:\\Users\\omega\\Chuleta", apagar, dpapi)],
+                         ["=" * 64, f"  {app.upper()}  ·  http://127.0.0.1:8765/", "  Carpeta: <texto>", apagar, dpapi])
         self.assertEqual(server.diag_codes("ConnectionResetError, 0x80040154 y -2147221005"),
                          " (ConnectionResetError, 0x80040154, -2147221005)")
 
