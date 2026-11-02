@@ -84,8 +84,11 @@ class MicroEnUsoTests(unittest.TestCase):
         self.assertIn("no está en marcha", logs[1])
 
     def test_scan_sin_saber_los_procesos_se_fia_de_la_fecha(self):
+        """running_images() devuelve None cuando no se puede saber (fuera de Windows, o tasklist falla): entonces
+        basta la fecha. En Windows la CI tiene tasklist de verdad, asi que se sustituye."""
         reciente = [("C:#Program Files#Zoom#bin#Zoom.exe", filetime(self.now - 30), 0)]
-        self.assertEqual(recording.mic_scan(reciente, self.now, images=None), "Zoom")
+        with mock.patch.object(recording, "running_images", lambda: None):
+            self.assertEqual(recording.mic_scan(reciente, self.now), "Zoom")
 
     def test_navegador_cuenta_si_esta_abierto(self):
         e = [("C:#Program Files (x86)#Microsoft#Edge#Application#msedge.exe", filetime(self.now - 30), 0)]
