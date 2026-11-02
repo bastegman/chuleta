@@ -36,7 +36,10 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
 
 ## Instalar (Windows, sin permisos de administrador)
 
-1. Consigue el zip `Chuleta - instalador.zip` o este repositorio y descomprímelo donde sea (Descargas vale). El zip lo
+1. Consigue el zip `Chuleta - instalador.zip` o este repositorio. Antes de descomprimirlo, clic derecho → Propiedades →
+   «Desbloquear» → Aceptar: así Windows no marca `INSTALAR.bat` como bajado de Internet y no sale el aviso «Unknown
+   publisher» («Windows protegió su PC»; si sale igual, «Más información» → «Ejecutar de todas formas»: el instalador
+   no lleva firma digital, nada más). Descomprímelo donde sea (Descargas vale). El zip lo
    crea una copia que ya funciona (⚙ Ajustes → Compartir Chuleta → «Crear instalador para otra persona») o
    `scripts/build_zip.py` (ver «Generar el zip instalable»); el repositorio se descarga entero con Code → Download
    ZIP.
