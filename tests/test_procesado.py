@@ -57,7 +57,7 @@ class ProcesadoDeTests(unittest.TestCase):
     def test_los_ajustes_por_defecto_no_deciden(self):
         """None hasta que arranca la app: asi una instalacion anterior con API key sigue en la nube."""
         self.assertIsNone(server.DEFAULT_SETTINGS["procesado"])
-        self.assertEqual(server.DEFAULT_SETTINGS["agente"], {"tipo": "claude", "modelo": "sonnet"})
+        self.assertIsNone(server.DEFAULT_SETTINGS["agente"])  # None: un "agente": null a mano no da el fichero por roto
         self.assertIn("if self.settings.get().get(\"procesado\") not in PROCESADOS:", read_app("server.py"))
 
 
@@ -75,8 +75,31 @@ class ClaudeCodeTests(unittest.TestCase):
                     mock.patch.dict(os.environ, {"USERPROFILE": home, "APPDATA": os.path.join(home, "nada")}):
                 self.assertEqual(engines.ClaudeCode.find(), exe)
             with mock.patch.object(engines.shutil, "which", return_value=None), \
-                    mock.patch.dict(os.environ, {"USERPROFILE": os.path.join(home, "otra"), "APPDATA": home}):
+                    mock.patch.dict(os.environ, {"USERPROFILE": os.path.join(home, "otra"), "APPDATA": home,
+                                                 "LOCALAPPDATA": os.path.join(home, "nada")}):
                 self.assertIsNone(engines.ClaudeCode.find())
+            wg = os.path.join(home, "Microsoft", "WinGet", "Packages", "Anthropic.ClaudeCode_Microsoft.Winget.Source",
+                              "claude.exe")
+            os.makedirs(os.path.dirname(wg))
+            open(wg, "w").close()
+            with mock.patch.object(engines.shutil, "which", return_value=None), \
+                    mock.patch.dict(os.environ, {"USERPROFILE": os.path.join(home, "otra"),
+                                                 "APPDATA": os.path.join(home, "x"), "LOCALAPPDATA": home}):
+                self.assertEqual(engines.ClaudeCode.find(), wg)  # winget sin enlace (sin modo desarrollador)
+
+    def test_find_en_windows_busca_exe_y_cmd_y_relee_el_path(self):
+        """En Windows, claude.exe antes que claude.cmd, y con el PATH del registro ademas del heredado (el servidor
+        arranco antes de instalar Claude Code)."""
+        pedidos = []
+
+        def which(n, path=None):
+            pedidos.append((n, path))
+            return r"C:\x\claude.cmd" if (n, path) == ("claude.cmd", "REG") else None
+        with mock.patch.object(engines, "_NT", True), mock.patch.object(engines, "windows_path", return_value="REG"), \
+                mock.patch.object(engines.shutil, "which", side_effect=which):
+            self.assertEqual(engines.ClaudeCode.find(), r"C:\x\claude.cmd")
+        self.assertEqual(pedidos[:3], [("claude.exe", None), ("claude.cmd", None), ("claude", None)])
+        self.assertIn(("claude.exe", "REG"), pedidos)
 
     def test_parse_del_json_de_claude(self):
         ag = engines.ClaudeCode()
@@ -94,17 +117,31 @@ class ClaudeCodeTests(unittest.TestCase):
         with self.assertRaises(engines.EngineError) as c:
             ag._parse(2, "basura", "boom", "sonnet")
         self.assertIn("código 2", str(c.exception))
+        # con «verbose» en la configuracion del usuario la salida es un array con todos los mensajes
+        verbose = json.dumps([{"type": "system", "subtype": "init"},
+                              {"type": "assistant", "message": {"content": "sesión"}}, json.loads(OK_JSON)])
+        self.assertEqual(ag._parse(0, verbose, "", "sonnet"), ("## Resumen\nHola.", "claude-sonnet-5-5"))
+        with self.assertRaises(engines.EngineError) as c:  # un array sin resultado: fallo generico, no «sin sesión»
+            ag._parse(1, json.dumps([{"type": "system", "text": "inicia sesión por favor"}]), "", "sonnet")
+        self.assertNotIn("sin sesión", str(c.exception))
+        for txt in ("Authentication required · Sign in again to continue",
+                    "Invalid auth token · Fix external auth token", "Login expired · Please run /login"):
+            with self.assertRaises(engines.EngineError) as c:
+                ag._parse(1, "", txt, "sonnet")
+            self.assertIn("sin sesión iniciada", str(c.exception), txt)
 
     def test_chat_lanza_claude_sin_herramientas_y_con_las_instrucciones_por_stdin(self):
         with tempfile.TemporaryDirectory() as d:
             ag = engines.ClaudeCode(settings_dir=d)
             seen = {}
 
-            def run(cmd, stdin_text=None, timeout=0, cancelled=None):
-                seen.update(cmd=cmd, stdin=stdin_text, timeout=timeout)
+            def run(cmd, stdin_text=None, timeout=0, cancelled=None, cwd=None, env=None):
+                seen.update(cmd=cmd, stdin=stdin_text, timeout=timeout, cwd=cwd, env=env)
                 return 0, OK_JSON, ""
             with mock.patch.object(engines.ClaudeCode, "run", side_effect=run), \
-                    mock.patch.object(engines.ClaudeCode, "find", return_value="/x/claude"):
+                    mock.patch.object(engines.ClaudeCode, "find", return_value="/x/claude"), \
+                    mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-no", "ANTHROPIC_AUTH_TOKEN": "t",
+                                                 "OTRA": "1"}):
                 stages = []
                 text, model = ag.chat("SISTEMA", "USUARIO largo", 2500, lambda **k: stages.append(k), lambda: False,
                                       model="haiku")
@@ -123,6 +160,21 @@ class ClaudeCodeTests(unittest.TestCase):
             with open(cmd[cmd.index("--settings") + 1], encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"disableAllHooks": True})
             self.assertTrue(any("Claude Code (haiku)" in s.get("stage", "") for s in stages))
+            self.assertEqual(seen["cwd"], os.path.join(d, "agente-cwd"))  # una carpeta vacia: sin CLAUDE.md de nadie
+            self.assertTrue(os.path.isdir(seen["cwd"]))
+            self.assertNotIn("ANTHROPIC_API_KEY", seen["env"])  # con -p la key del entorno se usaria siempre
+            self.assertNotIn("ANTHROPIC_AUTH_TOKEN", seen["env"])
+            self.assertEqual(seen["env"].get("OTRA"), "1")
+
+    def test_el_fichero_de_settings_se_reescribe_si_no_dice_lo_suyo(self):
+        with tempfile.TemporaryDirectory() as d:
+            ag = engines.ClaudeCode(settings_dir=d)
+            p = ag._settings_file()
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("{roto")
+            self.assertEqual(ag._settings_file(), p)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"disableAllHooks": True})
 
     def test_chat_sin_claude_instalado(self):
         with mock.patch.object(engines.ClaudeCode, "find", return_value=None):
@@ -145,16 +197,25 @@ class ClaudeCodeTests(unittest.TestCase):
         code, out, err = engines.AgenteLocal.run([sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"],
                                                  "hola")
         self.assertEqual((code, out.strip(), err), (0, "HOLA", ""))
+        # 300 KB (una reunion larga) y un hijo que tarda en leer: la entrada llega entera (hilo escritor propio)
+        code, out, err = engines.AgenteLocal.run(
+            [sys.executable, "-c", "import sys, time; time.sleep(1.5); print(len(sys.stdin.read()))"], "x" * 300_000,
+            timeout=30)
+        self.assertEqual((code, out.strip()), (0, "300000"), err)
+        with self.assertRaises(engines.EngineError) as c:
+            engines.ClaudeCode.run(["/no/existe/claude-xyz", "--version"], timeout=5)
+        self.assertIn("No se ha podido lanzar Claude Code", str(c.exception))
 
     def test_check_version_y_peticion_minima(self):
         ag = engines.ClaudeCode()
-        with mock.patch.object(engines.ClaudeCode, "version", return_value="2.1.314 (Claude Code)"), \
+        with mock.patch.object(engines.ClaudeCode, "version", return_value="2.1.314"), \
                 mock.patch.object(engines.ClaudeCode, "chat", return_value=("OK", "claude-sonnet-5-5")) as chat:
-            version, secs = ag.check("/x/claude")
-        self.assertEqual(version, "2.1.314 (Claude Code)")
+            version, secs = ag.check("/x/claude", model="opus")
+        self.assertEqual(version, "2.1.314")
         self.assertEqual(chat.call_args.kwargs.get("path"), "/x/claude")
+        self.assertEqual(chat.call_args.kwargs.get("model"), "opus")  # se comprueba el modelo elegido
         self.assertEqual(chat.call_args.kwargs.get("timeout"), engines.AGENTE_CHECK_S)
-        with mock.patch.object(engines.ClaudeCode, "version", return_value="2.1.314 (Claude Code)"), \
+        with mock.patch.object(engines.ClaudeCode, "version", return_value="2.1.314"), \
                 mock.patch.object(engines.ClaudeCode, "chat", return_value=("Hola, ¿qué tal?", "m")):
             with self.assertRaises(engines.EngineError) as c:
                 ag.check("/x/claude")
@@ -166,7 +227,7 @@ class ClaudeCodeTests(unittest.TestCase):
                 engines.ClaudeCode.version("/x/claude")
         self.assertIn("--version", str(c.exception))
         with mock.patch.object(engines.ClaudeCode, "run", return_value=(0, "2.1.314 (Claude Code)\n", "")):
-            self.assertEqual(engines.ClaudeCode.version("/x/claude"), "2.1.314 (Claude Code)")
+            self.assertEqual(engines.ClaudeCode.version("/x/claude"), "2.1.314")  # solo la version, para Ajustes
 
 
 class FakeAgente(engines.AgenteLocal):
@@ -277,6 +338,53 @@ class JobsProcesadoTests(TempTree):
                 j.auto_summary("Alfa/r.wav")
             self.assertEqual(j.enviados, [])
 
+    def test_cloud_ready_exige_api(self):
+        for modo in ("local", "agente"):
+            with self.assertRaises(server.ApiError) as c:
+                self.jobs(procesado=modo)._cloud_ready()
+            self.assertEqual(c.exception.msg, server.NUBE_OFF)
+
+    def test_un_trabajo_de_nube_en_cola_no_sale_si_la_nube_se_apago(self):
+        """Entro en cola con «API externa»; antes de empezar, Ajustes paso a «Solo en este PC»: no se transcribe."""
+        self.wav("Alfa/r.wav", seconds=3.0)
+        j = self.jobs(procesado="local")
+        motor = types.SimpleNamespace(transcribe=lambda *a, **k: self.fail("no debia transcribir"))
+        j.local = j.cloud = motor
+        jb = server.Job("Alfa/r.wav", "r.wav", "nube", None)
+        with j.lock:
+            j.list.append(jb)
+        with mock.patch.object(server, "log"):
+            j._run(jb)
+        self.assertEqual((jb.status, jb.error), ("error", server.NUBE_OFF))
+
+    def test_un_resumen_en_cola_vuelve_a_mirar_los_ajustes(self):
+        self.wav("Alfa/r.wav")
+        j = self.jobs(procesado="local")
+        jb = server.Job("Alfa/r.wav", "r.wav", "resumen", None)
+        with mock.patch.object(server, "log"):
+            j._run_summary(jb)
+        self.assertEqual(jb.status, "error")
+        self.assertIn("Dónde se procesan", jb.error)
+
+    def test_nube_apagada_cambia_los_directos_y_cancela_la_cola(self):
+        self.wav("Alfa/r.wav")
+        j = self.jobs(procesado="local")
+        vivo = server.Job("Alfa/r.wav", "r.wav", "nube", None)
+        vivo.live, vivo.status = True, "running"
+        cola_nube = server.Job("Beta/b.wav", "b.wav", "nube", None)
+        cola_resumen = server.Job("Alfa/r.wav", "r.wav", "resumen", None)
+        cola_local = server.Job("Gamma/g.wav", "g.wav", "rapido", None)
+        with j.lock:
+            j.list += [vivo, cola_nube, cola_resumen, cola_local]
+        with mock.patch.object(server, "log") as log:
+            self.assertEqual(j.nube_apagada(), 1)
+        self.assertEqual((vivo.preset, vivo.local_part, vivo.status), ("medium", True, "running"))
+        self.assertEqual((cola_nube.status, cola_resumen.status, cola_local.status),
+                         ("cancelled", "cancelled", "queued"))
+        self.assertIn("la nube se ha desactivado", cola_nube.stage)
+        self.assertNotIn("Alfa/r.wav", j._cloud_text())
+        self.assertIn("modelo medium", log.call_args[0][0])
+
     def test_summarizer_segun_el_modo(self):
         j = self.jobs(procesado="api")
         self.assertEqual(j._summarizer(j.settings.get()), "api")
@@ -342,12 +450,13 @@ class ApiProcesadoTests(TempTree):
                 a.agente_comprobar({})
         self.assertIn("No encuentro Claude Code", c.exception.msg)
         with mock.patch.object(engines.ClaudeCode, "find", return_value="/x/claude"), \
-                mock.patch.object(engines.ClaudeCode, "check", return_value=("2.1.314 (Claude Code)", 3.4)), \
+                mock.patch.object(engines.ClaudeCode, "check", return_value=("2.1.314", 3.4)) as check, \
                 mock.patch.object(server, "log") as log:
-            r = a.agente_comprobar({})
-        self.assertEqual(r, {"ok": True, "version": "2.1.314 (Claude Code)", "seconds": 3.4, "ruta": "/x/claude"})
+            r = a.agente_comprobar({"tipo": "claude", "modelo": "opus"})
+        self.assertEqual(r, {"ok": True, "version": "2.1.314", "seconds": 3.4, "ruta": "/x/claude"})
+        self.assertEqual(check.call_args.kwargs.get("model"), "opus")  # el modelo del formulario, sin guardarlo
         st = a.settings.get()
-        self.assertEqual(st["agente_version"], "2.1.314 (Claude Code)")
+        self.assertEqual((st["agente_version"], st["agente"], st["procesado"]), ("2.1.314", None, "agente"))
         self.assertGreater(st["agente_comprobado"], time.time() - 60)
         self.assertEqual(log.call_args[0][0], "   agente: Claude Code 2.1.314 comprobado (3.4 s)")
         with mock.patch.object(engines.ClaudeCode, "find", return_value="/x/claude"), \
@@ -357,10 +466,28 @@ class ApiProcesadoTests(TempTree):
                 a.agente_comprobar({})
         self.assertEqual(c.exception.msg, "sin sesión")
 
+    def test_salir_de_api_apaga_la_nube_en_los_trabajos(self):
+        a = self.app(procesado="api")
+        with mock.patch.object(server.Jobs, "nube_apagada", return_value=0) as apagar:
+            a.save_settings({"procesado": "agente"})
+            a.save_settings({"procesado": "local"})  # ya no venia de api: no se repite
+            a.save_settings({"procesado": "api"})
+        self.assertEqual(apagar.call_count, 1)
+
+    def test_agente_null_en_settings_no_rompe_los_ajustes(self):
+        """Un "agente": null escrito a mano no da el fichero por roto (perderia preset, prompt y procesado)."""
+        d = tempfile.mkdtemp(dir=self.tmp)
+        with open(os.path.join(d, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"preset": "medium", "procesado": "agente", "agente": None}, f)
+        st = server.Store(os.path.join(d, "settings.json"), server.DEFAULT_SETTINGS)
+        self.assertIsNone(getattr(st, "broken", None))
+        self.assertEqual((st.get()["preset"], st.get()["procesado"]), ("medium", "agente"))
+        self.assertEqual(server.agente_de(st.get())[1], {"tipo": "claude", "modelo": "sonnet"})
+
     def test_la_ruta_existe_y_el_diagnostico_dice_donde(self):
         src = read_app("server.py")
         self.assertIn('"/api/agente/comprobar": a.agente_comprobar', src)
-        a = self.app(procesado="agente", agente_version="2.1.314 (Claude Code)")
+        a = self.app(procesado="agente", agente_version="2.1.314")
         with mock.patch.object(engines.ClaudeCode, "find", return_value="/x/claude"), \
                 mock.patch.object(server, "perfil_de", return_value={"outputs": []}):
             texto = a.diagnostico({})["texto"]
@@ -399,7 +526,13 @@ class InterfazProcesadoTests(unittest.TestCase):
         self.assertIn("winget install Anthropic.ClaudeCode", app)
         self.assertIn("escribe <code>claude</code>", app)
         self.assertIn('id="agCheck"', app)
-        self.assertIn("api('/api/agente/comprobar', {})", app)
+        self.assertIn("api('/api/agente/comprobar', { tipo: S.config.agente?.tipo || 'claude', "
+                      "modelo: $('#agModelo', d)?.value })", app)
+        self.assertIn('id="sAutoAg"', app)  # el resumen automatico se puede apagar tambien con el agente
+        self.assertIn("se resumen solas; se desactiva aquí debajo", app)
+        self.assertIn("? $('#sAutoAg', d) : $('#sAuto', d)).checked", app)
+        self.assertIn("Pro, Max, Ultra, Team o Enterprise, o una de Console", app)
+        self.assertIn("localStorage.setItem('procElegido', '1')", app)
         self.assertIn('id="agModelo"', app)
         self.assertIn("procesado: $('input[name=\"proc\"]:checked', d)?.value", app)
         self.assertIn("agente: { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value }", app)
@@ -419,6 +552,9 @@ class InterfazProcesadoTests(unittest.TestCase):
                       app)
         self.assertIn("Elegir dónde se procesa (Ajustes)", notas)
         self.assertIn("S.config.procesado === 'api' ? S.config.cloud?.has_key : true", notas)
+        self.assertIn("'sumOk:' + (S.config?.procesado || 'api')", notas)  # el permiso es por destino
+        self.assertIn("Elige dónde se procesan tus reuniones", notas)
+        self.assertIn("|| S.config.procesado !== 'api') return '';", app)  # el aviso heredado habla de la API
         css = static("app.css")
         for sel in (".procs {", ".proc.on {", "ol.pasos {"):
             self.assertIn(sel, css)

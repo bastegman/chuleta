@@ -424,7 +424,9 @@ DEFAULT_SETTINGS = {
     # traves de Claude Code) o "api" (nube: transcripcion y resumen con API key). None = sin decidir: al arrancar
     # pasa a "api" si hay API key (instalaciones anteriores) y si no a "local" (App.__init__, procesado_de)
     "procesado": None,
-    "agente": {"tipo": "claude", "modelo": "sonnet"},
+    # el agente del PC: {"tipo": "claude", "modelo": "sonnet"} en cuanto se guarda desde Ajustes; None por defecto (asi
+    # un "agente": null escrito a mano no da el fichero por roto: agente_de lo resuelve)
+    "agente": None,
     "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
     # perfil de reunion por defecto (Ajustes > Perfil de reunion y «Guardar como perfil por defecto» al grabar).
     # None en folder/vocab = automatico, como siempre: la ultima carpeta usada (o la del proyecto del tema) y el tema
@@ -2313,6 +2315,9 @@ class Jobs:
     def _run_summary(self, job):
         job.status, job.started, job.stage = "running", time.time(), "Preparando el resumen…"
         try:
+            missing = self.summary_missing()  # por si Ajustes cambio mientras esperaba en la cola
+            if missing:
+                raise engines.EngineError(missing)
             abs_path = safe(job.path, "file")
             base = os.path.splitext(abs_path)[0]
             data = Transcripts().load(base)
@@ -2358,11 +2363,35 @@ class Jobs:
             self.library.at = 0
 
     def _cloud_ready(self):
+        """La nube se puede usar ahora: elegida en Ajustes («API externa») y con su endpoint. Lo comprueban tambien
+        los trabajos al empezar (_run, _run_summary): lo que entro en cola con la nube no sale si se apago entre
+        tanto."""
+        st = self.settings.get()
+        if procesado_de(st) != "api":
+            raise ApiError(NUBE_OFF)
         try:
-            engines.CloudEngine.endpoint(self.settings.get()["cloud"])
+            engines.CloudEngine.endpoint(st["cloud"])
             return True
         except engines.EngineError as e:
             raise ApiError(str(e))
+
+    def nube_apagada(self):
+        """Ajustes deja de ser «API externa»: lo que estuviera en la nube no sigue. Los directos en nube pasan a local
+        desde el siguiente trozo (como set_live_preset) y los trabajos de nube y los resumenes en cola se cancelan."""
+        cambiados = []
+        with self.lock:
+            for j in self.list:
+                en_nube = (engines.PRESETS_BY_ID.get(j.preset) or {}).get("engine") == "cloud"
+                if j.status == "running" and j.live and en_nube:
+                    j.preset, j.local_part = "medium", True
+                    cambiados.append(j)
+                elif j.status == "queued" and (j.engine == "cloud" or j.kind == "summary"):
+                    j.status, j.stage = "cancelled", "Cancelado: la nube se ha desactivado en Ajustes"
+                    j.finished = time.time()
+        for j in cambiados:
+            self._cloud_text().set(j.path, False)
+            log(f"   directo {j.name}: modelo medium (la nube se ha desactivado en Ajustes)")
+        return len(cambiados)
 
     # --- quien habla (voces): subproceso de prioridad baja al terminar cada transcripcion
     def voices_on(self):
@@ -2860,6 +2889,8 @@ class Jobs:
             # reunion»: el de su .md o el del perfil
             if job.final_pass or getattr(job, "per_meeting", False):
                 job.language = ms["language"] or None
+            if preset["engine"] == "cloud":
+                self._cloud_ready()  # ApiError si la nube se apago en Ajustes mientras esperaba en la cola
             if preset["engine"] == "local":
                 segs, lang, dur = self.local.transcribe(abs_path, preset, job.language, vocab,
                                                         int(st.get("threads") or default_threads()),
@@ -3559,9 +3590,9 @@ class App:
             lines = ["(no hay server.log)"]
         keys = [cloud.get("api_key"), *engines.all_extra_keys(cloud)]  # las adicionales de todos los proveedores
         mode = procesado_de(st)
-        ver = str(st.get("agente_version") or "").split()
+        ver = engines.VERSION_RX.match(str(st.get("agente_version") or ""))
         donde = {"local": "solo en este PC", "api": "API externa"}.get(mode) or (
-            f"agente ({agente_de(st)[0].label}" + (f" {ver[0]}" if ver else "") + ")")
+            f"agente ({agente_de(st)[0].label}" + (f" {ver.group(0)}" if ver else "") + ")")
         info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
                 f"Dónde se procesa: {donde}",
                 f"Transcripción: {motor} · directo: {tech(st.get('live_preset') or 'medium')}",
@@ -4474,6 +4505,7 @@ class App:
     def save_settings(self, b):
         perfil = (check_perfil(b["perfil"], perfil_de(self.settings.get())["outputs"])  # valida antes de guardar
                   if isinstance(b.get("perfil"), dict) else {})
+        antes = procesado_de(self.settings.get())
 
         def upd(d):
             for k in ("preset", "language", "prompt"):
@@ -4555,23 +4587,26 @@ class App:
                 new = [old.get(k.strip(), k.strip()) for k in incoming if isinstance(k, str) and k.strip()]
                 d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
+        if antes == "api" and procesado_de(self.settings.get()) != "api":
+            self.jobs.nube_apagada()  # lo que estuviera en la nube no sigue
         return self.config({})
 
     def agente_comprobar(self, b):
         """Ajustes → «Comprobar»: el agente esta instalado, responde a --version y contesta una peticion minima con la
         cuenta del usuario. Guarda la version y la hora para ensenarlas en Ajustes."""
         st = self.settings.get()
-        cls, _ = agente_de(st)
+        cls, a = agente_de(dict(st, agente=b if isinstance(b, dict) and b.get("tipo") else st.get("agente")))
+        modelo = b.get("modelo") if isinstance(b, dict) and b.get("modelo") in dict(cls.MODELOS) else a["modelo"]
         ruta = cls.find()
         if not ruta:
             raise ApiError(f"No encuentro {cls.label} en este PC. Haz los pasos 1 y 2 y vuelve a pulsar «Comprobar».")
         try:
-            version, secs = cls(settings_dir=DATA_DIR).check(ruta)
+            version, secs = cls(settings_dir=DATA_DIR).check(ruta, model=modelo)
         except engines.EngineError as e:
             log(f"   agente: {cls.label}: {e}")
             raise ApiError(str(e))
         self.settings.update(lambda d: d.update(agente_version=version, agente_comprobado=time.time()))
-        log(f"   agente: {cls.label} {version.split()[0]} comprobado ({secs:.1f} s)")
+        log(f"   agente: {cls.label} {version} comprobado ({secs:.1f} s)")
         return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta}
 
     def test_cloud(self, b):

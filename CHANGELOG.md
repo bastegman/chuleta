@@ -26,6 +26,18 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
   de la cola y del directo vuelven a ser locales. Con la cuenta de Claude, elegir la opción (con su aviso) es el
   consentimiento: también se resumen solas las reuniones transcritas en local. Preparado para añadir Codex CLI y
   Gemini CLI (`engines.AGENTES`). El diagnóstico dice dónde se procesa.
+- Tras una revisión independiente del código: cambiar a «Solo en este PC» o «Con tu cuenta de Claude» corta de verdad
+  la nube (lo que estuviera en cola con la nube no sale, un directo en nube pasa a local desde el siguiente trozo y los
+  trabajos de nube y resúmenes en cola se cancelan; `_cloud_ready` y `_run_summary` vuelven a mirar Ajustes al
+  empezar); con el `.cmd` de npm en Windows, cancelar o el tope de tiempo matan también a `claude.exe` (`taskkill /T`);
+  la salida de Claude Code con «verbose» activado (un array de mensajes) se entiende igual; se busca `claude.exe` y
+  `claude.cmd` también en el PATH del registro (recién instalado, con la app ya abierta) y en las carpetas de winget;
+  «Comprobar» no guarda el formulario (solo comprueba con el modelo elegido) y la versión sale limpia («2.1.314»); el
+  resumen automático se puede apagar también con la cuenta de Claude, y su aviso dice que es automático; la entrada
+  se escribe desde un hilo propio (una transcripción larga no se pierde con Python anterior a 3.13.10); `claude` se
+  lanza en una carpeta vacía y sin `ANTHROPIC_API_KEY` en el entorno (el gasto va a la cuenta, no a la API); el
+  permiso de «Resumir» es por destino (el de Groq no vale para Anthropic); un `"agente": null` en `settings.json` no da
+  el fichero por roto; Inicio invita a elegir dónde se procesa si nadie lo ha hecho.
 
 ### Invitar al autor a un café (02/11/2026)
 - En Ajustes › Acerca de, en el README y en el LEEME hay un enlace discreto de PayPal para invitar al autor a un

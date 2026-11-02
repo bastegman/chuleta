@@ -855,7 +855,7 @@ function viewMissing() {
 /* Tras actualizar: el resumen automático ya no manda a la nube lo transcrito en local (server.py,
    App._aviso_resumen_local). Se avisa una vez, arriba en Inicio, hasta que se cierra o se va al ajuste. */
 function avisoResumenLocalHtml() {
-  if (!S.config.summary?.aviso_local) return '';
+  if (!S.config.summary?.aviso_local || S.config.procesado !== 'api') return '';  // habla de la API: con el agente no aplica
   return `<div class="notice info" id="avisoSumLocal" style="margin:0 0 14px">${I.info}El resumen automático ya no envía a <b>${esc(provName())}</b> las reuniones transcritas en local. <a href="#" data-act="aviso-sum-ajuste">Actívalo en Ajustes</a> si quieres. <button class="btn sm ghost" type="button" data-act="aviso-sum-ok">Entendido</button></div>`;
 }
 function avisoResumenLocalVisto(irAlAjuste) {
@@ -1940,13 +1940,13 @@ function procesadoFieldsetHtml() {
     <div class="procs">
       ${opt('local', 'Solo en este PC', 'Whisper transcribe en tu ordenador. Nada sale de él. Sin resumen con IA.')}
       ${opt('agente', `Con tu cuenta de Claude (${agLabel})`, `Transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de ${agLabel}: ${esc(APP_NAME)} no ve ni guarda tus credenciales.`,
-    'El texto de la reunión (transcripción, notas, contexto y participantes confirmados) se envía a Anthropic con esa cuenta: con la de empresa, bajo el acuerdo de tu empresa; con la personal, bajo sus términos de uso. En algunas reuniones puede ser un bloqueante: compruébalo antes.')}
+    'El texto de la reunión (título, fecha, transcripción con quién habla si se sabe, notas, contexto, participantes confirmados e instrucciones; el audio no) se envía a Anthropic con esa cuenta: con la de empresa, bajo el acuerdo de tu empresa; con la personal, bajo sus términos de uso. En algunas reuniones puede ser un bloqueante: compruébalo antes. Al terminar de transcribir, las reuniones de los últimos 3 días se resumen solas; se desactiva aquí debajo.')}
       ${opt('api', 'API externa (Groq, OpenAI, Azure…)', 'Transcripción rápida en la nube y resumen con el proveedor que elijas, con su API key.',
     'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.')}
     </div>
     <div id="procAgente"${mode === 'agente' ? '' : ' hidden'}>
       <ol class="pasos">
-        <li><b>Instala ${agLabel}</b> (hace falta una cuenta Pro, Max, Team o Enterprise). En Windows, abre PowerShell y ejecuta <code>irm https://claude.ai/install.ps1 | iex</code> (o <code>winget install Anthropic.ClaudeCode</code>). No hace falta ser administrador.</li>
+        <li><b>Instala ${agLabel}</b> (hace falta una cuenta Pro, Max, Ultra, Team o Enterprise, o una de Console). En Windows, abre PowerShell y ejecuta <code>irm https://claude.ai/install.ps1 | iex</code> (o <code>winget install Anthropic.ClaudeCode</code>). No hace falta ser administrador.</li>
         <li><b>Inicia sesión</b>: abre una terminal nueva, escribe <code>claude</code> y sigue los pasos en el navegador con tu cuenta, la personal o la de tu empresa. Después puedes cerrar la terminal.</li>
         <li><b>Comprueba</b>: ${esc(APP_NAME)} busca <code>claude</code> en este PC, lee su versión y le hace una petición mínima con tu cuenta.</li>
       </ol>
@@ -1955,6 +1955,8 @@ function procesadoFieldsetHtml() {
         <div><label>Estado</label><div class="help" style="margin-top:8px" id="agEstado">${estado}</div></div>
       </div>
       <div class="row" style="margin-top:10px"><button class="btn sm" type="button" id="agCheck">Comprobar</button><span id="agRes" class="muted" style="font-size:12.5px"></span></div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:12px"><input type="checkbox" id="sAutoAg" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
+      <div class="help">Desmarcado, solo se resume a mano con «Resumir esta reunión». Cada resumen gasta cupo de tu suscripción.</div>
     </div>
   </fieldset>`;
 }
@@ -2039,12 +2041,11 @@ function openSettings() {
       $('#procApi', d).hidden = v !== 'api';
       $('#procAgente', d).hidden = v !== 'agente';
     }));
-    $('#agCheck', d).onclick = async () => {
+    $('#agCheck', d).onclick = async () => {  // no guarda el formulario: solo comprueba con el modelo elegido
       const res = $('#agRes', d);
       res.textContent = 'Comprobando… (la primera vez puede tardar medio minuto)';
       try {
-        setConfig(await api('/api/settings', collect()));
-        const r = await api('/api/agente/comprobar', {});
+        const r = await api('/api/agente/comprobar', { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value });
         res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)</span>`;
         $('#agEstado', d).textContent = `${S.config.agente?.label || 'Claude Code'} ${r.version} · comprobado ahora`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
@@ -2096,7 +2097,7 @@ function openSettings() {
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
-        summary: { auto: $('#sAuto', d).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
+        summary: { auto: ($('input[name="proc"]:checked', d)?.value === 'agente' ? $('#sAutoAg', d) : $('#sAuto', d)).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
     };
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
@@ -2151,7 +2152,7 @@ function openSettings() {
       const b = e.target.closest('[data-m]');
       if (!b) return;
       if (b.dataset.m === 'no') return closeModal(false);
-      try { setConfig(await api('/api/settings', collect())); closeModal(true); toast('Ajustes guardados'); refreshView(); }
+      try { setConfig(await api('/api/settings', collect())); localStorage.setItem('procElegido', '1'); closeModal(true); toast('Ajustes guardados'); refreshView(); }
       catch (err) { toast(esc(err.message), 'err'); }
     });
   });
