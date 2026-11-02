@@ -1,0 +1,39 @@
+name: ui-smoke
+
+# La interfaz en un navegador real (Playwright + Chromium): arranque con token, ⚙ Ajustes, Reuniones, Calendario,
+# Inicio y el dialogo de Grabar sin errores de JavaScript; el aviso de «version anterior abierta» y el de servidor
+# lento. Hasta el 02/11/2026 ningun test abria la interfaz y una pantalla con los botones muertos pasaba la suite.
+on:
+  push:
+    paths: ["_app/**", "tests/**", "requirements.txt", ".github/workflows/ui-smoke.yml"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: numpy, requests y Playwright con su Chromium
+        run: |
+          python -m pip install --disable-pip-version-check numpy requests playwright
+          python -m playwright install --with-deps chromium
+      - name: Interfaz en Chromium (falla si el test se salta)
+        working-directory: tests
+        shell: bash
+        run: |
+          python -m unittest -v test_ui_smoke 2>&1 | tee salida.txt
+          test ${PIPESTATUS[0]} -eq 0
+          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke se ha saltado"; exit 1; fi
+          grep -q "^Ran [1-9][0-9]* tests\?" salida.txt

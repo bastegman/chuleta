@@ -213,12 +213,96 @@ MEETING_APPS = (("msteams", "Teams"), ("teams.exe", "Teams"), ("zoom", "Zoom"), 
                 ("msedge.exe", "el navegador"), ("firefox.exe", "el navegador"))
 
 
-def mic_meeting_app():
-    """App de reuniones que tiene ahora mismo el micro abierto (segun el registro de privacidad)."""
+# El registro dice "en uso" cuando LastUsedTimeStart tiene valor y LastUsedTimeStop es 0. Esa pareja se queda asi si
+# la app se cerro mal (Windows no apunta el fin): el 02/11/2026 el aviso flotante y el chip «en llamada» salieron al
+# arrancar un lunes sin ninguna reunion. Por eso una entrada solo cuenta si empezo hace poco (MIC_MAX_AGE_S) y, cuando
+# se sabe que .exe es, si ese proceso sigue en marcha.
+MIC_MAX_AGE_S = 12 * 3600
+# entradas empaquetadas (sin ruta en el nombre de la clave): los .exe que las usan
+PACKAGED_EXES = {"msteams": ("ms-teams.exe", "teams.exe", "msteams.exe"), "skype": ("skype.exe", "skypeapp.exe"),
+                 "zoom": ("zoom.exe",), "webex": ("webex.exe", "ciscocollabhost.exe", "atmgr.exe"),
+                 "slack": ("slack.exe",)}
+_mic_logged = {}  # entrada -> ultimo estado contado ("uso", "rancia", "cerrada"): cada cambio se registra una vez
+
+
+def filetime_age(ft, now=None):
+    """Segundos desde un FILETIME del registro (centenas de ns desde 1601) hasta ahora; None si el valor no vale."""
+    try:
+        secs = int(ft) / 10_000_000 - 11644473600
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return (time.time() if now is None else now) - secs
+
+
+def mic_in_use(start, stop, now=None, max_age=MIC_MAX_AGE_S):
+    """La entrada dice "en uso" (empezo y no termino) y empezo hace menos de max_age (y no en el futuro)."""
+    if not start or stop:
+        return False
+    age = filetime_age(start, now)
+    return age is not None and -300 <= age <= max_age
+
+
+def entry_exes(name):
+    """Los .exe que corresponden a una entrada del registro: la ruta del .exe (NonPackaged, con '#' por '\\') o, en las
+    empaquetadas, los de PACKAGED_EXES. () si no se sabe (entonces no se comprueba el proceso)."""
+    if "#" in name:
+        return (name.rsplit("#", 1)[-1].lower(),)
+    low = name.lower()
+    return next((exes for k, exes in PACKAGED_EXES.items() if k in low), ())
+
+
+def running_images():
+    """Nombres (en minusculas) de los procesos en marcha, segun tasklist; None si no se sabe (fuera de Windows)."""
     if not WINDOWS:
         return None
+    try:
+        r = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
+                           creationflags=engines.NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {line.split('","')[0].strip('"').lower() for line in r.stdout.splitlines() if line.startswith('"')}
+
+
+def _mic_note(name, estado, texto):
+    if _mic_logged.get(name) != estado:
+        _mic_logged[name] = estado
+        log(texto)
+
+
+def mic_scan(entries, now=None, images=None):
+    """App de reuniones con el micro abierto entre las entradas (nombre, LastUsedTimeStart, LastUsedTimeStop) del
+    registro, o None. `images` son los procesos en marcha (running_images(); se consultan solo si hace falta)."""
+    for name, start, stop in entries:
+        low = name.lower()
+        app = next((label for k, label in MEETING_APPS if k in low), None)
+        if not app:
+            continue
+        if not start or stop:
+            _mic_logged.pop(name, None)
+            continue
+        age = filetime_age(start, now)
+        if not mic_in_use(start, stop, now):
+            _mic_note(name, "rancia", f"   micro: {app} ({name}) figura en uso desde hace "
+                      f"{(age or 0) / 3600:.1f} h sin cerrar: entrada rancia del registro, no cuenta")
+            continue
+        exes = entry_exes(name)
+        if exes:
+            if images is None:
+                images = running_images()
+            if images is not None and not any(e in images for e in exes):
+                _mic_note(name, "cerrada", f"   micro: {app} ({name}) figura en uso pero su proceso no está en marcha: "
+                          "no cuenta")
+                continue
+        _mic_note(name, "uso", f"   micro en uso por {app} ({name}) desde hace {(age or 0) / 60:.0f} min")
+        return app
+    return None
+
+
+def mic_entries():
+    """(nombre, LastUsedTimeStart, LastUsedTimeStop) de las entradas del registro de privacidad del micro."""
     import winreg
     base = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+    out = []
     for sub in (base, base + r"\NonPackaged"):
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub)
@@ -232,16 +316,21 @@ def mic_meeting_app():
                 except OSError:
                     break
                 i += 1
-                low = name.lower()
-                app = next((label for k, label in MEETING_APPS if k in low), None)
-                if not app:
-                    continue
                 try:
                     with winreg.OpenKey(key, name) as sk:
                         start = winreg.QueryValueEx(sk, "LastUsedTimeStart")[0]
                         stop = winreg.QueryValueEx(sk, "LastUsedTimeStop")[0]
                 except OSError:
                     continue
-                if start and not stop:  # en uso ahora mismo
-                    return app
-    return None
+                out.append((name, start, stop))
+    return out
+
+
+def mic_meeting_app():
+    """App de reuniones que tiene ahora mismo el micro abierto (segun el registro de privacidad), o None."""
+    if not WINDOWS:
+        return None
+    try:
+        return mic_scan(mic_entries())
+    except Exception:
+        return None

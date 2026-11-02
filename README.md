@@ -36,7 +36,10 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
 
 ## Instalar (Windows, sin permisos de administrador)
 
-1. Consigue el zip `Chuleta - instalador.zip` o este repositorio y descomprímelo donde sea (Descargas vale). El zip lo
+1. Consigue el zip `Chuleta - instalador.zip` o este repositorio. Antes de descomprimirlo, clic derecho → Propiedades →
+   «Desbloquear» → Aceptar: así Windows no marca `INSTALAR.bat` como bajado de Internet y no sale el aviso «Unknown
+   publisher» («Windows protegió su PC»; si sale igual, «Más información» → «Ejecutar de todas formas»: el instalador
+   no lleva firma digital, nada más). Descomprímelo donde sea (Descargas vale). El zip lo
    crea una copia que ya funciona (⚙ Ajustes → Compartir Chuleta → «Crear instalador para otra persona») o
    `scripts/build_zip.py` (ver «Generar el zip instalable»); el repositorio se descarga entero con Code → Download
    ZIP.
@@ -215,6 +218,10 @@ en un sitio público. `server.log` y `voces.log` sí llevan nombres de reuniones
 
 - `tests.yml`, con cada push y pull request: la suite en Ubuntu y Windows × Python 3.10–3.13, el parseo de
   `_app/*.ps1` con Windows PowerShell 5.1, flake8 y el job `agnosticismo`.
+- `ui-smoke` (la interfaz en Chromium con Playwright, en Ubuntu y Windows: arranque con token, Ajustes, Reuniones,
+  Calendario, Inicio y el diálogo de Grabar sin errores de JavaScript; el aviso de versión anterior y el de servidor
+  lento). En local: `pip install playwright && python -m playwright install chromium`; sin Playwright, el test se
+  salta.
 - `lookfeel-e2e` (E2E del instalador y del desinstalador), `reunion-windows` (ventana de Teams simulada, aviso
   flotante) y `windows-real` (formato regional español, la ventana real ante el apagado de Windows y sin WebView2):
   con cada push a main que toque lo que prueban, y a mano. `lookfeel-spike` (medición archivada), solo a mano.

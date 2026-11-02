@@ -405,6 +405,7 @@ const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulari
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
   + `<option value="__pick">Otra carpeta (fuera de ${esc(APP_NAME)})…</option>`;
 async function openRec() {
+  if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
   if (S.rec.recording) return stopRec();
   recDialog = true;
   // desde una carpeta: ahi; si no, la fija del perfil; si no, donde se grabo la ultima vez (con tema, la de su proyecto: applyVocab)
@@ -538,6 +539,7 @@ function go(kind, path, params, replace) {
 window.addEventListener('hashchange', route);
 
 function route() {
+  if (!S.config) return;  // arrancando (init espera a /api/config): se pinta la ruta cuando llegue, no un error
   flushEdits();  // si se estaba corrigiendo un texto, se guarda antes de cambiar de pagina
   flushNotes();
   const prev = S.route;
@@ -1925,6 +1927,7 @@ function openRenameFolder(path) {
 $('#btnNewFolder').onclick = () => openNewFolder(S.route.kind === 'f' ? S.route.path : '');
 
 function openSettings() {
+  if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
@@ -2173,15 +2176,45 @@ async function refreshTree(force) {
     if (S.route) refreshView();
   } catch { /* servidor reiniciandose */ }
 }
+/* La pagina la sirve un proceso y /api/config la contesta otro: una version anterior de la app que seguia abierta al
+   actualizar en el sitio (o un acceso directo viejo). Sin app_name ni perfil la API es anterior al 01/11/2026, y el
+   titulo sin sustituir ({{APP_NAME}}) delata que quien sirve el HTML no es el servidor de esta version. Antes
+   (02/11/2026) los botones no hacian nada y nadie decia por que. */
+function otraVersion(c) { return !c || !c.app_name || !c.perfil || /\{\{\s*APP_NAME\s*\}\}/.test(document.title); }
+function otraVersionHtml(c) {
+  const nombre = (c && c.app_name) || (/\{\{/.test(APP_NAME) ? 'la app' : APP_NAME);
+  return `<div class="page"><div class="card empty">${I.info}Hay abierta una <b>versión anterior</b> de ${esc(nombre)}${c && c.version ? ` (${esc(String(c.version))})` : ''} y esta ventana se ha conectado a ella, así que no funciona bien.<br>Ciérrala (su ventana de consola o, en el Administrador de tareas, <code>pythonw.exe</code>) y vuelve a abrir ${esc(nombre)} desde el acceso directo.</div></div>`;
+}
+/* Un error de JavaScript no se traga en silencio: un clic que no hace nada pasa a ser un aviso con el motivo
+   (02/11/2026: ocho minutos de botones muertos sin un solo mensaje). Cada mensaje distinto, una vez. */
+const errVistos = new Set();
+function avisoError(msg) {
+  const m = String(msg || 'error').slice(0, 300);
+  if (errVistos.has(m)) return;
+  errVistos.add(m);
+  try { toast(`Algo ha fallado en la interfaz: ${esc(m)}. Si se repite, cierra la ventana y vuelve a abrir ${esc(APP_NAME)}.`, 'err'); } catch { /* sin toast aun */ }
+}
+window.addEventListener('error', e => avisoError(e.message || (e.error && e.error.message)));
+window.addEventListener('unhandledrejection', e => avisoError((e.reason && e.reason.message) || e.reason));
+
+/* Mientras /api/config no contesta, se dice (con los segundos) en vez de dejar la pagina en blanco. */
+function esperandoHtml(seg) {
+  return `<div class="page"><div class="card empty">Arrancando… el servidor de ${esc(APP_NAME)} tarda en contestar (${seg} s).<br><span class="muted">Si pasa de un minuto, mira <code>%LOCALAPPDATA%\\AudiosApp\\server.log</code> o cierra la ventana y vuelve a abrir ${esc(APP_NAME)}.</span></div></div>`;
+}
 async function init() {
+  const t0 = Date.now();
+  const lento = setInterval(() => { if (!S.config) main.innerHTML = esperandoHtml(Math.round((Date.now() - t0) / 1000)); }, 3000);
   try {
     setConfig(await api('/api/config'));
+    clearInterval(lento);
+    if (otraVersion(S.config)) { main.innerHTML = otraVersionHtml(S.config); return; }
     if (S.config.settings_broken) toast(settingsBrokenHtml(S.config.settings_broken), 'err', openSettings);
     const r = await api('/api/tree');
     S.version = r.version;
     indexTree(r.tree);
     await loadVocab();  // temas (<proyecto>/Vocabulario/*.txt…) para los selectores
   } catch (err) {
+    clearInterval(lento);
     main.innerHTML = `<div class="page"><div class="card empty">No se puede conectar con el servidor de la app.<br>Ábrela con el acceso directo <b>${esc(APP_NAME)}</b> del escritorio.<br><br><span class="muted">${esc(err.message)}</span></div></div>`;
     return;
   }

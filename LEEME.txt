@@ -10,7 +10,9 @@ Qué es
 
 INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 ----------------------------------------------------------------------------------
-  1. Descomprime el .zip donde sea (Descargas vale).
+  1. Antes de descomprimir: clic derecho en el .zip > Propiedades > marca "Desbloquear" > Aceptar. Así
+     Windows no marca INSTALAR.bat como "bajado de Internet" y no sale el aviso de "Unknown publisher"
+     ("Windows protegió su PC"). Luego descomprime el .zip donde sea (Descargas vale).
 
   2. Doble clic en INSTALAR.bat
        - Instala Chuleta en su propia carpeta: C:\Users\<tu usuario>\Chuleta (fuera de Descargas y de
@@ -20,7 +22,8 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
        - Instala las librerías y crea el acceso directo "Chuleta" en el escritorio y en el menú Inicio.
        - Chuleta aparece en Configuración > Aplicaciones > Aplicaciones instaladas, con su versión y
          su botón Desinstalar.
-       - Si Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas formas".
+       - Si aun así Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas
+         formas" (el aviso es porque el instalador no lleva firma digital; no hay nada malo en él).
        - ¿Otra carpeta? Desde una ventana de comandos: INSTALAR.bat -Destino "D:\Reuniones" (una
          carpeta nueva o vacía). Solo vale la primera vez: si ya la tienes instalada, se actualiza
          donde está.

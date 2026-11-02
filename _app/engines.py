@@ -196,19 +196,27 @@ CLOUD_PROMPT_BYTES = 860
 _TOKENIZER = {}
 
 
-def _whisper_tokenizer():
-    """Tokenizador de algun modelo ya descargado, para contar tokens sin cargar Whisper."""
+def _load_tokenizer():
+    try:
+        import glob
+        from tokenizers import Tokenizer
+        files = glob.glob(os.path.join(hf_hub_cache(), "models--*whisper*", "snapshots", "*", "tokenizer.json"))
+        if files:
+            _TOKENIZER["t"] = Tokenizer.from_file(sorted(files)[-1])
+    except Exception:
+        pass
+
+
+def _whisper_tokenizer(wait=False):
+    """Tokenizador de algun modelo ya descargado, para contar tokens sin cargar Whisper. La primera vez se carga en
+    un hilo aparte (importar `tokenizers` puede tardar) y mientras tanto count_tokens estima: una peticion de la
+    interfaz (/api/vocab/check) no espera a una importacion. `wait` la carga en el propio hilo (tests)."""
     if "t" not in _TOKENIZER:
         _TOKENIZER["t"] = None
-        try:
-            import glob
-            from huggingface_hub.constants import HF_HUB_CACHE
-            from tokenizers import Tokenizer
-            files = glob.glob(os.path.join(HF_HUB_CACHE, "models--*whisper*", "snapshots", "*", "tokenizer.json"))
-            if files:
-                _TOKENIZER["t"] = Tokenizer.from_file(sorted(files)[-1])
-        except Exception:
-            pass
+        if wait:
+            _load_tokenizer()
+        else:
+            threading.Thread(target=_load_tokenizer, daemon=True, name="tokenizer").start()
     return _TOKENIZER["t"]
 
 
@@ -425,19 +433,54 @@ def write_flac(path, y, sr=16000):
 
 # ----------------------------------------------------------------------------- local
 
-def model_cached(name):
-    """True si el modelo ya esta descargado en la cache de Hugging Face."""
-    try:
-        from faster_whisper.utils import _MODELS
-        from huggingface_hub.constants import HF_HUB_CACHE
-    except ImportError:
-        return False
-    repo = _MODELS.get(name, name)
-    snaps = os.path.join(HF_HUB_CACHE, "models--" + repo.replace("/", "--"), "snapshots")
-    try:
-        return any(os.path.exists(os.path.join(snaps, s, "model.bin")) for s in os.listdir(snaps))
+# Repositorios de Hugging Face de los modelos de los presets (lo que trae faster_whisper.utils._MODELS). Fijos aqui
+# porque /api/config pregunta si estan descargados y NO puede importar faster_whisper para saberlo: el 02/11/2026 esa
+# importacion, lenta tras una actualizacion y compartida por el cerrojo de importacion con el hilo del directo, tuvo
+# /api/config 8 minutos sin contestar y la interfaz muerta (los botones no hacian nada).
+HF_REPOS = {"tiny": "Systran/faster-whisper-tiny", "base": "Systran/faster-whisper-base",
+            "small": "Systran/faster-whisper-small", "medium": "Systran/faster-whisper-medium",
+            "large-v2": "Systran/faster-whisper-large-v2", "large-v3": "Systran/faster-whisper-large-v3",
+            "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+            "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+            "distil-large-v3": "Systran/faster-distil-whisper-large-v3"}
+_MODEL_CACHED = {}  # modelo -> (hasta cuando vale, resultado): /api/config lo pide en cada carga de la interfaz
+MODEL_CACHED_TTL_S = 30.0
+
+
+def hf_hub_cache():
+    """La cache de Hugging Face tal como la resuelve huggingface_hub.constants, sin importarlo: HF_HUB_CACHE (o
+    HUGGINGFACE_HUB_CACHE), si no HF_HOME/hub, si no ~/.cache/huggingface/hub."""
+    p = os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+    if not p:
+        home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+        p = os.path.join(home, "hub")
+    return os.path.expanduser(p)
+
+
+def model_cached(name, ttl=None):
+    """True si el modelo ya esta descargado en la cache de Hugging Face. Sin importar nada (HF_REPOS, hf_hub_cache)
+    y con el resultado guardado un rato (MODEL_CACHED_TTL_S)."""
+    now = time.time()
+    hit = _MODEL_CACHED.get(name)
+    if hit and hit[0] > now:
+        return hit[1]
+    cache = hf_hub_cache()
+    dirs = ["models--" + HF_REPOS[name].replace("/", "--")] if name in HF_REPOS else []
+    try:  # por si el repositorio cambia de dueno: cualquier carpeta de la cache que acabe en el nombre del modelo
+        dirs += [d for d in os.listdir(cache) if d.startswith("models--") and d.endswith("faster-whisper-" + name)]
     except OSError:
-        return False
+        pass
+    found = False
+    for d in dirs:
+        snaps = os.path.join(cache, d, "snapshots")
+        try:
+            found = any(os.path.exists(os.path.join(snaps, x, "model.bin")) for x in os.listdir(snaps))
+        except OSError:
+            found = False
+        if found:
+            break
+    _MODEL_CACHED[name] = (now + (MODEL_CACHED_TTL_S if ttl is None else ttl), found)
+    return found
 
 
 class WorkerTimeout(EngineError):

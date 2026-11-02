@@ -23,6 +23,7 @@ from time import perf_counter  # aparte de `time`: los tests sustituyen live.tim
 import numpy as np
 
 import engines
+from common import log
 
 SR = 16000
 OPEN = 0xFFFFFFFF
@@ -130,9 +131,60 @@ class Resampler:
         return self._out(self.r.resample(None)) if self.r else np.zeros(0, np.float32)
 
 
+_VAD = {"fn": None, "retry_at": 0.0, "warned": False}
+VAD_RETRY_S = 600  # si la VAD de Whisper no se pudo importar, se vuelve a intentar pasado este tiempo
+
+
+def simple_speech(buf, frame_s=0.03, min_gap_s=0.3):
+    """Detector sencillo de voz por energia, en el formato de get_speech_timestamps ([{"start", "end"}] en
+    muestras): tramos cuyo RMS por tramo de 30 ms supera el 30 % del nivel alto del propio bufer (percentil 90), con
+    los huecos de menos de 300 ms unidos. Vale para cortar en pausas cuando no esta la VAD de Whisper."""
+    n = int(SR * frame_s)
+    if n <= 0 or len(buf) < n:
+        return [{"start": 0, "end": len(buf)}] if len(buf) else []
+    m = len(buf) // n
+    rms = np.sqrt(np.mean(np.asarray(buf[:m * n], np.float32).reshape(m, n) ** 2, axis=1))
+    th = max(0.005, 0.3 * float(np.percentile(rms, 90)))
+    out, start = [], None
+    for i, loud in enumerate(rms > th):
+        if loud and start is None:
+            start = i
+        elif not loud and start is not None:
+            out.append({"start": start * n, "end": i * n})
+            start = None
+    if start is not None:
+        out.append({"start": start * n, "end": len(buf)})
+    merged = []
+    for seg in out:
+        if merged and seg["start"] - merged[-1]["end"] < min_gap_s * SR:
+            merged[-1]["end"] = seg["end"]
+        else:
+            merged.append(dict(seg))
+    return merged
+
+
 def speech(buf):
-    from faster_whisper.vad import VadOptions, get_speech_timestamps
-    return get_speech_timestamps(buf, VadOptions(min_silence_duration_ms=300))
+    """Tramos con voz de `buf` (muestras a SR). La VAD de Whisper si se puede importar; si no (no instalada, o la
+    importacion falla o la pisa otro hilo: el 02/11/2026 salio un KeyError de importlib y tumbo el directo), el
+    detector sencillo, avisando una vez y reintentando la importacion mas tarde. Se importa aqui, no al cargar el
+    modulo, para no retrasar el arranque; nunca desde un hilo que atienda a la interfaz."""
+    fn = _VAD["fn"]
+    if fn is None or (fn is simple_speech and time.time() >= _VAD["retry_at"]):
+        try:
+            from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+            def fn(b):
+                return get_speech_timestamps(b, VadOptions(min_silence_duration_ms=300))
+            _VAD["warned"] = False
+        except Exception as e:
+            fn = simple_speech
+            _VAD["retry_at"] = time.time() + VAD_RETRY_S
+            if not _VAD["warned"]:
+                _VAD["warned"] = True
+                log(f"   la VAD de Whisper no está disponible ({e.__class__.__name__}: {e}): el directo corta las "
+                    "pausas con el detector sencillo")
+        _VAD["fn"] = fn
+    return fn(buf)
 
 
 def choose_cut(buf, final, catching_up, cloud=False):
