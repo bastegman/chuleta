@@ -10,6 +10,11 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Invitar al autor a un café (02/11/2026)
+- En Ajustes › Acerca de, en el README y en el LEEME hay un enlace discreto de PayPal para invitar al autor a un
+  café (`/api/acerca/abrir` con `que: "donar"` lo abre en el navegador del sistema). Sin ventanas emergentes ni
+  recordatorios.
+
 ### Arranque, primera pantalla y detección de llamadas (pruebas del 02/11/2026)
 Lo que falló en la primera prueba de la versión del 01/11/2026 en un portátil de empresa, con su causa y su arreglo.
 - **La interfaz ya no depende de importar Whisper.** Al abrirse, la página pide `/api/config`, que comprobaba qué

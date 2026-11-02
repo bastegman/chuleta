@@ -284,6 +284,11 @@ Rasteriza `_app/static/logo.svg` (y `design/logo-small.svg` para 16 y 20 px) con
 `_app/static/chuleta.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
 `_app/static/chuleta.png`. Solo hace falta si cambia el logo.
 
+## Invitar al autor a un café
+
+Chuleta es gratis. Si te sirve, puedes [invitar al autor a un café por PayPal](https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR). El mismo enlace está en
+Ajustes › Acerca de; no hay ventanas emergentes ni recordatorios.
+
 ## Licencia
 
 MIT. Ver `LICENSE`.

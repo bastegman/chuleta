@@ -108,6 +108,7 @@ class NombreCentralizadoTests(unittest.TestCase):
                   "licencia ${esc(ac.licencia)}", 'id="aRepo"', 'id="aDatos"', 'id="aDiag"',
                   "api('/api/acerca/abrir', { que: 'datos' })",
                   "api('/api/acerca/abrir', { que: 'repo' })", "api('/api/diagnostico')", "copy(r.texto,",
+                  'id="aDonar"', "api('/api/acerca/abrir', { que: 'donar' })", "${esc(ac.donar || '#')}",
                   "const ac = S.config.acerca || {};", "${esc(ac.datos || '')}"):
             self.assertIn(s, app, s)
         self.assertIn("info: '<svg", app)
@@ -254,7 +255,8 @@ class ServidorHttpTests(unittest.TestCase):
         «Acerca de»."""
         src = read("server.py")
         self.assertIn('"app_name": APP_NAME, "window": WINDOW is not None', src)
-        self.assertIn('"acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR}', src)
+        self.assertIn('"acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL}',
+                      src)
 
     def test_acerca_abrir(self):
         with mock.patch.object(server, "open_dir") as open_dir, mock.patch.object(server.webbrowser, "open") as wb:
@@ -262,9 +264,23 @@ class ServidorHttpTests(unittest.TestCase):
             open_dir.assert_called_once_with(server.DATA_DIR)
             self.assertEqual(self.call("/api/acerca/abrir", {"que": "repo"}), (200, {"ok": True}))
             wb.assert_called_once_with(server.REPO_URL)
+            self.assertEqual(self.call("/api/acerca/abrir", {"que": "donar"}), (200, {"ok": True}))
+            self.assertEqual(wb.call_args_list[-1].args, (server.DONAR_URL,))
             code, body = self.call("/api/acerca/abrir", {"que": "otra"})
         self.assertEqual(code, 400)
         self.assertEqual(self.call("/api/acerca/abrir", {"que": "datos"}, header=False)[0], 403)
+
+    def test_invitar_a_un_cafe(self):
+        """Donaciones discretas: un enlace de PayPal al correo del autor en Acerca de, el README y el LEEME (y su
+        plantilla), sin ventanas emergentes ni recordatorios."""
+        self.assertTrue(server.DONAR_URL.startswith("https://www.paypal.com/donate?business="), server.DONAR_URL)
+        raiz = os.path.dirname(APP)
+        for n in ("README.md", "LEEME.txt", os.path.join("_app", "export", "LEEME.txt")):
+            with open(os.path.join(raiz, n), encoding="utf-8") as f:
+                self.assertIn(server.DONAR_URL, f.read(), n)
+        app = read("static", "app.js")
+        self.assertNotIn("donar", app.split("Acerca de</legend>")[0].lower())  # solo en Acerca de, nada antes
+        self.assertNotIn("toast(", app.split('id="aDonar"')[1].split("</fieldset>")[0])
 
     def test_diagnostico_enmascara_claves(self):
         """Versión, Python, sistema, motor y las últimas 30 líneas de server.log sin la API key ni las adicionales."""
