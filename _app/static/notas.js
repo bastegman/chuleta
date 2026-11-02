@@ -71,7 +71,7 @@ function recentCards() {
 
 /* primer arranque (p. ej. en el PC de otra persona): conectar la nube y grabar la primera reunion */
 function welcomeCard(all) {
-  const key = S.config.cloud?.has_key;
+  const key = S.config.procesado === 'api' ? S.config.cloud?.has_key : true;  // sin API no hay nada que conectar
   if (key && all.length) return '';
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
@@ -341,7 +341,7 @@ function renderSummary(a) {
       <button class="btn sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button><div class="pbar${j.progress < 0.02 ? ' indet' : ''}"><i style="width:${(j.progress || 0) * 100}%"></i></div></div>` : '';
   const err = !j && last && last.status === 'error' ? `<div class="notice">No se pudo resumir: ${esc(last.error)}</div>` : '';
   // con Azure OpenAI solo se configura el deployment de Whisper: el resumen aún no funciona ahí (no es que falte configurar)
-  const azure = S.config?.cloud?.provider === 'azure' && !s.ready;
+  const azure = S.config?.procesado === 'api' && S.config?.cloud?.provider === 'azure' && !s.ready;
   const azureNote = '<div class="muted">El resumen con IA aún no funciona con Azure OpenAI: con Azure solo se transcribe. Para resumir, elige Groq, OpenAI u otra API compatible con OpenAI en Ajustes.</div>';
   if (!s.exists) {
     box.innerHTML = progress + err + `<div class="card sum-empty">
@@ -349,7 +349,7 @@ function renderSummary(a) {
       <div><b>Resumen con IA de la reunión</b><div class="muted">Resumen, puntos clave, decisiones, próximos pasos y participantes, con el minuto de cada punto. Usa también tus notas.</div></div>
       ${!has ? '<div class="muted">Primero hay que transcribir la reunión.</div>'
         : azure ? azureNote
-          : !s.ready ? '<button class="btn" data-act="settings">Configurar la nube en Ajustes</button>'
+          : !s.ready ? `<button class="btn" data-act="settings">${S.config?.procesado === 'local' ? 'Elegir dónde se procesa (Ajustes)' : S.config?.procesado === 'agente' ? `Comprobar ${esc(S.config.agente?.label || 'Claude Code')} en Ajustes` : 'Configurar la nube en Ajustes'}</button>`
             : j ? '' : `<button class="btn primary" data-act="summarize" data-path="${esc(a.path)}">${I.spark}Resumir esta reunión</button>`}
     </div>`;
     return;

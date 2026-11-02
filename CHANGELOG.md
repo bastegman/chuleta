@@ -10,6 +10,23 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Dónde se procesan tus reuniones (02/11/2026)
+- Ajustes empieza por una elección: **Solo en este PC** (Whisper local, nada sale del ordenador, sin resumen con IA),
+  **Con tu cuenta de Claude** (transcripción local y resumen con Claude usando la suscripción del usuario, personal o
+  de empresa, a través de Claude Code: paso a paso dentro de la app y botón «Comprobar») o **API externa** (lo de
+  siempre: Groq, OpenAI, Azure OpenAI o una API compatible). Las dos últimas llevan su aviso de que el contenido de la
+  reunión sale del PC (`procesado` en `settings.json`; una instalación anterior con API key sigue en «API externa» y
+  sin key pasa a «Solo en este PC»). Decisión de producto: una sola versión, pública, con las tres alternativas y los
+  avisos, en vez de una versión «solo local» y otra con nube.
+- Con «Con tu cuenta de Claude» el resumen se hace con `claude -p` (`engines.ClaudeCode`): sin herramientas, sin
+  guardar la sesión, sin servidores MCP ni hooks del usuario, las instrucciones por la entrada estándar y la respuesta
+  en JSON; una reunión larga cabe en una sola llamada. La app no ve ni guarda credenciales. `/api/agente/comprobar`
+  busca `claude` (PATH y las carpetas de sus instaladores en Windows), lee su versión y hace una petición mínima. La
+  nube (transcripción, directo y repaso final) solo se ofrece con «API externa»; al cambiar a otra opción, los motores
+  de la cola y del directo vuelven a ser locales. Con la cuenta de Claude, elegir la opción (con su aviso) es el
+  consentimiento: también se resumen solas las reuniones transcritas en local. Preparado para añadir Codex CLI y
+  Gemini CLI (`engines.AGENTES`). El diagnóstico dice dónde se procesa.
+
 ### Invitar al autor a un café (02/11/2026)
 - En Ajustes › Acerca de, en el README y en el LEEME hay un enlace discreto de PayPal para invitar al autor a un
   café (`/api/acerca/abrir` con `que: "donar"` lo abre en el navegador del sistema). Sin ventanas emergentes ni

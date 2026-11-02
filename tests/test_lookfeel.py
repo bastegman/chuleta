@@ -469,7 +469,8 @@ class InstaladorTests(unittest.TestCase):
                   "NOTAS_INSTALADOR_AUTOCERRAR", "NOTAS_INSTALADOR_SIMULAR_FALLO", "instalar.log",
                   'static\\chuleta.ico', 'static\\chuleta.png', 'Join-Path $app "Chuleta.bat"',
                   "instalación (sin permisos de administrador)", "Espera a que termine la instalación",
-                  "Transcripción en la nube", "(versión $ver)", "Join-Path $app 'version.txt'", "-Encoding UTF8"):
+                  "Dónde se procesan tus reuniones", "(versión $ver)", "Join-Path $app 'version.txt'",
+                  "-Encoding UTF8"):
             self.assertIn(s, ps1, s)
         m = re.search(r'\$AppId = "([^"]+)"', ps1)
         self.assertEqual(m.group(1), common.APP_ID)  # el .lnk y el proceso llevan el mismo AppUserModelID

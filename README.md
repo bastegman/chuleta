@@ -15,6 +15,9 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   estado, participantes, tema).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio. Al terminar se hace
   solo si la reunión se transcribió en la nube; lo transcrito en local, a mano o si lo permites en Ajustes.
+- **Dónde se procesa, lo eliges tú**: solo en este PC (nada sale de él), con tu cuenta de Claude (resumen con tu
+  suscripción a través de Claude Code, con el paso a paso dentro de la app) o con una API externa; las dos últimas,
+  con su aviso.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
 - **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas (y se pueden importar las listas
   de otra carpeta).
@@ -50,10 +53,16 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    «Chuleta» en el escritorio y en el menú Inicio y la añade a **Aplicaciones instaladas**
    (`HKCU\…\Uninstall\Chuleta`, sin administrador). Al terminar dice dónde ha quedado; la carpeta descomprimida ya se
    puede borrar.
-3. Se abre Chuleta. Para transcribir en la nube: ⚙ Ajustes → Transcripción en la nube → tu API key. Con la primera
-   key, la nube pasa a ser lo predeterminado para la cola y para el directo, y cada reunión transcrita en la nube se
-   resume sola al terminar (con Azure OpenAI el resumen aún no funciona). Sin nube también funciona (transcribe en el
-   propio PC, más lento), y lo transcrito en local no se envía solo al resumen: ver «Privacidad».
+3. Se abre Chuleta. Lo primero, en ⚙ Ajustes → «Dónde se procesan tus reuniones», elige una de las tres opciones:
+   **Solo en este PC** (Whisper transcribe en tu ordenador, nada sale de él, sin resumen con IA), **Con tu cuenta de
+   Claude** (transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de Claude
+   Code: la app te guía paso a paso, instalar, iniciar sesión y «Comprobar», y no ve ni guarda tus credenciales) o
+   **API externa** (Groq, OpenAI, Azure OpenAI o cualquier API compatible con OpenAI: transcripción rápida en la nube
+   y resumen, con tu API key; con la primera key, la nube pasa a ser lo predeterminado para la cola y para el
+   directo). Las dos últimas avisan de que el contenido de la reunión sale del PC: el texto, a Anthropic con la
+   cuenta de Claude; el audio y el texto, al proveedor de la API. En algunas reuniones eso puede ser un bloqueante:
+   compruébalo antes (política de tu empresa, acuerdo con tu cliente). Con Azure OpenAI el resumen aún no funciona,
+   y con la API lo transcrito en local no se envía solo al resumen: ver «Privacidad».
 4. Cerrar la ventana deja Chuleta en segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando); el acceso directo la
    vuelve a abrir. Para apagarla del todo: ⚙ Ajustes → Apagar Chuleta.
 5. Para actualizar, descomprime el zip nuevo y ejecuta su `INSTALAR.bat`: encuentra la instalación anterior (por
@@ -92,6 +101,12 @@ El manual completo está en `LEEME.txt`.
 
 - Grabaciones, transcripciones y notas viven en la carpeta de Chuleta (y en las carpetas vinculadas), en tu PC. Si una
   de esas carpetas está en OneDrive o SharePoint, se sincroniza como cualquier otra.
+- Con «Con tu cuenta de Claude», el texto de la reunión (transcripción con quién habla si se sabe, notas, contexto,
+  participantes confirmados e instrucciones; el audio no) se envía a Anthropic a través de Claude Code con la cuenta
+  con la que iniciaste sesión: la de empresa, bajo el acuerdo de tu empresa; la personal, bajo sus términos. Chuleta
+  no ve ni guarda esas credenciales: solo lanza `claude -p` en tu PC, sin herramientas, sin guardar la sesión y sin tus
+  hooks ni servidores MCP. Elegir esa opción, con su aviso, es el consentimiento: también se resumen solas las
+  reuniones transcritas en local (las de los últimos 3 días).
 - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que configures. El resumen
   automático solo envía las reuniones transcritas enteras en la nube. Las transcritas en local solo se envían si
   marcas «Resumir también las reuniones transcritas en local» en Ajustes → Resumen con IA, o si las resumes a mano. De

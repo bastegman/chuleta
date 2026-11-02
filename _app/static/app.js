@@ -129,7 +129,8 @@ function longTitle(a) {
   return `${DIA[d.getDay()]} ${d.getDate()} ${MES[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 const fullTitle = a => (a.props && a.props.titulo) ? `${nfc(a.props.titulo)} · ${shortTitle(a)}` : longTitle(a) + (a.label ? ` · ${nfc(a.label)}` : '');
-const provName = () => S.config?.providers?.[S.config.cloud?.provider]?.label || 'la nube';
+const provName = () => S.config?.procesado === 'agente' ? `${S.config.agente?.label || 'Claude Code'} (tu cuenta)`
+  : (S.config?.providers?.[S.config.cloud?.provider]?.label || 'la nube');
 const estDuration = a => a.duration || (a.ext === '.wav' ? a.size / 192000 : a.size / 16000);
 /* nombres de carpeta: las vinculadas (fuera de Audios) van por dentro como ":<id>/…" y se ven con su nombre */
 const nodeName = p => nfc(S.folders.get(p)?.name ?? p.split('/').pop());
@@ -1926,6 +1927,38 @@ function openRenameFolder(path) {
 }
 $('#btnNewFolder').onclick = () => openNewFolder(S.route.kind === 'f' ? S.route.path : '');
 
+/* Dónde se procesan las reuniones: solo en este PC, con la cuenta de Claude del usuario (Claude Code) o con una API
+   externa. Las dos últimas avisan de que el contenido de la reunión sale del PC (decisión de producto del 02/11/2026). */
+function procesadoFieldsetHtml() {
+  const mode = S.config.procesado || 'local', ag = S.config.agente || {}, agLabel = esc(ag.label || 'Claude Code');
+  const opt = (v, titulo, texto, aviso) => `<label class="proc${mode === v ? ' on' : ''}"><input type="radio" name="proc" value="${v}"${mode === v ? ' checked' : ''}>
+      <div><b>${titulo}</b><div class="help" style="margin-top:2px">${texto}</div>${aviso ? `<div class="notice proc-aviso">${I.info}${aviso}</div>` : ''}</div></label>`;
+  const cuando = ag.comprobado ? new Date(ag.comprobado * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : '';
+  const estado = !ag.encontrado ? `${agLabel} no está instalado en este PC (o no está en el PATH)`
+    : cuando ? `${agLabel} ${esc(ag.version || '')} · comprobado el ${cuando}` : `${agLabel} encontrado · sin comprobar todavía`;
+  return `<fieldset><legend>${I.monitor}Dónde se procesan tus reuniones</legend>
+    <div class="procs">
+      ${opt('local', 'Solo en este PC', 'Whisper transcribe en tu ordenador. Nada sale de él. Sin resumen con IA.')}
+      ${opt('agente', `Con tu cuenta de Claude (${agLabel})`, `Transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de ${agLabel}: ${esc(APP_NAME)} no ve ni guarda tus credenciales.`,
+    'El texto de la reunión (transcripción, notas, contexto y participantes confirmados) se envía a Anthropic con esa cuenta: con la de empresa, bajo el acuerdo de tu empresa; con la personal, bajo sus términos de uso. En algunas reuniones puede ser un bloqueante: compruébalo antes.')}
+      ${opt('api', 'API externa (Groq, OpenAI, Azure…)', 'Transcripción rápida en la nube y resumen con el proveedor que elijas, con su API key.',
+    'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.')}
+    </div>
+    <div id="procAgente"${mode === 'agente' ? '' : ' hidden'}>
+      <ol class="pasos">
+        <li><b>Instala ${agLabel}</b> (hace falta una cuenta Pro, Max, Team o Enterprise). En Windows, abre PowerShell y ejecuta <code>irm https://claude.ai/install.ps1 | iex</code> (o <code>winget install Anthropic.ClaudeCode</code>). No hace falta ser administrador.</li>
+        <li><b>Inicia sesión</b>: abre una terminal nueva, escribe <code>claude</code> y sigue los pasos en el navegador con tu cuenta, la personal o la de tu empresa. Después puedes cerrar la terminal.</li>
+        <li><b>Comprueba</b>: ${esc(APP_NAME)} busca <code>claude</code> en este PC, lee su versión y le hace una petición mínima con tu cuenta.</li>
+      </ol>
+      <div class="grid2">
+        <div><label>Modelo</label><select id="agModelo">${(ag.modelos || []).map(([v, l]) => `<option value="${esc(v)}"${v === ag.modelo ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+        <div><label>Estado</label><div class="help" style="margin-top:8px" id="agEstado">${estado}</div></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn sm" type="button" id="agCheck">Comprobar</button><span id="agRes" class="muted" style="font-size:12.5px"></span></div>
+    </div>
+  </fieldset>`;
+}
+
 function openSettings() {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
   const c = S.config.cloud, P = S.config.providers;
@@ -1933,6 +1966,8 @@ function openSettings() {
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
     ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
+    ${procesadoFieldsetHtml()}
+    <div id="procApi"${S.config.procesado === 'api' ? '' : ' hidden'}>
     <fieldset><legend>${I.nube}Transcripción en la nube</legend>
       <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
@@ -1944,6 +1979,16 @@ function openSettings() {
       </div>
       <div class="row" style="margin-top:14px"><button class="btn sm" id="cTest">Probar conexión</button><span id="cTestRes" class="muted" style="font-size:12.5px"></span></div>
     </fieldset>
+    <fieldset><legend>${I.spark}Resumen con IA</legend>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir en la nube (reuniones de los últimos 3 días)</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAutoLocal" ${S.config.summary?.local ? 'checked' : ''}> Resumir también las reuniones transcritas en local (las envía a ${esc(provName())})</label>
+      <div class="help" id="sAutoLocalQue">De cada reunión se envía a <b>${esc(provName())}</b>: el título (o el nombre del archivo), la fecha y la duración, la transcripción (con quién habla, si se sabe), tus notas, el contexto, los participantes confirmados y tus instrucciones para el resumen. El audio no.</div>
+      <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
+      <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
+      <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+    </fieldset>
+    </div>
     <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
@@ -1954,15 +1999,6 @@ function openSettings() {
     <fieldset><legend>${I.monitor}Transcripción local</legend>
       <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
-    </fieldset>
-    <fieldset><legend>${I.spark}Resumen con IA</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir en la nube (reuniones de los últimos 3 días)</label>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAutoLocal" ${S.config.summary?.local ? 'checked' : ''}> Resumir también las reuniones transcritas en local (las envía a ${esc(provName())})</label>
-      <div class="help" id="sAutoLocalQue">De cada reunión se envía a <b>${esc(provName())}</b>: el título (o el nombre del archivo), la fecha y la duración, la transcripción (con quién habla, si se sabe), tus notas, el contexto, los participantes confirmados y tus instrucciones para el resumen. El audio no.</div>
-      <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
-      <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
-      <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
     <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
@@ -1997,6 +2033,22 @@ function openSettings() {
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
+    $$('input[name="proc"]', d).forEach(r => r.addEventListener('change', () => {
+      const v = $('input[name="proc"]:checked', d)?.value;
+      $$('.proc', d).forEach(l => l.classList.toggle('on', l.querySelector('input').value === v));
+      $('#procApi', d).hidden = v !== 'api';
+      $('#procAgente', d).hidden = v !== 'agente';
+    }));
+    $('#agCheck', d).onclick = async () => {
+      const res = $('#agRes', d);
+      res.textContent = 'Comprobando… (la primera vez puede tardar medio minuto)';
+      try {
+        setConfig(await api('/api/settings', collect()));
+        const r = await api('/api/agente/comprobar', {});
+        res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)</span>`;
+        $('#agEstado', d).textContent = `${S.config.agente?.label || 'Claude Code'} ${r.version} · comprobado ahora`;
+      } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
+    };
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
     $('#aDonar', d).onclick = e => { e.preventDefault(); if (ac.donar) api('/api/acerca/abrir', { que: 'donar' }).catch(() => window.open(ac.donar, '_blank')); };
@@ -2039,7 +2091,8 @@ function openSettings() {
       if (p === 'custom') cloud.base_url = $('#cBase', d).value;
       if (typeof collectDirectoSettings === 'function') Object.assign(cloud, collectDirectoSettings(d));
       S.selLang = $('#sLang', d).value;
-      return { cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
+      return { procesado: $('input[name="proc"]:checked', d)?.value, agente: { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value },
+        cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
