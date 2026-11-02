@@ -420,6 +420,11 @@ DEFAULT_SETTINGS = {
     "summary_model": "openai/gpt-oss-120b",
     "summary_lang": "es",     # es / en / same (el de la reunion)
     "summary_extra": "",     # instrucciones extra para el resumen
+    # donde se procesan las reuniones: "local" (nada sale del PC), "agente" (resumen con la cuenta del usuario a
+    # traves de Claude Code) o "api" (nube: transcripcion y resumen con API key). None = sin decidir: al arrancar
+    # pasa a "api" si hay API key (instalaciones anteriores) y si no a "local" (App.__init__, procesado_de)
+    "procesado": None,
+    "agente": {"tipo": "claude", "modelo": "sonnet"},
     "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
     # perfil de reunion por defecto (Ajustes > Perfil de reunion y «Guardar como perfil por defecto» al grabar).
     # None en folder/vocab = automatico, como siempre: la ultima carpeta usada (o la del proyecto del tema) y el tema
@@ -445,6 +450,27 @@ DEFAULT_SETTINGS = {
               "live_model_custom": "", "extra_keys_openai": [], "extra_keys_azure": [], "extra_keys_custom": []},
     "speed": {},
 }
+
+PROCESADOS = ("local", "agente", "api")
+NUBE_OFF = ("La transcripción en la nube está desactivada: en Ajustes → «Dónde se procesan tus reuniones» elige "
+            "«API externa».")
+
+
+def procesado_de(st):
+    """Donde se procesan las reuniones. Sin decidir (ajustes de una version anterior): "api" si hay API key, si no
+    "local"."""
+    p = st.get("procesado")
+    if p in PROCESADOS:
+        return p
+    return "api" if ((st.get("cloud") or {}).get("api_key") or "").strip() else "local"
+
+
+def agente_de(st):
+    """(clase del agente, {tipo, modelo}): el configurado, o Claude Code si no se reconoce."""
+    a = st.get("agente") if isinstance(st.get("agente"), dict) else {}
+    cls = engines.AGENTES.get(a.get("tipo")) or engines.AGENTES["claude"]
+    modelo = a.get("modelo") if a.get("modelo") in dict(cls.MODELOS) else cls.MODELO
+    return cls, {"tipo": cls.tipo, "modelo": modelo}
 
 
 class Durations:
@@ -1855,6 +1881,7 @@ class Jobs:
         if self.cloud.purge_tmp():  # trozos de audio de una sesion que se corto (apagado, actualizacion, cuelgue)
             log("   borrados los trozos de audio temporales que dejó la sesión anterior")
         self.summarizer = engines.Summarizer(keys=self.cloud.keys)  # en la nube (Groq); mismas claves y cupo
+        self.summarizer_agente = None  # con el agente del PC (procesado "agente"): se crea al primer uso
         self.queues["resumen"] = queue.Queue()
         self.queues["voces"] = queue.Queue()  # quien habla: un subproceso de prioridad baja, de uno en uno
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
@@ -1944,6 +1971,8 @@ class Jobs:
         preset = preset or st.get("live_preset") or "medium"
         if preset not in LIVE_PRESETS:
             preset = "medium"
+        if preset == "nube" and procesado_de(st) != "api":
+            preset = "medium"  # la nube esta desactivada en Ajustes: en local
         if preset == "nube":
             try:
                 engines.CloudEngine.endpoint(st["cloud"])
@@ -2073,6 +2102,8 @@ class Jobs:
         if preset not in LIVE_PRESETS:
             raise ApiError("Modelo desconocido: " + str(preset))
         if engines.PRESETS_BY_ID[preset]["engine"] == "cloud":
+            if procesado_de(self.settings.get()) != "api":
+                raise ApiError(NUBE_OFF)
             self._cloud_ready()
 
     def set_live_preset(self, job_id, preset, restart=False):
@@ -2164,6 +2195,8 @@ class Jobs:
         if preset not in engines.PRESETS_BY_ID:
             raise ApiError("Velocidad desconocida: " + str(preset))
         if engines.PRESETS_BY_ID[preset]["engine"] == "cloud":
+            if procesado_de(self.settings.get()) != "api":
+                raise ApiError(NUBE_OFF)
             self._cloud_ready()
         added = []
         for rel in paths:
@@ -2183,16 +2216,44 @@ class Jobs:
             added.append(job.id)
         return added
 
-    # --- resumen con IA (Groq)
+    # --- resumen con IA: con la API de chat (procesado "api") o con el agente del PC (procesado "agente")
+    def summary_missing(self):
+        """Por que no se puede resumir ahora (None si se puede), segun donde se procesan las reuniones."""
+        st = self.settings.get()
+        mode = procesado_de(st)
+        if mode == "local":
+            return ("El resumen con IA está desactivado: en Ajustes → «Dónde se procesan tus reuniones» elige «Con tu "
+                    "cuenta de Claude» o «API externa».")
+        if mode == "agente":
+            cls, _ = agente_de(st)
+            if cls.find():
+                return None
+            return f"No encuentro {cls.label} en este PC: sigue el paso a paso de Ajustes y pulsa «Comprobar»."
+        c = st["cloud"]
+        if engines.chat_url(c) and (c.get("api_key") or "").strip():
+            return None
+        # con Azure OpenAI: que el resumen aun no funciona ahi (no "configura la nube")
+        return (engines.chat_missing(c)
+                or "El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+
     def summary_ready(self):
-        c = self.settings.get()["cloud"]
-        return bool(engines.chat_url(c)) and bool((c.get("api_key") or "").strip())
+        return self.summary_missing() is None
+
+    def _summarizer(self, st):
+        """El Summarizer que toca: el de la API de chat o, con procesado "agente", uno con el agente del PC."""
+        if procesado_de(st) != "agente":
+            return self.summarizer
+        cls, _ = agente_de(st)
+        cur = getattr(self, "summarizer_agente", None)
+        if cur is None or cur.agente.tipo != cls.tipo:
+            cur = self.summarizer_agente = engines.Summarizer(agente=cls(settings_dir=DATA_DIR))
+        return cur
 
     def submit_summary(self, rel, auto=False):
         abs_path = safe(rel, "file")
-        if not self.summary_ready():  # con Azure OpenAI: que el resumen aun no funciona ahi (no "configura la nube")
-            raise ApiError(engines.chat_missing(self.settings.get()["cloud"])
-                           or "El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+        missing = self.summary_missing()
+        if missing:
+            raise ApiError(missing)
         if not any(os.path.isfile(os.path.splitext(abs_path)[0] + e) for e in (".srt", ".txt")):
             raise ApiError("Primero hay que transcribir la reunión.")
         with self.lock:
@@ -2224,10 +2285,12 @@ class Jobs:
         """Al terminar de transcribir: resumen automatico si es una reunion reciente (las antiguas se
         resumen a mano, para no gastar de golpe el cupo diario de Groq). El resumen manda el texto, las notas y el
         contexto al proveedor de la nube: si el texto no se transcribio entero en la nube (_tx_in_cloud), solo con el
-        consentimiento de Ajustes (summary_auto_local). A mano, siempre."""
+        consentimiento de Ajustes (summary_auto_local). A mano, siempre. Con el agente del PC (procesado "agente") el
+        consentimiento es haber elegido esa opcion, con su aviso: todo lo transcrito en local se resume."""
         st = self.settings.get()
         if not st.get("summary_auto", True) or not self.summary_ready():
             return
+        mode = procesado_de(st)
         a = self.library.find(rel)
         when = None
         if a and a.get("date"):
@@ -2238,7 +2301,7 @@ class Jobs:
         when = when or (a or {}).get("mtime") or 0
         if time.time() - when > 3 * 86400:
             return
-        if not self._tx_in_cloud(rel) and not st.get("summary_auto_local"):
+        if mode != "agente" and not self._tx_in_cloud(rel) and not st.get("summary_auto_local"):
             log(f"   {os.path.basename(rel)}: transcrita en local, sin resumen automático (no sale del PC; se puede "
                 "resumir a mano)")
             return
@@ -2268,7 +2331,8 @@ class Jobs:
                     "participants": participantes_confirmados(props), "notes": notes,
                     "extra": st.get("summary_extra", ""), "about": props.get("contexto", "")}
             segments = self._with_speakers(abs_path, data["segments"], meta)
-            cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"))
+            cfg = dict(st["cloud"], summary_model=st.get("summary_model"), summary_lang=st.get("summary_lang"),
+                       agente_modelo=agente_de(st)[1]["modelo"])
 
             def report(frac=None, stage=None, **k):
                 if stage:
@@ -2276,7 +2340,7 @@ class Jobs:
                 if frac is not None:
                     job.progress = max(job.progress, frac)
 
-            text, model = self.summarizer.summarize(segments, meta, cfg, report, lambda: job.cancel)
+            text, model = self._summarizer(st).summarize(segments, meta, cfg, report, lambda: job.cancel)
             head = f"---\nmodelo: {model}\ngenerado: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n"
             save_text(base + ".resumen.md", head + text.strip() + "\n", "utf-8")
             job.status, job.progress, job.stage = "done", 1.0, "Resumen listo"
@@ -2941,6 +3005,9 @@ DIAG_LINES = (
     "   trozo de {n} s ({n} s de voz, {n} frases): texto a los {n} s{t}",
     "   {e} ({n} s de audio, intento {n})",
     "   directo: no se pudieron releer los ajustes de la nube ({c})",
+    # agente de IA del PC (Claude Code)
+    "   agente: {m} {v} comprobado ({n} s)",
+    "   agente: {m}: {e}",
     # biblioteca, carpetas, vocabulario y voces
     "⤓ importado: {t}",
     "🗑 vocabulario a la papelera: {t}",
@@ -3015,7 +3082,8 @@ DIAG_LINES = (
 DIAG_MODELS = frozenset(
     {x for p in engines.PRESETS for x in (p["id"], p["label"], p.get("live_label"), p.get("model")) if x}
     | set(engines.SUMMARY_MODELS) | {m for v in engines.PROVIDERS.values() for m in v.get("models") or []}
-    | {engines.LIVE_MODEL_DEFAULT, getattr(engines.Summarizer, "TRANSLATE_MODEL", None), "gpt-4o-mini"} - {None})
+    | {engines.LIVE_MODEL_DEFAULT, getattr(engines.Summarizer, "TRANSLATE_MODEL", None), "gpt-4o-mini"}
+    | {c.label for c in engines.AGENTES.values()} - {None})
 # codigos de error que se pueden ensenar: HTTP de la nube (engines: «HTTP 401: …»), errno y WinError, HRESULT de Windows
 # (COM de Outlook, WebView2), los codigos de error de las APIs compatibles con OpenAI y, de las palabras (exc), solo las
 # excepciones conocidas (diag_codes)
@@ -3168,6 +3236,8 @@ class App:
         global COMPLETE
         COMPLETE = Complete(os.path.join(DATA_DIR, "completas.json"))
         self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
+        if self.settings.get().get("procesado") not in PROCESADOS:  # ajustes de antes: se decide una vez y se guarda
+            self.settings.update(lambda d: d.update(procesado=procesado_de(d)))
         self._aviso_resumen_local()
         self._load_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
@@ -3488,7 +3558,12 @@ class App:
         except OSError:
             lines = ["(no hay server.log)"]
         keys = [cloud.get("api_key"), *engines.all_extra_keys(cloud)]  # las adicionales de todos los proveedores
+        mode = procesado_de(st)
+        ver = str(st.get("agente_version") or "").split()
+        donde = {"local": "solo en este PC", "api": "API externa"}.get(mode) or (
+            f"agente ({agente_de(st)[0].label}" + (f" {ver[0]}" if ver else "") + ")")
         info = [f"{APP_NAME} · versión {VERSION}", f"Python {sys.version.split()[0]} · {platform.platform()}",
+                f"Dónde se procesa: {donde}",
                 f"Transcripción: {motor} · directo: {tech(st.get('live_preset') or 'medium')}",
                 f"Carpeta de {APP_NAME}: en OneDrive: {si('onedrive' in ROOT.lower())} · en una unidad de red: "
                 f"{si(en_red)} · con tildes u otros caracteres no ASCII: {si(no_ascii)} · {len(ROOT)} caracteres",
@@ -3520,10 +3595,21 @@ class App:
             log("   aviso pendiente: el resumen automático ya no sube a la nube lo transcrito en local")
 
     # --- GET
+    def _agente_info(self, st):
+        """Para Ajustes: el agente configurado, si esta instalado, su version y cuando se comprobo."""
+        cls, a = agente_de(st)
+        ruta = cls.find()
+        return {"tipo": a["tipo"], "modelo": a["modelo"], "label": cls.label,
+                "modelos": [list(m) for m in cls.MODELOS], "encontrado": bool(ruta), "ruta": ruta,
+                "version": st.get("agente_version") or None, "comprobado": st.get("agente_comprobado") or None}
+
     def config(self, q):
         st = self.settings.get()
+        mode = procesado_de(st)
         presets = []
         for p in engines.PRESETS:
+            if p["engine"] == "cloud" and mode != "api":  # la nube no se ofrece si no se ha elegido «API externa»
+                continue
             d = {k: v for k, v in p.items()}
             d["speed"] = st["speed"].get(p["id"], p["speed"])
             d["cached"] = p["engine"] == "cloud" or engines.model_cached(p["model"])
@@ -3536,10 +3622,11 @@ class App:
         by = {p: [masked(k) for k in (cloud.pop(f, None) or []) if k] for p, f in engines.EXTRA_KEYS_FIELDS.items()}
         cloud["extra_keys_by"], cloud["extra_keys"] = by, by.get(cloud.get("provider") or "groq", [])
         cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
-                          if cloud["has_key"] else None)
+                          if cloud["has_key"] and getattr(self.jobs, "cloud", None) is not None else None)
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
+                "procesado": mode, "agente": self._agente_info(st),
                 "preset": st["preset"], "language": st["language"], "threads": st["threads"],
                 "prompt": st["prompt"], "cpu_count": os.cpu_count(),
                 "live_auto": bool(st.get("live_auto")), "live_preset": st.get("live_preset") or "medium",
@@ -4424,6 +4511,19 @@ class App:
                 d["worker_keepalive_min"] = max(0, min(int(b["worker_keepalive_min"] or 0), 720))
             if "worker_preload" in b:
                 d["worker_preload"] = bool(b["worker_preload"])
+            if b.get("procesado") in PROCESADOS:
+                d["procesado"] = b["procesado"]
+                if d["procesado"] != "api":  # sin nube: los motores de la cola y del directo vuelven a ser locales
+                    for k, local in (("preset", "rapido"), ("live_preset", "medium")):
+                        if (engines.PRESETS_BY_ID.get(d.get(k)) or {}).get("engine") == "cloud":
+                            d[k] = local
+            ag = b.get("agente") if isinstance(b.get("agente"), dict) else None
+            if ag:
+                cur = d.get("agente") if isinstance(d.get("agente"), dict) else {}
+                cls = (engines.AGENTES.get(ag.get("tipo")) or engines.AGENTES.get(cur.get("tipo"))
+                       or engines.AGENTES["claude"])
+                modelo = ag.get("modelo") if ag.get("modelo") in dict(cls.MODELOS) else cls.MODELO
+                d["agente"] = {"tipo": cls.tipo, "modelo": modelo}
             c = b.get("cloud") or {}
             for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
                 if k in c:
@@ -4433,7 +4533,7 @@ class App:
                 if k in c:
                     d["cloud"][k] = max(lo, min(int(c[k] or lo), hi))
             if c.get("api_key") and "…" not in c["api_key"] and "•" not in c["api_key"]:
-                if not d["cloud"].get("api_key"):  # primera key: la nube pasa a ser lo predeterminado
+                if not d["cloud"].get("api_key") and procesado_de(d) == "api":  # primera key: la nube, predeterminada
                     d["preset"] = d["live_preset"] = "nube"
                 d["cloud"]["api_key"] = c["api_key"].strip()
             if c.get("clear_key"):
@@ -4456,6 +4556,23 @@ class App:
                 d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
         return self.config({})
+
+    def agente_comprobar(self, b):
+        """Ajustes → «Comprobar»: el agente esta instalado, responde a --version y contesta una peticion minima con la
+        cuenta del usuario. Guarda la version y la hora para ensenarlas en Ajustes."""
+        st = self.settings.get()
+        cls, _ = agente_de(st)
+        ruta = cls.find()
+        if not ruta:
+            raise ApiError(f"No encuentro {cls.label} en este PC. Haz los pasos 1 y 2 y vuelve a pulsar «Comprobar».")
+        try:
+            version, secs = cls(settings_dir=DATA_DIR).check(ruta)
+        except engines.EngineError as e:
+            log(f"   agente: {cls.label}: {e}")
+            raise ApiError(str(e))
+        self.settings.update(lambda d: d.update(agente_version=version, agente_comprobado=time.time()))
+        log(f"   agente: {cls.label} {version.split()[0]} comprobado ({secs:.1f} s)")
+        return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta}
 
     def test_cloud(self, b):
         try:
@@ -4834,6 +4951,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/move": a.move, "/api/mkdir": a.mkdir, "/api/rename-folder": a.rename_folder,
                   "/api/reveal": a.reveal, "/api/open": a.open_file, "/api/settings": a.save_settings,
                   "/api/cloud/test": a.test_cloud, "/api/live": a.start_live, "/api/live/model": a.live_model,
+                  "/api/agente/comprobar": a.agente_comprobar,
                   "/api/live/traducir": a.live_translate,
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,

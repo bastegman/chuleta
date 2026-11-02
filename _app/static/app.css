@@ -623,6 +623,17 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 #rLiveOpts { margin-top: 8px; }
 .muted-on { background: var(--err-soft) !important; color: var(--err) !important; border-color: var(--err) !important; }
 
+/* donde se procesan las reuniones (Ajustes): tres opciones, las dos externas con aviso */
+.procs { display: grid; gap: 8px; margin-top: 6px; }
+.proc { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-weight: 400; }
+.proc.on { border-color: var(--accent); background: var(--accent-soft); }
+.proc input { margin: 4px 0 0; accent-color: var(--accent); flex: none; }
+.proc > div { min-width: 0; }
+.proc .notice.proc-aviso { margin: 8px 0 0; font-size: 12.5px; }
+ol.pasos { margin: 12px 0 0; padding-left: 22px; font-size: 13.5px; line-height: 1.45; }
+ol.pasos li { margin-bottom: 7px; }
+ol.pasos code { user-select: all; }
+
 /* resumen con IA */
 .sum { padding: 14px 0 50px; }
 .sum-empty { display: flex; align-items: center; gap: 16px; padding: 20px 22px; flex-wrap: wrap; }

@@ -668,17 +668,17 @@ class DiagnosticoTests(TempTree):
         t = self.texto()
         lines = t.split("\n")
         app = server.APP_NAME
-        self.assertEqual(lines[:8], [
+        self.assertEqual(lines[:9], [
             f"{app} · versión {server.VERSION}", f"Python {server.sys.version.split()[0]} · "
-            f"{server.platform.platform()}",
+            f"{server.platform.platform()}", "Dónde se procesa: API externa",
             "Transcripción: nube (groq) · modelo whisper-large-v3-turbo · directo: medium",
             f"Carpeta de {app}: en OneDrive: no · en una unidad de red: no · con tildes u otros caracteres no ASCII: "
             f"no · {len(server.ROOT)} caracteres",
             "Datos: en otra carpeta", "Carpetas vinculadas: 1 · destinos de salida: 1", "",
             "server.log (últimas 30 líneas; lo que no es técnico va como <texto>):"])
-        salida = [l.split(" ", 2)[2] if l[:4].isdigit() else l for l in lines[8:]]  # sin la fecha y la hora
+        salida = [l.split(" ", 2)[2] if l[:4].isdigit() else l for l in lines[9:]]  # sin la fecha y la hora
         self.assertEqual(salida, [esperado for _, esperado in self.LOG])
-        self.assertTrue(all(l.startswith("2026-10-31 10:00:") for l, (orig, _) in zip(lines[8:], self.LOG)
+        self.assertTrue(all(l.startswith("2026-10-31 10:00:") for l, (orig, _) in zip(lines[9:], self.LOG)
                             if orig[1:2] == " " and not orig.startswith(" ")))
 
     def test_ningun_hueco_deja_pasar_texto(self):

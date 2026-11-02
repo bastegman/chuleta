@@ -28,15 +28,18 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
          carpeta nueva o vacía). Solo vale la primera vez: si ya la tienes instalada, se actualiza
          donde está.
 
-  3. Se abre Chuleta. Conecta la nube en  ⚙ Ajustes > Transcripción en la nube:
-       - Groq: elige "Groq", pega tu API key (se crea en console.groq.com/keys) y deja el modelo
-         whisper-large-v3 (el más preciso; whisper-large-v3-turbo es más rápido y algo menos fino).
-       - Pasarela o API interna de la empresa: elige "Otra (compatible con OpenAI)" y pon su URL
-         base (la que termina en /v1), la key y el nombre del modelo de Whisper. En
-         "Modelo del directo" puedes poner otro, más rápido, para la transcripción en directo; si
-         lo dejas vacío, usa el mismo.
-       - Pulsa "Probar conexión" y Guardar. Desde ese momento transcribe en la nube por defecto.
-     El resumen con IA usa el mismo proveedor y la misma key (Ajustes > Resumen con IA).
+  3. Se abre Chuleta. Lo primero: ⚙ Ajustes > "Dónde se procesan tus reuniones". Elige una de tres:
+       - Solo en este PC: Whisper transcribe en tu ordenador y nada sale de él (sin resumen con IA).
+       - Con tu cuenta de Claude: transcribe en tu PC y resume con Claude usando tu suscripción (personal o
+         de empresa) a través de Claude Code. Ajustes te guía: instalar Claude Code, iniciar sesión con tu
+         cuenta y pulsar "Comprobar". Chuleta no ve ni guarda tus credenciales.
+       - API externa: transcripción rápida en la nube y resumen con Groq (gratis: la API key se crea en
+         console.groq.com/keys; deja el modelo whisper-large-v3, el más preciso), OpenAI, Azure OpenAI o la
+         pasarela de tu empresa ("Otra, compatible con OpenAI": su URL base, la key y el modelo; en "Modelo
+         del directo" puedes poner otro más rápido). Pulsa "Probar conexión" y Guardar.
+     Las dos últimas avisan: el contenido de la reunión sale del PC (el texto, a Anthropic con tu cuenta de
+     Claude; el audio y el texto, al proveedor de la API). En algunas reuniones puede ser un bloqueante:
+     compruébalo antes (política de tu empresa, acuerdo con tu cliente).
 
 
 ACTUALIZAR A UNA VERSIÓN NUEVA
@@ -153,6 +156,10 @@ PRIVACIDAD
   - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que
     configures. Si son reuniones de trabajo, confirma que lo permiten la política de tu empresa y
     el acuerdo con tu cliente, si lo hay.
+  - Con tu cuenta de Claude, el texto de la reunión (no el audio) se envía a Anthropic a través de
+    Claude Code con la cuenta con la que iniciaste sesión (la de empresa, bajo su acuerdo; la personal,
+    bajo sus términos). Chuleta no ve ni guarda esas credenciales. Elegir esa opción es el consentimiento:
+    también se resumen solas las reuniones transcritas en local.
   - El resumen automático solo envía las reuniones transcritas en la nube. Lo transcrito en local
     solo se envía al proveedor si lo resumes a mano o si marcas "Resumir también las reuniones
     transcritas en local" en Ajustes > Resumen con IA. De cada reunión, el resumen envía el

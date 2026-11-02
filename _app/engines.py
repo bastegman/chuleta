@@ -10,10 +10,12 @@ Motores de transcripcion.
 Ambos devuelven una lista de segmentos (inicio, fin, texto).
 """
 import itertools
+import json
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from time import perf_counter  # aparte de `time`: los tests le ponen un sleep falso
@@ -1264,6 +1266,153 @@ def _stamp(t):
     return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
 
 
+# ----------------------------------------------------------------------------- agente de IA instalado en el PC
+# Resumen con la cuenta del propio usuario a traves de un agente de linea de comandos que ya tiene instalado y con la
+# sesion iniciada (Claude Code hoy; Codex CLI y Gemini CLI, previstos). La app no ve ni guarda credenciales: lanza el
+# programa con el texto por la entrada estandar y recoge la respuesta. El texto de la reunion sale del PC hacia el
+# proveedor del agente, bajo la cuenta (personal o de empresa) con la que el usuario inicio sesion: Ajustes lo avisa.
+AGENTE_TIMEOUT_S = 600   # un resumen de una reunion larga, en una sola llamada
+AGENTE_CHECK_S = 120     # «Comprobar»: la version y una peticion minima (la primera vez el programa arranca lento)
+AGENTE_VERSION_S = 30
+
+
+class AgenteLocal:
+    """Base de los agentes: donde esta el ejecutable, su version y una llamada de chat (system + user -> texto).
+    SINGLE_CHARS y CHUNK_CHARS: contexto grande, una reunion de 3 h cabe en una llamada (los usa Summarizer)."""
+    tipo = label = ""
+    exe_names = ()
+    win_paths = ()      # (variable de entorno, ruta relativa): donde lo dejan sus instaladores en Windows
+    MODELOS = ()        # (id, etiqueta)
+    MODELO = ""
+    SINGLE_CHARS = 400_000
+    CHUNK_CHARS = 200_000
+    PROMPT = ("Sigue las INSTRUCCIONES que vienen por la entrada estandar y aplicalas al texto que las sigue. "
+              "Responde solo con el resultado pedido.")
+
+    def __init__(self, settings_dir=None):
+        self.settings_dir = settings_dir
+
+    @classmethod
+    def find(cls):
+        """Ruta del ejecutable o None: el PATH y, en Windows, las carpetas donde lo dejan sus instaladores."""
+        for n in cls.exe_names:
+            p = shutil.which(n)
+            if p:
+                return p
+        for var, rel in cls.win_paths:
+            base = os.environ.get(var)
+            if base and os.path.isfile(os.path.join(base, rel)):
+                return os.path.join(base, rel)
+        return None
+
+    @classmethod
+    def run(cls, cmd, stdin_text=None, timeout=AGENTE_TIMEOUT_S, cancelled=lambda: False):
+        """Lanza el programa sin ventana, le pasa stdin_text y devuelve (codigo, stdout, stderr). Se puede cancelar
+        (se mata el proceso) y tiene tope de tiempo. communicate() con reintentos no pierde salida (documentado)."""
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=NO_WINDOW)
+        data, end = (stdin_text or "").encode("utf-8"), time.time() + timeout
+        while True:
+            try:
+                out, err = proc.communicate(input=data, timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                data = None  # ya enviado: en los reintentos no se repite
+                if cancelled() or time.time() > end:
+                    proc.kill()
+                    proc.communicate()
+                    if cancelled():
+                        raise Cancelled()
+                    raise EngineError(f"{cls.label} no ha contestado en {timeout:.0f} s")
+        return proc.returncode, out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
+
+    @classmethod
+    def version(cls, path):
+        code, out, err = cls.run([path, "--version"], timeout=AGENTE_VERSION_S)
+        lines = (out or err).strip().splitlines()
+        if code != 0 or not lines:
+            detail = (err or out).strip()[:160]
+            raise EngineError(f"{cls.label} no responde a --version" + (f": {detail}" if detail else ""))
+        return lines[0][:80]
+
+    def chat(self, system, user, max_tokens, report, cancelled, model=None, timeout=None, path=None):
+        raise NotImplementedError
+
+    def check(self, path, cancelled=lambda: False):
+        """«Comprobar» en Ajustes: la version y una peticion minima con la cuenta del usuario. (version, segundos)."""
+        t0 = time.time()
+        version = self.version(path)
+        out, _ = self.chat("Responde exactamente con la palabra OK, sin nada más.", "OK", 10, lambda **k: None,
+                           cancelled, timeout=AGENTE_CHECK_S, path=path)
+        if "OK" not in out.upper():
+            raise EngineError(f"{self.label} ha contestado algo inesperado: {out.strip()[:80]!r}")
+        return version, time.time() - t0
+
+
+class ClaudeCode(AgenteLocal):
+    """Claude Code (`claude -p`): salida en JSON (result, is_error, modelUsage), sin herramientas, sin guardar la
+    sesion, sin servidores MCP ni hooks del usuario. `--bare` no vale: ese modo no usa la sesion iniciada (solo API
+    key) y aqui lo que se quiere es la cuenta del usuario. Las instrucciones van por la entrada estandar, no como
+    argumento: el .cmd de npm en Windows pasa por cmd.exe y estropea los textos largos con comillas."""
+    tipo, label = "claude", "Claude Code"
+    exe_names = ("claude",)
+    win_paths = (("USERPROFILE", os.path.join(".local", "bin", "claude.exe")),
+                 ("APPDATA", os.path.join("npm", "claude.cmd")))
+    MODELOS = (("haiku", "Haiku · el más rápido"), ("sonnet", "Sonnet · equilibrado (recomendado)"),
+               ("opus", "Opus · el más capaz, más lento"))
+    MODELO = "sonnet"
+
+    def _settings_file(self):
+        """`--settings` con un fichero: solo desactiva los hooks del usuario (no tienen que correr en un resumen)."""
+        d = self.settings_dir or tempfile.gettempdir()
+        p = os.path.join(d, "agente-claude-settings.json")
+        if not os.path.isfile(p):
+            os.makedirs(d, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"disableAllHooks": True}, f)
+        return p
+
+    def chat(self, system, user, max_tokens, report, cancelled, model=None, timeout=None, path=None):
+        path = path or self.find()
+        if not path:
+            raise EngineError(f"No encuentro {self.label} en este PC. Sigue el paso a paso de Ajustes y pulsa "
+                              "«Comprobar».")
+        model = model or self.MODELO
+        cmd = [path, "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
+               "--strict-mcp-config", "--settings", self._settings_file(), "--model", model, self.PROMPT]
+        report(stage=f"Resumiendo con {self.label} ({model})…")
+        code, out, err = self.run(cmd, f"INSTRUCCIONES:\n{system}\n\n{user}", timeout=timeout or AGENTE_TIMEOUT_S,
+                                  cancelled=cancelled)
+        return self._parse(code, out, err, model)
+
+    def _parse(self, code, out, err, model):
+        d = None
+        if out.strip().startswith("{"):
+            try:
+                d = json.loads(out)
+            except ValueError:
+                d = None
+        if not isinstance(d, dict):
+            raise EngineError(self._why(code, (err or out).strip()))
+        if d.get("is_error") or d.get("type") != "result":
+            raise EngineError(self._why(code, str(d.get("result") or d.get("error") or err or "").strip()))
+        text = (d.get("result") or "").strip()
+        if not text:
+            raise EngineError(f"{self.label} no ha devuelto texto")
+        used = next(iter((d.get("modelUsage") or {}).keys()), None) or model
+        return text, used
+
+    def _why(self, code, text):
+        low = text.lower()
+        if any(k in low for k in ("login", "log in", "not authenticated", "oauth", "invalid api key", "sesión")):
+            return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
+                    "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")
+        return f"{self.label} ha fallado" + (f" (código {code})" if code else "") + (f": {text[:200]}" if text else "")
+
+
+AGENTES = {"claude": ClaudeCode}
+
+
 class Summarizer:
     """Resumen estilo Notion AI Meeting Notes con un modelo de chat (Groq u OpenAI).
 
@@ -1275,9 +1424,12 @@ class Summarizer:
     SINGLE_CHARS = 15000   # reuniones cortas: una sola llamada
     TRANSLATE_MODEL = "openai/gpt-oss-20b"  # traduccion del directo: rapido y barato en cupo
 
-    def __init__(self, keys=None):
+    def __init__(self, keys=None, agente=None):
         self.remaining, self.reset_at = None, 0.0
         self.keys = keys or KeyPool()  # compartido con CloudEngine: la rotacion de claves es la misma
+        self.agente = agente  # AgenteLocal: el resumen con la cuenta del usuario, en vez de la API de chat
+        self.SINGLE_CHARS = agente.SINGLE_CHARS if agente else Summarizer.SINGLE_CHARS
+        self.CHUNK_CHARS = agente.CHUNK_CHARS if agente else Summarizer.CHUNK_CHARS
 
     @staticmethod
     def lines(segments, width=260):
@@ -1308,6 +1460,9 @@ class Summarizer:
         incluidas (el ultimo paso de la traduccion del directo). Con el, una espera que no deja BUDGET_MIN_S para la
         peticion, y BUDGET_SLACK_S de margen, no se hace (se falla ya), y cada peticion lleva como topes lo que quede:
         un tercio para conectar (como mucho CONNECT_TIMEOUT) y el resto, como mucho timeout, para la respuesta."""
+        if self.agente is not None:  # con el agente del PC: una llamada, sin cupos ni claves
+            return self.agente.chat(system, user, max_tokens, report, cancelled,
+                                    model=model or cfg.get("agente_modelo"), timeout=None)
         import requests
         provider = cfg.get("provider", "groq")
         url = chat_url(cfg)
