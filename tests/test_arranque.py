@@ -426,3 +426,94 @@ class InterfazNoMudaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------------------------------ una grabacion arrancada no se deja a medias
+
+class FakeRec:
+    """RecorderProcess de mentira: crea el WAV con su cabecera y «sigue vivo»."""
+
+    def __init__(self, path, mic, sys_dev, app_dir, data_dir):
+        self.path, self.status = path, {}
+        with open(path, "wb") as f:
+            f.write(b"\0" * 44)
+
+    def alive(self):
+        return True
+
+
+class GrabacionArrancadaTests(TempTree):
+    """02/11/2026, 10:35: la primera pulsacion de Ctrl+Alt+R arranco la grabadora, algo fallo justo despues y el aviso
+    fue «No se pudo grabar», con la grabacion en marcha sin decirlo (el vigilante arranco el directo «automatico» 7 s
+    despues y la segunda pulsacion la paro). Lo que falle tras arrancar la grabadora se anota y se avisa, pero la
+    grabacion sigue y se registra «Grabando»."""
+
+    def app(self):
+        from test_perfil import settings_store
+        import types
+        import threading
+        from support import bare_jobs
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp)
+        a.rec_lock, a.notes_lock, a.rec, a.monitor = threading.Lock(), threading.Lock(), None, None
+        a.library = types.SimpleNamespace(at=1)
+        a.jobs = bare_jobs([])
+        a.jobs.settings, a.jobs.started = a.settings, []
+        a.jobs.start_live = lambda rel, preset: a.jobs.started.append((rel, preset))
+        return a
+
+    def start(self, a, logs, **b):
+        os.makedirs(os.path.join(self.root, "Alfa"), exist_ok=True)
+        body = dict({"mic": "default", "sys": "all", "folder": "Alfa", "live": True, "preset": "medium", "name": "x",
+                     "vocab": ""}, **b)
+        with mock.patch.object(server, "RecorderProcess", FakeRec), mock.patch.object(server, "log", logs.append), \
+                mock.patch.object(server, "log_exc", lambda: logs.append("traceback")):
+            return a.rec_start(body)
+
+    def test_fallo_al_escribir_la_cabecera_no_para_la_grabacion(self):
+        a, logs = self.app(), []
+        with mock.patch.object(server.App, "notes_save", lambda self, b: (_ for _ in ()).throw(
+                server.ApiError("No existe el archivo: x", 404))):
+            r = self.start(a, logs, contexto="Comité")  # con contexto hay cabecera que escribir
+        self.assertTrue(a.rec.alive())
+        self.assertIn("sin cabecera de notas (No existe el archivo: x)", r["aviso"])
+        self.assertEqual(len(a.jobs.started), 1)  # el directo arranca igual
+        self.assertTrue(any(l.startswith("● Grabando: ") and "aviso: sin cabecera" in l for l in logs), logs)
+        self.assertIn("traceback", logs)
+        self.assertIn(r["path"], a.jobs.claimed)  # sigue reclamada: el vigilante no arranca otro directo
+
+    def test_fallo_del_directo_deja_la_grabacion_y_suelta_la_reclamacion(self):
+        a, logs = self.app(), []
+
+        def roto(rel, preset):
+            raise server.ApiError("Ese audio ya se está transcribiendo.")
+        a.jobs.start_live = roto
+        r = self.start(a, logs)
+        self.assertTrue(a.rec.alive())
+        self.assertIn("el directo no ha arrancado (Ese audio ya se está transcribiendo.)", r["aviso"])
+        self.assertNotIn(r["path"], a.jobs.claimed)  # que lo intente el vigilante
+        self.assertTrue(any(l.startswith("● Grabando: ") for l in logs), logs)
+
+    def test_sin_fallos_no_hay_aviso(self):
+        a, logs = self.app(), []
+        r = self.start(a, logs)
+        self.assertIsNone(r["aviso"])
+        self.assertTrue(any(l.startswith("● Grabando: ") and "aviso" not in l for l in logs), logs)
+
+    def test_la_grabadora_que_no_arranca_sigue_siendo_error(self):
+        a, logs = self.app(), []
+
+        class Muerta(FakeRec):
+            def alive(self):
+                return False
+        os.makedirs(os.path.join(self.root, "Alfa"), exist_ok=True)
+        with mock.patch.object(server, "RecorderProcess", Muerta), mock.patch.object(server, "log", logs.append):
+            with self.assertRaises(server.ApiError) as cm:
+                a.rec_start({"mic": "default", "sys": "all", "folder": "Alfa", "live": True, "name": "x", "vocab": ""})
+        self.assertIn("no ha podido arrancar", cm.exception.msg)
+        self.assertFalse(any(l.startswith("● Grabando") for l in logs))
+
+    def test_el_atajo_deja_el_error_en_el_log(self):
+        src = read_app("server.py")
+        self.assertIn('log(f"   no se pudo grabar (Ctrl+Alt+R): {e.msg}")', src)
+        self.assertIn('''(f" · {r['aviso']}" if r.get("aviso") else "")''', src)

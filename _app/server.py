@@ -3212,10 +3212,11 @@ class App:
                                     or ", ".join(sug.get("participants") or []),
                                     "sugerido": b.get("sugerido") or sug.get("source") or ""})
                 notify(f"● Grabando en {APP_NAME}", (f"{r['workstream']} · " if r.get("workstream") else "")
-                       + "Pulsa Ctrl+Alt+R otra vez para parar")
+                       + "Pulsa Ctrl+Alt+R otra vez para parar" + (f" · {r['aviso']}" if r.get("aviso") else ""))
                 return dict(r, recording=True)
             except ApiError as e:
                 cue("error")
+                log(f"   no se pudo grabar (Ctrl+Alt+R): {e.msg}")  # el toast se va; el log se queda
                 notify("No se pudo grabar", e.msg)
                 raise
 
@@ -3308,6 +3309,11 @@ class App:
                     time.sleep(0.05)
                 if not self.rec.alive():
                     raise ApiError("La grabadora no ha podido arrancar (ver %LOCALAPPDATA%\\AudiosApp\\recorder.log).")
+                # desde aqui la grabadora esta grabando: lo que falle ya no la para ni se calla (02/11/2026: un error
+                # tras arrancarla aviso «No se pudo grabar» y dejo la grabacion en marcha sin decirlo, hasta que el
+                # vigilante arranco el directo por su cuenta y la segunda pulsacion la paro)
+                started = True
+                avisos = []
                 preset = b.get("preset") or self.settings.get().get("live_preset") or "medium"
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
                 props = {"proyecto": v["project"], "workstream": v["name"], "vocabulario": v["id"]} if v else {}
@@ -3329,7 +3335,11 @@ class App:
                 if ctx:
                     props["contexto"] = ctx
                 if props:  # antes de arrancar el directo, para que ya use ese vocabulario
-                    self.notes_save({"path": rel, "props": props})
+                    try:
+                        self.notes_save({"path": rel, "props": props})
+                    except Exception as e:
+                        log_exc()
+                        avisos.append(f"sin cabecera de notas ({e.msg if isinstance(e, ApiError) else e})")
 
                 def upd(d):
                     if "vocab" in b:
@@ -3344,18 +3354,27 @@ class App:
                         d["rec_mic"] = mic
                     d.update(rec_sys=sys_dev, live_preset=preset if preset in LIVE_PRESETS else "medium")
                     # el idioma elegido para ESTA reunion va en su .md; el ajuste general solo lo cambia el perfil
-                self.settings.update(upd)
+                try:
+                    self.settings.update(upd)
+                except Exception as e:
+                    log_exc()
+                    avisos.append(f"sin guardar los ajustes de la grabación ({e})")
                 self.library.at = 0
                 if b.get("live"):
-                    self.jobs.start_live(rel, preset)
-                started = True
+                    try:
+                        self.jobs.start_live(rel, preset)
+                    except Exception as e:
+                        log_exc()
+                        avisos.append(f"el directo no ha arrancado ({e.msg if isinstance(e, ApiError) else e})")
+                        self.jobs.claimed.discard(rel)  # que el vigilante lo intente por su cuenta
             finally:
                 if not started:
                     self.jobs.claimed.discard(rel)
         log(f"● Grabando: {rel}" + (f" [{v['project']} · {v['name']}]" if v else "")
-            + ("" if b.get("live") else " (solo grabar, sin transcribir)"))
+            + ("" if b.get("live") else " (solo grabar, sin transcribir)")
+            + (f" · aviso: {'; '.join(avisos)}" if avisos else ""))
         return {"path": rel, "workstream": f"{v['project']} · {v['name']}" if v else None,
-                "participantes": props.get("participantes")}
+                "participantes": props.get("participantes"), "aviso": "; ".join(avisos) or None}
 
     def rec_mic(self, b):
         """Silenciar / reactivar mi micro a mitad de grabacion (se graba silencio en su lugar)."""
