@@ -680,7 +680,10 @@ class Library:
             return None
         prev = self.growth.get(a["path"])
         if not prev or prev[0] != a["size"]:
-            self.growth[a["path"]] = (a["size"], time.time())
+            # la primera vez que se ve (p. ej. al arrancar), lo ultimo que crecio fue en su fecha de modificacion: un
+            # WAV que OBS dejo abierto hace dias no es una grabacion en curso (02/11/2026: arrancaba un directo, y un
+            # repaso final en la nube, con cada arranque)
+            self.growth[a["path"]] = (a["size"], time.time() if prev else min(time.time(), a["mtime"]))
         a["recording"] = time.time() - self.growth[a["path"]][1] < live.STALLED_S
         return round(max(0, a["size"] - info["data_off"]) / info["byte_rate"], 1)
 
@@ -3172,7 +3175,7 @@ class App:
         self.rec, self.monitor, self.monitor_seen = None, None, 0.0
         self.rec_lock, self.devices_cache = threading.Lock(), (0.0, None)
         self.toggle_lock = threading.Lock()
-        self.notes_lock, self.meeting = threading.Lock(), None
+        self.notes_lock, self.meeting, self.meeting_prev = threading.Lock(), None, None
         self.voices_dl = None  # descarga de los modelos de voces en curso (progreso para la interfaz)
         self.vigia = calendario.Vigia()  # reunión en curso (Teams/Outlook): sugerencias y aviso flotante
         threading.Thread(target=self._meeting_watch, daemon=True, name="meeting-watch").start()
@@ -3189,8 +3192,10 @@ class App:
                         return {"recording": True, "path": rel_of(self.rec.path)}
                     r = self.rec_stop({})
                     cue("stop")
+                    seg = r["seconds"]  # en segundos si no llego al minuto: «1 min» tapaba una grabacion de 5 s
                     notify("■ Grabación guardada",
-                           f"{max(1, round(r['seconds'] / 60))} min · la transcripción termina sola")
+                           f"{f'{int(seg)} s' if seg < 60 else f'{round(seg / 60)} min'} · "
+                           "la transcripción termina sola")
                     return dict(r, recording=False)
                 st = self.settings.get()
                 # nombre y tema: lo que mande el aviso flotante; si no, la reunión en curso (Teams/Outlook, sin
@@ -3927,7 +3932,10 @@ class App:
         """Un paso del vigilante de llamadas (cada 8 s); devuelve la llamada ya avisada. «Avisarme si estoy en una
         llamada» (meeting_detect) es el interruptor general: apagado, ni toast, ni aviso flotante (aunque «Aviso
         flotante» siga marcado), ni el chip de la interfaz, que se pinta con `meeting`."""
-        app = mic_meeting_app()
+        leido = mic_meeting_app()
+        # dos lecturas seguidas (16 s) antes de dar la llamada por buena: una lectura suelta del registro de privacidad
+        # no abre el aviso flotante, ni manda el toast, ni pinta el chip (02/11/2026: saltaban al arrancar sin reunion)
+        app, self.meeting_prev = (leido if leido == self.meeting_prev else None), leido
         recording = bool(self.rec and self.rec.alive())
         st = self.settings.get()
         detect = st.get("meeting_detect", True)
@@ -4631,6 +4639,17 @@ class App:
 # HTML no llega a ejecutarse; los style="…" de las plantillas si hacen falta ('unsafe-inline' solo en estilos)
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "media-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+SLOW_REQUEST_S = 2.0
+
+
+def slow_request(method, path, dt):
+    """Una peticion de la API que tarda mas de SLOW_REQUEST_S queda en el log con su duracion: asi se ve que la
+    interfaz esperaba al servidor, y en que (02/11/2026: /api/config tardo 8 min por una importacion y nada lo
+    decia)."""
+    if dt >= SLOW_REQUEST_S:
+        log(f"   petición lenta: {method} {path} {dt:.1f} s")
+
+
 DRAIN_MAX = 1 << 20  # P0-1: un cuerpo sin leer de hasta 1 MiB se lee y se descarta antes de responder (el error llega
 # entero y la conexion sigue); uno mayor (una subida rechazada) o sin Content-Length cierra la conexion
 
@@ -4753,7 +4772,8 @@ class Handler(BaseHTTPRequestHandler):
         if (u.path.startswith("/api/") or u.path == "/media") and not self._token_ok():
             return self._denied()
         a = self.app
-        routes = {"/api/ping": lambda q: {"app": "audios"}, "/api/config": a.config, "/api/tree": a.tree,
+        routes = {"/api/ping": lambda q: {"app": "audios", "version": VERSION},
+                  "/api/config": a.config, "/api/tree": a.tree,
                   "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
@@ -4762,7 +4782,11 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/diagnostico": a.diagnostico}
         try:
             if u.path in routes:
-                return self._json(routes[u.path](q))
+                t0 = time.time()
+                try:
+                    return self._json(routes[u.path](q))
+                finally:
+                    slow_request("GET", u.path, time.time() - t0)
             if u.path == "/media":
                 return self._media(safe(q.get("path"), "file"))
             return self._static(u.path)
@@ -4822,7 +4846,11 @@ class Handler(BaseHTTPRequestHandler):
             route = routes.get(u.path)
             if not route:
                 raise ApiError("No encontrado", 404)
-            self._json(route(body))
+            t0 = time.time()
+            try:
+                self._json(route(body))
+            finally:
+                slow_request('POST', u.path, time.time() - t0)
         except ApiError as e:
             self._json({"error": e.msg}, e.code)
         except Exception as e:
@@ -4949,7 +4977,7 @@ def probe_running(token=None, timeout=1.5):
     sesion de Windows con su propio token)."""
     token = read_token(DATA_DIR) if token is None else token
     try:
-        return "app" if _local_request("api/ping", token, timeout=timeout).get("app") == "audios" else "otro"
+        r = _local_request("api/ping", token, timeout=timeout)
     except urllib.error.HTTPError:
         return "otro"
     except urllib.error.URLError as e:
@@ -4960,6 +4988,90 @@ def probe_running(token=None, timeout=1.5):
         return "arrancando"
     except Exception:
         return "otro"
+    if r.get("app") != "audios":
+        return "otro"
+    # "otra_version": nuestra app, pero de otra version (sin `version` en el ping, anterior al 02/11/2026, o distinta):
+    # una actualizacion en el sitio con la anterior aun abierta, o un acceso directo viejo. Si se le cediera la ventana,
+    # serviria los ficheros nuevos con la API vieja y los botones no harian nada (02/11/2026)
+    return "app" if r.get("version") == VERSION else "otra_version"
+
+
+def _wait_port_free(wait, token=None):
+    """True si el puerto queda libre antes de `wait` s."""
+    end = time.time() + wait
+    while time.time() < end:
+        if probe_running(token, timeout=1.0) == "libre":
+            return True
+        time.sleep(0.25)
+    return probe_running(token, timeout=1.0) == "libre"
+
+
+def _port_owner_pid(port):
+    """PID que escucha en 127.0.0.1:port (netstat; solo Windows), o None."""
+    try:
+        r = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True, timeout=15,
+                           creationflags=engines.NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].endswith(f":{port}") \
+                and parts[1].rsplit(":", 1)[0] in ("127.0.0.1", "0.0.0.0") and parts[3].upper() == "LISTENING":
+            try:
+                return int(parts[4])
+            except ValueError:
+                return None
+    return None
+
+
+def _is_python_process(pid):
+    """El proceso es python.exe o pythonw.exe (tasklist; solo Windows): la app anterior, nunca otro programa."""
+    try:
+        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                           timeout=15, creationflags=engines.NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.startswith('"python.exe"') or line.startswith('"pythonw.exe"') for line in r.stdout.splitlines())
+
+
+def retire_other_version(token=None, wait=10.0):
+    """Otra version de la app tiene el puerto. Se le pide que se apague (POST /api/apagar, desde el 31/10/2026) y, si
+    no sabe o no lo hace, en Windows se termina su proceso: nunca si esta grabando. Devuelve el estado final del
+    puerto (probe_running) o "grabando"."""
+    token = read_token(DATA_DIR) if token is None else token
+    try:
+        vieja = _local_request("api/ping", token).get("version") or "anterior al 02/11/2026"
+    except Exception:
+        vieja = "desconocida"
+    log(f"otra versión de {APP_NAME} ({vieja}) tiene el puerto {PORT}: se le pide que se cierre")
+    try:
+        if _local_request("api/rec/status", token).get("recording"):
+            log("   está grabando: no se toca")
+            return "grabando"
+    except Exception:
+        pass
+    try:
+        _local_request("api/apagar", token, b"{}", timeout=5)
+    except Exception as e:  # 404 en las versiones sin /api/apagar, 409 si grabando, o sin respuesta
+        log(f"   /api/apagar: {e}")
+    if _wait_port_free(wait / 2, token):
+        log("   cerrada")
+        return "libre"
+    if WINDOWS:
+        pid = _port_owner_pid(PORT)
+        if pid and pid != os.getpid() and _is_python_process(pid):
+            log(f"   no se ha cerrado: se termina su proceso (pid {pid})")
+            try:
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
+                               creationflags=engines.NO_WINDOW)
+            except (OSError, subprocess.SubprocessError):
+                log_exc()
+            if _wait_port_free(wait / 2, token):
+                log("   cerrada")
+                return "libre"
+    estado = probe_running(token)
+    log(f"   sigue ahí ({estado})")
+    return estado
 
 
 def already_running(token=None):
@@ -4993,10 +5105,13 @@ def reserve_port(wait=None):
         estado = probe_running()
         if estado == "app":
             return None
-        if estado == "otro" or time.time() >= end:
+        if estado in ("otro", "otra_version") or time.time() >= end:
             break
         time.sleep(0.3)  # "libre" (se acaba de soltar) o "arrancando": otra vuelta
     log(f"puerto {PORT} ocupado ({estado}): {err}")
+    if estado == "otra_version":
+        fatal(f"Hay abierta otra versión de {APP_NAME} que no se ha podido cerrar.\n\nCiérrala (su ventana de "
+              f"consola o, en el Administrador de tareas, pythonw.exe) y vuelve a abrir {APP_NAME}.")
     fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({err}).\n\nCierra ese programa (o arranca "
           f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
 
@@ -5093,7 +5208,13 @@ def main():
     setup_logging(DATA_DIR)
     no_browser = "--no-browser" in sys.argv
     os.environ["CHULETA_DATOS"] = DATA_DIR  # el aviso flotante (proceso hijo) lee ahi sesion.token, tambien con --data
-    srv = None if already_running() else reserve_port()  # el puerto, antes de App() (P1-13)
+    estado = probe_running()
+    if estado == "otra_version":  # una version anterior seguia abierta (actualizacion en el sitio, acceso viejo)
+        estado = retire_other_version()
+        if estado == "grabando":
+            fatal(f"Hay abierta una versión anterior de {APP_NAME} y está grabando.\n\nPara esa grabación "
+                  f"(Ctrl+Alt+R o su botón Parar) y vuelve a abrir {APP_NAME}.")
+    srv = None if estado == "app" else reserve_port()  # el puerto, antes de App() (P1-13)
     if srv is None:
         log("la app ya estaba abierta: se ensena su ventana")
         if not no_browser and not ask_running_to_show():

@@ -879,7 +879,7 @@ class InterruptorDeLlamadasTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="notas-llamada-")
         a = self.a = server.App.__new__(server.App)
         a.settings = server.Store(os.path.join(self.tmp, "settings.json"), server.DEFAULT_SETTINGS)
-        a.rec, a.meeting, a.vigia = None, None, calendario.Vigia()
+        a.rec, a.meeting, a.meeting_prev, a.vigia = None, None, None, calendario.Vigia()
         a._vocab_terms = lambda: []
         self.toasts = []
         self.patches = [mock.patch.object(calendario.subprocess, "Popen", FakeProc),
@@ -903,8 +903,26 @@ class InterruptorDeLlamadasTests(unittest.TestCase):
         self.assertEqual(self.toasts, [])        # ...ni toast...
         self.assertIsNone(self.a.meeting)        # ...ni chip (/api/rec/status manda meeting = None)
 
+    def test_una_lectura_suelta_no_abre_nada(self):
+        """02/11/2026: el registro de privacidad dijo «Teams usa el micro» nada mas arrancar, sin reunion, y salto el
+        aviso flotante. Hace falta verlo en dos pasos seguidos (16 s); si desaparece entre medias, nada."""
+        n = self.a._meeting_step(None)
+        self.assertEqual(FakeProc.spawned, [])
+        self.assertIsNone(self.a.meeting)
+        self.assertIsNone(n)
+        with mock.patch.object(server, "mic_meeting_app", lambda: None):
+            n = self.a._meeting_step(n)
+        self.assertEqual(FakeProc.spawned, [])
+        self.assertIsNone(self.a.meeting)
+        n = self.a._meeting_step(n)  # vuelve: primera lectura otra vez
+        self.assertEqual(FakeProc.spawned, [])
+        n = self.a._meeting_step(n)  # segunda seguida: ahora si
+        self.assertEqual(len(FakeProc.spawned), 1)
+        self.assertEqual(self.a.meeting, "Teams")
+
     def test_desmarcar_cierra_el_aviso_abierto(self):
         n = self.a._meeting_step(None)
+        n = self.a._meeting_step(n)  # dos lecturas seguidas
         self.assertEqual(len(FakeProc.spawned), 1)
         self.assertEqual(self.a.meeting, "Teams")
         self.a.settings.update(lambda d: d.update(meeting_detect=False))
@@ -915,7 +933,8 @@ class InterruptorDeLlamadasTests(unittest.TestCase):
     def test_marcado_sigue_como_antes(self):
         self.a.settings.update(lambda d: d.update(meeting_detect=True, rec_aviso=False))
         n = self.a._meeting_step(None)
-        self.a._meeting_step(n)
+        for _ in range(3):
+            n = self.a._meeting_step(n)
         self.assertEqual(self.toasts, ["¿Quieres tomar notas de la sesión?"])  # una vez por llamada
         self.assertEqual(FakeProc.spawned, [])
 

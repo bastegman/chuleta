@@ -274,7 +274,7 @@ class TokenDeSesionTests(ServidorBase):
             code, _, _ = self.call("GET", path, {TOKEN_HEADER: "otro-token"})
             self.assertEqual(code, 403, path)
         code, _, body = self.call("GET", "/api/ping", {TOKEN_HEADER: TOKEN})
-        self.assertEqual((code, json.loads(body)), (200, {"app": "audios"}))
+        self.assertEqual((code, json.loads(body)["app"]), (200, "audios"))
 
     def test_post_exige_el_token(self):
         h = self.post_ok_headers()
@@ -301,7 +301,7 @@ class TokenDeSesionTests(ServidorBase):
             self.assertIn(flag, cookie)
         self.assertNotIn("Max-Age", cookie)  # de sesión: vale lo que dure el navegador
         code, _, body = self.call("GET", "/api/ping", {"Cookie": f"otra=1; {name}={TOKEN}"})
-        self.assertEqual((code, json.loads(body)), (200, {"app": "audios"}))
+        self.assertEqual((code, json.loads(body)["app"]), (200, "audios"))
         # la cookie de otra copia (otro puerto) no vale aquí
         self.assertEqual(self.call("GET", "/api/ping", {"Cookie": f"audios_sesion_1={TOKEN}"})[0], 403)
         self.assertEqual(self.call("GET", "/api/ping", {"Cookie": f"{name}=otro"})[0], 403)

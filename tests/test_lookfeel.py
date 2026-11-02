@@ -63,7 +63,7 @@ class NombreCentralizadoTests(unittest.TestCase):
         self.assertTrue(server.DATA_DIR.endswith("AudiosApp"))
         src = read("server.py")
         self.assertIn('self.headers.get("X-Audios") != "1"', src)
-        self.assertIn('{"app": "audios"}', src)
+        self.assertIn('{"app": "audios", "version": VERSION}', src)  # el ping sigue diciendo "audios" (y la version)
         notas = read("static", "notas.js")
         self.assertIn("${I.notes}Notas", notas)  # la pestaña
         self.assertIn("Tomar Notas", notas)

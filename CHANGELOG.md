@@ -10,6 +10,44 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Arranque, primera pantalla y detección de llamadas (pruebas del 02/11/2026)
+Lo que falló en la primera prueba de la versión del 01/11/2026 en un portátil de empresa, con su causa y su arreglo.
+- **La interfaz ya no depende de importar Whisper.** Al abrirse, la página pide `/api/config`, que comprobaba qué
+  modelos locales estaban descargados importando `faster_whisper`; en ese PC, recién actualizado, la importación tardó
+  8 minutos (y acabó fallando), y como Python solo deja importar a un hilo a la vez, esa petición se quedó esperando
+  y ningún botón hacía nada salvo Calendario. Ahora la comprobación lee la caché de Hugging Face sin importar nada
+  (`engines.HF_REPOS`, `hf_hub_cache`) y guarda el resultado 30 s; contar tokens (`/api/vocab/check`) tampoco espera
+  a que cargue el tokenizador: estima mientras se carga en otro hilo.
+- **Un WAV viejo a medio cerrar ya no arranca un directo.** La primera vez que la app ve un WAV con la cabecera abierta
+  (OBS cerrado sin finalizar) tomaba el momento del arranque como «última vez que creció» y lo daba por grabación en
+  curso: cada arranque lanzaba un directo automático sobre un fichero de hace días (y, al terminar, un repaso final en
+  la nube). Ahora cuenta su fecha de modificación: solo es grabación en curso si ha crecido en los últimos 45 s.
+- **El directo no se cae si falla la VAD de Whisper.** El detector de pausas (`faster_whisper.vad`) se importaba en
+  cada trozo sin red de seguridad; una importación rota o pisada por otro hilo (el `KeyError: 'faster_whisper'` de
+  importlib de ese día) tumbaba la sesión. Ahora, si no se puede importar, corta las pausas con un detector sencillo
+  por energía, lo avisa una vez en el log y vuelve a intentarlo a los 10 minutos.
+- **Si el servidor tarda, la página lo dice y los botones no revientan.** A los 3 s sin `/api/config`, «Arrancando… el
+  servidor tarda en contestar (N s)» con dónde mirar; ⚙ Ajustes y ● Grabar avisan de que la app aún arranca; cambiar
+  de vista espera a la configuración y se pinta al llegar. Un error de JavaScript sale como aviso (cada mensaje una
+  vez) en vez de tragarse en silencio. En el servidor, toda petición de la API que pase de 2 s queda en
+  `server.log` con su duración («petición lenta: GET /api/config 480.2 s»).
+- **Aviso flotante y chip «en llamada» solo con llamada de verdad.** Saltaban nada más arrancar porque el registro de
+  privacidad de Windows decía que Teams tenía el micro abierto, sin reunión. Ahora una entrada solo cuenta si empezó
+  hace menos de 12 h (las que Windows no cierra al matar la app quedan «en uso» para siempre), si el proceso de esa app
+  sigue en marcha (`tasklist`) y si se ve en dos lecturas seguidas del vigilante (16 s); cada entrada descartada o
+  aceptada se anota una vez en el log con su antigüedad.
+- **Una versión anterior abierta ya no se queda con la ventana.** El acceso directo tomaba cualquier copia que
+  contestara al `ping` por «la app ya está abierta» y le pedía la ventana: una versión anterior (la del 30/10 no exige
+  token) servía los ficheros nuevos con su API vieja, sin que nada lo dijera. Ahora el `ping` lleva la versión; si la
+  que corre es otra, se le pide que se apague y, si no sabe (anteriores al 31/10) o no lo hace, en Windows se termina
+  su `pythonw.exe` (nunca si está grabando: entonces se avisa y no se arranca). La página, además, reconoce una API
+  anterior (sin `app_name` ni `perfil`, o el título sin sustituir) y lo dice con el mensaje de qué cerrar.
+- El aviso de Windows al parar con Ctrl+Alt+R dice los segundos si no se llegó al minuto («41 s», no «1 min»).
+- **Tests de la interfaz en un navegador real** (`tests/test_ui_smoke.py`, Playwright + Chromium, workflow
+  `ui-smoke` en Ubuntu y Windows): arranque con token, ⚙ Ajustes, Reuniones, Calendario, Inicio y el diálogo de Grabar
+  sin errores de JavaScript; sin token, 403; con una API anterior, el aviso; con `/api/config` lento, la espera. Hasta
+  hoy ningún test abría la interfaz: una pantalla con los botones muertos pasaba la suite entera.
+
 ### Seguridad
 - **Una página web abierta en el navegador ya no puede manejar Chuleta** (P0-1). Bastaba con tenerla abierta: dentro
   del cuerpo de un POST `text/plain` podía colar otra petición, con su propio `Host` y su `X-Audios`, que la API local
