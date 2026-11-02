@@ -1988,7 +1988,8 @@ function openSettings() {
     <fieldset style="margin-top:14px"><legend>${I.info}Acerca de</legend>
       <div class="help" style="margin-top:0"><b>${esc(APP_NAME)}</b> · versión ${esc(S.config.version || '')}${ac.licencia ? ` · licencia ${esc(ac.licencia)}` : ''}<br>
         Código, novedades y ayuda: <a href="${esc(ac.repo || '#')}" id="aRepo">${esc((ac.repo || '').replace(/^https?:\/\//, ''))}</a><br>
-        Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code></div>
+        Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code><br>
+        ${esc(APP_NAME)} es gratis. Si te sirve, puedes <a href="${esc(ac.donar || '#')}" id="aDonar">invitar al autor a un café</a> (PayPal).</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
       <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas y destinos hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
     </fieldset>
@@ -1998,6 +1999,7 @@ function openSettings() {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
+    $('#aDonar', d).onclick = e => { e.preventDefault(); if (ac.donar) api('/api/acerca/abrir', { que: 'donar' }).catch(() => window.open(ac.donar, '_blank')); };
     $('#aDiag', d).onclick = async () => {
       try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
     };

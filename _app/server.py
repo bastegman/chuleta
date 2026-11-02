@@ -72,6 +72,8 @@ DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _-](\d{2})-(\d{2})-(\d{2})")
 
 VERSION_FILE = os.path.join(APP_DIR, "version.txt")  # lo escribe scripts/build_zip.py: «AAAA-MM-DD · sha corto»
 REPO_URL = "https://github.com/bastegman/chuleta"
+# Acerca de > «invitar al autor a un café»: la pagina de donaciones de PayPal del autor (abre el navegador del sistema)
+DONAR_URL = "https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR"
 PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Chuleta/INSTALAR.bat, Chuleta/_app/...)
 
 
@@ -3446,13 +3448,15 @@ class App:
 
     def acerca_abrir(self, b):
         """Ajustes > Acerca de: abre la carpeta de datos (DATA_DIR: ajustes, API key cifrada, registros) en el
-        Explorador, o el repositorio en el navegador."""
+        Explorador, o el repositorio o la pagina de PayPal («Invitar al autor a un cafe») en el navegador."""
         que = b.get("que")
         if que == "datos":
             os.makedirs(DATA_DIR, exist_ok=True)
             open_dir(DATA_DIR)
         elif que == "repo":
             webbrowser.open(REPO_URL)
+        elif que == "donar":
+            webbrowser.open(DONAR_URL)
         else:
             raise ApiError("No sé qué abrir")
         return {"ok": True}
@@ -3534,7 +3538,7 @@ class App:
         cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
                           if cloud["has_key"] else None)
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
-                "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR},
+                "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "preset": st["preset"], "language": st["language"], "threads": st["threads"],
                 "prompt": st["prompt"], "cpu_count": os.cpu_count(),

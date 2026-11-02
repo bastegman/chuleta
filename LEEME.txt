@@ -170,6 +170,13 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
   - Resumen: unas 7 reuniones de 1 hora al día.
 
 
+SI TE SIRVE
+----------------------------------------------------------------------------------
+  - Chuleta es gratis. Si te ayuda en el día a día, puedes invitar al autor a un café por PayPal desde
+    ⚙ Ajustes > Acerca de > "invitar al autor a un café", o en este enlace:
+    https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR
+
+
 SI ALGO FALLA
 ----------------------------------------------------------------------------------
   - INSTALAR.bat se puede volver a ejecutar sin problema.
