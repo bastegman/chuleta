@@ -72,12 +72,14 @@ function recentCards() {
 /* primer arranque (p. ej. en el PC de otra persona): conectar la nube y grabar la primera reunion */
 function welcomeCard(all) {
   const key = S.config.procesado === 'api' ? S.config.cloud?.has_key : true;  // sin API no hay nada que conectar
-  if (key && all.length) return '';
+  const elegir = S.config.procesado === 'local' && !localStorage.getItem('procElegido');  // nadie ha elegido aun
+  if (key && all.length && !elegir) return '';
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
     <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Transcripción en la nube: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
+    ${elegir ? '<li><b>Elige dónde se procesan tus reuniones</b> en ⚙ Ajustes: solo en este PC (como ahora), con tu cuenta de Claude o con una API externa. Las dos últimas resumen con IA y avisan de lo que sale del PC.</li>' : ''}
     ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). También puedes arrastrar aquí audios que ya tengas, o guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
-    ${key ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
+    ${key && !elegir ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
 }
 
 /* acciones nuevas (los botones llevan data-act y los recoge este manejador) */
@@ -337,7 +339,7 @@ function renderSummary(a) {
   const j = sumJobFor(a.path), has = a.txt || a.srt;
   const last = S.jobs.filter(x => x.path === a.path && x.kind === 'summary').pop();
   const progress = j ? `<div class="card jobline sumline"><div><div class="st">${I.spark}${esc(j.status === 'queued' ? 'En cola para resumir' : j.stage)}</div>
-      <div class="sub">Se hace en ${provName()} por partes, al ritmo que permite tu plan · ${Math.round((j.progress || 0) * 100)} %</div></div>
+      <div class="sub">Se hace en ${provName()}${S.config?.procesado === 'agente' ? ' en una sola llamada' : ' por partes, al ritmo que permite tu plan'} · ${Math.round((j.progress || 0) * 100)} %</div></div>
       <button class="btn sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button><div class="pbar${j.progress < 0.02 ? ' indet' : ''}"><i style="width:${(j.progress || 0) * 100}%"></i></div></div>` : '';
   const err = !j && last && last.status === 'error' ? `<div class="notice">No se pudo resumir: ${esc(last.error)}</div>` : '';
   // con Azure OpenAI solo se configura el deployment de Whisper: el resumen aún no funciona ahí (no es que falte configurar)
@@ -373,9 +375,10 @@ main.addEventListener('click', async e => {
   const a = curAudio();
   if (act.dataset.act === 'summarize' && a) {
     try {
-      if (!localStorage.getItem('sumOk') && !await ask(`Resumir con IA en ${provName()}`,
+      const okKey = 'sumOk:' + (S.config?.procesado || 'api');  // el permiso es por destino: el de Groq no vale para Anthropic
+      if (!localStorage.getItem(okKey) && !await ask(`Resumir con IA en ${provName()}`,
         `El texto de la transcripción, tus notas, el contexto y los participantes confirmados se envían a <b>${esc(provName())}</b> para hacer el resumen (el audio no; los participantes que sugirió Outlook o Teams sin confirmar, tampoco). Si es una reunión de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.`, 'Entendido, resumir')) return;
-      localStorage.setItem('sumOk', '1');
+      localStorage.setItem(okKey, '1');
       await api('/api/summarize', { path: a.path });
       toast(`✨ Resumiendo en ${esc(provName())}… tarda unos minutos en reuniones largas`);
       pollJobs(true);

@@ -384,13 +384,16 @@ class AvisoResumenLocalTests(TempTree):
         src = static("app.js")
         fn = re.search(r"^function avisoResumenLocalHtml\(.*?^}", src, re.S | re.M).group(0)
         code = ("const I = {info: '(i)'}; const esc = s => String(s); const provName = () => 'Groq';\n"
-                "let S = {config: {summary: {aviso_local: true}}};\n" + fn + """
-const con = avisoResumenLocalHtml(); S.config.summary.aviso_local = false;
-console.log(JSON.stringify([con, avisoResumenLocalHtml()]));
+                "let S = {config: {summary: {aviso_local: true}, procesado: 'api'}};\n" + fn + """
+const con = avisoResumenLocalHtml();
+S.config.procesado = 'agente'; const agente = avisoResumenLocalHtml();  // habla de la API: con el agente no aplica
+S.config.procesado = 'api'; S.config.summary.aviso_local = false;
+console.log(JSON.stringify([con, avisoResumenLocalHtml(), agente]));
 """)
         r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
-        con, sin = json.loads(r.stdout)
+        con, sin, agente = json.loads(r.stdout)
+        self.assertEqual(agente, "")
         self.assertIn("El resumen automático ya no envía a <b>Groq</b> las reuniones transcritas en local. "
                       '<a href="#" data-act="aviso-sum-ajuste">Actívalo en Ajustes</a> si quieres.', con)
         self.assertIn('data-act="aviso-sum-ok">Entendido</button>', con)

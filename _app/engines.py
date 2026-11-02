@@ -9,6 +9,7 @@ Motores de transcripcion.
 
 Ambos devuelven una lista de segmentos (inicio, fin, texto).
 """
+import glob
 import itertools
 import json
 import os
@@ -1274,6 +1275,32 @@ def _stamp(t):
 AGENTE_TIMEOUT_S = 600   # un resumen de una reunion larga, en una sola llamada
 AGENTE_CHECK_S = 120     # «Comprobar»: la version y una peticion minima (la primera vez el programa arranca lento)
 AGENTE_VERSION_S = 30
+AGENTE_KILL_S = 5        # tras matarlo, cuanto se espera a que suelte las tuberias
+VERSION_RX = re.compile(r"\d+(?:\.\d+)+")
+_NT = os.name == "nt"
+
+
+def windows_path():
+    """El PATH tal como esta ahora en el registro (usuario + sistema) mas el heredado: un instalador (winget, npm, el
+    nativo) cambia el PATH y el servidor, que sigue en segundo plano desde antes, no se entera. None fuera de
+    Windows."""
+    if not _NT:
+        return None
+    partes = []
+    try:
+        import winreg
+        for root, sub in ((winreg.HKEY_CURRENT_USER, r"Environment"),
+                          (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+            try:
+                with winreg.OpenKey(root, sub) as k:
+                    v, _ = winreg.QueryValueEx(k, "Path")
+                partes.append(os.path.expandvars(str(v)))
+            except OSError:
+                pass
+    except ImportError:
+        pass
+    partes.append(os.environ.get("PATH", ""))
+    return os.pathsep.join(x for x in partes if x)
 
 
 class AgenteLocal:
@@ -1281,7 +1308,7 @@ class AgenteLocal:
     SINGLE_CHARS y CHUNK_CHARS: contexto grande, una reunion de 3 h cabe en una llamada (los usa Summarizer)."""
     tipo = label = ""
     exe_names = ()
-    win_paths = ()      # (variable de entorno, ruta relativa): donde lo dejan sus instaladores en Windows
+    win_paths = ()      # (variable de entorno, ruta relativa con comodines) de sus instaladores en Windows
     MODELOS = ()        # (id, etiqueta)
     MODELO = ""
     SINGLE_CHARS = 400_000
@@ -1294,56 +1321,98 @@ class AgenteLocal:
 
     @classmethod
     def find(cls):
-        """Ruta del ejecutable o None: el PATH y, en Windows, las carpetas donde lo dejan sus instaladores."""
-        for n in cls.exe_names:
-            p = shutil.which(n)
-            if p:
-                return p
+        """Ruta del ejecutable o None. En Windows, primero con extension (.exe antes que .cmd: el .cmd de npm pasa
+        por cmd.exe, y el `claude` sin extension es un script de bash), con el PATH del registro ademas del heredado,
+        y despues las carpetas de sus instaladores (nativo, winget, npm)."""
+        names = list(cls.exe_names)
+        if _NT:
+            names = [n + ext for n in cls.exe_names for ext in (".exe", ".cmd")] + names
+        for path in ((None, windows_path()) if _NT else (None,)):
+            for n in names:
+                p = shutil.which(n, path=path)
+                if p:
+                    return p
         for var, rel in cls.win_paths:
             base = os.environ.get(var)
-            if base and os.path.isfile(os.path.join(base, rel)):
-                return os.path.join(base, rel)
+            if not base:
+                continue
+            for p in sorted(glob.glob(os.path.join(base, rel)), reverse=True):
+                if os.path.isfile(p):
+                    return p
         return None
 
+    @staticmethod
+    def _kill(proc):
+        """Mata el proceso y sus hijos: con el .cmd de npm, claude.exe es nieto de cmd.exe y proc.kill() solo mataria
+        a cmd.exe (el nieto seguiria con las tuberias abiertas y communicate() no volveria)."""
+        try:
+            if _NT:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=15,
+                               creationflags=NO_WINDOW)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+
     @classmethod
-    def run(cls, cmd, stdin_text=None, timeout=AGENTE_TIMEOUT_S, cancelled=lambda: False):
+    def run(cls, cmd, stdin_text=None, timeout=AGENTE_TIMEOUT_S, cancelled=lambda: False, cwd=None, env=None):
         """Lanza el programa sin ventana, le pasa stdin_text y devuelve (codigo, stdout, stderr). Se puede cancelar
-        (se mata el proceso) y tiene tope de tiempo. communicate() con reintentos no pierde salida (documentado)."""
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                creationflags=NO_WINDOW)
-        data, end = (stdin_text or "").encode("utf-8"), time.time() + timeout
+        (se mata con sus hijos) y tiene tope de tiempo. La entrada se escribe desde un hilo propio: communicate() con
+        reintentos no sigue escribiendo en Python anterior a 3.13.10, y asi tampoco se bloquea mientras escribe."""
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    creationflags=NO_WINDOW, cwd=cwd, env=env)
+        except OSError as e:
+            raise EngineError(f"No se ha podido lanzar {cls.label} ({e.__class__.__name__}: {e})")
+        data = (stdin_text or "").encode("utf-8")
+        w, proc.stdin = proc.stdin, None
+
+        def feed():
+            try:
+                w.write(data)
+                w.close()
+            except (OSError, ValueError):
+                pass
+        threading.Thread(target=feed, daemon=True, name="agente-stdin").start()
+        end = time.time() + timeout
         while True:
             try:
-                out, err = proc.communicate(input=data, timeout=0.5)
+                out, err = proc.communicate(timeout=0.5)
                 break
             except subprocess.TimeoutExpired:
-                data = None  # ya enviado: en los reintentos no se repite
-                if cancelled() or time.time() > end:
-                    proc.kill()
-                    proc.communicate()
-                    if cancelled():
-                        raise Cancelled()
-                    raise EngineError(f"{cls.label} no ha contestado en {timeout:.0f} s")
+                if not cancelled() and time.time() <= end:
+                    continue
+                cls._kill(proc)
+                try:
+                    proc.communicate(timeout=AGENTE_KILL_S)
+                except subprocess.TimeoutExpired:
+                    pass
+                if cancelled():
+                    raise Cancelled()
+                raise EngineError(f"{cls.label} no ha contestado en {timeout:.0f} s")
         return proc.returncode, out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
 
     @classmethod
     def version(cls, path):
+        """«2.1.314» (lo que parece una version en la primera linea de --version; si no, esa linea)."""
         code, out, err = cls.run([path, "--version"], timeout=AGENTE_VERSION_S)
         lines = (out or err).strip().splitlines()
         if code != 0 or not lines:
             detail = (err or out).strip()[:160]
             raise EngineError(f"{cls.label} no responde a --version" + (f": {detail}" if detail else ""))
-        return lines[0][:80]
+        m = VERSION_RX.search(lines[0])
+        return m.group(0) if m else lines[0][:40]
 
     def chat(self, system, user, max_tokens, report, cancelled, model=None, timeout=None, path=None):
         raise NotImplementedError
 
-    def check(self, path, cancelled=lambda: False):
-        """«Comprobar» en Ajustes: la version y una peticion minima con la cuenta del usuario. (version, segundos)."""
+    def check(self, path, model=None, cancelled=lambda: False):
+        """«Comprobar» en Ajustes: la version y una peticion minima con la cuenta del usuario y el modelo elegido.
+        Devuelve (version, segundos)."""
         t0 = time.time()
         version = self.version(path)
         out, _ = self.chat("Responde exactamente con la palabra OK, sin nada más.", "OK", 10, lambda **k: None,
-                           cancelled, timeout=AGENTE_CHECK_S, path=path)
+                           cancelled, model=model, timeout=AGENTE_CHECK_S, path=path)
         if "OK" not in out.upper():
             raise EngineError(f"{self.label} ha contestado algo inesperado: {out.strip()[:80]!r}")
         return version, time.time() - t0
@@ -1356,21 +1425,48 @@ class ClaudeCode(AgenteLocal):
     argumento: el .cmd de npm en Windows pasa por cmd.exe y estropea los textos largos con comillas."""
     tipo, label = "claude", "Claude Code"
     exe_names = ("claude",)
-    win_paths = (("USERPROFILE", os.path.join(".local", "bin", "claude.exe")),
-                 ("APPDATA", os.path.join("npm", "claude.cmd")))
+    win_paths = (("USERPROFILE", os.path.join(".local", "bin", "claude.exe")),  # instalador nativo
+                 ("LOCALAPPDATA", os.path.join("Microsoft", "WinGet", "Links", "claude.exe")),  # winget (enlace)
+                 ("LOCALAPPDATA", os.path.join("Microsoft", "WinGet", "Packages", "Anthropic.ClaudeCode_*",
+                                               "claude.exe")),  # winget sin enlace (sin modo desarrollador)
+                 ("APPDATA", os.path.join("npm", "claude.cmd")))  # npm
     MODELOS = (("haiku", "Haiku · el más rápido"), ("sonnet", "Sonnet · equilibrado (recomendado)"),
                ("opus", "Opus · el más capaz, más lento"))
     MODELO = "sonnet"
+    SESION = ("login", "log in", "not authenticated", "authentication required", "sign in", "auth token", "oauth",
+              "invalid api key", "sesión")
+
+    def _dir(self):
+        return self.settings_dir or tempfile.gettempdir()
 
     def _settings_file(self):
-        """`--settings` con un fichero: solo desactiva los hooks del usuario (no tienen que correr en un resumen)."""
-        d = self.settings_dir or tempfile.gettempdir()
-        p = os.path.join(d, "agente-claude-settings.json")
-        if not os.path.isfile(p):
-            os.makedirs(d, exist_ok=True)
+        """`--settings` con un fichero: solo desactiva los hooks del usuario (no tienen por que correr en un resumen,
+        y uno de UserPromptSubmit recibiria la reunion entera). Se reescribe si no dice exactamente eso: un fichero
+        corrupto se ignoraria en silencio y los hooks volverian a correr."""
+        p = os.path.join(self._dir(), "agente-claude-settings.json")
+        want = json.dumps({"disableAllHooks": True})
+        try:
+            with open(p, encoding="utf-8") as f:
+                cur = f.read()
+        except OSError:
+            cur = None
+        if cur != want:
+            os.makedirs(self._dir(), exist_ok=True)
             with open(p, "w", encoding="utf-8") as f:
-                json.dump({"disableAllHooks": True}, f)
+                f.write(want)
         return p
+
+    def _cwd(self):
+        """Una carpeta vacia: sin CLAUDE.md ni .claude/ de ningun proyecto que cambien el resumen."""
+        d = os.path.join(self._dir(), "agente-cwd")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    @staticmethod
+    def _env():
+        """Sin ANTHROPIC_API_KEY ni ANTHROPIC_AUTH_TOKEN: con -p la clave del entorno se usaria siempre, y el gasto
+        iria a la API y no a la cuenta del usuario, que es lo que prometen los textos de Ajustes."""
+        return {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
 
     def chat(self, system, user, max_tokens, report, cancelled, model=None, timeout=None, path=None):
         path = path or self.find()
@@ -1382,18 +1478,21 @@ class ClaudeCode(AgenteLocal):
                "--strict-mcp-config", "--settings", self._settings_file(), "--model", model, self.PROMPT]
         report(stage=f"Resumiendo con {self.label} ({model})…")
         code, out, err = self.run(cmd, f"INSTRUCCIONES:\n{system}\n\n{user}", timeout=timeout or AGENTE_TIMEOUT_S,
-                                  cancelled=cancelled)
+                                  cancelled=cancelled, cwd=self._cwd(), env=self._env())
         return self._parse(code, out, err, model)
 
     def _parse(self, code, out, err, model):
-        d = None
-        if out.strip().startswith("{"):
+        s, d = out.strip(), None
+        if s.startswith(("{", "[")):
             try:
-                d = json.loads(out)
+                j = json.loads(s)
             except ValueError:
-                d = None
-        if not isinstance(d, dict):
-            raise EngineError(self._why(code, (err or out).strip()))
+                j = None
+            if isinstance(j, list):  # «verbose» del usuario: la salida son todos los mensajes; el resultado va al final
+                j = next((x for x in reversed(j) if isinstance(x, dict) and x.get("type") == "result"), None)
+            d = j if isinstance(j, dict) else None
+        if d is None:
+            raise EngineError(self._why(code, err.strip() or ("" if s.startswith(("{", "[")) else s)))
         if d.get("is_error") or d.get("type") != "result":
             raise EngineError(self._why(code, str(d.get("result") or d.get("error") or err or "").strip()))
         text = (d.get("result") or "").strip()
@@ -1403,8 +1502,10 @@ class ClaudeCode(AgenteLocal):
         return text, used
 
     def _why(self, code, text):
+        """Mensaje para Ajustes. text: solo stderr o el texto del resultado (nunca la salida entera, que lleva la
+        reunion y podria contener cualquier palabra)."""
         low = text.lower()
-        if any(k in low for k in ("login", "log in", "not authenticated", "oauth", "invalid api key", "sesión")):
+        if any(k in low for k in self.SESION):
             return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
                     "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")
         return f"{self.label} ha fallado" + (f" (código {code})" if code else "") + (f": {text[:200]}" if text else "")
