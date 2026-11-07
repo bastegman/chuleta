@@ -10,11 +10,13 @@ y WebView2): test_auditoria_windows.VentanaRealTests en windows-real.
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from unittest import mock
 
 from support import APP, server
@@ -61,6 +63,7 @@ class Icon:
             raise RuntimeError("sin bandeja")
         self.Icon = self.Text = self.ContextMenuStrip = None
         self.Visible, self.MouseClick, self.balloons, self.disposed = False, Ev(), [], False
+        self.BalloonTipClicked = Ev()
 
     def ShowBalloonTip(self, ms, titulo, texto, tipo):
         self.balloons.append((titulo, texto))
@@ -88,7 +91,8 @@ def wf():
     ns.Action = lambda f: f
     ns.Font = lambda base, estilo: f"negrita({base})"
     ns.FontStyle = type("FS", (), {"Bold": 1})
-    ns.Icon = lambda path: ("icono", path)
+    ns.Icon = lambda path, size=None: ("icono", path)
+    ns.SystemInformation = type("SI", (), {"SmallIconSize": (16, 16)})
     ns.BindingFlags = type("BF", (), {"NonPublic": 1, "Instance": 2})
     ns.ContextMenuStrip, ns.NotifyIcon, ns.ToolStripMenuItem = Menu, Icon, Item
     ns.ToolStripSeparator = lambda: "-"
@@ -223,6 +227,45 @@ class BandejaTests(unittest.TestCase):
         self.assertIn("sin icono en la bandeja (RuntimeError)", log.call_args_list[0][0][0])
         self.b.close()  # sin icono: nada que quitar, sin errores
 
+    def test_clic_en_el_globo_abre(self):
+        self.b.create(Form())
+        self.b.icon.BalloonTipClicked.fire(None, None)
+        self.assertTrue(esperar(lambda: "abrir" in self.hechos))
+
+    def test_quitado_antes_de_ponerse_ya_no_se_pone(self):
+        """Revisión (P1-1): Apagar mientras arranca llega antes de before_show; luego nadie quitaría el icono."""
+        self.b.close()
+        self.assertFalse(self.b.create(Form()))
+        self.assertIsNone(self.b.icon)
+        self.assertFalse(self.b.alive)
+
+    def test_lo_que_llega_al_hilo_de_la_ventana_tras_quitar_el_icono_no_lanza(self):
+        """Revisión (P2-1): en el hilo de la ventana, una excepción saca el diálogo «excepción no controlada»."""
+        pendientes = []
+        f = Form()
+        f.BeginInvoke = lambda fn: pendientes.append(fn)  # el hilo de la ventana está ocupado: quedan en cola
+        self.b.create(f)
+        self.estado["trabajos"] = 1
+        self.b.update()
+        self.b.balloon("t", "x")
+        with mock.patch.object(bandeja, "log"):
+            self.b.close(wait=0.1)  # no contesta: se quita desde aquí
+        with mock.patch.object(bandeja, "log_exc") as log_exc:
+            for fn in pendientes:
+                fn()  # ahora les toca: el icono ya no está
+        log_exc.assert_not_called()
+
+    def test_quitar_desde_el_hilo_de_la_ventana_no_pide_turno(self):
+        """Fin de sesión: el hilo de la ventana no puede esperar a su propia cola (el refutador lo vio sin test)."""
+        f = Form()
+        f.InvokeRequired = False
+        self.b.create(f)
+        n = f.llamadas
+        with mock.patch.object(bandeja, "log"):
+            self.b.close()
+        self.assertEqual(f.llamadas, n)
+        self.assertTrue(self.b._stop.is_set())
+
     def test_una_accion_que_falla_no_rompe_nada(self):
         self.b.create(Form())
         self.b.acciones["salir"] = mock.Mock(side_effect=RuntimeError("x"))
@@ -301,6 +344,33 @@ class VentanaConBandejaTests(unittest.TestCase):
         with open(os.path.join(self.data, "bandeja.json"), encoding="utf-8") as f:
             self.assertIn("aviso_cerrar", json.load(f))
 
+    def test_apagando_no_se_pone_el_icono(self):
+        tray = FakeTray()
+        w = self.make(tray)
+        w.destroy()  # Apagar llega antes de before_show
+        w._hook_native()
+        self.assertEqual(tray.created, [])
+
+    def test_si_el_globo_no_sale_no_se_da_por_avisado(self):
+        tray = FakeTray()
+        tray.balloon = lambda t, x: False
+        w = self.make(tray)
+        w._hook_native()
+        w._ask_page_then_hide()
+        self.assertFalse(os.path.exists(os.path.join(self.data, "bandeja.json")))
+
+    def test_dos_x_seguidas_un_solo_globo(self):
+        tray = FakeTray()
+        w = self.make(tray)
+        w._hook_native()
+        with mock.patch.object(window, "log"):
+            hilos = [threading.Thread(target=w._tray_notice) for _ in range(8)]
+            for h in hilos:
+                h.start()
+            for h in hilos:
+                h.join(5)
+        self.assertEqual(len(tray.balloons), 1)
+
     def test_sin_icono_como_antes(self):
         tray = FakeTray(ok=False)
         w = self.make(tray)
@@ -344,11 +414,11 @@ class SalirTests(unittest.TestCase):
         return a
 
     def salir(self, app, si=True):
-        with mock.patch.object(server.Handler, "app", app), mock.patch.object(server, "tray_balloon") as globo, \
+        with mock.patch.object(server.Handler, "app", app), mock.patch.object(server, "tell") as aviso, \
                 mock.patch.object(server, "ask_yes_no", return_value=si) as pregunta, \
                 mock.patch.object(server, "log"):
             server.tray_salir()
-        return globo, pregunta
+        return aviso, pregunta
 
     def test_salir_es_el_apagado_de_ajustes(self):
         a = self.app()
@@ -357,10 +427,11 @@ class SalirTests(unittest.TestCase):
         pregunta.assert_not_called()  # sin trabajos, sin pregunta
 
     def test_grabando_no_sale(self):
+        """Revisión (P2-3): un aviso de Windows, no solo un globo (con «No molestar» el globo no sale)."""
         a = self.app(grabando=True)
-        globo, _ = self.salir(a)
+        aviso, _ = self.salir(a)
         a.apagar.assert_not_called()
-        self.assertIn("grabando", globo.call_args[0][0])
+        self.assertIn("grabando", aviso.call_args[0][0])
 
     def test_con_trabajos_pregunta(self):
         a = self.app(jobs=("running", "done", "queued"))
@@ -405,7 +476,7 @@ class ArrancarConWindowsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.appdata, True)
         self.progs = os.path.join(self.appdata, "Microsoft", "Windows", "Start Menu", "Programs")
         for p in (mock.patch.object(server, "WINDOWS", True), mock.patch.dict(os.environ, {"APPDATA": self.appdata}),
-                  mock.patch.object(server, "log")):
+                  mock.patch.object(server, "log"), mock.patch.object(server, "shell_folder", return_value=None)):
             p.start()
             self.addCleanup(p.stop)
         self.origen = os.path.join(self.progs, f"{server.APP_NAME}.lnk")
@@ -443,6 +514,52 @@ class ArrancarConWindowsTests(unittest.TestCase):
         self.lnk()
         server.inicio_windows_al_dia()
         self.assertFalse(os.path.exists(self.destino))
+
+    def test_usa_las_carpetas_de_windows(self):
+        """Revisión (P2-4): con el menú Inicio redirigido por directiva, las carpetas que da Windows (las mismas que el
+        instalador y el desinstalador), no las de %APPDATA%."""
+        otra = tempfile.mkdtemp(prefix="chuleta-redirigida-")
+        self.addCleanup(shutil.rmtree, otra, True)
+        carpetas = {0x02: os.path.join(otra, "Programas"), 0x07: os.path.join(otra, "Inicio")}
+        with mock.patch.object(server, "shell_folder", side_effect=carpetas.get):
+            origen, destino = server._startup_lnks()
+        self.assertEqual(origen, os.path.join(otra, "Programas", f"{server.APP_NAME}.lnk"))
+        self.assertEqual(destino, os.path.join(otra, "Inicio", f"{server.APP_NAME}.lnk"))
+
+    def test_la_ruta_http_solo_activa_con_true(self):
+        """Revisión (P2-11): "false" (texto) no activa nada."""
+        srv = server.Server(("127.0.0.1", 0), server.Handler)
+        port = srv.server_address[1]
+        saved = (server.PORT, server.URL, server.Handler.app, server.Handler.token)
+        server.PORT, server.URL = port, f"http://127.0.0.1:{port}/"
+        server.Handler.app, server.Handler.token = mock.Mock(), "prueba-bandeja"
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        vistos = []
+        try:
+            with mock.patch.object(server, "inicio_windows_poner", lambda v: vistos.append(v) or v):
+                for cuerpo in ({"activado": "false"}, {"activado": 1}, {"activado": True}, {}):
+                    req = urllib.request.Request(server.URL + "api/inicio-windows", data=json.dumps(cuerpo).encode(),
+                                                 method="POST", headers={"X-Audios": "1", "Content-Type":
+                                                                         "application/json",
+                                                                         "X-Chuleta-Token": "prueba-bandeja"})
+                    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=5) as r:
+                        json.load(r)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            server.PORT, server.URL, server.Handler.app, server.Handler.token = saved
+        self.assertEqual(vistos, [False, False, True, False])
+
+    def test_main_lo_pone_al_dia_al_arrancar(self):
+        src = open(os.path.join(APP, "server.py"), encoding="utf-8").read()
+        main = src[src.index("def main():"):]
+        self.assertRegex(main, r"tray=make_tray\(ico\)\)\n\s+inicio_windows_al_dia\(\)")
+
+    def test_el_desinstalador_quita_la_copia_de_la_carpeta_inicio(self):
+        with open(os.path.join(APP, "desinstalar.ps1"), encoding="utf-8-sig") as f:
+            ps1 = f.read()
+        bloque = ps1[ps1.index("function Remove-Shortcuts"):ps1.index("function Remove-Registro")]
+        self.assertTrue(re.search(r'GetFolderPath\("Startup"\)', bloque), bloque[:600])
 
     def test_fuera_de_windows_nada(self):
         with mock.patch.object(server, "WINDOWS", False):

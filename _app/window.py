@@ -124,6 +124,7 @@ class Window:
         self.url, self.data_dir, self.ico_path = url, data_dir, ico_path
         self.tray = tray  # bandeja.Bandeja (aun sin crear) o None; se crea en el hilo de la ventana (_hook_native)
         self.tray_ok = False
+        self._notice_lock = threading.Lock()  # dos X seguidas: un solo globo
         self.webview = webview if webview is not None else import_webview()
         self.w, self.hwnd, self.quitting, self.alive = None, None, False, False
         self.native = False  # True con los manejadores propios de FormClosing/FormClosed enganchados (WinForms)
@@ -235,7 +236,7 @@ class Window:
     def _create_tray(self, form):
         """El icono de la bandeja, en el hilo de la ventana (su bucle de mensajes es el que lo atiende). Desde
         before_show ya se esta en el; desde shown (pywebview sin before_show), por Invoke."""
-        if self.tray is None or self.tray_ok:
+        if self.tray is None or self.tray_ok or self.quitting:  # apagando (p. ej. Apagar durante el arranque): no
             return
         try:
             if getattr(form, "InvokeRequired", False):
@@ -344,20 +345,22 @@ class Window:
     def _tray_notice(self):
         """La primera vez que se cierra con la X (marca en DATA_DIR\bandeja.json): el globo del icono."""
         path = os.path.join(self.data_dir, "bandeja.json")
-        try:
-            if os.path.isfile(path):
+        with self._notice_lock:
+            try:
+                if os.path.isfile(path):
+                    return False
+                if not self.tray.balloon(f"{APP_NAME} sigue aquí",
+                                         "Cerrar la ventana no la apaga: sigue en la bandeja, junto al reloj (si no "
+                                         "ves el icono, en ^). Para salir: clic derecho en el icono > Salir."):
+                    return False  # sin globo no se marca: la proxima vez se vuelve a intentar
+                os.makedirs(self.data_dir, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"aviso_cerrar": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+                log("   primer cierre con la X: aviso en el icono de la bandeja")
+                return True
+            except OSError:
+                log_exc()
                 return False
-            self.tray.balloon(f"{APP_NAME} sigue aquí",
-                              "Cerrar la ventana no la apaga: sigue en la bandeja, junto al reloj (si no ves el icono, "
-                              "en ^). Para salir: clic derecho en el icono > Salir.")
-            os.makedirs(self.data_dir, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"aviso_cerrar": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
-            log("   primer cierre con la X: aviso en el icono de la bandeja")
-            return True
-        except OSError:
-            log_exc()
-            return False
 
     def _close_tray(self):
         if self.tray is not None:

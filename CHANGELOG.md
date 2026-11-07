@@ -127,19 +127,26 @@ solo se pueda cerrar si la cierro desde ahí al salir».
   «Parar la grabación», según toque; lo mismo que Ctrl+Alt+R), «Arrancar con Windows» y «Salir». El texto del icono
   dice si está grabando (y cuánto lleva) y cuántos trabajos hay en marcha.
 - **Cerrar la ventana (la X, Alt+F4) la deja en la bandeja.** Ya no sale el aviso de «sigue en segundo plano» de la
-  página: la primera vez, un globo en el icono dice que sigue ahí y cómo salir.
+  página: la primera vez, un globo en el icono dice que sigue ahí y cómo salir (un clic en el globo abre la ventana;
+  si Windows no lo enseña, se vuelve a intentar la próxima vez).
 - **Salir** es el mismo apagado que ⚙ Ajustes › «Apagar Chuleta», que se mantiene (decisión por defecto del backlog).
-  Si está grabando no sale, y un globo lo dice; con trabajos en marcha, pregunta antes como Ajustes. El icono se quita
-  al apagar, también cuando Windows cierra la sesión, para que no quede un icono fantasma.
+  Si está grabando no sale, y lo dice un aviso de Windows; con trabajos en marcha pregunta antes (Ajustes pregunta
+  siempre). El icono se quita al apagar, también cuando Windows cierra la sesión o si se apaga mientras arranca, para
+  que no quede un icono fantasma.
 - **Arrancar con Windows** (en el menú del icono; apagado por defecto) copia el acceso directo del menú Inicio en la
   carpeta Inicio de Windows: sin registro ni permisos de administrador, con el mismo icono y AppUserModelID. Si
-  INSTALAR.bat rehace el acceso directo, la copia se pone al día al arrancar; el desinstalador la quita.
-  `/api/inicio-windows` (GET y POST `{"activado": true|false}`) queda para la casilla de Ajustes.
+  INSTALAR.bat rehace el acceso directo, la copia se pone al día la siguiente vez que se abre Chuleta; el
+  desinstalador la quita. Las carpetas son las que da Windows (también si la empresa las redirige). Al iniciar sesión
+  se abre con su ventana, como al pulsar el acceso directo. Si se desactiva desde el Administrador de tareas
+  (Aplicaciones de arranque), Windows no la abre aunque el menú siga marcado. `/api/inicio-windows` (GET y POST
+  `{"activado": true|false}`) queda para la casilla de Ajustes.
 - Windows pone los iconos nuevos en los iconos ocultos (la flecha ^): no se puede cambiar por programa; se arrastra
   una vez junto al reloj (README y LEEME lo dicen).
 - Sin dependencias nuevas: `System.Windows.Forms.NotifyIcon` por pythonnet, que ya carga pywebview (`_app/bandeja.py`).
   Si el icono no se puede poner, la app sigue como antes (con el aviso de la página al cerrar) y el log lo dice. Sin
-  ventana propia (sin WebView2, en Edge) no hay icono: se apaga desde Ajustes.
+  ventana propia (sin WebView2, en Edge) no hay icono: se apaga desde Ajustes. Tras una revisión independiente: Apagar
+  durante el arranque ya no deja el icono puesto, lo que llegue al hilo de la ventana con el icono ya quitado no saca el
+  diálogo de error de WinForms y dos X seguidas dan un solo globo.
 - Tests: `tests/test_bandeja.py` (el menú, el clic, el texto, el globo, el Dispose, la caída limpia, cerrar sin el
   aviso de la página, Salir y Arrancar con Windows) y, en windows-real, con WinForms y WebView2 de verdad: la X oculta
   la ventana, el clic en el icono (el mensaje que Windows le manda) la vuelve a enseñar y al apagar el icono se quita

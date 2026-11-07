@@ -29,13 +29,13 @@ def winforms():
     import System
     from System.Drawing import Font, FontStyle, Icon
     from System.Reflection import BindingFlags
-    from System.Windows.Forms import (ContextMenuStrip, MouseButtons, NotifyIcon, ToolStripMenuItem,
-                                      ToolStripSeparator, ToolTipIcon)
+    from System.Windows.Forms import (ContextMenuStrip, MouseButtons, NotifyIcon, SystemInformation,
+                                      ToolStripMenuItem, ToolStripSeparator, ToolTipIcon)
     ns = type("WinForms", (), {})()
     for k, v in dict(Action=System.Action, Font=Font, FontStyle=FontStyle, Icon=Icon, BindingFlags=BindingFlags,
                      ContextMenuStrip=ContextMenuStrip, MouseButtons=MouseButtons, NotifyIcon=NotifyIcon,
-                     ToolStripMenuItem=ToolStripMenuItem, ToolStripSeparator=ToolStripSeparator,
-                     ToolTipIcon=ToolTipIcon).items():
+                     SystemInformation=SystemInformation, ToolStripMenuItem=ToolStripMenuItem,
+                     ToolStripSeparator=ToolStripSeparator, ToolTipIcon=ToolTipIcon).items():
         setattr(ns, k, v)
     return ns
 
@@ -73,12 +73,18 @@ class Bandeja:
 
     # --- en el hilo de la ventana
     def create(self, form):
-        """Pone el icono en la bandeja. True si queda puesto; si no, False y al log (la app sigue como antes)."""
+        """Pone el icono en la bandeja. True si queda puesto; si no, False y al log (la app sigue como antes). Si ya se
+        ha pedido quitarlo (close(): la app se apaga mientras arranca), no lo pone: luego nadie lo quitaria."""
+        if self._stop.is_set():
+            return False
         try:
             wf = self._wf or winforms()
             self._wf = wf
             icon = self.icon = wf.NotifyIcon()  # en self en cuanto existe: si algo falla despues, _dispose lo quita
-            icon.Icon = wf.Icon(self.ico_path)
+            try:  # el tamano pequeno del .ico (16 px a 100 %): sin el, WinForms reduce el grande y sale borroso
+                icon.Icon = wf.Icon(self.ico_path, wf.SystemInformation.SmallIconSize)
+            except Exception:
+                icon.Icon = wf.Icon(self.ico_path)
             icon.Text = APP_NAME
             menu = self.menu = wf.ContextMenuStrip()
             abrir = wf.ToolStripMenuItem(f"Abrir {APP_NAME}")
@@ -100,6 +106,7 @@ class Bandeja:
             menu.Opening += self._on_opening
             icon.ContextMenuStrip = menu
             icon.MouseClick += self._on_click
+            icon.BalloonTipClicked += self._handler("abrir")  # clic en el globo: la ventana
             icon.Visible = True
             self.form = form
             self.alive = True
@@ -169,12 +176,19 @@ class Bandeja:
 
     # --- desde cualquier hilo
     def _invoke(self, fn):
-        """fn() en el hilo de la ventana sin esperarla (BeginInvoke). False si ya no hay icono."""
+        """fn() en el hilo de la ventana sin esperarla (BeginInvoke). False si ya no hay icono. fn no puede lanzar: en
+        el hilo de la ventana, una excepcion sin capturar saca el dialogo de WinForms «excepcion no controlada»."""
+        def seguro():
+            try:
+                if self.icon is not None:  # se pudo quitar entre la peticion y su turno (close() con el hilo ocupado)
+                    fn()
+            except Exception:
+                log_exc()
         with self._lock:
             if not (self.alive and self.form is not None):
                 return False
             try:
-                self.form.BeginInvoke(self._wf.Action(fn))
+                self.form.BeginInvoke(self._wf.Action(seguro))
                 return True
             except Exception:
                 log_exc()
@@ -202,7 +216,8 @@ class Bandeja:
 
     def close(self, wait=5.0):
         """Quita el icono (Dispose en el hilo de la ventana y lo espera hasta `wait` s; desde el propio hilo, al
-        momento). Sin esto Windows deja un icono fantasma hasta que se pasa el raton por encima."""
+        momento). Sin esto Windows deja un icono fantasma hasta que se pasa el raton por encima. Antes de create(),
+        hace que create() ya no lo ponga."""
         self._stop.set()
         with self._lock:
             if not self.alive:

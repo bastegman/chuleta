@@ -3112,6 +3112,7 @@ DIAG_LINES = (
     "   icono de la bandeja: el hilo de la ventana no contesta; se quita desde aquí",
     "   primer cierre con la X: aviso en el icono de la bandeja",
     "   salir desde la bandeja: está grabando, no se sale",
+    "   aviso: {t}",
     "   salir desde la bandeja: cancelado (trabajos en marcha)",
     "arrancar con Windows: activado",
     "arrancar con Windows: desactivado",
@@ -5215,7 +5216,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
                   "/api/acerca/abrir": a.acerca_abrir,
-                  "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(bool(b.get("activado")))}}
+                  "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)}}
         try:
             u = urlparse(self.path)
             if self.headers.get("Transfer-Encoding"):  # sin Content-Length no se sabe donde acaba el cuerpo (P0-1)
@@ -5742,6 +5743,19 @@ def tray_grabar():
             pass  # rec_toggle ya lo ha dicho (toast) y anotado
 
 
+def tell(titulo, texto):
+    """Aviso de Windows (MessageBox, delante de todo) desde un hilo cualquiera; fuera de Windows, al log. Para lo que no
+    puede quedarse en un globo de la bandeja (con «No molestar» Windows no los ensena)."""
+    log(f"   aviso: {titulo}")
+    if not WINDOWS:
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, texto, titulo, 0x0 | 0x40 | 0x10000 | 0x40000)  # MB_OK, ICONINFORMATION
+    except Exception:
+        log_exc()
+
+
 def ask_yes_no(titulo, texto):
     """Pregunta Si/No de Windows (MessageBox delante de todo), desde un hilo cualquiera. Fuera de Windows, si."""
     if not WINDOWS:
@@ -5762,8 +5776,8 @@ def tray_salir():
     if a is None:
         return
     if a.rec and a.rec.alive():
-        tray_balloon(f"{APP_NAME} está grabando", "Para la grabación antes de salir (Ctrl+Alt+R o su botón Parar).")
         log("   salir desde la bandeja: está grabando, no se sale")
+        tell(f"{APP_NAME} está grabando", "Para la grabación antes de salir (Ctrl+Alt+R o su botón Parar).")
         return
     n = tray_estado()["trabajos"]
     if n and not ask_yes_no(f"Salir de {APP_NAME}",
@@ -5775,16 +5789,34 @@ def tray_salir():
     try:
         a.apagar({"origen": "bandeja"})
     except ApiError as e:  # ha empezado a grabar entretanto
-        tray_balloon(APP_NAME, e.msg)
+        tell(APP_NAME, e.msg)
+
+
+def shell_folder(csidl):
+    """Carpeta especial de Windows (SHGetFolderPathW, la que respeta la redireccion por directiva de empresa; las mismas
+    que [Environment]::GetFolderPath del instalador y el desinstalador), o None."""
+    if not WINDOWS:
+        return None
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buf) == 0 and buf.value:
+            return buf.value
+    except Exception:
+        log_exc()
+    return None
 
 
 def _startup_lnks():
     """(acceso directo del menu Inicio que pone INSTALAR.bat, el de la carpeta Inicio de Windows) o (None, None)."""
-    appdata = os.environ.get("APPDATA") if WINDOWS else None
-    if not appdata:
+    if not WINDOWS:
         return None, None
-    progs = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs")
-    return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(progs, "Startup", f"{APP_NAME}.lnk")
+    appdata = os.environ.get("APPDATA")
+    progs = shell_folder(0x02) or (appdata and os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs"))
+    startup = shell_folder(0x07) or (progs and os.path.join(progs, "Startup"))  # CSIDL_PROGRAMS, CSIDL_STARTUP
+    if not (progs and startup):
+        return None, None
+    return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(startup, f"{APP_NAME}.lnk")
 
 
 def inicio_windows_leer():
