@@ -10,6 +10,24 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Voces dobles en la grabación (07/11/2026, msgs 1154 y 1156)
+- La grabadora pone cada fuente (micro y salidas) en una línea de tiempo común según cuándo llega su audio. Antes cada
+  fuente se tomaba por la cabeza de su cola: tras un corte (reabrir el dispositivo al cambiar de cascos o de salida,
+  o audio perdido con el PC cargado) esa fuente quedaba adelantada para siempre, y con altavoces el eco de la sala
+  (~30 ms) pasaba a ser una repetición de cientos de ms. Medido con la grabadora real y dispositivos simulados: un
+  corte de 300 ms dejaba el eco a +330 ms; ahora se queda a +30 ms. Los cortes se recolocan y van a `recorder.log`.
+- «Todas las salidas»: una salida que es copia retrasada de otra (un dispositivo virtual, el «espejo» de un driver)
+  deja de sumarse en cuanto se detecta (correlación cruzada a 8 kHz, ≥ 0,7 con el mismo retardo dos veces seguidas;
+  unos 4 s). Vuelve a sumarse si deja de parecerse o si suena sola. El medidor lo dice: «X (igual que Y: no se suma)».
+- Eco de los altavoces en el micro: mientras suena la reunión, el micro se baja 14-20 dB (lo justo para dejar el eco
+  ~32 dB por debajo) salvo que hables encima; el retardo y la atenuación del eco se miden solos. Y si una salida
+  lleva tu micro («Escuchar este dispositivo», tono lateral), esa copia se baja mientras hablas, sin quitar el resto
+  de la salida. Cada atenuación solo se activa cuando la correlación demuestra la copia en su sentido (con
+  auriculares no hay eco y no toca nada) y se desactiva sola. El nivel del micro ya no se reajusta mientras suena la
+  reunión (el eco se tomaba por tu voz y se subía). Medidores: «atenuando el eco de los altavoces», «lleva tu micro».
+- Para medir una grabación: `python3 scripts/medir_eco.py GRABACION.wav` dice si hay voces dobles y con qué retardo
+  (fijo: copia digital o eco estable; cambiante: eco que se mueve o los cortes de antes).
+
 ### Transcribir con los tres modos: descarga de Whisper con progreso y la verdad sobre el motor (07/11/2026)
 Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta de Claude» no transcribía, al grabar
 «Modelo» parecía seguir en Groq y «Descargando modelo medium» no acababa.

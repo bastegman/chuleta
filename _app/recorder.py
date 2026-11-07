@@ -27,11 +27,23 @@ import time
 import warnings
 from collections import deque
 
+import eco
+
 SR = 48000
 # margen para que lleguen los paquetes de las dos fuentes antes de mezclar: con Teams y el portatil
 # cargados un paquete puede llegar tarde; con 1 s de margen casi nunca hay que rellenar con silencio
 LAT = 1.0
-MAX_BACKLOG = 1.5   # si una fuente se adelanta mas que esto (relojes distintos), se descarta lo sobrante
+MAX_BUF_S = 10.0    # tope de memoria por fuente (si el escritor se parase): lo mas antiguo se descarta
+# Linea de tiempo comun: cada fuente coloca su audio en «posiciones» (muestras a SR desde EPOCH, el reloj del
+# proceso) segun cuando llega, y el escritor toma de todas la misma ventana de posiciones. Antes cada fuente se tomaba
+# por la cabeza de su cola: tras un corte (reabrir el dispositivo, PC cargado) esa fuente quedaba adelantada para
+# siempre y, con altavoces, el eco de 30 ms pasaba a ser una repeticion de 330 ms (medido el 07/11/2026).
+EPOCH = time.perf_counter()
+
+
+def now_pos():
+    return int(round((time.perf_counter() - EPOCH) * SR))
+
 
 # Igualar niveles: el micro suele llegar mucho mas flojo que el audio de la reunion. Cada fuente se
 # lleva poco a poco hacia el mismo volumen de voz, solo mientras hay sonido (en los silencios no se
@@ -49,7 +61,9 @@ class Leveler:
         self.level = None   # volumen de voz estimado (dBFS)
         self.gain = 1.0     # ganancia aplicada (lineal)
 
-    def __call__(self, x):
+    def __call__(self, x, update=True):
+        """update=False: se aplica la ganancia pero no se toca la estimacion (el micro mientras suena la reunion:
+        si no, el eco de los altavoces se tomaria por su voz y se subiria hacia -22 dB)."""
         import numpy as np
         if not len(x):
             return x
@@ -57,7 +71,7 @@ class Leveler:
         db = 20 * math.log10(rms)
         # hay sonido (y no es el ruido de fondo de las pausas, mucho mas flojo que la voz):
         # se actualiza la estimacion (sube rapido, baja despacio)
-        if db > GATE_DB and (self.level is None or db > self.level - 15):
+        if update and db > GATE_DB and (self.level is None or db > self.level - 15):
             if self.level is None:
                 self.level = db
             else:
@@ -104,16 +118,26 @@ class Source(threading.Thread):
 
     dev_id "default" sigue al dispositivo predeterminado de Windows aunque cambie a mitad de la
     grabacion (conectar o quitar los cascos). Con un dispositivo concreto: si se desconecta, pasa
-    al predeterminado y vuelve al elegido cuando reaparece (salvo fallback=False)."""
+    al predeterminado y vuelve al elegido cuando reaparece (salvo fallback=False).
+
+    Cada bloque va a su posicion de la linea de tiempo comun (EPOCH): seguido del anterior mientras lleguen seguidos.
+    Si los CONFIRM bloques siguientes llegan todos con el mismo retraso (> GAP), se perdio audio justo antes (o el
+    reloj del dispositivo va mas lento): esos bloques se mueven a su sitio y lo que falta se toma como silencio. Un
+    retraso solo al leer no cuenta (soundcard entrega un paquete por llamada: los atrasados llegan luego seguidos y el
+    desfase baja). Si llegan todos adelantados (reloj mas rapido), se mueven hacia atras."""
 
     CHECK_S = 2.0  # cada cuanto se mira si Windows ha cambiado de dispositivo
+    GAP = int(0.05 * SR)
+    CONFIRM = 12
 
     def __init__(self, kind, dev_id, fallback=True):
         super().__init__(daemon=True)
         self.kind, self.dev_id, self.fallback = kind, dev_id, fallback
-        self.buf, self.frames, self.lock = deque(), 0, threading.Lock()
+        self.buf, self.frames, self.lock = deque(), 0, threading.Lock()  # buf: [posicion, trozo, desfase al llegar]
         self.peak, self.error, self.name, self.note, self.stopping = 0.0, None, None, None, False
         self.lost = 0  # muestras que llegaron demasiado tarde y no se pudieron usar (PC muy cargado)
+        self.next, self.done, self.errs = None, None, deque(maxlen=self.CONFIRM)
+        self.gap_s = 0.0  # silencio puesto por cortes (va al log al acabar)
 
     def _pick(self):  # (no llamarlo _target: Thread ya usa ese nombre)
         """Dispositivo que toca usar ahora mismo (cambia si Windows cambia el predeterminado)."""
@@ -157,36 +181,68 @@ class Source(threading.Thread):
                         if d.ndim == 1:
                             d = d[:, None]
                         d = np.repeat(d, 2, axis=1) if d.shape[1] == 1 else d[:, :2]
-                        with self.lock:
-                            self.buf.append(d)
-                            self.frames += len(d)
-                            self.peak = max(self.peak, float(np.abs(d).max()))
+                        self.push(d)
             except Exception as e:  # dispositivo desconectado a mitad: se reintenta
                 self.error = f"{e.__class__.__name__}: {e}"[:200]
                 time.sleep(1.0)
 
-    def take(self, n):
-        """n muestras; rellena con silencio si no han llegado y recorta si la fuente va adelantada."""
+    def push(self, d, end=None):
+        """Bloque recien llegado; su ultima muestra es «ahora» (end: posicion, para los tests)."""
         import numpy as np
-        out, got = [], 0
+        end = now_pos() if end is None else end
         with self.lock:
-            while self.buf and got < n:
-                c = self.buf[0]
-                k = min(n - got, len(c))
-                out.append(c[:k])
-                got += k
-                if k == len(c):
-                    self.buf.popleft()
-                else:
-                    self.buf[0] = c[k:]
-            self.frames -= got
-            while self.frames > MAX_BACKLOG * SR and self.buf:
-                k = len(self.buf.popleft())
+            start = end - len(d)
+            if self.next is None:
+                self.next = start
+            err = start - self.next
+            self.buf.append([self.next, d, err])
+            self.frames += len(d)
+            self.next += len(d)
+            if len(d):
+                self.peak = max(self.peak, float(np.abs(d).max()))
+            self.errs.append(err)
+            if len(self.errs) == self.CONFIRM:
+                lo, hi = min(self.errs), max(self.errs)
+                shift = lo if lo > self.GAP else hi if hi < -self.GAP else 0
+                if shift:
+                    for c in reversed(self.buf):  # los bloques que llegaron ya con ese desfase
+                        if (c[2] < shift / 2) if shift > 0 else (c[2] > shift / 2):
+                            break
+                        c[0] += shift
+                        c[2] -= shift
+                    self.next += shift
+                    self.errs = deque((e - shift for e in self.errs), maxlen=self.CONFIRM)
+                    self.gap_s += shift / SR
+            while self.frames > MAX_BUF_S * SR and self.buf:
+                k = len(self.buf.popleft()[1])
                 self.frames -= k
                 self.lost += k
-        if got < n:
-            out.append(np.zeros((n - got, 2), np.float32))
-        return np.concatenate(out) if len(out) > 1 else out[0]
+
+    def take_window(self, w0, n):
+        """Las n muestras de las posiciones [w0, w0 + n): silencio donde no hay audio. Lo anterior se descarta (si
+        llego cuando su sitio ya estaba escrito, cuenta como perdido)."""
+        import numpy as np
+        out = np.zeros((n, 2), np.float32)
+        w1 = w0 + n
+        with self.lock:
+            keep = deque()
+            for c in self.buf:
+                p, x = c[0], c[1]
+                q = p + len(x)
+                if self.done is not None and p < w0:
+                    self.lost += min(q, w0) - p
+                a, b = max(p, w0), min(q, w1)
+                if a < b:
+                    out[a - w0:b - w0] = x[a - p:b - p]
+                if q <= w1:
+                    self.frames -= len(x)
+                    continue
+                if p < w1:
+                    c[0], c[1] = w1, x[w1 - p:]
+                    self.frames -= w1 - p
+                keep.append(c)
+            self.buf, self.done = keep, w1
+        return out
 
     def status(self):
         with self.lock:
@@ -197,12 +253,15 @@ class Source(threading.Thread):
 
 class AllOutputs:
     """Lo que suena en TODAS las salidas a la vez (cascos, altavoces…): capta la reunion salga
-    por donde salga, y si se conecta otro dispositivo a mitad de la grabacion se incorpora."""
+    por donde salga, y si se conecta otro dispositivo a mitad de la grabacion se incorpora. Una salida que es copia
+    retrasada de otra (un dispositivo virtual, el «espejo» de un driver) no se suma: eco.Duplicates."""
 
     SCAN_S = 3.0
 
-    def __init__(self):
+    def __init__(self, log=None):
         self.sources, self.scanned = {}, 0.0
+        self.log = log or (lambda msg: None)
+        self.dups = eco.Duplicates(log=self.log)
         self.scan()
 
     def scan(self):
@@ -219,20 +278,29 @@ class AllOutputs:
         for i in set(self.sources) - ids:
             self.sources.pop(i).stopping = True
 
-    def take(self, n):
+    def take_window(self, w0, n):
         import numpy as np
         if time.time() - self.scanned > self.SCAN_S:
             self.scan()
+        parts = {i: s.take_window(w0, n) for i, s in list(self.sources.items())}
+        if self.dups is not None:
+            try:
+                return self.dups.feed(parts)
+            except Exception as e:  # un fallo aqui no puede parar la grabacion: se sigue sumando todo
+                self.dups = None
+                self.log(f"✖ salidas duplicadas: {e.__class__.__name__}: {e}: se desactiva (se suman todas)")
         mix = np.zeros((n, 2), np.float32)
-        for s in list(self.sources.values()):
-            mix += s.take(n)
+        for x in parts.values():
+            mix += x
         return mix
 
     def status(self):
-        sts = [s.status() for s in list(self.sources.values())]
+        items = list(self.sources.items())
+        notes = self.dups.note({i: s.name for i, s in items}) if self.dups is not None else {}
+        sts = [dict(s.status(), dup=notes.get(i)) for i, s in items]
         live = [x for x in sts if x["name"] and not x["error"]]
-        loud = max(live, key=lambda x: x["db"], default=None)
-        return {"name": " + ".join(x["name"] for x in live) or None,
+        loud = max((x for x in live if not x["dup"]), key=lambda x: x["db"], default=None)
+        return {"name": " + ".join(x["name"] + (f" ({x['dup']})" if x["dup"] else "") for x in live) or None,
                 "db": loud["db"] if loud else -100,
                 "error": None if live else "ninguna salida de audio disponible",
                 "note": f"suena por: {loud['name']}" if loud and loud["db"] > -60 else None,
@@ -277,8 +345,13 @@ def main():
     if a.mic != "none":
         sources["mic"] = Source("mic", a.mic)
         sources["mic"].start()
+
+    def elog(msg):  # a recorder.log (el servidor manda ahi el stderr): que se pueda ver luego que paso
+        sys.stderr.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+        sys.stderr.flush()
+
     if a.sys == "all":
-        sources["sys"] = AllOutputs()
+        sources["sys"] = AllOutputs(log=elog)
     elif a.sys != "none":
         sources["sys"] = Source("sys", a.sys)
         sources["sys"].start()
@@ -286,6 +359,12 @@ def main():
     stop = threading.Event()
     muted = {"mic": False}
     levelers = {k: Leveler(*GAIN_RANGE[k]) for k in sources}
+    # con micro y salida: el eco de los altavoces en el micro (B) y una salida que lleva el micro (A); cada una solo
+    # actua si la correlacion demuestra la copia en su sentido (eco.Gate)
+    both = "mic" in sources and "sys" in sources
+    echo = eco.Gate("eco de los altavoces en el micro", 0.25, 0.003, log=elog) if both else None
+    mon = eco.Gate("el micro en la salida", 0.6, 0.0, log=elog) if both else None
+    gates = [both]  # se apaga si fallan (la grabacion sigue igual que antes)
 
     def read_stdin():  # "stop" o que el servidor se cierre (fin de stdin): se para y se cierra bien
         for line in sys.stdin:
@@ -304,6 +383,7 @@ def main():
         f.write(wav_header())
         f.flush()
     t0, written, last = time.perf_counter(), 0, 0.0
+    base = int(round((t0 - EPOCH) * SR))  # posicion de la muestra 0 del fichero: lo capturado en t0
     try:
         while True:
             now = time.perf_counter()
@@ -311,11 +391,22 @@ def main():
             target = int(max(0.0, now - t0 - (0 if final else LAT)) * SR)
             n = target - written
             if n > 0:
+                # la misma ventana de la linea de tiempo de todas las fuentes (se toma aunque el micro este
+                # silenciado, para no acumular nada)
+                parts = {k: s.take_window(base + written, n) for k, s in sources.items()}
+                busy = False  # con eco demostrado y la reunion sonando, el nivel del micro no se reestima (seria eco)
+                if gates[0] and not muted["mic"]:
+                    try:
+                        parts["sys"], _ = mon(parts["sys"], parts["mic"])
+                        parts["mic"], busy = echo(parts["mic"], parts["sys"])
+                        busy = busy and echo.enabled
+                    except Exception as e:  # un fallo aqui no puede parar la grabacion: se graba sin atenuar
+                        gates[0] = False
+                        elog(f"✖ eco: {e.__class__.__name__}: {e}: se desactiva (se graba sin atenuar)")
                 mix = np.zeros((n, 2), np.float32)
-                for k, s in sources.items():
-                    part = s.take(n)  # se vacia igual aunque este silenciado, para no acumular retraso
+                for k, part in parts.items():
                     if not (k == "mic" and muted["mic"]):
-                        mix += levelers[k](part)  # micro y reunion a un volumen parecido
+                        mix += levelers[k](part, update=not (k == "mic" and busy))  # micro y reunion igualados
                 soft_limit(mix)
                 np.clip(mix, -1.0, 1.0, out=mix)
                 if f:
@@ -324,8 +415,13 @@ def main():
                 written += n
             if now - last >= 0.25 or final:
                 last = now
-                emit({"t": round(written / SR, 2), "mic_muted": muted["mic"],
-                      **{k: s.status() for k, s in sources.items()}})
+                st = {k: s.status() for k, s in sources.items()}
+                for gate, k, txt in ((echo, "mic", "atenuando el eco de los altavoces"),
+                                     (mon, "sys", "lleva tu micro: se atenúa mientras hablas")):
+                    if gate is not None and gate.enabled:
+                        st[k]["note"] = f"{st[k]['note']} · {txt}" if st[k].get("note") else txt
+                emit({"t": round(written / SR, 2), "mic_muted": muted["mic"], **st,
+                      "eco": {"micro": echo.status(), "salida": mon.status()} if both else None})
             if final:
                 break
             time.sleep(0.05)
@@ -335,6 +431,12 @@ def main():
         lost = {k: s.status().get("lost", 0) for k, s in sources.items()}
         if any(lost.values()):  # queda en recorder.log
             sys.stderr.write(f"audio perdido por llegar tarde (PC cargado): {lost}\n")
+        cortes = {k: round(sum(x.gap_s for x in (s.sources.values() if isinstance(s, AllOutputs) else [s])), 2)
+                  for k, s in sources.items()}
+        if any(cortes.values()):
+            elog(f"cortes de audio recolocados en su sitio (s): {cortes}")
+        if both:
+            elog(f"eco al terminar: micro {echo.status()} · salida {mon.status()}")
         if f:
             size = f.tell()
             f.seek(4)

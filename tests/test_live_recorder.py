@@ -123,42 +123,127 @@ class LevelerTests(unittest.TestCase):
         self.assertEqual(y[2], -y[3])
 
 
-class SourceTakeTests(unittest.TestCase):
+class SourceTimelineTests(unittest.TestCase):
+    """Linea de tiempo comun (07/11/2026): cada bloque va a su posicion y el escritor toma por posicion. Antes, tras un
+    corte una fuente quedaba adelantada para siempre (medido: el eco de 30 ms pasaba a 330 ms)."""
+
     def _src(self):
-        return recorder.Source("mic", "default")  # sin start(): solo la cola
+        return recorder.Source("sys", "default")  # sin start(): solo la cola
+
+    def blk(self, v, n=480):
+        return np.full((n, 2), v, np.float32)
+
+    def feed(self, s, start, count, v=1.0, n=480, late=0):
+        """count bloques seguidos de n muestras desde la posicion start; `late` = llegan con ese retraso."""
+        for i in range(count):
+            s.push(self.blk(v, n), end=start + (i + 1) * n + late)
+        return start + count * n
 
     def test_rellena_con_silencio(self):
-        s = self._src()
-        out = s.take(100)
+        out = self._src().take_window(0, 100)
         self.assertEqual(out.shape, (100, 2))
         self.assertFalse(out.any())
 
-    def test_consume_por_trozos(self):
+    def test_consume_por_ventanas(self):
         s = self._src()
-        a = np.ones((60, 2), np.float32)
-        with s.lock:
-            s.buf.append(a)
-            s.buf.append(a * 2)
-            s.frames += 120
-        out = s.take(80)
-        self.assertEqual(out.shape, (80, 2))
-        self.assertEqual(out[:60].sum(), 120)
-        self.assertEqual(out[60:].sum(), 80)
-        self.assertEqual(s.frames, 40)
-        out = s.take(100)  # 40 reales + 60 de silencio
-        self.assertEqual(out.sum(), 160)
+        self.feed(s, 0, 3, v=1.0)
+        out = s.take_window(0, 1000)
+        self.assertEqual(out[:, 0].sum(), 1000)
+        out = s.take_window(1000, 1000)  # 440 reales + silencio
+        self.assertEqual(out[:, 0].sum(), 440)
         self.assertEqual(s.frames, 0)
 
-    def test_recorta_el_retraso(self):
+    def test_corte_confirmado_se_recoloca(self):
         s = self._src()
-        n = int(recorder.MAX_BACKLOG * recorder.SR)
-        with s.lock:
-            for _ in range(4):
-                s.buf.append(np.zeros((n, 2), np.float32))
-            s.frames = 4 * n
-        s.take(10)
+        pos = self.feed(s, 0, 20)  # 20 bloques seguidos (9.600 muestras)
+        gap = int(0.3 * recorder.SR)  # se pierden 300 ms (reabrir el dispositivo)
+        self.feed(s, pos + gap, s.CONFIRM + 3, v=2.0)  # lo que llega despues, en su hora
+        self.assertAlmostEqual(s.gap_s, 0.3, places=2)
+        out = s.take_window(0, pos + gap + 480 * 4)
+        self.assertTrue((out[:pos, 0] == 1).all())
+        self.assertFalse(out[pos:pos + gap].any())  # el corte, como silencio
+        self.assertTrue((out[pos + gap:, 0] == 2).all())  # y lo de despues en su sitio, no 300 ms antes
+
+    def test_un_retraso_al_leer_no_es_un_corte(self):
+        """soundcard da un paquete por llamada: si el hilo se retrasa 90 ms, el primero llega tarde y los demas
+        atrasados enseguida, seguidos. Nada se pierde: no se mueve nada."""
+        s = self._src()
+        pos = self.feed(s, 0, 20)
+        late = int(0.09 * recorder.SR)
+        s.push(self.blk(3.0), end=pos + 480 + late)  # el primero, tarde
+        for i in range(2, 30):  # los atrasados, uno tras otro casi a la vez; luego al ritmo normal
+            s.push(self.blk(3.0), end=pos + 480 + late + i * 10 if i < 10 else pos + i * 480 + 480)
+        self.assertEqual(s.gap_s, 0.0)
+        out = s.take_window(0, pos + 480 * 29)
+        self.assertTrue((out[:pos, 0] == 1).all())
+        self.assertTrue((out[pos:, 0] == 3).all())
+
+    def test_reloj_rapido_se_recoloca_hacia_atras(self):
+        s = self._src()
+        pos = self.feed(s, 0, 20)
+        early = int(0.08 * recorder.SR)
+        self.feed(s, pos - early, s.CONFIRM + 2, v=2.0)  # llegan antes de lo que tocaria
+        self.assertAlmostEqual(s.gap_s, -0.08, places=2)
+
+    def test_lo_que_llega_tarde_cuenta_como_perdido(self):
+        s = self._src()
+        s.take_window(0, 4800)  # ese tramo ya esta escrito
+        s.push(self.blk(1.0), end=4800)  # y llega ahora
+        s.take_window(4800, 480)
+        self.assertEqual(s.lost, 480)
+
+    def test_tope_de_memoria(self):
+        s = self._src()
+        n = int(recorder.MAX_BUF_S * recorder.SR)
+        self.feed(s, 0, 3, n=n)
         self.assertLessEqual(s.frames, n)
         self.assertGreater(s.lost, 0)
+
+
+class AllOutputsTests(unittest.TestCase):
+    def outputs(self, dups):
+        class Fake:
+            def __init__(self, v, name):
+                self.v, self.name = v, name
+
+            def take_window(self, w0, n):
+                return np.full((n, 2), self.v, np.float32)
+
+            def status(self):
+                return {"name": self.name, "db": -20.0, "error": None, "note": None, "lost": 0.0}
+        a = recorder.AllOutputs.__new__(recorder.AllOutputs)
+        a.sources, a.scanned, a.logs = {"x": Fake(0.1, "Altavoces"), "y": Fake(0.2, "Espejo")}, 1e18, []
+        a.log, a.dups = a.logs.append, dups
+        return a
+
+    def test_si_falla_la_deteccion_se_suman_todas(self):
+        class Rota:
+            def feed(self, parts):
+                raise ValueError("rota")
+        a = self.outputs(Rota())
+        out = a.take_window(0, 480)
+        np.testing.assert_allclose(out, 0.3, rtol=1e-5)  # la grabacion sigue: todas sumadas
+        self.assertIsNone(a.dups)
+        self.assertIn("se desactiva (se suman todas)", a.logs[0])
+        self.assertEqual(a.status()["name"], "Altavoces + Espejo")
+
+    def test_la_copia_sale_en_el_medidor(self):
+        import eco
+        d = eco.Duplicates()
+        d.muted = {"y": ("x", 640)}
+        a = self.outputs(d)
+        np.testing.assert_allclose(a.take_window(0, 480), 0.1, rtol=1e-5)
+        self.assertEqual(a.status()["name"], "Altavoces + Espejo (igual que Altavoces: no se suma)")
+
+
+class LevelerUpdateTests(unittest.TestCase):
+    def test_sin_actualizar_no_sube_con_el_eco(self):
+        lev = recorder.Leveler(*recorder.GAIN_RANGE["mic"])
+        x = (np.random.default_rng(0).standard_normal((2400, 2)) * 0.01).astype(np.float32)
+        for _ in range(30):
+            lev(x.copy(), update=False)  # mientras suena la reunion: el eco no cuenta como su voz
+        self.assertIsNone(lev.level)
+        self.assertEqual(lev.gain, 1.0)
 
 
 if __name__ == "__main__":
