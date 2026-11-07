@@ -141,13 +141,36 @@ class DuplicatesTests(unittest.TestCase):
         self.assertEqual(d.muted, {})
         self.assertAlmostEqual(lvl(mix, 1.0, 4.0), lvl(sigue, 1.0, 4.0), delta=0.1)  # en <= 1 s vuelve a oirse
 
+    def test_una_pausa_no_suelta_la_copia(self):
+        """Refutador, 2.ª ronda: con silencio en lo ultimo mirado el residuo salia «100 % propio» y la copia se soltaba
+        en cada pausa (voz doble 1-2 s)."""
+        v = voz(14, seed=1, on=lambda t: ((t % 5) < 3).astype(float))  # 3 s de voz, 2 s de pausa
+        logs = []
+        d = eco.Duplicates(log=logs.append)
+        blocks(lambda a, b: d.feed({"A": a, "B": b}), v, delay(v, 80))
+        self.assertIn("B", d.muted)
+        self.assertFalse([m for m in logs if "ya no es solo una copia" in m], logs)
+
+    def test_la_copia_sigue_quitada_si_su_retardo_se_mueve(self):
+        """Cada fuente corrige su reloj (pasos de 15 ms): el retardo entre las dos se mueve y la copia no se suelta."""
+        v = voz(16, seed=1)
+        b = delay(v, 80)
+        b[8 * SR:] = delay(v, 95)[8 * SR:]  # a los 8 s, 15 ms mas
+        logs = []
+        d = eco.Duplicates(log=logs.append)
+        blocks(lambda x, y: d.feed({"A": x, "B": y}), v, b)
+        self.assertEqual(list(d.muted), ["B"])
+        self.assertAlmostEqual(d.muted["B"][1] * 1000 / eco.SR_C, 95, delta=1)
+        self.assertFalse([m for m in logs if "ya no es solo una copia" in m], logs)
+
     def test_salida_que_desaparece(self):
         v = voz(8, seed=1)
         d = eco.Duplicates()
         blocks(lambda a, b: d.feed({"A": a, "B": b}), v, delay(v, 80))
         out = d.feed({"B": v[:2400]})  # se ha quitado A: B ya no es copia de nadie
         self.assertEqual(d.muted, {})
-        np.testing.assert_allclose(out, v[:2400])
+        np.testing.assert_allclose(out[480:], v[480:2400])  # tras el fundido de 10 ms, entera
+        self.assertLess(float(np.abs(out[:480]).max()), float(np.abs(v[:480]).max()) + 1e-6)
 
 
 class GateTests(unittest.TestCase):

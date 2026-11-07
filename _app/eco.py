@@ -119,7 +119,7 @@ class Duplicates:
     NCC, CONFIRM, LAG_TOL, PURE, IMPURE, PAIRS = 0.7, 2, 16, 0.02, 0.05, 2  # PURE: lo propio, por debajo de -17 dB
 
     def __init__(self, log=None):
-        self.rings, self.muted, self.cand, self.rr = {}, {}, {}, 0
+        self.rings, self.muted, self.cand, self.rr, self.gain = {}, {}, {}, 0, {}
         self.since, self.log, self.mixed = 0, log or (lambda msg: None), set()
 
     def feed(self, parts):
@@ -137,30 +137,45 @@ class Duplicates:
         if self.since >= HOP_S * SR:
             self.since = 0
             self.analyze()
-        out = None
+        out = np.zeros((n, 2), np.float32)
         for i, x in parts.items():
-            if i in self.muted:
+            g0 = self.gain.get(i, 1.0)
+            g1 = 0.0 if i in self.muted else 1.0
+            self.gain[i] = g1
+            if g0 == g1 == 0.0:
                 continue
-            out = x.copy() if out is None else out + x
-        if out is None:
-            out = np.zeros((n, 2), np.float32)
+            if g0 == g1:
+                out += x
+            else:  # quitar o volver a sumar una copia con un fundido de 10 ms, sin clic
+                k = min(n, SR // 100)
+                ramp = np.ones((n, 1), np.float32) * g1
+                ramp[:k, 0] = np.linspace(g0, g1, k, dtype=np.float32)
+                out += x * ramp
         return out
 
     @staticmethod
-    def residual(lead, follow, lag, taps=5):
-        """Parte de la energia de `follow` que NO explica `lead` retrasada `lag` (follow(t) ≈ Σ h_k·lead(t - lag - k)):
-        ~0 si es solo una copia, ~1 si no tiene nada que ver. Un filtro corto (`taps` alrededor del retardo, por minimos
-        cuadrados) y no una sola ganancia: cada dispositivo tiene su reloj, el retardo no es un numero entero de
-        muestras y con una ganancia sola una copia exacta dejaba un 10-30 % «propio»."""
-        n, half = len(lead), taps // 2
-        lo, hi = max(0, lag + half), min(n, n + lag - half)
-        if hi - lo < SR_C // 2:
-            return 1.0
+    def residual(lead, follow, lag, pre=4, post=27, seconds=0.5):
+        """Parte de la energia de `follow` que NO explica `lead` retrasada `lag` (follow(t) ≈ Σ h_k·lead(t - lag - k),
+        k = -pre..post): ~0 si es solo una copia, ~1 si no tiene nada que ver, None si lo mirado de `follow` es
+        silencio (en las pausas no se decide nada: si no, una copia se soltaba en cada pausa de la reunion). Un
+        filtro corto ajustado por minimos
+        cuadrados y no una sola ganancia: cada dispositivo tiene su reloj, el retardo no es un numero entero de
+        muestras y con una ganancia sola una copia exacta dejaba un 10-30 % «propio». Asimetrico (lo que una
+        ecualizacion añade suena despues, no antes) y sobre lo ultimo (`seconds`): con relojes que se separan
+        200 ppm, en 2 s el retardo cambia 3 muestras y ningun filtro fijo lo sigue (refutador, 2.ª ronda: con 5
+        coeficientes sobre 2 s, 6-18 % «propio» con 208 ppm o con +9 dB de ecualizacion). Con contenido que no es copia,
+        32 coeficientes sobre ~4.000 muestras solo explican ~1 % por azar."""
+        k = int(seconds * SR_C) + abs(lag) + pre + post
+        lead, follow = lead[-k:], follow[-k:]
+        n = len(lead)
+        lo, hi = max(0, lag + post), min(n, n + lag - pre)
+        if hi - lo < SR_C // 4:
+            return None
         f = follow[lo:hi].astype(np.float64)
         ef = float(f @ f)
-        if ef <= 1e-12:
-            return 1.0
-        a = np.stack([lead[lo - lag - k:hi - lag - k] for k in range(-half, half + 1)], axis=1).astype(np.float64)
+        if ef <= (hi - lo) * 1e-6:  # lo mirado de `follow` es silencio (< -60 dBFS): no se puede saber (None)
+            return None
+        a = np.stack([lead[lo - lag - j:hi - lag - j] for j in range(-pre, post + 1)], axis=1).astype(np.float64)
         h = np.linalg.lstsq(a, f, rcond=None)[0]
         res = f - a @ h
         return float(res @ res) / ef
@@ -172,7 +187,19 @@ class Duplicates:
         for j, (lead, lag) in list(self.muted.items()):  # ¿sigue siendo solo una copia?
             if j not in lvl or lvl[j] <= SILENT_DB:
                 continue
-            r = self.residual(self.rings[lead].buf, self.rings[j].buf, lag) if lead in lvl else 1.0
+            r = 1.0
+            if lead in lvl:  # el retardo puede moverse (cada fuente corrige su reloj): se busca cerca, sobre lo
+                near = int(0.03 * SR_C)  # mismo que mira el residuo (lo ultimo), y se apunta
+                tail = int(0.5 * SR_C) + max_lag
+                a_t, b_t = self.rings[lead].buf[-tail:], self.rings[j].buf[-tail:]
+                lags, rr = xcorr(a_t, b_t, max_lag)
+                cands = {lag, peak(lags, rr, lag - near, lag + near)[0] or lag}
+                scored = [(self.residual(self.rings[lead].buf, self.rings[j].buf, c), c) for c in cands]
+                scored = [(x, c) for x, c in scored if x is not None]
+                if not scored:
+                    continue
+                r, lag = min(scored)
+                self.muted[j] = (lead, lag)
             if r > self.IMPURE:
                 self.muted.pop(j)
                 self.log(f"salida {j}: ya no es solo una copia de {lead}: se vuelve a sumar")
@@ -200,6 +227,8 @@ class Duplicates:
             else:
                 keep, drop, rel = (i, j, lag) if lag >= 0 else (j, i, -lag)
             res = self.residual(self.rings[keep].buf, self.rings[drop].buf, rel)
+            if res is None:
+                continue
             if res <= self.PURE:
                 self.muted[drop] = (keep, rel)
                 self.mixed.discard(drop)
@@ -226,7 +255,7 @@ class Gate:
 
     FRAME = SR // 100
     DUCK_MIN, DUCK_MAX, MARGIN_DB, HOLD = 14.0, 20.0, 6.0, 20  # HOLD: 200 ms de cola (reverberacion) tras `ref`
-    CONFIRM, OFF_S = 2, 20.0
+    CONFIRM, OFF_S, OFF_S_AVISO = 2, 20.0, 8.0  # solo avisando, el aviso se quita antes (p. ej. al ponerse cascos)
 
     def __init__(self, name, c_min, min_lag_s, log=None, act=True):
         """act=False: solo mide y avisa (detecta la copia, su retardo y su atenuacion) sin tocar el audio."""
@@ -263,9 +292,9 @@ class Gate:
             self.cand = None
             if self.enabled:
                 self.off += HOP_S
-                if self.off >= self.OFF_S:
+                if self.off >= (self.OFF_S if self.act else self.OFF_S_AVISO):
                     self.enabled = False
-                    self.log(f"{self.name}: sin copia en {self.OFF_S:.0f} s: deja de atenuar")
+                    self.log(f"{self.name}: ya no se ve la copia" + ("" if not self.act else ": deja de atenuar"))
         if len(self.erls) >= 50:
             self.erl = min(60.0, max(-20.0, float(np.percentile(self.erls, 80))))
 

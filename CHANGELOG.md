@@ -15,17 +15,20 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
   fuente se tomaba por la cabeza de su cola: tras un corte (reabrir el dispositivo al cambiar de cascos o de salida,
   o audio perdido con el PC cargado) esa fuente quedaba adelantada para siempre, y con altavoces el eco de la sala
   (~30 ms) pasaba a ser una repetición de cientos de ms. Medido con la grabadora real y dispositivos simulados: un
-  corte de 300 ms dejaba el eco a +330 ms; ahora se queda a +30 ms. Un retraso al leer de hasta 300 ms (sin perder
-  audio) no se toma por un corte; la deriva entre relojes se corrige en los silencios, en pasos de 15 ms que no se
-  oyen. Los cortes recolocados van a `recorder.log`.
+  corte de 300 ms dejaba el eco a +330 ms; ahora se queda a +30 ms. Un bloqueo al leer (con el audio atrasado
+  llegando luego de golpe) no se toma por un corte, tampoco con el primer paquete tarde; la deriva entre relojes se
+  corrige dentro de los silencios, en pasos de 15 ms que no se oyen. Lo que un corte de más de ~0,7 s deja sin
+  colocar a tiempo cuenta como audio perdido. Los cortes recolocados van a `recorder.log`.
 - «Todas las salidas»: una salida que es SOLO una copia retrasada de otra (un dispositivo virtual, el «espejo» de un
   driver) deja de sumarse en cuanto se detecta (unos 4 s): correlación cruzada a 8 kHz y, al quitarle la mejor copia
-  de la otra (un filtro corto, que admite que cada dispositivo tenga su reloj), le queda menos del 2 % propio. Si lleva
-  además otra cosa (una voz, un aviso), se sigue sumando. Se queda la más fuerte. Vuelve a sumarse en cuanto deja de
-  ser solo una copia o suena ella sola. El medidor lo dice: «X (igual que Y: no se suma)».
+  de la otra (un filtro corto, que admite que cada dispositivo tenga su reloj o algo de ecualización), le queda menos
+  del 2 % propio. Si lleva además otra cosa (una voz, un aviso), se sigue sumando. Se queda la más fuerte. Vuelve a
+  sumarse en cuanto deja de ser solo una copia o suena ella sola (en las pausas no se decide nada), con un fundido de
+  10 ms. El medidor lo dice: «X (igual que Y: no se suma)».
 - Eco de los altavoces en el micro y salida que lleva tu micro («Escuchar este dispositivo», tono lateral): se
   detectan (correlación cruzada en su sentido, con el retardo y la atenuación medidos) y se avisan en el medidor y en
-  `recorder.log` con qué hacer («con auriculares no pasa», «quita “Escuchar este dispositivo”»), pero no se toca el
+  `recorder.log` con qué hacer («con auriculares no pasa», «quita “Escuchar este dispositivo”»; si tu voz vuelve con
+  más de ~120 ms, es el eco de otro participante y así se dice), pero no se toca el
   audio: bajarlos por niveles se comía tu voz cuando hablabais a la vez o sonaba un vídeo (revisión independiente:
   el 73 % de la voz bajaba más de 10 dB). Con las fuentes alineadas, el eco de la sala queda a ~30 ms y no se oye
   doble.

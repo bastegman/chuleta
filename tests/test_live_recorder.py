@@ -200,6 +200,57 @@ class SourceTimelineTests(unittest.TestCase):
         self.feed(v, pos + int(0.02 * recorder.SR), v.WIN // 480 + 3, v=0.3)
         self.assertEqual(v.gap_s, 0.0)
 
+    def backlog(self, s, pos, stall, v):
+        """Tras un bloqueo de `stall` muestras, los paquetes atrasados llegan seguidos (casi a la vez) y luego al ritmo
+        normal; devuelve la posicion siguiente."""
+        n = stall // 480
+        for i in range(1, n + 60):
+            arrival = pos + stall + i * 5 if i <= n else pos + i * 480
+            s.push(self.blk(v), end=max(arrival, pos + i * 480))
+        return pos + (n + 59) * 480
+
+    def test_bloqueo_largo_con_cola_no_pierde_nada(self):
+        """Refutador, 2.ª ronda: con >= 340 ms se metia un hueco y se pisaba la voz. Mientras se vacia la cola atrasada
+        (los bloques llegan mucho mas deprisa que su audio) no se decide nada."""
+        for stall_ms in (400, 700):
+            s = self._src()
+            pos = self.feed(s, 0, 40)
+            end = self.backlog(s, pos, int(stall_ms / 1000 * recorder.SR), 3.0)
+            self.assertEqual(s.gap_s, 0.0, stall_ms)
+            out = s.take_window(0, end)
+            self.assertTrue((out[:pos, 0] == 1).all(), stall_ms)
+            self.assertTrue((out[pos:, 0] == 3).all(), stall_ms)
+
+    def test_primer_bloque_tarde_no_pierde_nada(self):
+        """El primer paquete se lee 300 ms tarde (y los atrasados detras): el anclaje iba tarde y se corrige moviendo
+        todo, sin pisar (antes faltaban 237 ms del principio)."""
+        s = self._src()
+        late = int(0.3 * recorder.SR)
+        end = self.backlog(s, -late, late, 1.0)  # el primero llega a la posicion 0, siendo de -300 ms
+        out = s.take_window(-late, end + late)
+        self.assertEqual(int((out[:, 0] == 1).sum()), end + late)  # todo, en su sitio
+        self.assertEqual(s.lost, 0)
+
+    def test_la_deriva_se_corrige_en_el_silencio_no_en_la_voz_anterior(self):
+        """La correccion pequeña (silencio) cae al principio del silencio mirado, no ~1 s antes (en la voz)."""
+        s = self._src()
+        pos = self.feed(s, 0, 60, v=0.3)  # 0,6 s de voz
+        q0 = pos + int(0.02 * recorder.SR)  # el silencio llega 20 ms mas tarde de lo que tocaria (reloj lento)
+        self.feed(s, q0, s.WIN // 480 + 3, v=1e-4)
+        self.assertAlmostEqual(s.gap_s, 0.02, places=3)
+        out = s.take_window(0, q0 + 480 * 10)
+        self.assertTrue((out[:pos, 0] == 0.3).all())  # la voz, intacta y en su sitio
+        self.assertFalse(out[pos:q0].any())  # el hueco, justo al empezar el silencio
+
+    def test_lo_que_se_pisa_cuenta_como_perdido(self):
+        s = self._src()
+        s.take_window(0, 480)  # para que cuente (como en la grabacion)
+        s.buf.append([480, self.blk(1.0), 0])
+        s.buf.append([720, self.blk(2.0), 0])  # solapa 240 muestras con el anterior
+        s.frames += 960
+        s.take_window(480, 2000)
+        self.assertEqual(s.lost, 240)
+
     def test_lo_que_llega_tarde_cuenta_como_perdido(self):
         s = self._src()
         s.take_window(0, 4800)  # ese tramo ya esta escrito
@@ -247,7 +298,8 @@ class AllOutputsTests(unittest.TestCase):
         d = eco.Duplicates()
         d.muted = {"y": ("x", 640)}
         a = self.outputs(d)
-        np.testing.assert_allclose(a.take_window(0, 480), 0.1, rtol=1e-5)
+        out = a.take_window(0, 960)  # 10 ms de fundido al quitarla y luego solo la primera
+        np.testing.assert_allclose(out[480:], 0.1, rtol=1e-5)
         self.assertEqual(a.status()["name"], "Altavoces + Espejo (igual que Altavoces: no se suma)")
 
 

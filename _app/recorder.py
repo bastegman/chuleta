@@ -127,11 +127,11 @@ class Source(threading.Thread):
     da un paquete por llamada y los atrasados llegan luego seguidos, con el desfase bajando hasta 0 dentro de esa
     ventana (si no, un bloqueo de 160 ms con paquetes de 10 ms se tomaba por un corte: refutador del 07/11/2026). Si
     llegan todos adelantados (reloj mas rapido), se mueven hacia atras. Umbral: GAP con voz; GAP_QUIET si todo lo
-    mirado es silencio (la deriva se corrige asi en pasos que no se oyen)."""
+    mirado es silencio (RMS < -40 dBFS: la deriva se corrige asi en pasos que no se oyen, y en ese silencio)."""
 
     CHECK_S = 2.0  # cada cuanto se mira si Windows ha cambiado de dispositivo
     WIN = int(0.3 * SR)
-    GAP, GAP_QUIET, QUIET = int(0.05 * SR), int(0.015 * SR), 10 ** (-45 / 20)
+    GAP, GAP_QUIET, QUIET = int(0.05 * SR), int(0.015 * SR), 10 ** (-40 / 20)  # QUIET: RMS de cada bloque
 
     def __init__(self, kind, dev_id, fallback=True):
         super().__init__(daemon=True)
@@ -141,6 +141,8 @@ class Source(threading.Thread):
         self.lost = 0  # muestras que llegaron demasiado tarde y no se pudieron usar (PC muy cargado)
         self.next, self.done, self.win, self.win_len = None, None, deque(), 0  # win: (desfase, muestras, pico)
         self.since_check = 0  # la ventana se mira como mucho cada 10 ms de audio (paquetes pequeños: coste lineal)
+        self.last_end = None  # llegada del bloque anterior: si llegan mucho mas deprisa que su audio, se esta vaciando
+        #                       una cola atrasada (tras un bloqueo) y no se decide nada hasta que vuelvan a su ritmo
         self.gap_s = 0.0  # silencio puesto por cortes (va al log al acabar)
 
     def _pick(self):  # (no llamarlo _target: Thread ya usa ese nombre)
@@ -204,36 +206,66 @@ class Source(threading.Thread):
             self.next += len(d)
             pk = float(np.abs(d).max()) if len(d) else 0.0
             self.peak = max(self.peak, pk)
-            self.win.append((err, len(d), pk))
+            rms = float(np.sqrt(np.mean(np.square(d, dtype=np.float64)))) if len(d) else 0.0
+            catch = self.last_end is not None and len(d) and end - self.last_end < len(d) // 4
+            self.last_end = end
+            self.win.append((err, len(d), rms, catch))
             self.win_len += len(d)
             while len(self.win) > 1 and self.win_len - self.win[0][1] >= self.WIN:
                 self.win_len -= self.win.popleft()[1]
             self.since_check += len(d)
-            if self.win_len >= self.WIN and self.since_check >= SR // 100:
+            if self.win_len >= self.WIN and self.since_check >= SR // 100 and not any(w[3] for w in self.win):
                 self.since_check = 0
-                errs = [e for e, _, _ in self.win]
-                thr = self.GAP_QUIET if all(p < self.QUIET for _, _, p in self.win) else self.GAP
+                errs = [w[0] for w in self.win]
+                quiet = all(w[2] < self.QUIET for w in self.win)
+                thr = self.GAP_QUIET if quiet else self.GAP
                 lo, hi = min(errs), max(errs)
-                shift = lo if lo > thr else hi if hi < -thr else 0
+                shift = lo if lo >= thr else hi if hi <= -thr else 0
                 if shift:
-                    for c in reversed(self.buf):  # los bloques que llegaron ya con ese desfase
-                        if (c[2] < shift / 2) if shift > 0 else (c[2] > shift / 2):
-                            break
-                        c[0] += shift
-                        c[2] -= shift
+                    self._shift(shift, len(self.win) if quiet else None)
                     self.next += shift
-                    self.win = deque((e - shift, k, p) for e, k, p in self.win)
+                    self.win = deque((w[0] - shift,) + tuple(w[1:]) for w in self.win)
                     self.gap_s += shift / SR
             while self.frames > MAX_BUF_S * SR and self.buf:
                 k = len(self.buf.popleft()[1])
                 self.frames -= k
                 self.lost += k
 
+    def _shift(self, shift, last=None):
+        """Mueve a su sitio los bloques que llegaron con el desfase `shift` (con el candado ya cogido).
+        last=None (con voz: un corte de verdad): los que llegaron con ese desfase, hasta el salto. last=k (todo lo
+        mirado es silencio: deriva o un corte pequeño): solo los k ultimos, los de la ventana mirada, para que el
+        silencio que se mete (o lo que se quita, de su principio) caiga en ese silencio y no en la voz de antes
+        (refutador del 07/11/2026: la ventana iba ~1 s por delante de la cabeza del bufer y la correccion caia en
+        plena voz)."""
+        if last:
+            chunks = list(self.buf)[-last:]
+        elif shift < 0:  # todo llega antes de lo que se creia: el anclaje iba tarde; se mueve todo, sin solapes
+            chunks = list(self.buf)
+        else:
+            chunks = []
+            for c in reversed(self.buf):
+                if c[2] < shift / 2:
+                    break
+                chunks.insert(0, c)
+        if shift < 0 and last:  # hacia atras sin pisar lo anterior: se quita lo primero de la ventana (silencio)
+            drop = -shift
+            for c in chunks:
+                if drop <= 0:
+                    break
+                m = min(drop, len(c[1]))
+                c[0], c[1], drop = c[0] + m, c[1][m:], drop - m
+                self.frames -= m
+        for c in chunks:
+            c[0] += shift
+            c[2] -= shift
+
     def take_window(self, w0, n):
         """Las n muestras de las posiciones [w0, w0 + n): silencio donde no hay audio. Lo anterior se descarta (si
-        llego cuando su sitio ya estaba escrito, cuenta como perdido)."""
+        llego cuando su sitio ya estaba escrito, cuenta como perdido), y lo que un trozo posterior pisa, tambien."""
         import numpy as np
         out = np.zeros((n, 2), np.float32)
+        cover = np.zeros(n, bool)
         w1 = w0 + n
         with self.lock:
             keep = deque()
@@ -244,7 +276,10 @@ class Source(threading.Thread):
                     self.lost += min(q, w0) - p
                 a, b = max(p, w0), min(q, w1)
                 if a < b:
+                    if self.done is not None:
+                        self.lost += int(cover[a - w0:b - w0].sum())
                     out[a - w0:b - w0] = x[a - p:b - p]
+                    cover[a - w0:b - w0] = True
                 if q <= w1:
                     self.frames -= len(x)
                     continue
@@ -427,13 +462,18 @@ def main():
             if now - last >= 0.25 or final:
                 last = now
                 st = {k: s.status() for k, s in sources.items()}
-                for gate, k, txt in ((echo, "mic", "se oye la reunión por el micro (eco de {ms} ms): con auriculares "
-                                                   "no pasa"),
-                                     (mon, "sys", "esta salida lleva tu micro ({ms} ms): quita «Escuchar este "
-                                                  "dispositivo» del micro en Sonido de Windows")):
-                    if gate is not None and gate.enabled:
-                        txt = txt.format(ms=gate.status()["retardo_ms"])
-                        st[k]["note"] = f"{st[k]['note']} · {txt}" if st[k].get("note") else txt
+                for gate, k in ((echo, "mic"), (mon, "sys")):
+                    if gate is None or not gate.enabled or muted["mic"]:  # con el micro silenciado no se mide
+                        continue
+                    ms = gate.status()["retardo_ms"] or 0
+                    if gate is echo:
+                        txt = f"se oye la reunión por el micro (eco de {ms} ms): con auriculares no pasa"
+                    elif ms >= 120:  # > ~120 ms: vuelve por la llamada (otro participante con altavoz), no es local
+                        txt = f"tu voz vuelve por la reunión ({ms} ms): es el eco de otro participante"
+                    else:
+                        txt = (f"esta salida lleva tu micro ({ms} ms): quita «Escuchar este dispositivo» del micro en "
+                               "Sonido de Windows")
+                    st[k]["note"] = f"{st[k]['note']} · {txt}" if st[k].get("note") else txt
                 emit({"t": round(written / SR, 2), "mic_muted": muted["mic"], **st,
                       "eco": {"micro": echo.status(), "salida": mon.status()} if both else None})
             if final:
