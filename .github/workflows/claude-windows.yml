@@ -1,0 +1,44 @@
+name: claude-windows
+
+# «Con tu cuenta de Claude» con Claude Code de verdad en Windows, sin sesión iniciada (07/11/2026, msgs 1185-1187:
+# «Comprobar» tardó minutos en el PC de Bernardo). Instalador nativo oficial y npm (claude.cmd por cmd.exe, en una
+# carpeta con espacios, «&» y «%» que solo está en el PATH del registro). Chuleta arranca antes de instalar. Mide cuánto
+# tarda cada llamada en frío y en caliente, y si quedan procesos con la salida abierta. Sin login ni credenciales.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, fix-claude-windows]
+    paths:
+      - "_app/engines.py"
+      - "_app/server.py"
+      - "scripts/e2e/claude_windows.py"
+      - ".github/workflows/claude-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        instalacion: [nativo, npm]
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      NOTAS_ARTEFACTOS: ${{ github.workspace }}\artefactos
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: numpy y requests (lo que usa el servidor para esto)
+        run: python -m pip install --disable-pip-version-check numpy requests
+      - name: Claude Code real sin sesión, con Chuleta arrancada antes
+        run: python scripts/e2e/claude_windows.py ${{ matrix.instalacion }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: claude-windows-${{ matrix.instalacion }}
+          path: artefactos
+          if-no-files-found: warn
