@@ -85,6 +85,15 @@ class DuplicatesTests(unittest.TestCase):
         np.testing.assert_allclose(mix[-4 * SR:], v[-4 * SR:], atol=1e-6)  # una sola voz
         self.assertEqual(d.note({"A": "Altavoces", "B": "Espejo"}), {"B": "igual que Altavoces: no se suma"})
 
+    def test_copia_con_retardo_fraccionario(self):
+        """Cada dispositivo tiene su reloj: la copia va 80,0104 ms detras (media muestra a 48 kHz)."""
+        v = voz(10, seed=1)
+        t = np.arange(len(v)) / SR
+        frac = np.stack([np.interp(t - 0.0800104, t, v[:, c], left=0) for c in (0, 1)], axis=1).astype(np.float32)
+        d = eco.Duplicates()
+        blocks(lambda a, b: d.feed({"A": a, "B": b}), v, frac)
+        self.assertIn("B", d.muted)
+
     def test_salidas_distintas_se_suman(self):
         a, b = voz(10, seed=1), voz(10, f0=200, seed=7)
         d = eco.Duplicates()
@@ -100,6 +109,37 @@ class DuplicatesTests(unittest.TestCase):
         otra = voz(6, f0=220, seed=9)
         blocks(lambda a, b: d.feed({"A": a, "B": b}), np.zeros_like(otra), otra)  # A calla, B suena sola
         self.assertEqual(d.muted, {})
+
+    def test_copia_con_algo_propio_no_se_silencia(self):
+        """Refutador D7: la misma reunion con 200 ms y ademas una voz solo en B. Silenciar B borraba esa voz."""
+        v, extra = voz(20, seed=1), voz(20, f0=210, seed=11)
+        for gain in (1.0, 0.5, 0.25):  # la voz propia de B a 0, -6 y -12 dB
+            logs = []
+            d = eco.Duplicates(log=logs.append)
+            b = delay(v, 200) + extra * gain
+            mix = np.concatenate(blocks(lambda x, y: d.feed({"A": x, "B": y}), v, b))
+            self.assertEqual(d.muted, {}, gain)
+            np.testing.assert_allclose(mix, v + b, atol=1e-6)
+            self.assertTrue(any("ademas otra cosa" in m for m in logs), (gain, logs))
+
+    def test_se_queda_la_mas_fuerte(self):
+        """La copia que suena antes puede ser bastante mas floja (aqui 12 dB): se queda la fuerte (la mezcla no se
+        hunde; refutador: con la que sonaba antes, 25 dB mas floja, la mezcla bajaba de -20,9 a -45,9 dB)."""
+        v = voz(10, seed=1)
+        d = eco.Duplicates()
+        mix = np.concatenate(blocks(lambda x, y: d.feed({"A": x, "B": y}), v * 0.25, delay(v, 80)))
+        self.assertEqual(list(d.muted), ["A"])
+        self.assertAlmostEqual(lvl(mix, 7, 10), lvl(delay(v, 80), 7, 10), delta=0.5)
+
+    def test_si_la_principal_se_calla_la_copia_vuelve_enseguida(self):
+        v = voz(8, seed=1)
+        d = eco.Duplicates()
+        blocks(lambda a, b: d.feed({"A": a, "B": b}), v, delay(v, 80))
+        self.assertIn("B", d.muted)
+        sigue = voz(4, f0=140, seed=12)
+        mix = np.concatenate(blocks(lambda a, b: d.feed({"A": a, "B": b}), np.zeros_like(sigue), sigue))
+        self.assertEqual(d.muted, {})
+        self.assertAlmostEqual(lvl(mix, 1.0, 4.0), lvl(sigue, 1.0, 4.0), delta=0.1)  # en <= 1 s vuelve a oirse
 
     def test_salida_que_desaparece(self):
         v = voz(8, seed=1)
@@ -139,6 +179,16 @@ class GateTests(unittest.TestCase):
         g, y, _ = self.eco_micro(room, ref)
         self.assertTrue(g.status()["activa"])
         self.assertLessEqual(lvl(y, 8, 12) - lvl(room, 8, 12), -10.0)
+
+    def test_solo_medir_no_toca_el_audio(self):
+        """Como la usa la grabadora (act=False): detecta y mide, pero el audio sale tal cual."""
+        ref = voz(12, seed=2)
+        x = delay(ref, 40, 0.1) + voz(12, f0=180, seed=3, on=lambda t: ((t % 4) > 3).astype(float)) * 2
+        g = eco.Gate("eco", 0.25, 0.003, act=False)
+        y = np.concatenate([o[0] for o in blocks(lambda a, b: g(a, b), x, ref)])
+        np.testing.assert_array_equal(y, x)
+        st = g.status()
+        self.assertEqual((st["activa"], st["retardo_ms"], st["bajado_s"]), (True, 40, 0.0))
 
     def test_sin_eco_auriculares_no_toca_nada(self):
         ref, mine = voz(12, seed=5), voz(12, f0=170, seed=6) * 2

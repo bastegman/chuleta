@@ -121,14 +121,17 @@ class Source(threading.Thread):
     al predeterminado y vuelve al elegido cuando reaparece (salvo fallback=False).
 
     Cada bloque va a su posicion de la linea de tiempo comun (EPOCH): seguido del anterior mientras lleguen seguidos.
-    Si los CONFIRM bloques siguientes llegan todos con el mismo retraso (> GAP), se perdio audio justo antes (o el
-    reloj del dispositivo va mas lento): esos bloques se mueven a su sitio y lo que falta se toma como silencio. Un
-    retraso solo al leer no cuenta (soundcard entrega un paquete por llamada: los atrasados llegan luego seguidos y el
-    desfase baja). Si llegan todos adelantados (reloj mas rapido), se mueven hacia atras."""
+    Llegar tarde nunca es «antes de tiempo»: el retraso de llegada solo suma. Asi que, si en los ultimos WIN de audio
+    el MENOR desfase sigue por encima del umbral, se perdio audio justo antes (o el reloj del dispositivo va mas lento):
+    esos bloques se mueven a su sitio y lo que falta se toma como silencio. Un retraso solo al leer no cuenta: soundcard
+    da un paquete por llamada y los atrasados llegan luego seguidos, con el desfase bajando hasta 0 dentro de esa
+    ventana (si no, un bloqueo de 160 ms con paquetes de 10 ms se tomaba por un corte: refutador del 07/11/2026). Si
+    llegan todos adelantados (reloj mas rapido), se mueven hacia atras. Umbral: GAP con voz; GAP_QUIET si todo lo
+    mirado es silencio (la deriva se corrige asi en pasos que no se oyen)."""
 
     CHECK_S = 2.0  # cada cuanto se mira si Windows ha cambiado de dispositivo
-    GAP = int(0.05 * SR)
-    CONFIRM = 12
+    WIN = int(0.3 * SR)
+    GAP, GAP_QUIET, QUIET = int(0.05 * SR), int(0.015 * SR), 10 ** (-45 / 20)
 
     def __init__(self, kind, dev_id, fallback=True):
         super().__init__(daemon=True)
@@ -136,7 +139,8 @@ class Source(threading.Thread):
         self.buf, self.frames, self.lock = deque(), 0, threading.Lock()  # buf: [posicion, trozo, desfase al llegar]
         self.peak, self.error, self.name, self.note, self.stopping = 0.0, None, None, None, False
         self.lost = 0  # muestras que llegaron demasiado tarde y no se pudieron usar (PC muy cargado)
-        self.next, self.done, self.errs = None, None, deque(maxlen=self.CONFIRM)
+        self.next, self.done, self.win, self.win_len = None, None, deque(), 0  # win: (desfase, muestras, pico)
+        self.since_check = 0  # la ventana se mira como mucho cada 10 ms de audio (paquetes pequeños: coste lineal)
         self.gap_s = 0.0  # silencio puesto por cortes (va al log al acabar)
 
     def _pick(self):  # (no llamarlo _target: Thread ya usa ese nombre)
@@ -198,12 +202,19 @@ class Source(threading.Thread):
             self.buf.append([self.next, d, err])
             self.frames += len(d)
             self.next += len(d)
-            if len(d):
-                self.peak = max(self.peak, float(np.abs(d).max()))
-            self.errs.append(err)
-            if len(self.errs) == self.CONFIRM:
-                lo, hi = min(self.errs), max(self.errs)
-                shift = lo if lo > self.GAP else hi if hi < -self.GAP else 0
+            pk = float(np.abs(d).max()) if len(d) else 0.0
+            self.peak = max(self.peak, pk)
+            self.win.append((err, len(d), pk))
+            self.win_len += len(d)
+            while len(self.win) > 1 and self.win_len - self.win[0][1] >= self.WIN:
+                self.win_len -= self.win.popleft()[1]
+            self.since_check += len(d)
+            if self.win_len >= self.WIN and self.since_check >= SR // 100:
+                self.since_check = 0
+                errs = [e for e, _, _ in self.win]
+                thr = self.GAP_QUIET if all(p < self.QUIET for _, _, p in self.win) else self.GAP
+                lo, hi = min(errs), max(errs)
+                shift = lo if lo > thr else hi if hi < -thr else 0
                 if shift:
                     for c in reversed(self.buf):  # los bloques que llegaron ya con ese desfase
                         if (c[2] < shift / 2) if shift > 0 else (c[2] > shift / 2):
@@ -211,7 +222,7 @@ class Source(threading.Thread):
                         c[0] += shift
                         c[2] -= shift
                     self.next += shift
-                    self.errs = deque((e - shift for e in self.errs), maxlen=self.CONFIRM)
+                    self.win = deque((e - shift, k, p) for e, k, p in self.win)
                     self.gap_s += shift / SR
             while self.frames > MAX_BUF_S * SR and self.buf:
                 k = len(self.buf.popleft()[1])
@@ -359,11 +370,13 @@ def main():
     stop = threading.Event()
     muted = {"mic": False}
     levelers = {k: Leveler(*GAIN_RANGE[k]) for k in sources}
-    # con micro y salida: el eco de los altavoces en el micro (B) y una salida que lleva el micro (A); cada una solo
-    # actua si la correlacion demuestra la copia en su sentido (eco.Gate)
+    # con micro y salida: el eco de los altavoces en el micro (B) y una salida que lleva el micro (A). Solo se MIDEN y
+    # se avisan (recorder.log y el medidor), sin tocar el audio: decidir por niveles cuando hablan los dos (o con musica
+    # o un video sonando) se comia la voz (refutador del 07/11/2026: el 73 % de la voz del usuario bajaba > 10 dB con
+    # eco a -10 dB). Alineadas las fuentes, el eco de la sala queda a ~30 ms y no se oye «doble».
     both = "mic" in sources and "sys" in sources
-    echo = eco.Gate("eco de los altavoces en el micro", 0.25, 0.003, log=elog) if both else None
-    mon = eco.Gate("el micro en la salida", 0.6, 0.0, log=elog) if both else None
+    echo = eco.Gate("eco de los altavoces en el micro", 0.25, 0.003, log=elog, act=False) if both else None
+    mon = eco.Gate("el micro en la salida", 0.6, 0.0, log=elog, act=False) if both else None
     gates = [both]  # se apaga si fallan (la grabacion sigue igual que antes)
 
     def read_stdin():  # "stop" o que el servidor se cierre (fin de stdin): se para y se cierra bien
@@ -394,19 +407,17 @@ def main():
                 # la misma ventana de la linea de tiempo de todas las fuentes (se toma aunque el micro este
                 # silenciado, para no acumular nada)
                 parts = {k: s.take_window(base + written, n) for k, s in sources.items()}
-                busy = False  # con eco demostrado y la reunion sonando, el nivel del micro no se reestima (seria eco)
                 if gates[0] and not muted["mic"]:
-                    try:
+                    try:  # solo miden (act=False): devuelven las partes tal cual
                         parts["sys"], _ = mon(parts["sys"], parts["mic"])
-                        parts["mic"], busy = echo(parts["mic"], parts["sys"])
-                        busy = busy and echo.enabled
-                    except Exception as e:  # un fallo aqui no puede parar la grabacion: se graba sin atenuar
+                        parts["mic"], _ = echo(parts["mic"], parts["sys"])
+                    except Exception as e:  # un fallo aqui no puede parar la grabacion
                         gates[0] = False
-                        elog(f"✖ eco: {e.__class__.__name__}: {e}: se desactiva (se graba sin atenuar)")
+                        elog(f"✖ eco: {e.__class__.__name__}: {e}: se deja de medir")
                 mix = np.zeros((n, 2), np.float32)
                 for k, part in parts.items():
                     if not (k == "mic" and muted["mic"]):
-                        mix += levelers[k](part, update=not (k == "mic" and busy))  # micro y reunion igualados
+                        mix += levelers[k](part)  # micro y reunion a un volumen parecido
                 soft_limit(mix)
                 np.clip(mix, -1.0, 1.0, out=mix)
                 if f:
@@ -416,9 +427,12 @@ def main():
             if now - last >= 0.25 or final:
                 last = now
                 st = {k: s.status() for k, s in sources.items()}
-                for gate, k, txt in ((echo, "mic", "atenuando el eco de los altavoces"),
-                                     (mon, "sys", "lleva tu micro: se atenúa mientras hablas")):
+                for gate, k, txt in ((echo, "mic", "se oye la reunión por el micro (eco de {ms} ms): con auriculares "
+                                                   "no pasa"),
+                                     (mon, "sys", "esta salida lleva tu micro ({ms} ms): quita «Escuchar este "
+                                                  "dispositivo» del micro en Sonido de Windows")):
                     if gate is not None and gate.enabled:
+                        txt = txt.format(ms=gate.status()["retardo_ms"])
                         st[k]["note"] = f"{st[k]['note']} · {txt}" if st[k].get("note") else txt
                 emit({"t": round(written / SR, 2), "mic_muted": muted["mic"], **st,
                       "eco": {"micro": echo.status(), "salida": mon.status()} if both else None})

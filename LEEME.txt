@@ -82,10 +82,11 @@ USO DIARIO
     abrir. Para apagarla del todo: ⚙ Ajustes > Apagar Chuleta.
   - ● Grabar (o Ctrl+Alt+R desde cualquier programa) empieza y para la grabación. Puedes elegir
     grabar con o sin micro, y con o sin transcripción en directo.
-  - Voces dobles: si una salida repite a otra (un dispositivo virtual, el «espejo» de un driver) o
-    lleva tu micro, o si con altavoces el micro recoge la reunión, la grabadora lo detecta sola en
-    unos segundos y no suma la copia (o la baja). Los medidores de ● Grabar lo dicen («igual que
-    …: no se suma», «atenuando el eco de los altavoces»). Con auriculares no hace falta nada.
+  - Voces dobles: si una salida solo repite a otra (un dispositivo virtual, el «espejo» de un
+    driver), la grabadora lo detecta sola en unos segundos y no suma la copia («igual que …: no se
+    suma» en el medidor de ● Grabar). Si con altavoces el micro recoge la reunión, o una salida
+    lleva tu micro, el medidor te lo dice con qué hacer (auriculares; quitar «Escuchar este
+    dispositivo» en Sonido de Windows). Con auriculares no hace falta nada.
   - Si estás en una llamada de Teams y no estás grabando, arriba aparece
     "📞 Teams en llamada · ● Tomar Notas".
   - Al detectar la llamada, abajo en el centro aparece un aviso pequeño con el nombre de la reunión y

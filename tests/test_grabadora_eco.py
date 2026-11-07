@@ -66,7 +66,7 @@ class GrabadoraConEcoTests(unittest.TestCase):
         corte = r"cortes de audio recolocados en su sitio \(s\): \{'mic': [\d.]+, 'sys': ([\d.]+)"
         self.assertAlmostEqual(self.ms(corte), 0.3, delta=0.02)
         self.assertIn("Espejo del driver (igual que Altavoces: no se suma)", self.last["sys"]["name"])
-        self.assertIn("atenuando el eco de los altavoces", self.last["mic"]["note"])
+        self.assertIn("se oye la reunión por el micro (eco de", self.last["mic"]["note"])  # se avisa, no se toca
         self.assertTrue(self.last["eco"]["micro"]["activa"])
 
     def test_el_fichero_ya_no_lleva_la_copia(self):

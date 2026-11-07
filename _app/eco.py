@@ -108,16 +108,19 @@ def peak(lags, r, lo, hi):
 
 
 class Duplicates:
-    """«Todas las salidas»: una salida que lleva una copia retrasada de otra no se suma (se sigue leyendo, para no
-    acumular retraso). Copia = correlacion >= NCC con el mismo retardo (±LAG_TOL) en CONFIRM ventanas seguidas; deja
-    la que suena antes. La copia vuelve a sumarse si, con sonido, deja de parecerse RELEASE_S segundos, o enseguida si
-    suena sin que suene la otra (ahora lleva otra cosa)."""
+    """«Todas las salidas»: una salida que es SOLO una copia retrasada de otra no se suma (se sigue leyendo, para no
+    acumular retraso). Copia = correlacion >= NCC con el mismo retardo (±LAG_TOL) en CONFIRM ventanas seguidas y, sobre
+    todo, que al quitarle la mejor copia de la otra le quede menos de PURE de su energia (-17 dB): si lleva ademas
+    otra cosa (una voz o un sonido solo suyo), se sigue sumando (refutador del 07/11/2026: silenciarla borraba eso).
+    Se queda la mas fuerte (a igualdad, ±3 dB, la que suena antes). En cada analisis se vuelve a comprobar: en cuanto
+    lleva otra cosa (o suena ella sola), vuelve a sumarse. Como mucho PAIRS parejas por analisis (coste acotado con
+    muchas salidas)."""
 
-    NCC, CONFIRM, LAG_TOL, RELEASE_S, SOLO_S = 0.7, 2, 16, 15.0, 2.0
+    NCC, CONFIRM, LAG_TOL, PURE, IMPURE, PAIRS = 0.7, 2, 16, 0.02, 0.05, 2  # PURE: lo propio, por debajo de -17 dB
 
     def __init__(self, log=None):
-        self.rings, self.muted, self.cand, self.unlike, self.solo = {}, {}, {}, {}, {}
-        self.since, self.log = 0, log or (lambda msg: None)
+        self.rings, self.muted, self.cand, self.rr = {}, {}, {}, 0
+        self.since, self.log, self.mixed = 0, log or (lambda msg: None), set()
 
     def feed(self, parts):
         """parts: {id: (n, 2)} tomados a la vez. Devuelve la suma de las que se suman."""
@@ -143,42 +146,69 @@ class Duplicates:
             out = np.zeros((n, 2), np.float32)
         return out
 
+    @staticmethod
+    def residual(lead, follow, lag, taps=5):
+        """Parte de la energia de `follow` que NO explica `lead` retrasada `lag` (follow(t) ≈ Σ h_k·lead(t - lag - k)):
+        ~0 si es solo una copia, ~1 si no tiene nada que ver. Un filtro corto (`taps` alrededor del retardo, por minimos
+        cuadrados) y no una sola ganancia: cada dispositivo tiene su reloj, el retardo no es un numero entero de
+        muestras y con una ganancia sola una copia exacta dejaba un 10-30 % «propio»."""
+        n, half = len(lead), taps // 2
+        lo, hi = max(0, lag + half), min(n, n + lag - half)
+        if hi - lo < SR_C // 2:
+            return 1.0
+        f = follow[lo:hi].astype(np.float64)
+        ef = float(f @ f)
+        if ef <= 1e-12:
+            return 1.0
+        a = np.stack([lead[lo - lag - k:hi - lag - k] for k in range(-half, half + 1)], axis=1).astype(np.float64)
+        h = np.linalg.lstsq(a, f, rcond=None)[0]
+        res = f - a @ h
+        return float(res @ res) / ef
+
     def analyze(self):
         ids = sorted(i for i, rg in self.rings.items() if rg.full())
         lvl = {i: self.rings[i].level() for i in ids}
         max_lag = int(MAX_LAG_S * SR_C)
-        for x, i in enumerate(ids):
-            for j in ids[x + 1:]:
-                if lvl[i] <= SILENT_DB or lvl[j] <= SILENT_DB:
-                    continue
-                lags, r = xcorr(self.rings[i].buf, self.rings[j].buf, max_lag)
-                lag, c = peak(lags, r, -max_lag, max_lag)
-                key = (i, j)
-                if lag is not None and c >= self.NCC:
-                    prev = self.cand.get(key)
-                    count = prev[1] + 1 if prev and abs(prev[0] - lag) <= self.LAG_TOL else 1
-                    self.cand[key] = (lag, count)
-                    lead, follow = (i, j) if lag >= 0 else (j, i)
-                    if count >= self.CONFIRM and follow not in self.muted and lead not in self.muted:
-                        self.muted[follow] = (lead, abs(lag))
-                        self.unlike[follow] = 0.0
-                        self.log(f"salida duplicada: {follow} = {lead} con {abs(lag) * 1000 // SR_C} ms de retraso "
-                                 f"(parecido {c:.2f}): no se suma")
-                else:
-                    self.cand.pop(key, None)
-        for j, (lead, lag) in list(self.muted.items()):  # ¿sigue siendo copia?
+        for j, (lead, lag) in list(self.muted.items()):  # ¿sigue siendo solo una copia?
             if j not in lvl or lvl[j] <= SILENT_DB:
                 continue
-            if lead not in lvl or lvl[lead] <= SILENT_DB - 10:  # suena ella sola: ahora lleva otra cosa
-                self.solo[j] = self.solo.get(j, 0.0) + HOP_S
-            else:
-                self.solo[j] = 0.0
-                lags, r = xcorr(self.rings[lead].buf, self.rings[j].buf, int(MAX_LAG_S * SR_C))
-                c = peak(lags, r, lag - self.LAG_TOL, lag + self.LAG_TOL)[1]
-                self.unlike[j] = 0.0 if c >= 0.5 else self.unlike.get(j, 0.0) + HOP_S
-            if self.solo.get(j, 0.0) >= self.SOLO_S or self.unlike.get(j, 0.0) >= self.RELEASE_S:
+            r = self.residual(self.rings[lead].buf, self.rings[j].buf, lag) if lead in lvl else 1.0
+            if r > self.IMPURE:
                 self.muted.pop(j)
-                self.log(f"salida {j}: ya no es copia de {lead}: se vuelve a sumar")
+                self.log(f"salida {j}: ya no es solo una copia de {lead}: se vuelve a sumar")
+        pairs = [(i, j) for x, i in enumerate(ids) for j in ids[x + 1:]
+                 if lvl[i] > SILENT_DB and lvl[j] > SILENT_DB and i not in self.muted and j not in self.muted]
+        if not pairs:
+            return
+        start = self.rr % len(pairs)
+        self.rr += self.PAIRS
+        for i, j in (pairs[start:] + pairs[:start])[:self.PAIRS]:
+            lags, r = xcorr(self.rings[i].buf, self.rings[j].buf, max_lag)
+            lag, c = peak(lags, r, -max_lag, max_lag)
+            key = (i, j)
+            if lag is None or c < self.NCC:
+                self.cand.pop(key, None)
+                continue
+            prev = self.cand.get(key)
+            count = prev[1] + 1 if prev and abs(prev[0] - lag) <= self.LAG_TOL else 1
+            self.cand[key] = (lag, count)
+            if count < self.CONFIRM:
+                continue
+            # se queda la mas fuerte; a igualdad (±3 dB), la que suena antes (j va `lag` detras de i)
+            if abs(lvl[i] - lvl[j]) > 3:
+                keep, drop, rel = (i, j, lag) if lvl[i] > lvl[j] else (j, i, -lag)
+            else:
+                keep, drop, rel = (i, j, lag) if lag >= 0 else (j, i, -lag)
+            res = self.residual(self.rings[keep].buf, self.rings[drop].buf, rel)
+            if res <= self.PURE:
+                self.muted[drop] = (keep, rel)
+                self.mixed.discard(drop)
+                self.log(f"salida duplicada: {drop} = {keep} con {abs(rel) * 1000 // SR_C} ms de retraso "
+                         f"(parecido {c:.2f}, le queda {res * 100:.0f} % propio): no se suma")
+            elif drop not in self.mixed:
+                self.mixed.add(drop)
+                self.log(f"salida {drop}: lleva lo mismo que {keep} con {abs(rel) * 1000 // SR_C} ms y ademas otra "
+                         f"cosa ({res * 100:.0f} % propio): se sigue sumando")
 
     def note(self, names):
         """Para el medidor: «X (igual que Y: no se suma)»."""
@@ -198,8 +228,9 @@ class Gate:
     DUCK_MIN, DUCK_MAX, MARGIN_DB, HOLD = 14.0, 20.0, 6.0, 20  # HOLD: 200 ms de cola (reverberacion) tras `ref`
     CONFIRM, OFF_S = 2, 20.0
 
-    def __init__(self, name, c_min, min_lag_s, log=None):
-        self.name, self.c_min, self.min_lag = name, c_min, int(min_lag_s * SR_C)
+    def __init__(self, name, c_min, min_lag_s, log=None, act=True):
+        """act=False: solo mide y avisa (detecta la copia, su retardo y su atenuacion) sin tocar el audio."""
+        self.name, self.c_min, self.min_lag, self.act = name, c_min, int(min_lag_s * SR_C), act
         self.rx, self.rr = Ring(), Ring()
         keep = int(MAX_LAG_S * 100) + self.HOLD + 2  # niveles de ref por trozo de 10 ms: retardo maximo + cola
         self.hist = deque([-100.0] * keep, maxlen=keep)
@@ -225,8 +256,8 @@ class Gate:
                 self.lag = lag  # desde la primera prueba: asi se mide la atenuacion del camino antes de activar
             if self.cand[1] >= self.CONFIRM:
                 if not self.enabled:
-                    self.log(f"{self.name}: copia detectada con {lag * 1000 // SR_C} ms (parecido {abs(c):.2f}): se "
-                             "atenua")
+                    self.log(f"{self.name}: copia detectada con {lag * 1000 // SR_C} ms (parecido {abs(c):.2f})"
+                             + (": se atenua" if self.act else ": solo se avisa, sin tocar el audio"))
                 self.enabled, self.lag, self.off = True, lag, 0.0
         else:
             self.cand = None
@@ -262,7 +293,7 @@ class Gate:
             if active and self.lag is not None:
                 if h[len(h) - 1 - d] > SILENT_DB:
                     self.erls.append(h[len(h) - 1 - d] - lx)
-                if self.enabled and lx < src - self.erl + self.MARGIN_DB:
+                if self.act and self.enabled and lx < src - self.erl + self.MARGIN_DB:
                     target = 10 ** (-self.duck_db() / 20)
             if target < self.gain:   # bajar rapido (un trozo); subir algo mas despacio (~50 ms)
                 g = target

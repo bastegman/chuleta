@@ -157,7 +157,7 @@ class SourceTimelineTests(unittest.TestCase):
         s = self._src()
         pos = self.feed(s, 0, 20)  # 20 bloques seguidos (9.600 muestras)
         gap = int(0.3 * recorder.SR)  # se pierden 300 ms (reabrir el dispositivo)
-        self.feed(s, pos + gap, s.CONFIRM + 3, v=2.0)  # lo que llega despues, en su hora
+        self.feed(s, pos + gap, s.WIN // 480 + 3, v=2.0)  # lo que llega despues, en su hora
         self.assertAlmostEqual(s.gap_s, 0.3, places=2)
         out = s.take_window(0, pos + gap + 480 * 4)
         self.assertTrue((out[:pos, 0] == 1).all())
@@ -165,25 +165,40 @@ class SourceTimelineTests(unittest.TestCase):
         self.assertTrue((out[pos + gap:, 0] == 2).all())  # y lo de despues en su sitio, no 300 ms antes
 
     def test_un_retraso_al_leer_no_es_un_corte(self):
-        """soundcard da un paquete por llamada: si el hilo se retrasa 90 ms, el primero llega tarde y los demas
-        atrasados enseguida, seguidos. Nada se pierde: no se mueve nada."""
-        s = self._src()
-        pos = self.feed(s, 0, 20)
-        late = int(0.09 * recorder.SR)
-        s.push(self.blk(3.0), end=pos + 480 + late)  # el primero, tarde
-        for i in range(2, 30):  # los atrasados, uno tras otro casi a la vez; luego al ritmo normal
-            s.push(self.blk(3.0), end=pos + 480 + late + i * 10 if i < 10 else pos + i * 480 + 480)
-        self.assertEqual(s.gap_s, 0.0)
-        out = s.take_window(0, pos + 480 * 29)
-        self.assertTrue((out[:pos, 0] == 1).all())
-        self.assertTrue((out[pos:, 0] == 3).all())
+        """soundcard da un paquete por llamada: si el hilo se bloquea D ms, los paquetes atrasados llegan luego uno tras
+        otro casi a la vez, y el desfase baja de D a 0. Con D = 90, 200 y 300 ms (refutador: desde 160 ms se tomaba por
+        un corte, metia silencio y pisaba audio) no se mueve nada."""
+        for stall_ms in (90, 200, 300):
+            s = self._src()
+            pos = self.feed(s, 0, 40)
+            stall = int(stall_ms / 1000 * recorder.SR)
+            backlog = stall // 480
+            for i in range(1, backlog + 40):  # los atrasados llegan seguidos al acabar el bloqueo; luego, a su ritmo
+                arrival = pos + stall + i * 5 if i <= backlog else pos + i * 480
+                s.push(self.blk(3.0), end=max(arrival, pos + i * 480))
+            self.assertEqual(s.gap_s, 0.0, stall_ms)
+            out = s.take_window(0, pos + 480 * (backlog + 39))
+            self.assertTrue((out[:pos, 0] == 1).all(), stall_ms)
+            self.assertTrue((out[pos:, 0] == 3).all(), stall_ms)  # nada pisado ni con silencio
 
     def test_reloj_rapido_se_recoloca_hacia_atras(self):
         s = self._src()
         pos = self.feed(s, 0, 20)
         early = int(0.08 * recorder.SR)
-        self.feed(s, pos - early, s.CONFIRM + 2, v=2.0)  # llegan antes de lo que tocaria
+        self.feed(s, pos - early, s.WIN // 480 + 2, v=2.0)  # llegan antes de lo que tocaria
         self.assertAlmostEqual(s.gap_s, -0.08, places=2)
+
+    def test_en_silencio_se_corrige_antes(self):
+        """La deriva del reloj (o un corte pequeño) se corrige desde 15 ms si todo es silencio (no se oye); con voz,
+        desde 50 ms."""
+        s = self._src()
+        pos = self.feed(s, 0, 40, v=1e-4)  # silencio (ruido de fondo)
+        self.feed(s, pos + int(0.02 * recorder.SR), s.WIN // 480 + 3, v=1e-4)  # 20 ms de mas
+        self.assertAlmostEqual(s.gap_s, 0.02, places=3)
+        v = self._src()
+        pos = self.feed(v, 0, 40, v=0.3)  # con voz no
+        self.feed(v, pos + int(0.02 * recorder.SR), v.WIN // 480 + 3, v=0.3)
+        self.assertEqual(v.gap_s, 0.0)
 
     def test_lo_que_llega_tarde_cuenta_como_perdido(self):
         s = self._src()
