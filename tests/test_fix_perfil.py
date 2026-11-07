@@ -1228,10 +1228,11 @@ class RenombrarCarpetaTests(TempTree):
 
 class TextosTests(unittest.TestCase):
     def test_el_atajo_usa_el_perfil(self):
-        """P2-33: el diálogo Grabar no dice que Ctrl+Alt+R use «esta misma configuración»."""
-        app = read("app.js")
-        self.assertNotIn("con esta misma configuración", app)
-        self.assertIn("con el perfil de reunión por defecto (carpeta, idioma, tema y contexto)", app)
+        """P2-33: el diálogo Grabar no dice que Ctrl+Alt+R use «esta misma configuración». Desde el 07/11/2026 usa el
+        mismo plan que la tarjeta, sin lo que se cambie solo para esa reunión, y la tarjeta lo dice así."""
+        self.assertNotIn("con esta misma configuración", read("app.js") + read("grabar.js"))
+        self.assertIn("Ctrl+Alt+R y el aviso de Teams graban con este mismo plan, sin los cambios que hagas solo para "
+                      "esta reunión.", read("grabar.js"))
 
     def test_la_carpeta_de_la_app_no_se_llama_audios(self):
         """P2-34: la interfaz nombra la carpeta de la app con APP_NAME, no «Audios»."""
@@ -1279,56 +1280,8 @@ console.log((h.match(/<li>/g) || []).length, h.includes('a&lt;b&gt;.md'), h.incl
   h.includes('de Chuleta o de una carpeta vinculada'), h.includes('abierto en Word'));""")
         self.assertEqual(out, ['""', "3 true true true true"])
 
-    def test_la_sugerencia_no_pisa_lo_que_eliges(self):
-        """P2-30: si mientras se consulta la reunión en curso eliges tú el tema o la carpeta, la sugerencia de
-        Teams/Outlook no los cambia."""
-        fake = r"""
-class El {
-  constructor(id, value = '') { this.id = id; this.value = value; this.dataset = {}; this.ls = []; this.options = []; }
-  q() { return new El('x'); }
-  addEventListener(t, f) { if (t === 'change') this.ls.push(f); }
-  dispatchEvent(e) { if (this.onchange) this.onchange(e); this.ls.forEach(f => f(e)); return true; }
-  closest() { return null; }
-  after() { }
-}
-const document = { body: { contains: () => true }, createElement: () => new El('nota') };
-const esc = s => String(s);
-let S = { route: { kind: 'home' } };
-let pendiente;
-const api = () => new Promise(r => { pendiente = r; });
-function dialogo() {
-  const els = { rName: new El('rName'), rVocab: new El('rVocab', ''), rProj: new El('rProj', ''),
-                rFolder: new El('rFolder', 'Raiz'), rForm: new El('rForm') };
-  els.rVocab.options = [{ value: '' }, { value: 'A/Vocabulario/G.txt' }, { value: 'B/Vocabulario/X.txt' }];
-  els.rVocab.onchange = () => { els.rFolder.value = 'Carpeta de ' + els.rVocab.value; };  // applyVocab de app.js
-  const d = new El('d');
-  d.q = sel => els[sel.replace('#', '')] || null;
-  return [d, els];
-}
-const $ = (sel, root) => root.q(sel);
-const sug = { sugerencia: { source: 'teams', name: 'Comité', vocab: 'B/Vocabulario/X.txt', vocab_label: 'B · X',
-                            participants: [] } };
-const usuario = (el, v) => { el.value = v; el.dispatchEvent({ type: 'change', isTrusted: true }); };
-(async () => {
-  let [d, e] = dialogo();                                  // 1. nadie toca nada: se aplica la sugerencia
-  let p = reunionPrefill(d); pendiente(sug); await p;
-  console.log(e.rVocab.value, e.rFolder.value, e.rName.value);
-  [d, e] = dialogo();                                      // 2. eliges tú el tema mientras se consulta
-  p = reunionPrefill(d); usuario(e.rVocab, 'A/Vocabulario/G.txt'); pendiente(sug); await p;
-  console.log(e.rVocab.value, e.rFolder.value);
-  [d, e] = dialogo();                                      // 3. eliges tú la carpeta: el tema sí, la carpeta no
-  p = reunionPrefill(d); usuario(e.rFolder, 'Mía'); pendiente(sug); await p;
-  console.log(e.rVocab.value, e.rFolder.value);
-  [d, e] = dialogo(); S = { route: { kind: 'f' } };        // 4. abierto desde una carpeta: esa se queda
-  p = reunionPrefill(d); pendiente(sug); await p;
-  console.log(e.rVocab.value, e.rFolder.value);
-})();
-"""
-        out = self.node(fake + js_function(read("reunion.js"), "reunionPrefill"))
-        self.assertEqual(out, ["B/Vocabulario/X.txt Carpeta de B/Vocabulario/X.txt Comité",
-                               "A/Vocabulario/G.txt Carpeta de A/Vocabulario/G.txt",
-                               "B/Vocabulario/X.txt Mía",
-                               "B/Vocabulario/X.txt Raiz"])
+    # P2-30 (la sugerencia de Teams/Outlook no pisa lo que eliges mientras llega) lo prueba ahora el navegador:
+    # test_ui_smoke.test_tarjeta_de_grabar (la tarjeta de grabar.js sustituye a reunionPrefill)
 
 
 if __name__ == "__main__":

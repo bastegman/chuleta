@@ -62,16 +62,24 @@ def ruta_txt(rel, links=None):
 
 # ----------------------------------------------------------------------------- historial
 
-def historial_de(flat, limite=600):
+def historial_de(flat, listas=None, limite=600):
     """Las reuniones de la biblioteca como historial, de la más reciente a la más antigua: {titulo, fecha, vocab,
-    proyecto, workstream}. El título es el de su .md o el nombre del archivo sin la fecha."""
+    proyecto, workstream}. El título es el de su .md o el nombre del archivo sin la fecha. Sin el id de su lista en
+    este PC (grabada en otro, o de antes), la lista sale de los nombres de su cabecera si solo una se llama así."""
+    por_nombre = {}
+    for v in listas or []:
+        por_nombre.setdefault((fold(v["project"]), fold(v["name"])), []).append(v["id"])
     out = []
     for a in flat or []:
         props = a.get("props") or {}
         titulo = " ".join(str(props.get("titulo") or a.get("label") or "").split())
         if not titulo:
             continue
-        out.append({"titulo": titulo, "fecha": a.get("date") or "", "vocab": props.get("vocabulario") or "",
+        vid = props.get("vocabulario") or ""
+        if not vid and props.get("workstream"):
+            ids = por_nombre.get((fold(props.get("proyecto")), fold(props.get("workstream")))) or []
+            vid = ids[0] if len(ids) == 1 else ""
+        out.append({"titulo": titulo, "fecha": a.get("date") or "", "vocab": vid,
                     "proyecto": props.get("proyecto") or "", "workstream": props.get("workstream") or ""})
     out.sort(key=lambda h: h["fecha"], reverse=True)
     return out[:limite]
@@ -258,7 +266,10 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     proyecto = {"vocab": vid, "texto": proyecto_txt(v), "proyecto": v["project"] if v else "",
                 "workstream": v["name"] if v else "", "origen": p_origen, "motivo": motivo}
     plan = {"nombre": {"valor": nombre, "origen": n_origen, "texto": n_txt}, "proyecto": proyecto,
-            "lineas": lineas, "rec": rec, "fuente": sug.get("source") or ""}
+            "lineas": lineas, "rec": rec, "fuente": sug.get("source") or "",
+            # la reunión en curso tal cual: la tarjeta la propone («Teams dice …») si ya has escrito otra cosa
+            "sugerencia": {"nombre": " ".join(str(sug.get("name") or "").split())[:120],
+                           "fuente": sug.get("source") or ""}}
     plan["resumen"] = resumen(plan)
     return plan
 

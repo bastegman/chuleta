@@ -381,7 +381,7 @@ async function pollRec() {
 function onRecChange() {
   refreshTree(true); pollJobs(true);
   if (S.recLocal) { S.recLocal = false; return; }  // lo ha pedido esta misma pagina: ya avisa ella
-  if (S.rec.recording) toast('● Grabando con el perfil por defecto · <b>Ctrl+Alt+R</b> para parar · clic para ajustar idioma, tema y contexto', '', () => go('a', S.rec.path));
+  if (S.rec.recording) toast(`● Grabando${S.rec.resumen ? ` · ${esc(S.rec.resumen)}` : ''} · <b>Ctrl+Alt+R</b> para parar · clic para verla y cambiar el idioma o el contexto`, '', () => go('a', S.rec.path));
   else toast('■ Grabación guardada · la transcripción termina sola');
 }
 async function toggleRec() {
@@ -428,136 +428,12 @@ async function stopRec() {
 const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulario')
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
   + `<option value="__pick">Otra carpeta (fuera de ${esc(APP_NAME)})…</option>`;
-async function openRec() {
+/* «● Grabar»: la tarjeta «Así se va a grabar» (grabar.js, rediseño B1 del 07/11/2026). Lo que enseña y lo que se graba
+   sale de /api/grabar/plan, el mismo cálculo que Ctrl+Alt+R y el aviso de Teams */
+function openRec() {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  if (S.rec.recording) return stopRec();
-  recDialog = true;
-  // desde una carpeta: ahi; si no, la fija del perfil; si no, donde se grabo la ultima vez (con tema, la de su proyecto: applyVocab)
-  const pf = S.config.perfil || {};
-  const folder = S.route.kind === 'f' ? S.route.path : (pf.folder != null && S.folders.has(pf.folder)) ? pf.folder
-    : (S.folders.has(S.config.rec_folder) ? S.config.rec_folder : '');
-  openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
-    <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
-    <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (carpeta, idioma, tema y contexto) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
-      : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
-    <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
-    <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
-    d.addEventListener('click', e => { if (e.target.closest('[data-m="no"]')) closeModal(false); });
-    let devs, voc;
-    try { [devs, voc] = await Promise.all([api('/api/rec/devices'), loadVocab(S.config.language ?? 'es-en')]); }
-    catch (err) { $('#rForm', d).innerHTML = `<div class="notice">${esc(err.message)}</div>`; return; }
-    // tema: el que se acaba de crear desde este dialogo; si no, el fijo del perfil; si no, el ultimo usado
-    const want = S.vocabJustSaved || (pf.vocab != null ? pf.vocab : voc.last);
-    S.vocabJustSaved = null;
-    const lastWs = S.vocab.some(v => v.id === want) ? want : '';
-    // arriba, las opciones que siguen solas a los cascos; debajo, cada dispositivo por si hace falta fijarlo
-    const o = (v, label, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(label)}</option>`;
-    const defName = list => nfc((list.find(x => x.default) || {}).name || '—');
-    const mics = o('default', `Predeterminado de Windows (ahora: ${defName(devs.mics)})`, devs.mic)
-      + `<optgroup label="Fijar un micrófono">${devs.mics.map(x => o(x.id, nfc(x.name), devs.mic)).join('')}</optgroup>`
-      + o('none', 'Sin micrófono', devs.mic);
-    const outs = o('all', 'Todo lo que suena en el ordenador (todas las salidas) · recomendado', devs.sys)
-      + o('default', `Salida predeterminada de Windows (ahora: ${defName(devs.outputs)})`, devs.sys)
-      + `<optgroup label="Fijar una salida">${devs.outputs.map(x => o(x.id, nfc(x.name), devs.sys)).join('')}</optgroup>`
-      + o('none', 'No grabar el audio del ordenador', devs.sys);
-    const presets = S.config.presets.map(p => `<option value="${p.id}"${p.id === (S.config.live_preset || 'medium') ? ' selected' : ''}>${esc(p.live_label)} · ${liveFit(p)[1]}</option>`).join('');
-    $('#rForm', d).innerHTML = `
-      ${typeof perfilTemaHtml === 'function' ? perfilTemaHtml(lastWs) : `<label>${I.topic}Tema</label>${S.vocab.length
-        ? `<div class="row" style="gap:6px;flex-wrap:nowrap"><select id="rVocab" style="flex:1">${vocabOptions(lastWs)}</select><button class="btn sm" type="button" id="rVocabNew">${I.plus}Nuevo</button></div><div class="help" id="rVocabFit"></div>`
-        : `<div class="row" style="gap:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button></div>`}`}
-      <label class="chk"><input type="checkbox" id="rMicOn" checked><span>${I.mic}Grabar también mi micrófono <span class="muted" style="font-weight:400">· desmárcalo para grabar solo el audio del ordenador</span></span></label>
-      <div id="rMicBox"><select id="rMic">${mics}</select>
-      ${meterHtml('mic', 'Nivel')}</div>
-      <label>${I.volume}Audio del ordenador</label><select id="rSys">${outs}</select>
-      ${meterHtml('sys', 'Nivel')}
-      <div class="help">Con las opciones de arriba da igual que conectes o quites los cascos, incluso a mitad de la reunión: la grabación sigue con el dispositivo nuevo. Pon algo a sonar para ver que la barra se mueve.</div>
-      <div class="grid2">
-        <div><label>Nombre (opcional)</label><input class="input" id="rName" placeholder="p. ej. Reunión semanal del equipo"></div>
-        <div><label title="Donde se guardan el audio y la transcripción">Carpeta de destino</label><select id="rFolder" title="Donde se guardan el audio y la transcripción">${folderOpts(folder)}</select></div>
-      </div>
-      ${typeof perfilCamposHtml === 'function' ? perfilCamposHtml(S.config.language ?? 'es-en', pf.context) : langSelect('rLang', S.config.language ?? 'es-en')}
-      <label>${I.chat}Transcripción</label>
-      <div class="seg2" id="rMode">
-        <label class="on"><input type="radio" name="rMode" value="live" checked><b>Transcribir en directo</b><span>El texto va apareciendo mientras se habla</span></label>
-        <label><input type="radio" name="rMode" value="rec"><b>Solo grabar</b><span>Si el portátil va lento: la transcribes al terminar</span></label>
-      </div>
-      <div id="rMotor">${typeof modoLineaHtml === 'function' ? modoLineaHtml(S.config.live_preset || 'medium', { cambiar: 'r-cambiar', falta: true })
-        : typeof motorNotaHtml === 'function' ? motorNotaHtml(S.config.live_preset || 'medium') : ''}</div>
-      <div id="rLiveOpts"${typeof modoLineaHtml === 'function' ? ' class="hidden"' : ''}><label style="margin-top:8px">Modelo del directo</label><select id="rPreset">${presets}</select></div>
-      <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">${I.clipboard}Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
-    if (typeof perfilBindRec === 'function') perfilBindRec(d);  // Proyecto/Tema, importar listas y «Guardar como perfil»
-    const micVal = () => $('#rMicOn', d).checked ? $('#rMic', d).value : 'none';
-    const monitor = () => api('/api/rec/monitor', { mic: micVal(), sys: $('#rSys', d).value }).catch(() => { });
-    $('#rMic', d).onchange = $('#rSys', d).onchange = monitor;
-    $('#rMicOn', d).onchange = () => { $('#rMicBox', d).classList.toggle('off', !$('#rMicOn', d).checked); monitor(); };
-    // la línea del modo: el motor del directo o, con «Solo grabar», el de la cola (configurar.js)
-    const motorRec = () => d.querySelector('[name=rMode]:checked').value === 'live' ? $('#rPreset', d).value : (S.config.preset || 'rapido');
-    const pintaMotor = () => {
-      if (typeof modoLineaHtml !== 'function') return;
-      const live = d.querySelector('[name=rMode]:checked').value === 'live', m = $('#rMotor', d);
-      m.dataset.preset = motorRec();
-      m.innerHTML = modoLineaHtml(m.dataset.preset, { cambiar: live ? 'r-cambiar' : '', abierto: !$('#rLiveOpts', d).classList.contains('hidden'), falta: true });
-    };
-    $('#rMotor', d).dataset.preset = motorRec();
-    $('#rMotor', d).addEventListener('click', e => {
-      if (!e.target.closest('[data-act="r-cambiar"]')) return;
-      e.preventDefault();
-      $('#rLiveOpts', d).classList.toggle('hidden');
-      pintaMotor();
-    });
-    d.pintaMotor = pintaMotor;  // al llegar el % de una descarga (configurar.js)
-    $('#rMode', d).onchange = () => { const live = d.querySelector('[name=rMode]:checked').value === 'live'; $$('#rMode label', d).forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#rLiveOpts', d).classList.toggle('off', !live); if (!live) $('#rLiveOpts', d).classList.add('hidden'); pintaMotor(); };
-    $('#rPreset', d).addEventListener('change', pintaMotor);
-    d.querySelector('[data-m="consent"]').onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
-    // workstream: cuanto le cabe a Whisper y, al elegirlo, se graba en la carpeta de su proyecto
-    const vocabSel = () => S.vocab.find(v => v.id === $('#rVocab', d)?.value);
-    const fsel = $('#rFolder', d);
-    fsel.dataset.prev = fsel.value;
-    const applyVocab = initial => {
-      const v = vocabSel(), fit = $('#rVocabFit', d);
-      if (fit) fit.innerHTML = vocabFit(v);
-      if (initial && S.route.kind === 'f') return;  // se abrio desde una carpeta: esa manda
-      if (pf.folder != null) return;  // carpeta fija en el perfil: el tema no la cambia
-      // la ultima carpeta donde grabaste reuniones de ese proyecto; si aun no hay, se queda la elegida
-      const want = v ? S.config.project_folders?.[v.project] : (initial ? S.config.rec_folder || '' : undefined);
-      if (want != null && [...fsel.options].some(o => o.value === want)) fsel.value = fsel.dataset.prev = want;
-    };
-    fsel.onchange = async () => {
-      if (fsel.value !== '__pick') { fsel.dataset.prev = fsel.value; return; }
-      fsel.value = fsel.dataset.prev || '';
-      const rel = await linkFolder();
-      if (rel && document.body.contains(fsel)) { fsel.innerHTML = folderOpts(rel); fsel.dataset.prev = rel; }
-    };
-    $('#rVocabNew', d).onclick = () => openVocabEditor(null, openRec, vocabSel()?.project || '');
-    if ($('#rVocab', d)) {
-      $('#rVocab', d).onchange = () => applyVocab(false);
-      $('#rLang', d).onchange = async () => { await loadVocab($('#rLang', d).value); applyVocab(true); };  // la frase de estilo cambia con el idioma
-      applyVocab(true);
-    }
-    monitor();
-    pollRec();
-    window.reunionPrefill?.(d);  // nombre, tema y participantes de la reunión en curso (reunion.js)
-    $('#rGo', d).disabled = false;
-    $('#rGo', d).onclick = async () => {
-      $('#rGo', d).disabled = true;
-      try {
-        S.recLocal = true;
-        const r = await api('/api/rec/start', { mic: micVal(), sys: $('#rSys', d).value, name: $('#rName', d).value.trim(),
-          folder: $('#rFolder', d).value, live: d.querySelector('[name=rMode]:checked').value === 'live', preset: $('#rPreset', d).value,
-          language: $('#rLang', d).value, vocab: $('#rVocab', d)?.value || '', ...(window.reunionExtra?.(d) || {}),
-          ...(typeof perfilRecExtra === 'function' ? perfilRecExtra(d) : {}) });
-        S.config.live_preset = $('#rPreset', d).value;
-        recDialog = false;
-        closeModal(true);
-        toast((r.workstream ? `🗂 <b>${esc(r.workstream)}</b> · ` : '') + 'Grabando · el texto irá apareciendo en directo');
-        await refreshTree(true);
-        pollRec(); pollJobs(true);
-        go('a', r.path);
-      } catch (err) { S.recLocal = false; toast(esc(err.message), 'err'); $('#rGo', d).disabled = false; }
-    };
-  });
-  S.modalCleanup = () => { if (recDialog) { recDialog = false; api('/api/rec/monitor', { stop: true }).catch(() => { }); } };
+  if (typeof abrirGrabar === 'function') return abrirGrabar();
+  toast('No se ha podido cargar la tarjeta de grabar: recarga la página (Ctrl+R) o usa Ctrl+Alt+R.', 'err');
 }
 $('#btnRec').onclick = openRec;
 

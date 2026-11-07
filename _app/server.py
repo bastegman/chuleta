@@ -3475,7 +3475,7 @@ class App:
                 lib.refresh(max_age=60)  # Ctrl+Alt+R nada más arrancar: el historial, aunque no se haya abierto la app
             except Exception:
                 log_exc()
-        hist = grabar_plan.historial_de(list(getattr(lib, "flat", None) or []))
+        hist = grabar_plan.historial_de(list(getattr(lib, "flat", None) or []), listas)
         reunion = globals().get("carpeta_reunion")  # rama de carpetas (B1b): la carpeta de la reunión en la base
         return grabar_plan.resolver(
             st, listas, sug, hist, pedido,
@@ -3494,9 +3494,9 @@ class App:
             pedido["cambios"] = b["cambios"]
         p = self.plan_grabar(pedido)
         if b.get("recientes"):
-            por_id = {v["id"]: v for v in list_vocab()}
-            p["recientes"] = grabar_plan.recientes(
-                grabar_plan.historial_de(list(getattr(getattr(self, "library", None), "flat", None) or [])), por_id)
+            vs = list_vocab()
+            p["recientes"] = grabar_plan.recientes(grabar_plan.historial_de(
+                list(getattr(getattr(self, "library", None), "flat", None) or []), vs), {v["id"]: v for v in vs})
         return p
 
     def grabar_recordar(self, b):

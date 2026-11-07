@@ -157,8 +157,9 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("[data-nav='home']")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=5000)
         pg.click("#btnRec")
-        pg.wait_for_selector("#modal:not(.hidden)", timeout=5000)
-        self.assertIn("Nueva grabación", pg.inner_text("#modal"))
+        pg.wait_for_selector("#modal:not(.hidden) .dialog.gr", timeout=5000)
+        self.assertIn("Nueva grabación", pg.text_content("#modal"))
+        pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=15000)  # el plan del servidor
         pg.keyboard.press("Escape")
         pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
         self.assertTrue(pg.evaluate("document.querySelector('#meetChip').classList.contains('hidden')"))
@@ -218,6 +219,72 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [])
+        self.assertEqual(red, [])
+
+    def test_tarjeta_de_grabar(self):
+        """La tarjeta «Así se va a grabar» (rediseño B1, 07/11/2026): cabe en 900×600, cada línea dice de dónde sale,
+        la reunión que llega tarde no pisa lo que has escrito (P2-30, D4), «Usarlo en» guarda para el proyecto y
+        «Empezar a grabar» manda a /api/rec/start exactamente el plan que se ve."""
+        pg, errores, red = self.pagina()
+        pg.set_viewport_size({"width": 900, "height": 600})
+        devs = {"mics": [{"id": "m1", "name": "Micro de prueba", "default": True}], "mic": "default", "sys": "all",
+                "outputs": [{"id": "o1", "name": "Altavoces de prueba", "default": True}]}
+        pg.route("**/api/rec/devices*", lambda r: r.fulfill(json=devs))
+        pg.route("**/api/rec/monitor", lambda r: r.fulfill(json={"ok": True}))  # sin grabadora de verdad
+        retenidas, enviados = [], []
+        pg.route("**/api/reunion/actual", lambda r: retenidas.append(r))  # la reunión «tarda» (Outlook)
+
+        def start(route):
+            enviados.append(json.loads(route.request.post_data))
+            route.fulfill(json={"error": "grabadora de prueba"}, status=400)  # no se graba: solo se mira el cuerpo
+        pg.route("**/api/rec/start", start)
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnRec")
+        pg.wait_for_selector(".dialog.gr .gr-cargando", timeout=5000)  # «Buscando la reunión de Teams…»
+        # no espera a la reunión más de ~2 s: se pinta el plan igualmente
+        pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=8000)
+        pg.wait_for_function("!document.querySelector('#rGo').disabled", timeout=5000)
+        vis = pg.evaluate("[...document.querySelectorAll('.gr-fila:not(.hidden)')].map(f => f.dataset.fila)")
+        self.assertEqual(vis, ["carpeta", "idioma", "vocab", "transcribe", "resume", "audio"])
+        for f in vis:
+            self.assertTrue(pg.text_content(f".gr-fila[data-fila='{f}'] .gr-origen").strip(), f)
+        b = pg.evaluate("(() => { const r = document.querySelector('#rGo').getBoundingClientRect();"
+                        " return [r.top, r.bottom, innerHeight]; })()")
+        self.assertTrue(0 <= b[0] and b[1] <= b[2], b)  # «Empezar a grabar» a la vista en 900×600
+        # escribes un nombre; luego llega la reunión de Teams: se propone, no se pisa
+        pg.fill("#grNombre", "Mi reunión")
+        sug = {"name": "Comité", "source": "teams", "vocab": "", "participants": []}
+        retenidas[0].fulfill(json={"teams": {"title": "Comité"}, "outlook": None, "reason": None, "sugerencia": sug})
+        pg.wait_for_selector("#grPropuesta:not(.hidden)", timeout=5000)
+        self.assertIn("Teams dice «Comité»", pg.inner_text("#grPropuesta"))
+        self.assertEqual(pg.input_value("#grNombre"), "Mi reunión")
+        # proyecto y, con «Usarlo en», el idioma para todas sus reuniones
+        pg.select_option("#grProy", "Proyecto/Vocabulario/General.txt")
+        pg.wait_for_function("document.querySelector('[data-fila=vocab] .gr-origen').textContent === 'del workstream'",
+                             timeout=5000)
+        pg.click("[data-gr-cambiar='idioma']")
+        pg.select_option("[data-panel='idioma'] select", "pt")
+        pg.wait_for_function("document.querySelector('[data-fila=idioma] .gr-origen').classList.contains('cambiado')",
+                             timeout=5000)
+        pg.check("input[name='grAlc_idioma'][value='proyecto']")
+        pg.click("[data-gr-listo='idioma']")
+        pg.wait_for_function("document.querySelector('[data-fila=idioma] .gr-origen').textContent === 'de Proyecto'",
+                             timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["project_langs"], {"Proyecto": "pt"})
+        # lo que se ve es lo que se usa: el cuerpo de /api/rec/start es el plan pintado
+        plan = pg.evaluate("G.plan")
+        pg.click("#rGo")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('grabadora de prueba')",
+                             timeout=5000)
+        self.assertEqual(enviados[0], dict(plan["rec"], resumen=plan["resumen"]))
+        self.assertEqual((enviados[0]["name"], enviados[0]["language"], enviados[0]["vocab"]),
+                         ("Mi reunión", "pt", "Proyecto/Vocabulario/General.txt"))
+        pg.evaluate("api('/api/grabar/recordar', {clave: 'idioma', valor: null, alcance: 'proyecto',"
+                    " vocab: 'Proyecto/Vocabulario/General.txt'})")  # deja los ajustes como estaban
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, [r for r in red if "/api/rec/start" not in r])
+        self.assertEqual([e for e in err if "grabadora de prueba" not in e and "400" not in e], [])
         self.assertEqual(red, [])
 
     def test_sin_token_no_hay_sesion(self):

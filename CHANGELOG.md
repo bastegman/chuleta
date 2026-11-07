@@ -10,6 +10,29 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Grabar: una tarjeta que dice qué va a pasar, y lo mismo con Ctrl+Alt+R (07/11/2026)
+Lo que pidió: grabar «no es nada amigable» y no estaba claro si lo que se configura es lo que de verdad se usa
+(msg 1196).
+- «● Grabar» abre una tarjeta: la reunión (el nombre sale de Teams, de Outlook o de lo que escribas, con tus reuniones
+  recientes como sugerencia), el proyecto › workstream y, debajo, **«Así se va a grabar»**: dónde se guarda, idioma,
+  vocabulario, quién transcribe, quién resume y el audio, cada línea con **de dónde sale** (esta reunión, el
+  workstream, el proyecto o Ajustes). Sustituye al formulario de 15 controles.
+- «Cambiar» en cada línea pregunta **para qué reuniones**: solo esta (lo de siempre por defecto), todas las del proyecto
+  o todas (Ajustes). Sustituye a «Guardar como perfil por defecto», que mezclaba las dos cosas. Lo que se cambia solo
+  para una reunión ya no pasa a ser el predeterminado de la siguiente.
+- El proyecto se propone, en este orden, por la misma reunión grabada antes, por el título y por la última grabación,
+  siempre con el motivo a la vista («como la última «Comité» (vie 30 oct)»). «La última usada» ya no es un valor por
+  defecto escondido.
+- **Un solo cálculo** en la app (`/api/grabar/plan`) para la tarjeta, Ctrl+Alt+R y el aviso de Teams: lo que enseña la
+  tarjeta es exactamente lo que se manda a grabar, y Ctrl+Alt+R graba con el mismo plan (sin los cambios de esa
+  reunión). Antes la regla estaba escrita dos veces, una en la página y otra en el servidor. El aviso de Windows al
+  empezar con Ctrl+Alt+R dice la reunión, el proyecto y el idioma.
+- La reunión de Teams u Outlook que llega tarde se espera como mucho 2 s; si ya has escrito o elegido algo, se propone
+  («Teams dice «…» · Usar») y no lo pisa.
+- Desarrollo y CI: `tests/test_plan.py` (capas, origen de cada valor, el orden del proyecto, «Usarlo en» y la prueba de
+  paridad Ctrl+Alt+R = tarjeta) y `test_ui_smoke.test_tarjeta_de_grabar` (en Chromium a 900×600: cabe, no pisa lo
+  escrito y el cuerpo de /api/rec/start es el plan pintado).
+
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
 - La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja

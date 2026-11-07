@@ -9,13 +9,12 @@ import unittest
 from test_frontend import js_defs, read
 
 # ganchos de app.js y notas.js: cada uno una sola vez y protegido con typeof (la app funciona sin perfil.js)
-HOOKS_APP = ("perfilTemaHtml(lastWs)", "perfilBindRec(d)", "perfilCamposHtml(S.config.language ?? 'es-en', pf.context)",
-             "perfilRecExtra(d)", "perfilLiveHtml(a)", "perfilFieldsetHtml()", "bindPerfilSettings(d)",
+# (07/11/2026: el diálogo Grabar es la tarjeta de grabar.js; sus ganchos de perfil.js se fueron con él)
+HOOKS_APP = ("perfilLiveHtml(a)", "perfilFieldsetHtml()", "bindPerfilSettings(d)",
              "collectPerfilSettings(d)", "perfilLangOf(list[0])", "perfilImportar('', openSettings)",
              "perfilVocabEmptyHtml()")
-GUARDED = ("perfilTemaHtml", "perfilBindRec", "perfilCamposHtml", "perfilRecExtra", "perfilLiveHtml",
-           "perfilFieldsetHtml", "bindPerfilSettings", "collectPerfilSettings", "perfilLangOf", "perfilImportar",
-           "perfilVocabEmptyHtml", "perfilPropsHtml", "perfilSavedText")
+GUARDED = ("perfilLiveHtml", "perfilFieldsetHtml", "bindPerfilSettings", "collectPerfilSettings", "perfilLangOf",
+           "perfilImportar", "perfilVocabEmptyHtml", "perfilPropsHtml", "perfilSavedText")
 
 
 class PerfilCargaTests(unittest.TestCase):
@@ -34,29 +33,22 @@ class PerfilCargaTests(unittest.TestCase):
         self.assertEqual(notas.count("perfilSavedText('contexto'"), 1)
         for fn in GUARDED:
             self.assertRegex(src, rf"typeof {fn} === 'function'", fn)
-        # el idioma ya no va dentro de las opciones del directo (es de la reunion, tambien con «Solo grabar»)
-        # (07/11/2026: el selector va detrás de «Cambiar», con su etiqueta; dentro sigue sin haber idioma)
-        self.assertRegex(app, r'<div id="rLiveOpts"[^>]*>(<label[^<]*>Modelo del directo</label>)?'
-                              r'<select id="rPreset">\$\{presets\}</select></div>')
-        self.assertNotIn("langSelect('rLang', S.config.language ?? 'es-en')}</div>", app)
         # el motor del directo, el idioma del resumen y las instrucciones extra viven en el perfil (con fallback)
         self.assertNotIn('<label>Motor para el directo</label>', app)
         self.assertIn("$('#lPreset', d)?.value", app)
         self.assertIn("$('#sSumLang', d)?.value", app)
         # mezclas nuevas en la lista de idiomas y el toast de Ctrl+Alt+R con «clic para ajustar»
         self.assertIn("['es-pt', 'Español + portugués (mezcla)'], ['en-pt', 'Inglés + portugués (mezcla)']", app)
-        self.assertIn("clic para ajustar idioma, tema y contexto", app)
+        self.assertIn("clic para verla y cambiar el idioma o el contexto", app)
         # el idioma de la reunion no cambia el ajuste general al grabar
         self.assertNotIn("S.config.language = S.selLang = $('#rLang', d).value;", app)
-        # la sugerencia de Teams no pisa un tema fijado por el perfil
-        self.assertIn("!d.dataset.pfVocab", read("reunion.js"))
 
     def test_textos_y_sin_nada_externo(self):
         js = read("perfil.js")
-        for s in ("Guardar como perfil por defecto", "Importar listas de otra carpeta…", "Sin vocabulario", "Nuevo…",
-                  "Perfil de reunión", "Destinos de salida", "Añadir carpeta…", "subcarpeta por proyecto",
-                  "Markdown (.md)", "Texto (.txt)", "Word (.docx)", "/api/perfil", "/api/vocab/import",
-                  "/api/link/pick", "Vocabulario\\\\&lt;Tema&gt;.txt", "junto a <code>_app</code>", "Por defecto · ",
+        for s in ("Sin vocabulario", "Perfil de reunión", "Destinos de salida", "Añadir carpeta…",
+                  "subcarpeta por proyecto", "Markdown (.md)", "Texto (.txt)", "Word (.docx)", "/api/perfil",
+                  "/api/vocab/import", "/api/link/pick", "Vocabulario\\\\&lt;Tema&gt;.txt",
+                  "junto a <code>_app</code>", "Por defecto · ",
                   "Automática · la última usada", "Automático · el que sugiera la reunión", "Contexto",
                   "el directo lo usa desde el siguiente trozo", "${esc(APP_NAME)}"):
             self.assertIn(s, js, s)
@@ -64,11 +56,10 @@ class PerfilCargaTests(unittest.TestCase):
         self.assertNotRegex(js, r"https?://")
         self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u26FF]")  # sin emojis: iconos I.*
         self.assertNotIn("Notas", js)  # el nombre de la app sale de APP_NAME
-        for fn in ("perfilLangLabel", "perfilLangOptions", "perfilLangOf", "perfilResolve", "perfilGroups",
-                   "perfilTemaOptions", "perfilTemaHtml", "perfilBindTema", "perfilCamposHtml", "perfilBindRec",
-                   "perfilRecExtra", "perfilImportar", "perfilImportText", "perfilPropsHtml", "perfilLiveHtml",
-                   "perfilSavedText", "perfilFieldsetHtml", "perfilOutsHtml", "bindPerfilOuts", "bindPerfilSettings",
-                   "collectPerfilSettings", "perfilVocabEmptyHtml"):
+        for fn in ("perfilLangLabel", "perfilLangOptions", "perfilLangOf", "perfilGroups", "perfilImportar",
+                   "perfilImportText", "perfilPropsHtml", "perfilLiveHtml", "perfilSavedText", "perfilFieldsetHtml",
+                   "perfilOutsHtml", "bindPerfilOuts", "bindPerfilSettings", "collectPerfilSettings",
+                   "perfilVocabEmptyHtml"):
             self.assertRegex(js, re.compile(rf"^(async )?function {fn}\(", re.M), fn)
 
 
@@ -78,41 +69,18 @@ class PerfilHelpersTests(unittest.TestCase):
         app = read("app.js")
         langs = re.search(r"^const LANGS = \[.*?\]\];$", app, re.S | re.M).group(0)
         defs = js_defs(app, ["esc", "nfc"]) + "\n" + langs + "\nconst S = {selLang: null, config: {language: 'pt'}};\n"
-        defs += js_defs(read("perfil.js"), ["perfilLangLabel", "perfilLangOptions", "perfilLangOf", "perfilResolve",
-                                            "perfilGroups", "perfilTemaOptions", "perfilImportText", "perfilSavedText",
-                                            "perfilOutsHtml", "PERFIL_FORMATS"])
+        defs += js_defs(read("perfil.js"), ["perfilLangLabel", "perfilLangOptions", "perfilLangOf", "perfilGroups",
+                                            "perfilImportText", "perfilSavedText", "perfilOutsHtml", "PERFIL_FORMATS"])
         r = subprocess.run(["node", "-e", defs + "\n" + code], capture_output=True, text=True, encoding="utf-8",
                            timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.rstrip("\n")
 
-    def test_precedencias_como_el_servidor(self):
-        out = self.run_js("""
-const perfil = {folder: null, vocab: null, context: '', language: 'es'};
-const sug = {name: 'Comité', vocab: 'Beta/Vocabulario/Legal.txt'};
-const last = {folder: 'Otra', vocab: 'Alfa/Vocabulario/General.txt'};
-const r1 = perfilResolve(perfil, sug, last);
-console.log([r1.vocab, r1.origen.vocab, r1.folder, r1.origen.folder, r1.name, r1.language].join('|'));
-const r2 = perfilResolve({folder: 'Alfa/Reuniones', vocab: '', context: 'ctx', language: 'pt'}, sug, last);
-console.log([r2.vocab, r2.origen.vocab, r2.folder, r2.origen.folder, r2.name, r2.origen.name, r2.context].join('|'));
-const r3 = perfilResolve({vocab: ''}, sug, last, {vocab: 'X', folder: '', language: 'en-pt', name: 'N'});
-console.log([r3.vocab, r3.folder, r3.origen.folder, r3.language, r3.name].join('|'));
-console.log(JSON.stringify(perfilResolve(null, null, null)));""")
-        lines = out.splitlines()
-        self.assertEqual(lines[0], "Beta/Vocabulario/Legal.txt|reunion|Otra|ultimo|Comité|es")
-        self.assertEqual(lines[1], "|perfil|Alfa/Reuniones|perfil|Comité|reunion|ctx")
-        self.assertEqual(lines[2], "X||elegido|en-pt|N")
-        self.assertIn('"vocab":""', lines[3])
-
-    def test_tema_en_dos_pasos_e_idiomas(self):
+    def test_listas_por_proyecto_e_idiomas(self):
         out = self.run_js("""
 const vocab = [{id: 'A/Vocabulario/General.txt', project: 'A', name: 'General', desc: 'd'},
   {id: 'A/Vocabulario/Legal.txt', project: 'A', name: 'Legal'}, {id: 'B/Vocabulario/X.txt', project: 'B', name: 'X'}];
 console.log(perfilGroups(vocab).map(([p, vs]) => p + ':' + vs.length).join(','));
-const html = perfilTemaOptions(vocab, 'A', 'A/Vocabulario/Legal.txt');
-console.log((html.match(/<option/g) || []).length, (html.match(/ hidden/g) || []).length,
-  html.includes(' selected>Legal'), html.includes('General · d'),
-  html.startsWith('<option value="">Sin vocabulario</option>'));
 console.log(perfilLangOptions('', 'pt'));
 console.log(perfilLangOptions('auto', 'pt')
   .includes('<option value="auto" selected>Detectar (cualquier idioma)</option>'));
@@ -121,10 +89,9 @@ console.log(perfilLangOf({props: {idioma: 'auto'}}) === '', perfilLangOf({props:
   perfilLangOf({props: {}}));""")
         lines = out.splitlines()
         self.assertEqual(lines[0], "A:2,B:1")
-        self.assertEqual(lines[1], "4 1 true true true")  # 3 listas + «Sin vocabulario»; la de B oculta
-        self.assertTrue(lines[2].startswith('<option value="" selected>Por defecto · Português</option>'))
-        self.assertNotIn('<option value="">Detectar', lines[2])  # detectar es «auto», no vacío
-        self.assertEqual(lines[3:], ["true", "true", "true en pt"])
+        self.assertTrue(lines[1].startswith('<option value="" selected>Por defecto · Português</option>'))
+        self.assertNotIn('<option value="">Detectar', lines[1])  # detectar es «auto», no vacío
+        self.assertEqual(lines[2:], ["true", "true", "true en pt"])
 
     def test_textos_de_importar_guardar_y_destinos(self):
         out = self.run_js("""

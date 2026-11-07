@@ -1,5 +1,6 @@
-/* Reuniones: sugerencia de nombre, tema y participantes al grabar (título de la ventana de reunión de Teams y, si se
-   activa en Ajustes, la cita en curso del Outlook clásico) y los ajustes del aviso flotante «Grabar».
+/* Reuniones: lo que la app ve de la reunión en curso (título de la ventana de reunión de Teams y, si se activa en
+   Ajustes, la cita en curso del Outlook clásico), el botón «Probar» y los ajustes del aviso flotante «Grabar». La
+   sugerencia al grabar (nombre, proyecto y participantes) la aplica el servidor en el plan (grabar.js).
    Se carga después de app.js y usa sus utilidades ($, api, esc, I, S). app.js lo invoca con `window.x?.()`:
    sin este fichero la app funciona igual, sin sugerencias. */
 
@@ -48,57 +49,7 @@ function reunionCollect(d) {
   return o && a ? { outlook_on: o.checked, rec_aviso: a.checked } : {};
 }
 
-/* Diálogo Grabar: precarga nombre, tema y participantes si hay reunión en curso, con una nota y «Quitar». La consulta
-   puede tardar unos segundos: lo que hayas elegido tú entretanto (tema, proyecto o carpeta) no se pisa. */
-async function reunionPrefill(d) {
-  const tocado = {};  // selectores que has cambiado tú (los cambios que hace la propia app no cuentan: isTrusted)
-  ['rVocab', 'rProj', 'rFolder'].forEach(id => $('#' + id, d)?.addEventListener('change', e => { if (e.isTrusted) tocado[id] = true; }));
-  let r;
-  try { r = await api('/api/reunion/actual'); } catch { return; }
-  const s = (r && r.sugerencia) || {};
-  if (!s.source || !document.body.contains(d)) return;
-  const name = $('#rName', d), sel = $('#rVocab', d), fsel = $('#rFolder', d);
-  const prev = { name: name ? name.value : '', vocab: sel ? sel.value : '' };
-  if (name && !name.value && s.name) name.value = s.name;
-  // la carpeta que elegiste tú (o aquella desde la que abriste el diálogo) no cambia con el tema sugerido
-  const keepFolder = fn => {
-    const f = fsel && (tocado.rFolder || S.route?.kind === 'f') ? [fsel.value, fsel.dataset.prev] : null;
-    fn();
-    if (f) { fsel.value = f[0]; fsel.dataset.prev = f[1]; }
-  };
-  let vocabOk = false;
-  // perfil.js marca pfVocab cuando el perfil fija el tema: entonces la sugerencia no lo cambia (el nombre y los
-  // participantes sí se sugieren, porque el perfil no los fija); tampoco si ya has elegido tú el tema o el proyecto
-  if (sel && s.vocab && !d.dataset.pfVocab && !tocado.rVocab && !tocado.rProj && [...sel.options].some(o => o.value === s.vocab)) {
-    // carpeta del proyecto y aviso de cuánto cabe, como si lo eligieras tú
-    keepFolder(() => { sel.value = s.vocab; sel.dispatchEvent(new Event('change')); });
-    vocabOk = true;
-  }
-  d.dataset.rnParticipantes = (s.participants || []).join(', ');
-  d.dataset.rnSource = s.source;
-  const partes = [];
-  if (name && s.name) partes.push(`nombre «${esc(s.name)}»`);
-  if (vocabOk) partes.push(`tema <b>${esc(s.vocab_label)}</b>`);
-  if (s.participants?.length) partes.push(`${s.participants.length} participantes (irán a las notas de la reunión como sugeridos: no se envían al resumen ni a los destinos hasta que los confirmes)`);
-  if (!partes.length) return;
-  const nota = document.createElement('div');
-  nota.className = 'help';
-  nota.id = 'rnNota';
-  nota.innerHTML = `Sugerido por ${s.source === 'outlook' ? 'Outlook' : 'Teams'}: ${partes.join(' · ')}. Puedes cambiarlo. <a href="#" id="rnQuitar">Quitar</a>`;
-  (name && name.closest('.grid2') || $('#rForm', d)).after(nota);
-  $('#rnQuitar', nota).onclick = e => {
-    e.preventDefault();
-    if (name) name.value = prev.name;
-    if (sel && vocabOk) keepFolder(() => { sel.value = prev.vocab; sel.dispatchEvent(new Event('change')); });
-    delete d.dataset.rnParticipantes;
-    delete d.dataset.rnSource;
-    nota.remove();
-  };
-}
 
-function reunionExtra(d) {
-  return { participantes: d.dataset.rnParticipantes || '', sugerido: d.dataset.rnSource || '' };
-}
 
 /* Página de la reunión: participantes sugeridos por Outlook/Teams al grabar (props.participantes_origen). Hasta
    que se confirman o se editan, el servidor no los manda al resumen con IA ni a los destinos de salida. notas.js

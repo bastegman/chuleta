@@ -177,6 +177,13 @@ class HistorialTests(unittest.TestCase):
         r = plan.recientes(h, {v["id"]: v for v in LISTAS})
         self.assertEqual([(x["titulo"], x["n"], x["vocab"], x["proyecto_txt"]) for x in r],
                          [("comité", 2, A, "Alfa › General"), ("Daily", 1, "", "")])
+        # sin el id de su lista en este PC: por los nombres de su cabecera, si solo una se llama así
+        otro = [{"label": "Kick-off", "date": "2026-11-03T10:00:00",
+                 "props": {"proyecto": "beta", "workstream": "GENERAL"}},
+                {"label": "Raro", "date": "2026-11-04T10:00:00",
+                 "props": {"proyecto": "Nadie", "workstream": "General"}}]
+        h = plan.historial_de(otro, LISTAS)
+        self.assertEqual([x["vocab"] for x in h], ["", B])
 
     def test_textos(self):
         self.assertEqual(plan.fecha_corta("2026-11-07T22:00:00"), "sáb 7 nov")

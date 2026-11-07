@@ -571,14 +571,13 @@ class ReunionFrontendTests(unittest.TestCase):
     def test_ganchos_en_app_js_e_index(self):
         app, html = static("app.js"), static("index.html")
         self.assertIn('<script src="/reunion.js"></script>', html)
-        for s in ("window.reunionPrefill?.(d)", "...(window.reunionExtra?.(d) || {})",
-                  "${window.reunionFieldsetHtml?.() || ''}", "window.bindReunionSettings?.(d)",
+        # (07/11/2026: la sugerencia al grabar la aplica el servidor en el plan: sin reunionPrefill ni reunionExtra)
+        for s in ("${window.reunionFieldsetHtml?.() || ''}", "window.bindReunionSettings?.(d)",
                   "...(window.reunionCollect?.(d) || {})"):
             self.assertEqual(app.count(s), 1, s)
         js = static("reunion.js")
-        for s in ("function reunionPrefill", "function reunionExtra", "function reunionFieldsetHtml",
-                  "function bindReunionSettings", "function reunionCollect", "/api/reunion/actual?outlook=1",
-                  'id="rnOutlook"', 'id="rnAviso"', 'id="rnProbar"', "Sugerido por", "Quitar"):
+        for s in ("function reunionFieldsetHtml", "function bindReunionSettings", "function reunionCollect",
+                  "/api/reunion/actual?outlook=1", 'id="rnOutlook"', 'id="rnAviso"', 'id="rnProbar"'):
             self.assertIn(s, js, s)
         self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u26FF]")  # sin emojis (Steve los está quitando)
 
