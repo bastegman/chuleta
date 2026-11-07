@@ -1916,17 +1916,20 @@ function procesadoFieldsetHtml() {
 }
 
 /* la ayuda del directo en Ajustes › Grabar: con la API, la nube y su cupo; sin ella, solo el PC */
-const lAyuda = api => 'El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. '
+const lAyuda = api => 'El motor con el que empieza cada directo se elige en Procesado › Motores y se puede cambiar en mitad de la grabación desde la propia pantalla. '
   + (api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.'
     : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.');
 /* Ajustes por secciones (07/11/2026, configurar.js): antes, un diálogo de 6 a 7,5 pantallas con «Guardar» al final.
    Todas las secciones están en el DOM (collect() lee de todas); solo se ve la elegida. opts.sec: la que se abre (si
    no, la última vista). Se llama también como manejador de clic: un Event no trae .sec. */
-const AJ_SECS = [['procesado', 'Procesado'], ['grabar', 'Grabar'], ['vocabulario', 'Vocabulario'], ['voces', 'Voces'],
-  ['carpetas', 'Carpetas'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
+// (rediseño B2, 07/11/2026) por lo que se hace: «Al grabar» primero; Vocabulario y Carpetas pasan a Proyectos; el
+// idioma y las instrucciones del resumen, a Resumen; Outlook y Teams, a Calendario y Teams; OBS, a Avanzado
+const AJ_SECS = [['algrabar', 'Al grabar'], ['proyectos', 'Proyectos'], ['procesado', 'Procesado'], ['resumen', 'Resumen'],
+  ['calendario', 'Calendario y Teams'], ['voces', 'Voces'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
 function openSettings(opts) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec) || S.ajSec || 'procesado';
+  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
+    || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
   S.ajSec = sec;
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
@@ -1937,6 +1940,24 @@ function openSettings(opts) {
     <nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}">${l}</button>`).join('')}</nav>
     <div class="aj-main">
     ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
+    <section data-secc="algrabar"${sec === 'algrabar' ? '' : ' hidden'}>
+    ${typeof ajAlGrabarHtml === 'function' ? ajAlGrabarHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
+    </section>
+    <section data-secc="proyectos"${sec === 'proyectos' ? '' : ' hidden'}>
+    ${typeof ajProyectosHtml === 'function' ? ajProyectosHtml() : ''}
+    <fieldset><legend>${I.book}Listas de vocabulario</legend>
+      <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
+      <label>Vocabulario de las reuniones sin proyecto</label>
+      <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
+      <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
+    </fieldset>
+    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
+      <div id="sLinks"></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
+      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí, escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
+    </fieldset>
+    ${typeof perfilSalidasHtml === 'function' ? perfilSalidasHtml() : ''}
+    </section>
     <section data-secc="procesado"${sec === 'procesado' ? '' : ' hidden'}>
     ${typeof cfgEstadoHtml === 'function' ? cfgEstadoHtml() : ''}
     ${procesadoFieldsetHtml()}
@@ -1955,40 +1976,26 @@ function openSettings(opts) {
       <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
       <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
       <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+      <div class="help">El idioma del resumen y las instrucciones extra están en <a href="#" data-sec-ir="resumen">Resumen</a>. Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     </div>
+    ${typeof perfilMotoresHtml === 'function' ? perfilMotoresHtml() : ''}
     </section>
-    <section data-secc="grabar"${sec === 'grabar' ? '' : ' hidden'}>
-    <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
-      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${enApi ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
-      <div class="help" id="lAyuda">${esc(lAyuda(enApi))}</div>
-    </fieldset>
-    ${window.reunionFieldsetHtml?.() || ''}
-    ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
+    <section data-secc="resumen"${sec === 'resumen' ? '' : ' hidden'}>
+    ${typeof perfilResumenHtml === 'function' ? perfilResumenHtml() : ''}
     </section>
-    <section data-secc="vocabulario"${sec === 'vocabulario' ? '' : ' hidden'}>
-    <fieldset><legend>${I.book}Vocabulario</legend>
-      <label>Por tema <span class="muted" style="font-weight:400">· se elige al grabar o en cada reunión</span></label>
-      <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
-      <label>General · para reuniones sin tema</label>
-      <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
-      <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
-    </fieldset>
+    <section data-secc="calendario"${sec === 'calendario' ? '' : ' hidden'}>
+    ${typeof ajCalendarioHtml === 'function' ? ajCalendarioHtml() : window.reunionFieldsetHtml?.() || ''}
     </section>
     <section data-secc="voces"${sec === 'voces' ? '' : ' hidden'}>
     ${vocesFieldsetHtml()}
     </section>
-    <section data-secc="carpetas"${sec === 'carpetas' ? '' : ' hidden'}>
-    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
-      <div id="sLinks"></div>
-      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
-      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
-    </fieldset>
-    </section>
     <section data-secc="avanzado"${sec === 'avanzado' ? '' : ' hidden'}>
+    <fieldset><legend><i class="recdot"></i>Grabaciones de OBS</legend>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
+      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${enApi ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
+      <div class="help" id="lAyuda">${esc(lAyuda(enApi))}</div>
+    </fieldset>
     <fieldset><legend>${I.monitor}Transcripción local</legend>
       <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
@@ -2037,7 +2044,7 @@ function openSettings(opts) {
     // «Hay cambios sin guardar» de verdad: se compara con cómo se abrió. Lo que se guarda solo (Voces, personas) o no
     // es de «Guardar» (el vocabulario del instalador) no cuenta. Si un subdiálogo (Voces, vocabulario, carpeta,
     // Apagar, el asistente) reabre Ajustes, lo escrito y sin guardar vuelve (S.ajBorrador).
-    const NO_CUENTA = new Set(['vzOn', 'xVocab']);
+    const NO_CUENTA = new Set(['vzOn', 'xVocab', 'agProy']);  // agProy: solo elige qué plan enseñar
     const campos = () => $$('.aj-main input[id], .aj-main select[id], .aj-main textarea[id]', d)
       .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && x.type !== 'file' && x.type !== 'button');
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
@@ -2193,6 +2200,9 @@ function openSettings(opts) {
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     window.bindReunionSettings?.(d);
     if (typeof bindPerfilSettings === 'function') bindPerfilSettings(d);
+    if (typeof bindAjAlGrabar === 'function') bindAjAlGrabar(d);  // ajustes.js: el plan arriba, las reglas debajo
+    if (typeof bindAjProyectos === 'function') bindAjProyectos(d);
+    if (typeof bindAjCalendario === 'function') bindAjCalendario(d);
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -2207,6 +2217,7 @@ function openSettings(opts) {
         cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
+        ...(typeof ajAlGrabarCollect === 'function' ? ajAlGrabarCollect(d) : {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
         summary: { auto: ($('input[name="proc"]:checked', d)?.value === 'agente' ? $('#sAutoAg', d) : $('#sAuto', d)).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
       // los motores, solo si se han cambiado aquí: un selector sin tocar, pintado con el modo de antes, devolvía el directo

@@ -569,7 +569,8 @@ class AvisoTextoTests(unittest.TestCase):
 
 class ReunionFrontendTests(unittest.TestCase):
     def test_ganchos_en_app_js_e_index(self):
-        app, html = static("app.js"), static("index.html")
+        # (B2: el bloque va en «Calendario y Teams», que pinta ajustes.js)
+        app, html = static("app.js") + static("ajustes.js"), static("index.html")
         self.assertIn('<script src="/reunion.js"></script>', html)
         # (07/11/2026: la sugerencia al grabar la aplica el servidor en el plan: sin reunionPrefill ni reunionExtra)
         for s in ("${window.reunionFieldsetHtml?.() || ''}", "window.bindReunionSettings?.(d)",

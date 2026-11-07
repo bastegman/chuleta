@@ -1536,6 +1536,29 @@ def update_perfil(d, cambios):
         d["language"] = cambios["language"]
 
 
+def ajustes_previstos(st, a):
+    """Los ajustes con lo que Ajustes › Al grabar tiene escrito y sin guardar (solo para enseñar el plan; no se guarda
+    nada). Se aceptan las claves de esa sección, validadas como al guardar; lo que no vale se ignora."""
+    st = copy.deepcopy(st)
+    lang = str(a.get("language") or "").strip().lower() if "language" in a else None
+    if lang is not None and (not lang or IDIOMA_RE.match(lang)):
+        st["language"] = lang
+    for k in ("rec_mic", "rec_sys"):
+        if isinstance(a.get(k), str) and a[k].strip():
+            st[k] = a[k].strip()[:300]
+    if "rec_directo" in a:
+        st["rec_directo"] = bool(a["rec_directo"])
+    if a.get("live_preset") in LIVE_PRESETS:
+        st["live_preset"] = a["live_preset"]
+    if isinstance(a.get("perfil"), dict):
+        try:
+            claves = ("folder", "vocab", "context")
+            update_perfil(st, check_perfil({k: x for k, x in a["perfil"].items() if k in claves}))
+        except ApiError:
+            pass
+    return st
+
+
 def _con_o_sin(d, k, val):
     """Copia del diccionario `d` con `k` = `val`, o sin `k` si `val` es None (vuelve a heredar)."""
     out = dict(d or {})
@@ -3515,7 +3538,10 @@ class App:
         pedido = {k: b[k] for k in ("nombre", "vocab", "participantes") if k in b}
         if isinstance(b.get("cambios"), dict):
             pedido["cambios"] = b["cambios"]
-        p = self.plan_grabar(pedido)
+        st = self.settings.get()
+        if isinstance(b.get("ajustes"), dict):  # Ajustes › Al grabar: cómo quedaría con lo que aún no se ha guardado
+            st = ajustes_previstos(st, b["ajustes"])
+        p = self.plan_grabar(pedido, st=st)
         if b.get("recientes"):
             vs = list_vocab()
             p["recientes"] = grabar_plan.recientes(grabar_plan.historial_de(

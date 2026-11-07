@@ -80,35 +80,53 @@ function perfilSavedText(prop, live, transcribed) {
   return transcribed ? `${que} guardado · se aplicará si la vuelves a transcribir (y al resumen)` : `${que} guardado · se usará al transcribirla`;
 }
 
-/* ---------------------------------------------------------------- Ajustes: Perfil de reunión */
-function perfilFieldsetHtml() {
-  const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [], presets = c.presets || [];
+/* ---------------------------------------------------------------- Ajustes (rediseño B2, 07/11/2026)
+   El «Perfil de reunión» de antes era un bloque de 466 palabras con grabar, resumir, motores y destinos mezclados.
+   Ahora cada pieza va a su sección: las reglas de grabar a «Al grabar» (ajustes.js), los motores a «Procesado», el
+   idioma y las instrucciones del resumen a «Resumen» y los destinos de salida a «Proyectos». Los ids no cambian (los
+   lee collect() de app.js y collectPerfilSettings). */
+const perfilOpt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+/* Al grabar: reuniones sin proyecto, idioma por defecto, proyecto si no se elige y contexto. Filas de una línea. */
+function perfilReglasHtml() {
+  const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [];
   const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
-  const opt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto</label><div><select id="pfFolder">${perfilOpt(PERFIL_AUTO, 'Automática · la última usada', folderSel)}${folderOpts(folderSel)}</select>
+      <span class="ag-hint">las de un proyecto, en su carpeta</span></div></div>
+    <div class="ag-regla"><label for="sLang">Idioma por defecto</label><div>${langSelect('sLang', c.language ?? 'es-en')}<span class="ag-hint">si el proyecto no tiene el suyo</span></div></div>
+    <div class="ag-regla"><label for="pfVocab">Proyecto al grabar</label><div><select id="pfVocab">${perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', vocabSel)}${perfilOpt('', 'Sin proyecto', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, vocabSel)).join('')}</optgroup>`).join('')}</select>
+      <span class="ag-hint">el de esa reunión otras veces, el título o la última</span></div></div>
+    <div class="ag-regla"><label for="pfContext">Contexto</label><div><input class="input" id="pfContext" maxlength="500" value="${esc(p.context || '')}" placeholder="Opcional: de qué van tus reuniones y quién participa" autocomplete="off"></div></div>`;
+}
+/* Procesado: con qué motor empieza el directo y con cuál se transcribe después. */
+function perfilMotoresHtml() {
+  const c = S.config || {}, presets = c.presets || [];
   const prov = c.providers?.[c.cloud?.provider]?.label || 'nube';
-  return `<fieldset><legend>${I.clipboard}Perfil de reunión</legend>
-      <div class="help" style="margin-top:4px">Con lo que empieza cada grabación (● Grabar y Ctrl+Alt+R). En el diálogo de grabar se ajusta para una reunión concreta y, desde ahí, se puede guardar como perfil.</div>
+  return `<fieldset><legend>${I.monitor}Motores</legend>
       <div class="grid2">
-        <div><label>${I.folder}Carpeta de destino</label><select id="pfFolder">${opt(PERFIL_AUTO, 'Automática · la última usada (o la del proyecto del tema)', folderSel)}${folderOpts(folderSel)}</select></div>
-        <div><label>${I.globe}Idioma de la reunión</label>${langSelect('sLang', c.language ?? 'es-en')}</div>
+        <div><label for="lPreset">Motor del directo</label><select id="lPreset">${presets.map(pr => perfilOpt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join('')}</select></div>
+        <div><label for="pfPreset">Motor al transcribir después</label><select id="pfPreset">${presets.map(pr => perfilOpt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('')}</select></div>
       </div>
-      <label>${I.topic}Tema de vocabulario</label>
-      <select id="pfVocab">${opt(PERFIL_AUTO, 'Automático · el que sugiera la reunión en curso (Teams/Outlook) o el último elegido', vocabSel)}${opt('', 'Sin vocabulario · el general de Ajustes', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => opt(v.id, v.name + (v.desc ? ' · ' + v.desc : ''), vocabSel)).join('')}</optgroup>`).join('')}</select>
-      <label>${I.text}Contexto de las reuniones <span class="muted" style="font-weight:400">· opcional, una o dos frases</span></label>
-      <textarea id="pfContext" rows="2" maxlength="500" placeholder="p. ej. Reuniones semanales del proyecto Alfa con el equipo del cliente: seguimiento de la migración y del plan de pruebas">${esc(p.context || '')}</textarea>
-      <div class="help"><b>Español + inglés</b>, <b>Español + portugués</b> e <b>Inglés + portugués</b> detectan el idioma cada pocos segundos pero solo entre esos dos y dejan cada frase en su idioma; si una reunión es solo en uno, fijarlo es algo más preciso. El contexto lo recibe Whisper detrás del vocabulario (si no cabe todo, se recorta antes que el vocabulario) y lo tiene en cuenta el resumen.</div>
-      <div class="grid2">
-        <div><label>Idioma del resumen</label><select id="sSumLang">${[['es', 'Español'], ['en', 'Inglés'], ['same', 'El de la reunión']].map(([v, l]) => opt(v, l, c.summary?.lang || 'es')).join('')}</select></div>
-        <div><label>Motor del directo</label><select id="lPreset">${presets.map(pr => opt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join('')}</select></div>
-      </div>
-      <label>Instrucciones extra para el resumen (opcional)</label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(c.summary?.extra || '')}</textarea>
-      <label>Motor al transcribir después <span class="muted" style="font-weight:400">· «Solo grabar», «Volver a transcribir» y audios que arrastres</span></label>
-      <select id="pfPreset">${presets.map(pr => opt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('')}</select>
-      <label>${I.copy}Destinos de salida <span class="muted" style="font-weight:400">· opcional: cada reunión, como documento, en otras carpetas</span></label>
+      <div class="help">El de después es el de «Solo grabar», «Volver a transcribir» y los audios que arrastres. El del directo se puede cambiar en mitad de la grabación desde su pantalla.</div>
+    </fieldset>`;
+}
+/* Resumen: en qué idioma y con qué instrucciones (quién resume se elige en Procesado). */
+function perfilResumenHtml() {
+  const c = S.config || {};
+  return `<fieldset><legend>${I.spark}Resumen</legend>
+      <label for="sSumLang">Idioma del resumen</label><select id="sSumLang">${[['es', 'Español'], ['en', 'Inglés'], ['same', 'El de la reunión']].map(([v, l]) => perfilOpt(v, l, c.summary?.lang || 'es')).join('')}</select>
+      <label for="sExtra">Instrucciones extra para el resumen <span class="muted" style="font-weight:400">· opcional</span></label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(c.summary?.extra || '')}</textarea>
+      <div class="help">Quién resume y si lo hace solo al terminar se elige en <a href="#" data-sec-ir="procesado">Procesado</a>.</div>
+    </fieldset>`;
+}
+/* Proyectos: copias de cada reunión, como documento, en otras carpetas (los «destinos de salida»). */
+function perfilSalidasHtml() {
+  const p = (S.config || {}).perfil || {};
+  return `<fieldset><legend>${I.copy}Copias en otras carpetas</legend>
+      <div class="help" style="margin-top:4px">Opcional: cada reunión, como documento, en un vault de Obsidian, una biblioteca de SharePoint sincronizada o la carpeta de documentos del proyecto.</div>
       <div id="pfOuts">${perfilOutsHtml(p.outputs || [])}</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="pfOutAdd">${I.plus}Añadir carpeta…</button></div>
       <div id="pfAvisos"></div>
-      <div class="help">Una carpeta fuera de ${esc(APP_NAME)}: un vault de Obsidian, una biblioteca de SharePoint sincronizada, la de documentos del proyecto en OneDrive… No vale la carpeta de ${esc(APP_NAME)}, una carpeta vinculada ni una con grabaciones: allí cada documento chocaría con las notas de su reunión. Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>; si ese nombre ya lo usa otra reunión o un fichero tuyo, como <code>&lt;fecha&gt; - &lt;nombre&gt; (código).md</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)} en este PC; uno ajeno, uno nuestro que hayas cambiado allí o uno de otro PC que no coincida se deja como está (abajo verás el aviso). Al borrar una reunión, sus documentos que nadie haya cambiado van también a la papelera.</div>
+      <details class="ag-como"><summary>¿Cómo funciona?</summary><div class="help">Una carpeta fuera de ${esc(APP_NAME)}: no vale la carpeta de ${esc(APP_NAME)}, una carpeta vinculada ni una con grabaciones: allí cada documento chocaría con las notas de su reunión. Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>; si ese nombre ya lo usa otra reunión o un fichero tuyo, como <code>&lt;fecha&gt; - &lt;nombre&gt; (código).md</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)} en este PC; uno ajeno, uno nuestro que hayas cambiado allí o uno de otro PC que no coincida se deja como está (abajo verás el aviso). Al borrar una reunión, sus documentos que nadie haya cambiado van también a la papelera.</div></details>
     </fieldset>`;
 }
 /* ---------------------------------------------------------------- destinos de salida (lista editable de Ajustes) */
@@ -174,7 +192,7 @@ function bindPerfilSettings(d) {
       fsel.value = fsel.dataset.prev || PERFIL_AUTO;
       const rel = await linkFolder();  // se vincula y pasa a ser la carpeta fija
       if (rel && document.body.contains(fsel)) {
-        fsel.innerHTML = `<option value="${PERFIL_AUTO}">Automática · la última usada (o la del proyecto del tema)</option>` + folderOpts(rel);
+        fsel.innerHTML = `<option value="${PERFIL_AUTO}">Automática · la última usada</option>` + folderOpts(rel);
         fsel.dataset.prev = rel;
       }
     };

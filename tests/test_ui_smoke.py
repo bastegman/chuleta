@@ -142,6 +142,11 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         nota = "document.querySelector('#sInicioWinNota').textContent.includes('solo con la app instalada')"
         pg.wait_for_function(nota, timeout=10000)
         self.assertTrue(pg.evaluate("document.querySelector('#sInicioWin').disabled"))
+        # Ajustes abre en «Al grabar», con el plan del servidor arriba (rediseño B2, 07/11/2026)
+        pg.wait_for_selector(".aj-nav [data-sec='algrabar'].on", timeout=5000)
+        pg.wait_for_selector("#agFilas .gr-fila[data-fila='carpeta']", timeout=10000)
+        self.assertIn("Así se graba ahora", pg.text_content("[data-secc='algrabar']"))
+        pg.click(".aj-nav [data-sec='procesado']")
         # «Donde se procesan tus reuniones»: las tres opciones, y cada una ensena lo suyo (02/11/2026)
         for v in ("local", "agente", "api"):
             pg.wait_for_selector(f"#modal input[name='proc'][value='{v}']", state="attached", timeout=5000)
@@ -209,6 +214,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         # api() en todo Ajustes y solo lo vio la e2e de Windows) y la sección elegida se recuerda
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal:not(.hidden) .aj-nav", timeout=5000)
+        pg.click(".aj-nav [data-sec='procesado']")
         otro = "agente" if antes != "agente" else "local"
         pg.check(f"#modal input[name='proc'][value='{otro}']")
         pg.click("#procAplicar")
@@ -305,6 +311,44 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, [r for r in red if "/api/rec/start" not in r])
         self.assertEqual([e for e in err if "grabadora de prueba" not in e and "400" not in e], [])
+        self.assertEqual(red, [])
+
+    def test_ajustes_al_grabar_y_proyectos(self):
+        """Ajustes (rediseño B2, 07/11/2026): abre en «Al grabar» con el plan del servidor arriba, que cambia con lo
+        escrito aunque no se haya guardado; «Proyectos» guarda el idioma de un proyecto en su fila y lo dice como suyo;
+        «Calendario y Teams» dice el estado de Teams en una frase."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila[data-fila='idioma']", timeout=10000)
+        antes = pg.evaluate("api('/api/config')")["language"]
+        otro = "pt" if antes != "pt" else "de"
+        pg.select_option("#sLang", otro)
+        nombre = {"pt": "Portugués", "de": "Alemán"}[otro]
+        fila = "document.querySelector('#agFilas [data-fila=idioma] .gr-v').textContent"
+        pg.wait_for_function(f"{fila}.includes('{nombre}')", timeout=5000)
+        self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
+        self.assertEqual(pg.evaluate("api('/api/config')")["language"], antes)  # aún no
+        pg.select_option("#sLang", antes)  # se deja como estaba
+        pg.click(".aj-nav [data-sec='proyectos']")
+        pg.wait_for_selector("#pjTabla [data-pj-editar='Proyecto']", timeout=10000)
+        pg.click("#pjTabla [data-pj-editar='Proyecto']")
+        pg.select_option("#pjTabla [data-pj-l]", "en")
+        pg.click("#pjTabla [data-pj-ok]")
+        fila_p = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"]')?.innerText"
+        pg.wait_for_function(f"{fila_p}.includes('Solo inglés')", timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["project_langs"], {"Proyecto": "en"})
+        pg.click(".aj-nav [data-sec='algrabar']")
+        origen = "document.querySelector('#agFilas [data-fila=idioma] .gr-origen').textContent"
+        pg.wait_for_function(f"{origen} === 'de Proyecto'", timeout=5000)
+        pg.click(".aj-nav [data-sec='calendario']")
+        self.assertTrue(pg.inner_text("#ctTeamsEstado").strip())
+        pg.evaluate("api('/api/grabar/recordar', {clave: 'idioma', valor: null, alcance: 'proyecto',"
+                    " vocab: 'Proyecto/Vocabulario/General.txt'})")
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [])
         self.assertEqual(red, [])
 
     def test_sin_token_no_hay_sesion(self):

@@ -10,6 +10,19 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Ajustes por lo que haces: «Al grabar» primero, «Proyectos» y «Calendario y Teams» (07/11/2026)
+Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configurado es lo que se usa (msg 1196).
+- Ajustes abre en **«Al grabar»**: arriba, «Así se graba ahora una reunión de [proyecto]», el mismo cálculo que la
+  tarjeta de grabar y Ctrl+Alt+R, que cambia al momento con lo que escribas debajo aunque aún no lo hayas guardado.
+  Debajo, solo las reglas, una por línea: reuniones sin proyecto, idioma por defecto, proyecto al grabar, contexto,
+  micrófono y audio del PC, texto en directo y el aviso al detectar una llamada. La ayuda larga, plegada.
+- **«Proyectos»** junta lo que antes eran Vocabulario y Carpetas: una tabla con la carpeta y el idioma de cada proyecto
+  y workstream, que dice si son suyos o heredados («la del proyecto», «el de Ajustes») y se edita en la propia fila; las
+  listas de vocabulario, las carpetas fuera de la app y las copias en otras carpetas (los antiguos destinos de salida).
+- Cada cosa a su sección: los motores a **Procesado**, el idioma y las instrucciones del resumen a **Resumen**, OBS a
+  **Avanzado** y Outlook y el aviso flotante a **Calendario y Teams**, que dice en una frase si Teams funciona (y la
+  reunión que ve ahora) y el estado de Outlook.
+
 ### Grabar: una tarjeta que dice qué va a pasar, y lo mismo con Ctrl+Alt+R (07/11/2026)
 Lo que pidió: grabar «no es nada amigable» y no estaba claro si lo que se configura es lo que de verdad se usa
 (msg 1196).

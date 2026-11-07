@@ -337,6 +337,20 @@ class ServidorPlanTests(TempTree):
             with self.assertRaises(server.ApiError, msg=mal):
                 a.grabar_recordar(mal)
 
+    def test_ajustes_sin_guardar_se_ven_en_el_plan(self):
+        """B2: «Así se graba ahora» enseña lo que quedará con lo escrito en Ajustes › Al grabar, sin guardarlo."""
+        a = self.app(language="es", rec_mic="default")
+        antes = a.settings.get()
+        aj = {"language": "pt", "rec_mic": "none", "rec_directo": False, "perfil": {"context": "X"}}
+        p = a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": aj})
+        b = lineas(p)
+        self.assertEqual((b["idioma"]["code"], b["audio"]["mic"], b["transcribe"]["live"], b["contexto"]["valor"]),
+                         ("pt", "none", False, "X"))
+        self.assertEqual(b["idioma"]["origen"], "ajustes")
+        self.assertEqual(a.settings.get(), antes)  # no se ha guardado nada
+        p = a.grabar_plan_api({"vocab": "", "ajustes": {"language": "xx-yy-zz", "perfil": {"folder": "No/Existe"}}})
+        self.assertEqual(lineas(p)["idioma"]["code"], "es")  # lo que no vale se ignora
+
     def test_renombrar_un_tema_o_un_proyecto_conserva_su_idioma(self):
         d = {"workstream_langs": {"Alfa/Vocabulario/General.txt": "pt"}, "project_langs": {"Alfa": "en"}}
         server.settings_moved(d, "Alfa", "Alfa2", folder=True, project=("Alfa", "Alfa2"))

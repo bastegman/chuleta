@@ -10,10 +10,14 @@ from test_frontend import js_defs, read
 
 # ganchos de app.js y notas.js: cada uno una sola vez y protegido con typeof (la app funciona sin perfil.js)
 # (07/11/2026: el diálogo Grabar es la tarjeta de grabar.js; sus ganchos de perfil.js se fueron con él)
-HOOKS_APP = ("perfilLiveHtml(a)", "perfilFieldsetHtml()", "bindPerfilSettings(d)",
+# (07/11/2026, B2: el «Perfil de reunión» se reparte por secciones: motores, resumen y copias aquí; las reglas de
+# grabar, en ajustes.js)
+HOOKS_APP = ("perfilLiveHtml(a)", "perfilMotoresHtml()", "perfilResumenHtml()", "perfilSalidasHtml()",
+             "bindPerfilSettings(d)",
              "collectPerfilSettings(d)", "perfilLangOf(list[0])", "perfilImportar('', openSettings)",
              "perfilVocabEmptyHtml()")
-GUARDED = ("perfilLiveHtml", "perfilFieldsetHtml", "bindPerfilSettings", "collectPerfilSettings", "perfilLangOf",
+GUARDED = ("perfilLiveHtml", "perfilMotoresHtml", "perfilResumenHtml", "perfilSalidasHtml", "bindPerfilSettings",
+           "collectPerfilSettings", "perfilLangOf",
            "perfilImportar", "perfilVocabEmptyHtml", "perfilPropsHtml", "perfilSavedText")
 
 
@@ -45,11 +49,11 @@ class PerfilCargaTests(unittest.TestCase):
 
     def test_textos_y_sin_nada_externo(self):
         js = read("perfil.js")
-        for s in ("Sin vocabulario", "Perfil de reunión", "Destinos de salida", "Añadir carpeta…",
+        for s in ("Sin proyecto", "Perfil de reunión", "Copias en otras carpetas", "Añadir carpeta…",
                   "subcarpeta por proyecto", "Markdown (.md)", "Texto (.txt)", "Word (.docx)", "/api/perfil",
                   "/api/vocab/import", "/api/link/pick", "Vocabulario\\\\&lt;Tema&gt;.txt",
                   "junto a <code>_app</code>", "Por defecto · ",
-                  "Automática · la última usada", "Automático · el que sugiera la reunión", "Contexto",
+                  "Automática · la última usada", "Automático · con su motivo", "Contexto", "Reuniones sin proyecto",
                   "el directo lo usa desde el siguiente trozo", "${esc(APP_NAME)}"):
             self.assertIn(s, js, s)
         self.assertNotIn("fetch(", js)  # todo pasa por api() de app.js
@@ -57,7 +61,8 @@ class PerfilCargaTests(unittest.TestCase):
         self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u26FF]")  # sin emojis: iconos I.*
         self.assertNotIn("Notas", js)  # el nombre de la app sale de APP_NAME
         for fn in ("perfilLangLabel", "perfilLangOptions", "perfilLangOf", "perfilGroups", "perfilImportar",
-                   "perfilImportText", "perfilPropsHtml", "perfilLiveHtml", "perfilSavedText", "perfilFieldsetHtml",
+                   "perfilImportText", "perfilPropsHtml", "perfilLiveHtml", "perfilSavedText", "perfilReglasHtml",
+                   "perfilMotoresHtml", "perfilResumenHtml", "perfilSalidasHtml",
                    "perfilOutsHtml", "bindPerfilOuts", "bindPerfilSettings", "collectPerfilSettings",
                    "perfilVocabEmptyHtml"):
             self.assertRegex(js, re.compile(rf"^(async )?function {fn}\(", re.M), fn)

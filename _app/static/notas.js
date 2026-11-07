@@ -903,6 +903,12 @@ function renderMeetChip() {
   const c = $('#meetChip'), m = S.rec && S.rec.meeting;
   c.classList.toggle('hidden', !m || !!S.rec.recording);
   if (m) c.innerHTML = `${I.phone}${esc(m)} en llamada · <b><i class="recdot"></i>Tomar Notas</b>`;
+  // con qué grabaría: el mismo plan que Ctrl+Alt+R y la tarjeta (/api/grabar/plan), una vez por llamada
+  if (m && !S.rec.recording && S.meetPlanDe !== m) {
+    S.meetPlanDe = m;
+    api('/api/grabar/plan', {}).then(p => { c.title = `Graba: ${p.resumen}`; }).catch(() => { });
+  }
+  if (!m) S.meetPlanDe = null;
 }
 $('#meetChip').onclick = () => toggleRec();
 
