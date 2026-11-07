@@ -4,7 +4,6 @@ y, de reserva, en texto limpio; sin Markdown (##, **, - [ ]), sin los minutos [m
 helpers de notas.js se ejecutan con node (si está instalado); el portapapeles de verdad lo prueban test_ui_smoke
 (Chromium) y test_portapapeles_webview2 (WebView2, en el runner de Windows). Los nombres son inventados."""
 import json
-import re
 import shutil
 import subprocess
 import unittest
@@ -95,7 +94,8 @@ class ActaTests(unittest.TestCase):
     def test_escapa_el_html_y_aguanta_lo_raro(self):
         out = self.run_js("""
 const r = actaCorreo('# Acta <script>alert(1)</script>\\n\\nTexto con <b>etiquetas</b> & "comillas"\\n- [ ] \\n---\\n'
-  + '1. Primero [0:10]\\n2) Segundo\\n\\n## Vacía\\n\\n', {title: '<img src=x onerror=alert(1)>', when: '', people: ''});
+  + '1. Primero [0:10]\\n2) Segundo\\n\\n## Vacía\\n\\n',
+  {title: '<img src=x onerror=alert(1)>', when: '', people: ''});
 console.log(JSON.stringify(r));
 console.log(JSON.stringify(actaCorreo('', {})));
 console.log(JSON.stringify(actaCorreo('solo un párrafo\\nen dos líneas', null)));""")
