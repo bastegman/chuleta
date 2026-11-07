@@ -5613,7 +5613,7 @@ class App:
             except UnicodeDecodeError:  # cp1252 o UTF-16 (de una carpeta conectada): en el zip, en UTF-8
                 tmp = tmp or tempfile.mkdtemp(prefix="chuleta-listas-")
                 src = os.path.join(tmp, f"{len(vocab)}.txt")
-                with open(src, "w", encoding="utf-8") as f:
+                with open(src, "w", encoding="utf-8", newline="") as f:  # sin newline="", Windows dobla los \r\n
                     f.write(_decode_list(raw))
             except OSError:
                 continue
