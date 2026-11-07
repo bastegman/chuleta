@@ -15,6 +15,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   estado, participantes, tema).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio. Al terminar se hace
   solo si la reunión se transcribió en la nube; lo transcrito en local, a mano o si lo permites en Ajustes.
+  «Copiar para correo» lo copia como acta con formato (título, fecha, asistentes confirmados y el resumen, sin
+  Markdown ni minutos) para pegarlo en Outlook o en Teams.
 - **Dónde se procesa, lo eliges tú**: solo en este PC (nada sale de él), con tu cuenta de Claude (resumen con tu
   suscripción a través de Claude Code, con el paso a paso dentro de la app) o con una API externa; las dos últimas,
   con su aviso.

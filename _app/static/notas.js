@@ -332,6 +332,71 @@ function linkStamps(html) {  // [12:34] -> enlace que salta a ese minuto del aud
   return html.replace(/\[((?:\d+:)?\d{1,2}:\d{2})\]/g, (m, t) => `<a class="tsl" data-ts="${t}" title="Escuchar desde aquí">${m}</a>`);
 }
 const stampSecs = t => t.split(':').reduce((acc, x) => acc * 60 + +x, 0);
+
+/* ---------------------------------------------------------------- «Copiar para correo» */
+/* El resumen como acta para un correo o un chat: en HTML (Outlook y Teams lo pegan con formato) y en texto limpio, de
+   reserva. Sin Markdown (##, **, - [ ]), sin los minutos [mm:ss] (en un correo no saltan al audio) y sin firma de IA:
+   es su correo y ya lo revisa (decisión D10). info: {title, when, people}; con asistentes confirmados, la sección de
+   participantes del resumen sobra (van en la cabecera). La letra va puesta: sin ella, Outlook pega en Times. */
+const ACTA_GENTE = /^(participantes|asistentes|participants|attendees|teilnehmer(innen)?|partecipanti)$/i;
+const ACTA_FONT = 'font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt';
+function actaInline(s, html) {  // un trozo del resumen: sin minutos y con negrita y cursiva (en HTML) o sin marcas
+  s = String(s).replace(/\s*\[(?:\d+:)?\d{1,2}:\d{2}\]/g, '').replace(/\s+([,.;:)])/g, '$1').trim();
+  if (!html) return s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2').replace(/`([^`]+)`/g, '$1');
+  return esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>').replace(/`([^`]+)`/g, '$1');
+}
+function actaItem(s) {  // «Responsable: tarea» con el responsable en negrita (también «Plazo: …» en los puntos)
+  const t = actaInline(s, false), m = t.match(/^([^:]{1,40}):\s+(.+)$/);
+  return m && m[1].split(/\s+/).length <= 5 && !/https?$/i.test(m[1]) ? `<b>${esc(m[1])}</b>: ${actaInline(m[2], true)}` : actaInline(s, true);
+}
+function actaCorreo(sum, info) {
+  info = info || {};
+  const people = String(info.people || '').trim(), secs = [{ h: '', blocks: [] }];
+  let para = null, list = null;
+  const cur = () => secs[secs.length - 1];
+  for (const l of String(sum || '').replace(/\r/g, '').split('\n')) {
+    let m;
+    if ((m = l.match(/^\s*#{1,6}\s+(.*)/))) { para = list = null; secs.push({ h: m[1].trim(), blocks: [] }); }
+    else if (!l.trim() || /^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) para = list = null;
+    else if ((m = l.match(/^\s*(?:[-*•+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.*)/))) {
+      para = null;
+      if (!list) { list = { items: [] }; cur().blocks.push(list); }
+      if (m[1].trim()) list.items.push(m[1]);
+    } else {
+      list = null;
+      if (!para) { para = { lines: [] }; cur().blocks.push(para); }
+      para.lines.push(l.trim());
+    }
+  }
+  const head = [info.title, info.when, people].map(x => String(x || '').trim()).filter(Boolean);
+  const text = [], html = [];
+  if (head.length) {
+    text.push(head.join(' · '));
+    html.push(`<p style="margin:0 0 10pt"><b>${esc(head[0])}</b>${head.slice(1).map(x => ' · ' + esc(x)).join('')}</p>`);
+  }
+  for (const s of secs) {
+    const blocks = s.blocks.filter(b => (b.items || b.lines).length);
+    if (!blocks.length || (s.h && people && ACTA_GENTE.test(actaInline(s.h, false).replace(/[:.]$/, '')))) continue;
+    if (s.h) { text.push('', actaInline(s.h, false)); html.push(`<p style="margin:12pt 0 4pt"><b>${actaInline(s.h, true)}</b></p>`); }
+    for (const b of blocks) {
+      if (b.lines) { text.push(actaInline(b.lines.join(' '), false)); html.push(`<p style="margin:0 0 6pt">${actaInline(b.lines.join(' '), true)}</p>`); }
+      else {
+        b.items.forEach(it => text.push('• ' + actaInline(it, false)));
+        html.push(`<ul style="margin:0 0 6pt;padding-left:18pt">${b.items.map(it => `<li>${actaItem(it)}</li>`).join('')}</ul>`);
+      }
+    }
+  }
+  return { text: text.join('\n').trim() + '\n', html: `<div style="${ACTA_FONT}">${html.join('')}</div>` };
+}
+/* Título, fecha («viernes 6 nov, 10:00») y asistentes CONFIRMADOS de la reunión: los que sugirió Outlook o Teams sin
+   confirmar no salen (como en el resumen y los destinos de salida). */
+function actaInfo(a) {
+  const p = (a && a.props) || {}, d = a ? aDate(a) : null;
+  const y = d && d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : '';
+  return { title: nfc(p.titulo || (a && a.label) || 'Reunión'),
+    when: d ? `${DIA[d.getDay()].toLowerCase()} ${d.getDate()} ${MES[d.getMonth()]}${y}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : '',
+    people: p.participantes && !p.participantes_origen ? nfc(String(p.participantes)) : '' };
+}
 async function loadSummary(a) {
   const box = $('#aSum');
   if (!box) return;
@@ -369,7 +434,7 @@ function renderSummary(a) {
   box.innerHTML = progress + err + `<div class="sum-tools">
       <span class="muted">${I.spark}Generado con IA${m.modelo ? ` (${esc(m.modelo)})` : ''}${m.generado ? ` · ${esc(m.generado)}` : ''} · revísalo antes de compartirlo</span>
       <span class="sp"></span>
-      <button class="btn sm" data-act="sum-copy">${I.copy}Copiar</button>
+      <button class="btn sm" data-act="sum-copy" title="Título, fecha, asistentes confirmados y el resumen, con formato y sin los minutos: para pegarlo en un correo o en Teams">${I.copy}Copiar para correo</button>
       <button class="btn sm" data-act="sum-to-notes">${I.plus}A mis notas</button>
       ${j || azure ? '' : `<button class="btn sm" data-act="summarize" data-path="${esc(a.path)}" title="Vuelve a hacerlo (por ejemplo, tras corregir la transcripción o añadir notas)">${I.refresh}Regenerar</button>`}
     </div>
@@ -393,7 +458,10 @@ main.addEventListener('click', async e => {
       pollJobs(true);
       setTimeout(() => renderSummary(a), 600);
     } catch (err) { toast(esc(err.message), 'err'); }
-  } else if (act.dataset.act === 'sum-copy' && S.sum) copy(S.sum.text, 'Resumen copiado');
+  } else if (act.dataset.act === 'sum-copy' && S.sum) {
+    const r = actaCorreo(S.sum.text, actaInfo(a && a.path === S.sum.path ? a : S.audios.get(S.sum.path)));
+    copyRich(r.html, r.text, 'Copiado para correo: pégalo en Outlook o en Teams');
+  }
   else if (act.dataset.act === 'sum-to-notes' && a && S.sum) {
     const r = await api('/api/notes?path=' + enc(a.path));
     const body = (r.body ? r.body.trim() + '\n\n---\n\n' : '') + '# ✨ Resumen\n\n' + S.sum.text.replace(/^## /gm, '## ');

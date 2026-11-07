@@ -10,6 +10,22 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### «Copiar para correo»: el resumen con formato (07/11/2026)
+Lo que pasaba: «Copiar» dejaba en el portapapeles el Markdown del resumen (`## Resumen`, `- [ ] Luis: …`, `[1:12]`), y
+así llegaba al correo (auditoría de UX del rediseño, A5; mock 08).
+- «Copiar» pasa a **«Copiar para correo»** (pestaña Resumen): copia un acta con el título, la fecha («viernes 6 nov,
+  10:00») y los asistentes confirmados, y el resumen con sus secciones, listas y negritas; el responsable de cada tarea,
+  en negrita. Sin `##`, sin `[ ]` y sin los minutos (en un correo no saltan al audio).
+- Al portapapeles van dos versiones a la vez: **HTML** (Outlook, Teams y Word lo pegan con formato, con letra Aptos o
+  Calibri; sin letra, Outlook pegaba en Times) y **texto limpio** de reserva (Bloc de notas, chats sin formato). Si el
+  navegador no deja escribir HTML, solo el texto, y el aviso lo dice («sin formato»).
+- Los participantes que sugirió Outlook o Teams sin confirmar no salen (como en el resumen). Con asistentes
+  confirmados, la sección «Participantes» del resumen no se repite.
+- Sin firma de IA: es tu correo y ya lo revisas (decisión D10). La página sigue diciendo que el resumen es de la IA.
+- Desarrollo y CI: `test_copiar_correo.py` (el acta, con node), un ui-smoke que lee el portapapeles en Chromium, y
+  `test_portapapeles_webview2.py`, que en `windows-real` abre WebView2, pulsa el botón con el ratón de Windows y lee los
+  formatos «HTML Format» y CF_UNICODETEXT del portapapeles de Windows.
+
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
 - La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja
