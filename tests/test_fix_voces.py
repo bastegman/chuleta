@@ -464,5 +464,48 @@ J(spkPickBody(a, 'h1', {persona: 'pa', usuario: false}, 'pb'));""")
         self.assertNotIn("cur && !i.provisional ? cur.id", js)  # la decision que renombraba al usuario
 
 
+@unittest.skipUnless(shutil.which("node"), "node no instalado")
+class CopiarTextoTests(unittest.TestCase):
+    """§15 del backlog (msg 1160): «Copiar texto» lleva quien habla, como la pantalla."""
+
+    def run_js(self, setup):
+        defs = js_defs(read("app.js"), ["paragraphs", "whoFor", "transcriptText"])
+        defs += "\n" + js_defs(read("voces.js"), ["spkInfo", "spkLabel"])
+        code = "let S = {};\n" + defs + "\n" + setup + "\nconsole.log(JSON.stringify(transcriptText()));"
+        return "\n".join(node(code))
+
+    SEGS = ("[{start: 0, end: 1, text: 'Hola.'}, {start: 1, end: 2, text: 'Qué tal.'}, {start: 2, end: 3, "
+            "text: 'Bien.'}, {start: 3, end: 4, text: 'Vale.'}, {start: 4, end: 5, text: 'A la vez.'}, "
+            "{start: 5, end: 6, text: 'Ruido.'}, {start: 12, end: 13, text: 'Sigo.'}]")
+
+    def test_con_hablantes(self):
+        out = self.run_js(f"""S.tx = {{path: 'r.wav', kind: 'srt', segs: {self.SEGS}}};
+S.spk = {{path: 'r.wav', exists: true, who: ['h1', 'h1', 'h2', 'h1', 'varios', null, null],
+  hablantes: {{h1: {{label: 'Ana'}}, h2: {{label: 'Tú'}}, h3: {{label: '¿Luis?'}}}}}};""")
+        self.assertEqual(json.loads(out), "Ana: Hola. Qué tal.\n\nTú: Bien.\n\nAna: Vale.\n\nvarios: A la vez."
+                                          "\n\nRuido.\n\nSigo.")
+
+    def test_mismo_hablante_tras_una_pausa_no_repite_el_nombre(self):
+        out = self.run_js(f"""S.tx = {{path: 'r.wav', kind: 'srt', segs: {self.SEGS}.slice(5)}};
+S.spk = {{path: 'r.wav', exists: true, who: ['h3', 'h3'], hablantes: {{h3: {{label: '¿Luis?'}}}}}};""")
+        self.assertEqual(json.loads(out), "¿Luis?: Ruido.\n\nSigo.")
+
+    def test_sin_voces_igual_que_antes(self):
+        segs = f"{self.SEGS}"
+        for spk in ("null", "{path: 'otra.wav', exists: true, who: ['h1'], hablantes: {}}",
+                    "{path: 'r.wav', exists: true, who: ['h1'], hablantes: {}}"):  # otra reunion / longitud distinta
+            out = self.run_js(f"S.tx = {{path: 'r.wav', kind: 'srt', segs: {segs}}};\nS.spk = {spk};")
+            self.assertEqual(json.loads(out), "Hola. Qué tal. Bien. Vale. A la vez. Ruido.\n\nSigo.")
+        out = self.run_js("S.tx = {path: 'r.wav', kind: 'txt', segs: [{start: null, end: null, text: 'a'}]};"
+                          "S.spk = {path: 'r.wav', exists: true, who: ['h1'], hablantes: {h1: {label: 'Ana'}}};")
+        self.assertEqual(json.loads(out), "a")  # .txt: sin hablantes
+
+    def test_el_boton_usa_transcript_text(self):
+        app = read("app.js")
+        self.assertIn("a === 'copy-tx') copy(transcriptText(), whoFor(S.tx) ? 'Transcripción copiada (con hablantes)'",
+                      app)
+        self.assertIn("const who = whoFor(tx);", app)  # pantalla y boton, el mismo casado
+
+
 if __name__ == "__main__":
     unittest.main()

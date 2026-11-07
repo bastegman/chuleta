@@ -31,6 +31,8 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
 - «Volver a identificar» conserva lo que ya corregiste a mano (nombres, «Soy yo», «No soy yo»), casando hablantes
   nuevos y antiguos por tiempo; si falla o se cancela, el sidecar queda como estaba. Las huellas en memoria de la
   identificación anterior se descartan antes de rediarizar (con «Recordar» se podía guardar la voz de otro hablante).
+- «Copiar texto» copia también quién habla, como la pantalla: un párrafo por turno con «Nombre: » delante al cambiar de
+  hablante (sin voces, igual que antes).
 
 ### Dónde se procesan tus reuniones (02/11/2026)
 - Ajustes empieza por una elección: **Solo en este PC** (Whisper local, nada sale del ordenador, sin resumen con IA),

@@ -1299,7 +1299,7 @@ function renderTxBody(fromModel) {
   const edit = S.editing ? ' contenteditable="plaintext-only" spellcheck="true"' : '';
   const span = i => `<span class="s${i >= fresh ? ' fresh' : ''}" data-i="${i}"${edit}>${hlTerms(tx.segs[i].text, terms)}</span>`;
   // quien habla (voces.js): etiqueta al cambiar de hablante, parrafo nuevo por turno
-  const who = S.spk && S.spk.path === tx.path && S.spk.exists && tx.kind === 'srt' && S.spk.who && S.spk.who.length === tx.segs.length ? S.spk.who : null;
+  const who = whoFor(tx);
   const chip = i => who && (i === 0 || who[i] !== who[i - 1]) ? spkChip(who[i]) : '';
   if (S.mode === 'lines' && tx.kind === 'srt') {
     body.innerHTML = tx.segs.map((s, i) => `<div class="ln"><span class="ts" data-i="${i}">${fmtClock(s.start)}</span><span>${chip(i)}${span(i)}</span></div>`).join('');
@@ -1369,10 +1369,20 @@ function updateToLive() {
 }
 main.addEventListener('scroll', updateToLive, { passive: true });
 
+// quien habla en cada frase (el sidecar de voces casado con el .srt): el mismo para la pantalla y para «Copiar texto»
+function whoFor(tx) {
+  return tx && S.spk && S.spk.path === tx.path && S.spk.exists && tx.kind === 'srt' && S.spk.who && S.spk.who.length === tx.segs.length ? S.spk.who : null;
+}
+
+// «Copiar texto»: como en pantalla, un parrafo por turno y el nombre de quien habla al cambiar (msg 1160)
 function transcriptText() {
   const tx = S.tx;
   if (!tx) return '';
-  return paragraphs(tx.segs).map(p => p.map(i => tx.segs[i].text).join(' ')).join('\n\n');
+  const who = whoFor(tx);
+  return paragraphs(tx.segs, who).map(p => {
+    const w = who && who[p[0]] && (p[0] === 0 || who[p[0]] !== who[p[0] - 1]) ? spkLabel(who[p[0]]) : '';
+    return (w ? w + ': ' : '') + p.map(i => tx.segs[i].text).join(' ');
+  }).join('\n\n');
 }
 
 /* ---------------------------------------------------------------- documentos */
@@ -1611,7 +1621,7 @@ main.addEventListener('click', async e => {
     else if (a === 'link-remove') unlinkFolder(p);
     else if (a === 'aviso-sum-ok' || a === 'aviso-sum-ajuste') { e.preventDefault(); avisoResumenLocalVisto(a === 'aviso-sum-ajuste'); }
     else if (a === 'cancel-job') { await api('/api/cancel', { id: act.dataset.id }); pollJobs(true); }
-    else if (a === 'copy-tx') copy(transcriptText(), 'Transcripción copiada');
+    else if (a === 'copy-tx') copy(transcriptText(), whoFor(S.tx) ? 'Transcripción copiada (con hablantes)' : 'Transcripción copiada');
     else if (a === 'copy-doc') copy(S.docText || '', 'Texto copiado');
     else if (a === 'mark-next') gotoMark(S.markIdx + 1);
     else if (a === 'mark-prev') gotoMark(S.markIdx - 1);

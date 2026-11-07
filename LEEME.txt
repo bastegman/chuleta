@@ -141,8 +141,9 @@ QUIÉN HABLA (opcional)
     pulsa «No soy yo»; si eres tú y no sale, «Soy yo». También «Es…» / «Fusionar con…» (dos
     etiquetas eran la misma persona), «No es esta persona» y «Olvidar persona». «Volver a
     identificar» conserva lo que ya hayas corregido a mano.
-  - El resumen con IA usa esos nombres (responsables y participantes) y «Exportar con hablantes»
-    guarda <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
+  - El resumen con IA usa esos nombres (responsables y participantes), «Copiar texto» copia la
+    transcripción con el nombre de quien habla y «Exportar con hablantes» guarda
+    <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
   - Privacidad: las voces se separan y se reconocen en tu PC, y las huellas no salen de él. Los
     nombres que pongas van con la transcripción: al resumen con IA (si lo usas) y a los destinos
     de salida. Por reunión se guarda <grabación>.hablantes.json junto al audio (tramos y
