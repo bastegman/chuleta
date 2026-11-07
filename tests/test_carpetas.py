@@ -420,8 +420,12 @@ class MoverConSuCarpetaTests(TempTree):
 
     def test_mientras_se_resume_no_se_mueve(self):
         self.a.jobs.list.append(types.SimpleNamespace(path=self.rel, kind="summary", status="running"))
+        with mock.patch.object(server, "log"):
+            r = self.a.move({"path": self.rel, "folder": "Beta"})  # se apunta: se mueve al terminar (B1c)
+        self.assertEqual((r["path"], r["pendiente"]["folder"]), (self.rel, "Beta"))
+        self.assertTrue(os.path.isfile(server.safe(self.rel)))
         with self.assertRaises(server.ApiError) as cm:
-            self.move(folder="Beta")
+            self.move(folder="Beta", name="2026-11-07 10-05-09 - Otro")
         self.assertIn("resumiendo", cm.exception.msg)
         self.assertNotIn("OBS", cm.exception.msg)
 

@@ -10,6 +10,21 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Cambiar la carpeta en pleno directo (07/11/2026)
+Lo que pidió: «Quiero poder cambiar la carpeta durante la reunión. Es posible?» (msg 1198).
+- En la cabecera del directo, **«Se guarda en \\Proyecto\\AAAA-MM-DD Nombre\\ · Cambiar»** (sustituye a la miga). Se
+  elige entre las carpetas principales de tus proyectos u **«Otra carpeta…»** con el selector de Windows (si está
+  fuera de Chuleta, se conecta como con «Conectar carpeta»).
+- La grabación sigue escribiendo donde empezó (en Windows no se puede mover un archivo abierto): la línea pasa a «Se
+  moverá a … al terminar · Deshacer», también en la página de la reunión. Cuando ya no queda nada en marcha (la
+  grabación, el directo, el repaso final, las voces y el resumen), Chuleta mueve la reunión entera, con su carpeta, y
+  avisa «Movida a … · Abrir carpeta»; la página que la tenía abierta pasa sola a la ruta nueva.
+- Lo elegido se guarda: si cierras Chuleta antes, se mueve al volver a abrirla. Si un archivo está en uso (OneDrive, el
+  antivirus), no se mueve nada y se reintenta con espera, y se dice. Unas notas que se guarden justo al moverla van a
+  la ruta nueva.
+- Arrastrar en el árbol una reunión que se está grabando o procesando ya no da el aviso de OBS: se moverá al terminar.
+  Renombrarla, cuando termine.
+
 ### Una carpeta por reunión, dentro de la de su proyecto (07/11/2026)
 Lo que pidió: «Que se cree una carpeta por reu. Esto que sea automático dentro de la main folder asignada por el
 proyecto o workstream» (msg 1158).

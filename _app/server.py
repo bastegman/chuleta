@@ -1025,6 +1025,70 @@ class Temas:
                 self._save()
 
 
+class Movimientos:
+    """Reuniones que se moveran a otra carpeta en cuanto la app deje de escribir en ellas (cambiar la carpeta en pleno
+    directo, msg 1198): ruta interna del audio -> {"to": la carpeta principal elegida, "at": cuando, y tras un intento
+    fallido "target" (la carpeta de la reunion ya elegida: el siguiente va a la misma), "intentos", "next" y "error"}.
+    En DATA_DIR/movimientos_pendientes.json: si la app se cierra antes, se hace al volver a abrirla."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        self.data = {k: v for k, v in data.items()
+                     if isinstance(k, str) and isinstance(v, dict) and isinstance(v.get("to"), str)} \
+            if isinstance(data, dict) else {}
+
+    def _save(self):
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, sort_keys=True)
+            os.replace(tmp, self.path)
+        except OSError as e:  # vale en memoria; sin el fichero, un cierre de la app lo olvida
+            log(f"   no se pudo guardar {os.path.basename(self.path)} ({e.__class__.__name__})")
+
+    def get(self, rel):
+        with self.lock:
+            e = self.data.get(rel)
+            return dict(e) if e else None
+
+    def items(self):
+        with self.lock:
+            return [(k, dict(v)) for k, v in self.data.items()]
+
+    def set(self, rel, entry):
+        with self.lock:
+            self.data[rel] = dict(entry)
+            self._save()
+
+    def pop(self, rel):
+        with self.lock:
+            e = self.data.pop(rel, None)
+            if e is not None:
+                self._save()
+            return e
+
+    def moved(self, old, new, folder=False):
+        """Una carpeta (o una reunion) cambia de ruta: lo apuntado la sigue, la reunion y la carpeta de destino."""
+        with self.lock:
+            out = {}
+            for k, v in self.data.items():
+                k2 = moved_rel(k, old, new, folder)
+                v = dict(v)
+                for f in ("to", "target"):
+                    m = moved_rel(v.get(f), old, new, folder=True)
+                    if m is not None:
+                        v[f] = m
+                out[k if k2 is None else k2] = v
+            if out != self.data:
+                self.data = out
+                self._save()
+
+
 _TEMAS, _TEMAS_LOCK = {}, threading.Lock()
 
 
@@ -2139,6 +2203,10 @@ class Jobs:
         self._voices, self.voice_vectors = None, {}  # voces.json (se abre al primer uso) y huellas por reunion
         self._registro, self._salidas_timers = None, {}  # salidas.json (documentos escritos) y reescrituras pendientes
         self.closing = False  # apagando: un repaso final cancelado queda pendiente para el proximo arranque
+        # trabajos que se estan ejecutando o terminando por reunion (busy_for): lo que encadenan al acabar (voces,
+        # resumen) ya esta en cola cuando se sueltan. on_idle(rel): la reunion ha quedado libre; on_tick(): cada 3 s
+        # (App: los movimientos pendientes, cambiar la carpeta en pleno directo)
+        self.held, self.on_idle, self.on_tick = {}, None, None
         for kind in self.queues:
             threading.Thread(target=self._worker, args=(kind,), daemon=True, name=f"worker-{kind}").start()
         threading.Thread(target=self._watch_recordings, daemon=True, name="live-watch").start()
@@ -2199,6 +2267,28 @@ class Jobs:
             return next((j for j in self.list if j.path == path and j.kind in kinds
                          and j.status in ("queued", "running")), None)
 
+    def _hold(self, rel):
+        """Un trabajo de esa reunion empieza a ejecutarse (en su hilo): hasta _release, busy_for la da por ocupada."""
+        with self.lock:
+            held = self.__dict__.setdefault("held", {})
+            held[rel] = held.get(rel, 0) + 1
+
+    def _release(self, rel):
+        """El trabajo ha terminado del todo (con lo que encadena ya en cola): si la reunion queda libre, on_idle."""
+        with self.lock:
+            held = self.__dict__.setdefault("held", {})
+            n = held.get(rel, 0) - 1
+            if n > 0:
+                held[rel] = n
+            else:
+                held.pop(rel, None)
+        cb = getattr(self, "on_idle", None)
+        if n <= 0 and cb and not self.busy_for(rel):
+            try:
+                cb(rel)
+            except Exception:
+                log_exc()
+
     def busy_for(self, rel):
         """Por que la app va a escribir aun en los archivos de esa reunion (una frase), o None: un trabajo suyo en cola,
         en marcha o terminando (lo que encadena al acabar, voces y resumen, ya esta en cola cuando se suelta: hold),
@@ -2221,9 +2311,15 @@ class Jobs:
 
     # --- en directo
     def _watch_recordings(self):
-        """Arranca la transcripcion en directo en cuanto aparece una grabacion de OBS en curso."""
+        """Arranca la transcripcion en directo en cuanto aparece una grabacion de OBS en curso. En la misma vuelta, el
+        resto de cosas de cada 3 s (on_tick: los movimientos pendientes de las reuniones que ya han quedado libres)."""
         while True:
             time.sleep(3)
+            if getattr(self, "on_tick", None):
+                try:
+                    self.on_tick()
+                except Exception:
+                    log_exc()
             try:
                 if not self.settings.get().get("live_auto"):
                     continue
@@ -2265,7 +2361,8 @@ class Jobs:
         COMPLETE.set(rel, False)  # hasta que termine bien, no se da por completa
         with self.lock:
             self.list.append(job)
-        threading.Thread(target=self._run_live, args=(job, abs_path, st), daemon=True, name="live").start()
+        self._hold(rel)  # hasta que el directo acabe con lo que encadene (repaso final, voces, resumen)
+        threading.Thread(target=self._run_live_held, args=(job, abs_path, st), daemon=True, name="live").start()
         log(f"● {job.name}  transcripción en directo{' (automática)' if auto else ''}")
         return job.id
 
@@ -2393,6 +2490,12 @@ class Jobs:
             job.stage = "Rehaciendo desde el principio…"
         log(f"   directo {job.name}: {'rehacer con' if restart else 'modelo'} {job.preset}")
         return job.public()
+
+    def _run_live_held(self, job, abs_path, st):
+        try:
+            self._run_live(job, abs_path, st)
+        finally:
+            self._release(job.path)
 
     def _run_live(self, job, abs_path, st):
         resume = []
@@ -3132,6 +3235,7 @@ class Jobs:
             job = q.get()
             if job.status != "queued":
                 continue
+            self._hold(job.path)  # hasta que termine con lo que encadene (voces, resumen): la reunion esta ocupada
             try:
                 if job.kind == "summary":
                     self._run_summary(job)
@@ -3143,6 +3247,8 @@ class Jobs:
                 log_exc()
                 job.status, job.stage, job.error = "error", "Error", str(e) or e.__class__.__name__
                 job.finished = job.finished or time.time()
+            finally:
+                self._release(job.path)
 
     def _run(self, job):
         job.status, job.started, job.stage = "running", time.time(), "Empezando…"
@@ -3335,6 +3441,11 @@ DIAG_LINES = (
     "   tema de {n} reuniones: siguen a la carpeta renombrada {t}",
     "↪ {t}  →  {t}",
     "   no se pudo quitar la carpeta vacía {t}",
+    "📁 {t}: se moverá a {t} al terminar",
+    "📁 {t}: ya no se mueve (deshecho)",
+    "   movimiento pendiente de {t}: la reunión ya no está ahí, se olvida",
+    "   movimiento pendiente de {t}: la carpeta {t} ya no existe, se queda donde está",
+    "   movimiento pendiente de {t}: {e} Se reintenta en {n} s",
     "   carpeta principal de {t}⟦ (workstream)⟧: {t}",
     "↺ {t}: transcripción original restaurada",
     "🔗 carpeta vinculada: {t}",
@@ -3600,6 +3711,9 @@ class App:
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
         self.transcripts = Transcripts()
         self.jobs = Jobs(self.settings, self.library)
+        # cambiar la carpeta en pleno directo (msg 1198): se mueve cuando la reunion queda libre (al acabar su ultimo
+        # trabajo o en la vuelta de 3 s, que tambien hace los que quedaron de antes de un cierre)
+        self.jobs.on_idle, self.jobs.on_tick = self._al_quedar_libre, self._aplicar_movimientos
         # grabadora propia: una grabacion y, mientras la ventana de "Grabar" esta abierta, un medidor
         self.rec, self.monitor, self.monitor_seen = None, None, 0.0
         self.rec_lock, self.devices_cache = threading.Lock(), (0.0, None)
@@ -3847,6 +3961,9 @@ class App:
             log_exc()
         self.library.at = 0
         log(f"■ Grabación parada: {rel_of(r.path)} ({secs / 60:.1f} min)")
+        if self._movs().get(rel_of(r.path)):  # «solo grabar» no deja trabajos: si tenia otra carpeta, se mueve ya
+            threading.Thread(target=self._aplicar_movimientos, args=(rel_of(r.path),), daemon=True,
+                             name="mover").start()
         return {"path": rel_of(r.path), "seconds": secs}
 
     def shutdown_prepare(self):
@@ -4407,6 +4524,7 @@ class App:
             except OSError:
                 pass
         COMPLETE.set(rel, False)
+        self._movs().pop(rel)  # un movimiento pendiente (cambiar la carpeta en pleno directo) ya no tiene a quien mover
         self.jobs._cloud_text().set(rel, False)  # otra reunion que acabe con este nombre no hereda su origen
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
         self.jobs.voice_vectors.pop(rel, None)
@@ -4646,7 +4764,7 @@ class App:
         return {"results": results[:100], "total": sum(r["count"] for r in results)}
 
     def jobs_list(self, q):
-        return {"jobs": self.jobs.snapshot()}
+        return {"jobs": self.jobs.snapshot(), "movimientos": self.movimientos_publicos()}
 
     # --- POST
     def transcribe(self, b):
@@ -4714,10 +4832,15 @@ class App:
         new_stem = clean_name(b["name"]) if b.get("name") else stem
         if ext.lower() in AUDIO_EXT:
             why = self._ocupada(rel_of(src))
-            if why:
-                raise ApiError(f"{why}: muévela cuando termine.")
+            if why and new_stem != stem:
+                raise ApiError(f"{why}: podrás renombrarla cuando termine.")
+            if why:  # se mueve sola al terminar (como «Cambiar» en la cabecera del directo)
+                return self._destino_pendiente(rel_of(src), rel_of(dest_dir))
         with self._move_lock():
-            return {"path": self._move_now(src, dest_dir, new_stem)}
+            new = self._move_now(src, dest_dir, new_stem)
+        if ext.lower() in AUDIO_EXT:
+            self._movs().pop(rel_of(src))  # movida a mano: lo que estuviera pendiente ya no vale
+        return {"path": new}
 
     def _move_now(self, src, dest_dir, new_stem=None, target=None):
         """Mueve (o renombra) una reunion con todo lo suyo a `dest_dir` y devuelve la ruta interna nueva del audio.
@@ -4815,6 +4938,185 @@ class App:
         if getattr(self.jobs, "settings", None) is not None:  # el documento de los destinos dice de donde sale
             self.jobs.schedule_outputs(new)
 
+    # --- cambiar la carpeta en pleno directo (B1c, msg 1198): se mueve al terminar todo
+    MOV_ESPERAS = (3, 10, 30, 60, 120)  # segundos entre reintentos si un archivo esta en uso (OneDrive, antivirus)
+
+    def _movs(self):
+        """Los movimientos pendientes (Movimientos) del DATA_DIR vigente."""
+        path = os.path.join(DATA_DIR, "movimientos_pendientes.json")
+        reg = self.__dict__.get("_movs_reg")
+        if reg is None or reg.path != path:
+            reg = self.__dict__["_movs_reg"] = Movimientos(path)
+        return reg
+
+    def _donde_esta(self, abs_audio):
+        """La carpeta principal donde esta ahora la reunion: la que contiene su carpeta (si la tiene) o la suya."""
+        own = own_meeting_dir(abs_audio)
+        return os.path.dirname(own) if own else os.path.dirname(abs_audio)
+
+    def _destino_final(self, abs_audio, to_rel, target=None):
+        """Donde acabara la reunion si se mueve a `to_rel`: su carpeta dentro (con « (2)» si ya hay otra) o la propia
+        carpeta (una reunion sin carpeta suya)."""
+        if target:
+            return target
+        own = own_meeting_dir(abs_audio)
+        try:
+            dest = safe(to_rel, "dir")
+        except ApiError:
+            return to_rel
+        return rel_of(free_dir(dest, os.path.basename(own), mine=own)) if own else rel_of(dest)
+
+    def _pendiente_publico(self, rel, e):
+        try:
+            abs_audio = safe(rel, "file")
+        except ApiError:
+            abs_audio = None
+        dest = self._destino_final(abs_audio, e["to"], e.get("target")) if abs_audio else e["to"]
+        return {"folder": e["to"], "destino": dest, "display": display_rel(dest), "error": e.get("error"),
+                "intentos": e.get("intentos", 0)}
+
+    def destino(self, b):
+        """POST /api/reunion/destino {path, folder | folder_abs | null}: la carpeta principal a la que mover esta
+        reunion. Si se esta grabando o procesando, se apunta y se mueve sola en cuanto no quede nada en marcha (directo,
+        repaso, voces y resumen); si no, ahora. folder null (o la carpeta donde ya esta) = Deshacer. folder_abs: una
+        carpeta del PC (el selector de Windows); si esta fuera de la app, se vincula como «Conectar carpeta»."""
+        src = safe(b.get("path"), "file")
+        if os.path.splitext(src)[1].lower() not in AUDIO_EXT:
+            raise ApiError("Solo se puede cambiar la carpeta de una reunión.")
+        rel = rel_of(src)
+        folder = b.get("folder")
+        if b.get("folder_abs"):
+            p = os.path.normpath(os.path.expandvars(str(b["folder_abs"]).strip().strip('"')))
+            inside = _inside(p, ROOT) or any(_inside(p, l["path"]) for l in LINKS.values())
+            folder = rel_of(p) if inside and os.path.isdir(p) else self.link_add({"path": p})["rel"]
+        if folder is None:
+            if self._movs().pop(rel) is not None:
+                log(f"📁 {rel}: ya no se mueve (deshecho)")
+            return {"path": rel, "pendiente": None}
+        return self._destino_pendiente(rel, str(folder).replace("\\", "/").strip("/"))
+
+    def _destino_pendiente(self, rel, folder_rel):
+        src = safe(rel, "file")
+        dest = safe(folder_rel, "dir")
+        if in_app_dir(dest):
+            raise ApiError("No se puede mover ahí")
+        if _norm_dir(dest) == _norm_dir(self._donde_esta(src)):  # la carpeta donde ya esta: nada que mover
+            if self._movs().pop(rel) is not None:
+                log(f"📁 {rel}: ya no se mueve (deshecho)")
+            return {"path": rel, "pendiente": None}
+        own = own_meeting_dir(src)
+        if own and _inside(dest, own):
+            raise ApiError("No se puede mover una reunión dentro de su propia carpeta.")
+        with self._move_lock():
+            if not self._ocupada(rel):  # ya no se escribe en ella: se mueve ahora
+                self._movs().pop(rel)
+                new = self._move_now(src, dest)
+                self._nota_movida(rel, new)
+                return {"path": new, "pendiente": None, "movida": True}
+            e = {"to": rel_of(dest), "at": time.time()}
+            self._movs().set(rel, e)
+        log(f"📁 {rel}: se moverá a {e['to']} al terminar")
+        return {"path": rel, "pendiente": self._pendiente_publico(rel, e)}
+
+    def _al_quedar_libre(self, rel):
+        """Jobs.on_idle: la reunion ha terminado su ultimo trabajo. Si tiene un movimiento pendiente, se hace en otro
+        hilo (no se para la cola mientras se mueve un audio grande)."""
+        if self._movs().get(rel):
+            threading.Thread(target=self._aplicar_movimientos, args=(rel,), daemon=True, name="mover").start()
+
+    def _aplicar_movimientos(self, only=None):
+        """Mueve las reuniones con un movimiento pendiente que ya han quedado libres (o solo `only`). Lo llaman el final
+        de cada trabajo (on_idle), la parada de la grabacion y la vuelta de 3 s (on_tick), que tambien hace los que se
+        quedaron de antes de un cierre de la app y reintenta los que fallaron (con espera: MOV_ESPERAS)."""
+        movs = self._movs()
+        pend = [(r, e) for r, e in movs.items() if only is None or r == only]
+        if not pend:
+            return 0
+        lock = self._move_lock()
+        if not lock.acquire(blocking=False):
+            return 0  # otro hilo esta moviendo: la vuelta siguiente (3 s) lo vuelve a mirar
+        n = 0
+        try:
+            for rel, e in pend:
+                if e.get("next", 0) > time.time() or self._ocupada(rel):
+                    continue
+                n += self._mover_pendiente(rel, e)
+        finally:
+            lock.release()
+        return n
+
+    def _mover_pendiente(self, rel, e):
+        movs = self._movs()
+        try:
+            src = safe(rel, "file")
+        except ApiError:
+            src = None
+        target = e.get("target")
+        if src is None and target:  # la app se cerro a medio mover: el audio ya esta en la suya y falta lo demas
+            try:
+                moved = os.path.join(safe(target, "dir"), os.path.basename(rel))
+            except ApiError:
+                moved = None
+            if moved and os.path.isfile(moved):
+                movs.pop(rel)
+                self._moved_refs(rel, rel_of(moved))
+                self._nota_movida(rel, rel_of(moved))
+                return 1
+        if src is None:
+            movs.pop(rel)
+            log(f"   movimiento pendiente de {rel}: la reunión ya no está ahí, se olvida")
+            return 0
+        try:
+            dest = safe(e["to"], "dir")
+            if in_app_dir(dest):
+                raise ApiError("No se puede mover ahí")
+        except ApiError:
+            movs.pop(rel)
+            msg = f"La carpeta {display_rel(e['to'])} ya no existe: la reunión se queda donde estaba."
+            log(f"   movimiento pendiente de {rel}: la carpeta {e['to']} ya no existe, se queda donde está")
+            self._nota_movida(rel, None, msg)
+            notify("No se ha movido la reunión", msg)
+            return 0
+        own = own_meeting_dir(src)
+        if own:
+            # la carpeta de la reunion en el destino, apuntada mientras se mueve: si la app se cierra a medias, el
+            # siguiente intento termina en la misma. Un intento que falla lo deshace todo (move_files) y la olvida
+            target = target or rel_of(free_dir(dest, os.path.basename(own), mine=own))
+            if _norm_dir(safe(target)) != _norm_dir(own):
+                e["target"] = target
+                movs.set(rel, e)
+        try:
+            new = self._move_now(src, dest, target=safe(target) if own else None)
+        except ApiError as err:
+            e.pop("target", None)
+            n = int(e.get("intentos") or 0) + 1
+            wait = self.MOV_ESPERAS[min(n, len(self.MOV_ESPERAS)) - 1]
+            e.update(intentos=n, error=err.msg, next=time.time() + wait)
+            movs.set(rel, e)
+            if n == 1 or n % 10 == 0:
+                log(f"   movimiento pendiente de {rel}: {err.msg} Se reintenta en {wait} s")
+            if n == 5:
+                notify("No se ha podido mover la reunión", f"{err.msg} Se sigue intentando.")
+            return 0
+        movs.pop(rel)
+        self._nota_movida(rel, new)
+        notify("Reunión movida", "→ " + display_rel(rel_of(os.path.dirname(safe(new)))))
+        return 1
+
+    def _nota_movida(self, old, new, error=None):
+        """Lo que la interfaz avisa al terminar (y con lo que la pagina de la reunion pasa a su ruta nueva)."""
+        notas = self.__dict__.setdefault("_movidas", [])
+        carpeta = rel_of(os.path.dirname(safe(new))) if new else None
+        notas.append({"de": old, "a": new, "carpeta": carpeta, "display": display_rel(carpeta) if new else None,
+                      "error": error, "at": time.time()})
+        del notas[:-20]
+
+    def movimientos_publicos(self):
+        """Para /api/jobs: los pendientes (ruta -> a donde, y el error del ultimo intento) y los hechos hace <10 min."""
+        now = time.time()
+        return {"pendientes": {r: self._pendiente_publico(r, e) for r, e in self._movs().items()},
+                "hechos": [n for n in self.__dict__.get("_movidas", []) if now - n["at"] < 600]}
+
     def mkdir(self, b):
         parent = safe(b.get("parent", ""), "dir")
         p = os.path.join(parent, clean_name(b.get("name")))
@@ -4890,6 +5192,7 @@ class App:
             log_exc()
         self.jobs.outputs_moved(old, new, folder=True)
         self.settings.update(lambda d: settings_moved(d, old, new, folder=True, project=project))
+        self._movs().moved(old, new, folder=True)  # los movimientos pendientes: la reunion y la carpeta de destino
         self._themes_moved(new, project)
 
     def _themes_moved(self, new, project=None):
@@ -5879,7 +6182,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
                   "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check,
                   "/api/vocab/import": a.vocab_import, "/api/perfil": a.perfil_save,
-                  "/api/proyecto/carpeta": a.carpeta_principal,
+                  "/api/proyecto/carpeta": a.carpeta_principal, "/api/reunion/destino": a.destino,
                   "/api/voces/activar": a.voices_toggle, "/api/voces/identificar": a.voices_identify,
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,

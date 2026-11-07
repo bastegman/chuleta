@@ -41,8 +41,14 @@ class Defecto2ColaResumen(unittest.TestCase):
             with self.assertRaises(server.ApiError) as cm:
                 app.delete({"path": "a.wav"})
             self.assertIn("resum", cm.exception.msg.lower())
-            with self.assertRaises(server.ApiError) as cm:
-                app.move({"path": "a.wav", "folder": ""})
+            # mover mientras se resume ya no falla (07/11/2026, cambiar la carpeta en pleno directo): se apunta y se
+            # mueve al terminar el resumen; lo que no puede pasar es moverla ahora (el .resumen.md iria a la ruta vieja)
+            app._move_now = mock.Mock(side_effect=AssertionError("se ha movido mientras se resumia"))
+            app._destino_pendiente = mock.Mock(return_value={"path": "a.wav", "pendiente": {"folder": ""}})
+            self.assertEqual(app.move({"path": "a.wav", "folder": ""})["pendiente"], {"folder": ""})
+            self.assertIn("resum", app._ocupada("a.wav").lower())
+            with self.assertRaises(server.ApiError) as cm:  # renombrarla, cuando termine
+                app.move({"path": "a.wav", "folder": "", "name": "b"})
             self.assertIn("resum", cm.exception.msg.lower())
 
     def test_guardar_transcripcion_mientras_se_resume(self):

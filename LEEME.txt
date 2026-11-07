@@ -113,6 +113,9 @@ USO DIARIO
   - Cada grabación va en su propia carpeta, "AAAA-MM-DD Nombre", dentro de la carpeta principal
     de su proyecto (sin asignar, la del proyecto: la que tiene su carpeta Vocabulario). Lo
     grabado antes se queda donde está. Mover o renombrar la reunión mueve su carpeta entera.
+    En pleno directo, "Se guarda en ... · Cambiar" elige otra carpeta: la grabación sigue y,
+    cuando terminan el directo, el repaso y el resumen, la reunión entera se mueve sola (hasta
+    entonces se puede deshacer; si cierras Chuleta antes, se mueve al volver a abrirla).
   - Perfil de reunión (⚙ Ajustes > Perfil de reunión): la carpeta donde se guarda, el idioma
     (por defecto se detecta solo; "Español + inglés", "Español + portugués" e "Inglés + portugués"
     son para reuniones que mezclan dos), el tema de vocabulario y un contexto de una o dos frases

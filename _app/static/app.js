@@ -279,7 +279,7 @@ function liveStatus(a, j) {
 function liveHeroSig(a, j, sel, mine, muted) {
   const p = S.presetsById[sel] || {}, falta = !j && p.cached === false ? (S.modelos?.[p.model]?.downloading ? 'd' : 'f') : '';
   return (j ? j.id + j.preset : 'none') + sel + mine + muted + (S.config.procesado || '') + (S.lhModelos ? 'm' : '')
-    + (typeof prepEstado === 'function' && prepEstado(j) ? 'p' : '') + falta;
+    + (typeof prepEstado === 'function' && prepEstado(j) ? 'p' : '') + falta + (typeof destinoSig === 'function' ? destinoSig(a) : '');
 }
 function renderLiveHero(a) {
   const el = $('#lHero');
@@ -302,7 +302,7 @@ function renderLiveHero(a) {
         : `<button class="btn primary" data-act="live" data-path="${esc(a.path)}">${I.spark}Transcribir en directo</button>`}
     </div>
     ${mine ? `<div class="lh-meters">${meterHtml('mic', I.mic + 'Micro')}${meterHtml('sys', I.volume + 'Ordenador')}</div>` : ''}
-    ${crumbs(a.folder)}
+    ${typeof destinoHtml === 'function' ? destinoHtml(a) : crumbs(a.folder)}
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
     <div id="directoBar"></div>
@@ -758,6 +758,11 @@ async function moveItem(path, folder, name) {
   if (wasPlaying) { audio.pause(); audio.removeAttribute('src'); audio.load(); }  // suelta el archivo para poder moverlo
   try {
     const r = await api('/api/move', { path, folder, name: name || undefined });
+    if (r.pendiente) {  // se está grabando o procesando: se mueve sola al terminar (directo.js)
+      if (wasPlaying) { const a = S.audios.get(path); S.playing = null; if (a) loadAudio(a, t, playingNow); }
+      toast(`Se moverá a <b>${esc(r.pendiente.display)}</b> cuando termine todo`);
+      return pollJobs(true);
+    }
     toast(name ? 'Renombrado' : `Movido a <b>${esc(folderName(folder))}</b>`);
     await refreshTree(true);
     if (wasPlaying) { const a = S.audios.get(r.path); S.playing = null; if (a) loadAudio(a, t, playingNow); }
@@ -1017,7 +1022,7 @@ function renderAudioHead(a, force) {
   if (!force && el.contains(ae) && (ae.isContentEditable || /INPUT|SELECT/.test(ae.tagName))) return;
   const st = statusOf(a), has = a.txt || a.srt;
   const docs = (a.parent?.docs || []);
-  el.innerHTML = `${crumbs(a.folder)}
+  el.innerHTML = `${crumbs(a.folder)}${typeof destinoPendienteHtml === 'function' ? destinoPendienteHtml(a) : ''}
     ${titleRowHtml(a)}
     ${propsHtml(a)}
     <div class="actions">
@@ -1792,7 +1797,11 @@ let jobsTimer = null;
 async function pollJobs(now) {
   clearTimeout(jobsTimer);
   if (S.off) return;
-  try { onJobs((await api('/api/jobs')).jobs); } catch { /* servidor reiniciandose */ }
+  try {
+    const r = await api('/api/jobs');
+    onJobs(r.jobs);
+    if (typeof onMovimientos === 'function') onMovimientos(r.movimientos);  // cambiar la carpeta en pleno directo
+  } catch { /* servidor reiniciandose */ }
   const active = S.jobs.some(isActive);
   jobsTimer = setTimeout(pollJobs, active ? 1000 : 4000);
 }
