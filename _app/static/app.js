@@ -929,6 +929,7 @@ function viewHome() {
   const lives = liveAudios(), loose = t.audios.filter(a => !isLive(a));
   main.innerHTML = `<div class="page">
     ${lives.map(liveBanner).join('')}
+    ${typeof avisoProbarHtml === 'function' ? avisoProbarHtml() : ''}
     ${avisoResumenLocalHtml()}
     <h1>Tus notas de reunión</h1>
     <div class="meta">${esc(S.config.root)} · <a href="#" data-act="palette">Ctrl+P para buscar</a></div>
@@ -1673,6 +1674,12 @@ main.addEventListener('click', async e => {
     else if (a === 'rename-folder') openRenameFolder(p);
     else if (a === 'link-remove') unlinkFolder(p);
     else if (a === 'aviso-sum-ok' || a === 'aviso-sum-ajuste') { e.preventDefault(); avisoResumenLocalVisto(a === 'aviso-sum-ajuste'); }
+    else if (a === 'cfg-abrir' && typeof abrirConfigurar === 'function') abrirConfigurar();
+    else if (a === 'cfg-probar' || a === 'cfg-aviso-no') {  // el aviso único de Inicio (configurar.js)
+      localStorage.setItem('avisoProbar', '1');
+      $('#avisoProbar')?.remove();
+      if (a === 'cfg-probar' && typeof abrirConfigurar === 'function') abrirConfigurar({ paso: 3 });
+    }
     else if (a === 'cancel-job') { await api('/api/cancel', { id: act.dataset.id }); pollJobs(true); }
     else if (a === 'copy-tx') copy(transcriptText(), whoFor(S.tx) ? 'Transcripción copiada (con hablantes)' : 'Transcripción copiada');
     else if (a === 'copy-doc') copy(S.docText || '', 'Texto copiado');
@@ -2002,6 +2009,7 @@ function procesadoFieldsetHtml() {
   const estado = !ag.encontrado ? `${agLabel} no está instalado en este PC (o no está en el PATH)`
     : cuando ? `${agLabel} ${esc(ag.version || '')} · comprobado el ${cuando}` : `${agLabel} encontrado · sin comprobar todavía`;
   return `<fieldset><legend>${I.monitor}Dónde se procesan tus reuniones</legend>
+    ${typeof abrirConfigurar === 'function' ? `<div class="help" style="margin-top:0"><a href="#" id="procAsistente">Configurar paso a paso</a>: elige, prepáralo y pruébalo de punta a punta, con tu voz.</div>` : ''}
     <div class="procs">
       ${opt('local', 'Solo en este PC', 'Whisper transcribe en tu ordenador. Nada sale de él. Sin resumen con IA.')}
       ${opt('agente', `Con tu cuenta de Claude (${agLabel})`, `Transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de ${agLabel}: ${esc(APP_NAME)} no ve ni guarda tus credenciales.`,
@@ -2102,6 +2110,7 @@ function openSettings() {
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
+    $('#procAsistente', d)?.addEventListener('click', e => { e.preventDefault(); abrirConfigurar({ volver: openSettings }); });
     // «Dónde se procesan» (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior sin
     // decirlo (al grabar seguía usando Groq). Ahora el cambio pendiente se dice junto a las opciones, con «Aplicar ahora»
     // (y su aviso si hay trabajo en la nube, que pasaría a este PC), y al cerrar sin aplicarlo se avisa. Un clic de

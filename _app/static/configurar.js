@@ -68,6 +68,33 @@ function prepTexto(e, segs) {
   return t + '. La grabación sigue y no se pierde nada: cuando acabe la descarga, el texto empieza desde el principio.';
 }
 
+/* Los modelos de Whisper que necesita «En este PC» o «Con tu cuenta de Claude»: el del directo y el de la cola, si son
+   locales; si no (la configuración de ahora es la API), los de siempre (Normal y Rápido). Decisión de Claudia
+   (07/11/2026): se descargan los dos juntos, con una sola barra, para que no haya una segunda descarga por sorpresa. */
+function cfgModelosNecesarios(cfg) {
+  const c = cfg || S.config || {};
+  const pick = (k, def) => { const p = S.presetsById?.[c[k]]; return p && p.engine === 'local' ? p.model : (S.presetsById?.[def]?.model || (def === 'medium' ? 'medium' : 'small')); };
+  return [...new Set([pick('live_preset', 'medium'), pick('preset', 'rapido')])];
+}
+/* Una sola barra para varias descargas: {listo, bajando, error, total, done, pct, eta} o null si aún no hay datos */
+function cfgDescargaTotal(names, modelos) {
+  const ms = names.map(n => (modelos || S.modelos || {})[n]);
+  if (!ms.length || ms.some(m => !m)) return null;
+  const tam = m => m.total_mb || m.size_mb || 0;
+  const total = ms.reduce((t, m) => t + tam(m), 0);
+  const done = ms.reduce((t, m) => t + (m.ready ? tam(m) : Math.min(tam(m), m.done_mb || 0)), 0);
+  return { listo: ms.every(m => m.ready), bajando: ms.some(m => m.downloading),
+    error: (ms.find(m => m.error && !m.downloading && !m.ready) || {}).error || null,
+    total, done, pct: total ? Math.floor(100 * done / total) : 0, eta: Math.max(0, ...ms.map(m => m.eta_s || 0)) };
+}
+function cfgDescargaTexto(t) {
+  if (!t) return 'Preparando la descarga…';
+  if (t.listo) return 'Modelos descargados: ya están en este PC.';
+  if (t.error && !t.bajando) return t.error;
+  if (!t.bajando) return `Sin descargar · ${cfgFmtGb(t.total)} en total (se descargan una sola vez)`;
+  return `Descargando · ${t.pct} % · ${cfgFmtGb(t.done)} de ${cfgFmtGb(t.total)}` + (t.eta ? ` · quedan unos ${cfgFmtQueda(t.eta)}` : '');
+}
+
 /* ---8<--- DOM (lo de abajo usa el DOM, I, api, toast… de app.js) */
 
 S.modelos = S.modelos || {};
@@ -161,3 +188,305 @@ document.addEventListener('modelos', () => {
   if (m && typeof m.pintaMotor === 'function') m.pintaMotor();
   if (!$('#jobsPanel').classList.contains('hidden') && typeof renderJobsPanel === 'function') renderJobsPanel();
 });
+
+/* ================================================================ asistente «Configurar Chuleta» (3 pasos)
+   1 · elegir dónde se procesan · 2 · prepararlo (descarga, Claude Code o la clave) · 3 · «Probar» de punta a punta.
+   No guarda nada hasta terminar el paso 3 (como «Aplicar ahora» en Ajustes: un clic de prueba no cambia nada). */
+const W = { paso: 1, modo: 'local', cloud: {}, prueba: null, timer: null, agTimer: null, volver: null, d: null };
+// los avisos de privacidad, con su texto de siempre (decisión de producto del 02/11/2026)
+const AVISO_CLAUDE = 'El texto de la reunión (título, fecha, transcripción con quién habla si se sabe, notas, contexto, participantes confirmados e instrucciones; el audio no) se envía a Anthropic con esa cuenta: con la de empresa, bajo el acuerdo de tu empresa; con la personal, bajo sus términos de uso. En algunas reuniones puede ser un bloqueante: compruébalo antes. Al terminar de transcribir, las reuniones de los últimos 3 días se resumen solas; se desactiva en Ajustes.';
+const AVISO_API = 'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.';
+const AVISO_NUBE = 'Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.';
+
+function abrirConfigurar(opts = {}) {
+  if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
+  const c = S.config.cloud || {};
+  Object.assign(W, { paso: opts.paso || 1, modo: opts.modo || S.config.procesado || 'local', prueba: null, volver: opts.volver || null,
+    cloud: { provider: c.provider || 'groq', api_key: '', base_url: c.base_url || '', azure_endpoint: c.azure_endpoint || '',
+      azure_deployment: c.azure_deployment || '', azure_api_version: c.azure_api_version || '' } });
+  openModal('<div class="wz-raiz"></div>', d => { W.d = d; wzPintar(); }, 'wz');
+  S.modalCleanup = () => { wzParar(); W.d = null; };
+}
+function wzParar() {
+  clearTimeout(W.timer); clearTimeout(W.agTimer);
+  W.timer = W.agTimer = null;
+}
+function wzProv() { return S.config.providers?.[W.cloud.provider]?.label || 'la API'; }
+function wzOpcion(v, titulo, chip, chipCls, texto, aviso) {
+  const on = W.modo === v;
+  return `<label class="wz-opt${on ? ' on' : ''}"><input type="radio" name="wzModo" value="${v}"${on ? ' checked' : ''}>
+    <div><div class="t">${titulo} <span class="wz-chip ${chipCls}">${chip}</span></div><div class="d">${texto}</div>
+    ${aviso && on ? `<div class="wz-aviso">${aviso}</div>` : ''}</div></label>`;
+}
+function wzCabecera() {
+  return `<div class="wz-head"><img src="/logo.svg" alt="">Configurar ${esc(APP_NAME)}
+    <div class="wz-steps" aria-label="Paso ${W.paso} de 3">Paso ${W.paso} de 3 ${[1, 2, 3].map(n => `<i class="${n <= W.paso ? 'on' : ''}"></i>`).join('')}</div></div>`;
+}
+function wzPaso1() {
+  return `<h2 tabindex="-1">¿Dónde se procesan tus reuniones?</h2>
+    <p class="wz-lead">Elige una opción. Puedes cambiarla cuando quieras en Ajustes.</p>
+    <fieldset class="wz-opts"><legend class="sr-only">Dónde se procesan tus reuniones</legend>
+      ${wzOpcion('local', 'Solo en este PC', 'Lo más privado', 'g', 'Tu PC transcribe las reuniones. No hay resumen con IA y nada sale del PC.')}
+      ${wzOpcion('agente', 'Con tu cuenta de Claude', 'Necesita Claude Code', '', 'Tu PC transcribe y Claude resume, con tu suscripción personal o de empresa.', AVISO_CLAUDE)}
+      ${wzOpcion('api', 'Con una API externa', 'El audio sale del PC', 'w', 'Groq, OpenAI o la API de tu empresa transcriben y resumen en la nube, con tu clave. Es lo más rápido.', AVISO_API)}
+    </fieldset>`;
+}
+function wzDescargaHtml(strip) {
+  const t = cfgDescargaTotal(cfgModelosNecesarios(), S.modelos);
+  const cls = t?.listo ? ' ok' : t?.error && !t.bajando ? ' err' : '';
+  const bar = t && !t.listo && !(t.error && !t.bajando) ? `<div class="prep-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${t.pct}"><i style="width:${t.pct}%"></i></div>` : '';
+  const re = t?.error && !t.bajando ? ' <button class="btn sm" type="button" data-wz="bajar">Reintentar</button>' : '';
+  const intro = strip ? `<b>Mientras tanto, descargando el modelo de transcripción</b> (${t ? cfgFmtGb(t.total) + ', ' : ''}solo la primera vez). Con Claude, la transcripción se hace en tu PC y Claude solo resume.` : '';
+  return `<div class="wz-descarga${cls}" data-wz-descarga aria-live="polite">${intro}${bar}<div>${esc(cfgDescargaTexto(t))}${re}</div></div>`;
+}
+function wzPaso2() {
+  if (W.modo === 'local') {
+    return `<h2 tabindex="-1">Descarga el modelo de transcripción</h2>
+      <p class="wz-lead">${esc(APP_NAME)} transcribe con un modelo que se queda en tu PC. Se descarga una sola vez.</p>
+      ${wzDescargaHtml(false)}
+      <p class="help">Puedes pasar al paso siguiente mientras se descarga.</p>
+      ${typeof modelosHtml === 'function' ? `<details class="wz-mas"><summary>Ver los modelos de este PC</summary>${modelosHtml()}</details>` : ''}`;
+  }
+  if (W.modo === 'agente') {
+    const ag = S.config.agente || {};
+    return `<h2 tabindex="-1">Conecta Claude Code</h2>
+      <p class="wz-lead">${esc(APP_NAME)} usa el Claude Code de tu PC para resumir. Tu contraseña no pasa por ${esc(APP_NAME)}: inicias sesión tú, en la página de Anthropic.</p>
+      ${wzDescargaHtml(true)}
+      <ol class="wz-pasos">
+        <li><span class="num${ag.encontrado ? ' ok' : ''}" data-wz-num>${ag.encontrado ? I.check : '1'}</span><div><b>Instala Claude Code</b>
+          <div>Abre PowerShell, pega esta línea y pulsa Intro. No hace falta ser administrador.</div>
+          <div class="wz-code"><code>irm https://claude.ai/install.ps1 | iex</code><button class="btn sm" type="button" data-wz="copiar">${I.copy || ''}Copiar</button></div>
+          <div class="help">¿Prefieres winget? <code>winget install Anthropic.ClaudeCode</code></div>
+          <div class="help">Si tu empresa no te deja instalar programas, pídele a IT que instale Claude Code.</div>
+          <div class="wz-est${ag.encontrado ? ' ok' : ''}" data-wz-encontrado>${ag.encontrado ? 'Instalado en este PC' : 'Todavía no lo encuentro en este PC'}</div></div></li>
+        <li><span class="num">2</span><div><b>Inicia sesión</b>
+          <div>En PowerShell escribe <code>claude</code>, pulsa Intro y sigue los pasos en el navegador. Vale tu cuenta personal o la de tu empresa (Pro, Max, Ultra, Team o Enterprise) y también una cuenta de Console, la de la API de Anthropic.</div></div></li>
+        <li><span class="num">3</span><div><b>Pruébalo</b>
+          <div>Pulsa Siguiente y luego «Probar»: ${esc(APP_NAME)} graba 3 s de tu voz, los transcribe en tu PC y le pide a Claude que los resuma.</div></div></li>
+      </ol>`;
+  }
+  const P = S.config.providers || {}, p = P[W.cloud.provider] || {}, c = S.config.cloud || {};
+  const misma = W.cloud.provider === (c.provider || 'groq');
+  const ph = misma && c.has_key ? `Guardada: ${c.api_key} (escribe para cambiarla)` : 'Pega aquí la clave';
+  const keys = p.keys ? p.keys.replace('https://', '') : '';
+  const campos = W.cloud.provider === 'azure'
+    ? `<label>Dirección del recurso (endpoint)</label><input class="input" id="wzAzEp" placeholder="https://<recurso>.openai.azure.com" value="${esc(W.cloud.azure_endpoint)}">
+       <div class="grid2"><div><label>Nombre del despliegue de Whisper</label><input class="input" id="wzAzDep" value="${esc(W.cloud.azure_deployment)}"></div>
+       <div><label>Versión de la API</label><input class="input" id="wzAzVer" value="${esc(W.cloud.azure_api_version)}"></div></div>`
+    : W.cloud.provider === 'custom'
+      ? `<label>Dirección de la API (te la da tu empresa)</label><input class="input" id="wzBase" placeholder="https://…/v1" value="${esc(W.cloud.base_url)}">` : '';
+  return `<h2 tabindex="-1">Pega tu clave de ${esc(p.label || 'la API')}</h2>
+    <p class="wz-lead">${keys ? `Consíguela en <a href="#" data-wz="claves">${esc(keys)}</a>. ` : ''}Se guarda solo en este PC, fuera de OneDrive.</p>
+    <div data-wz-prov${misma && W.cloud.provider === 'groq' && !W.provAbierto ? ' hidden' : ''}><label>Proveedor</label><select id="wzProv">${Object.entries(P).map(([k, v]) => `<option value="${esc(k)}"${k === W.cloud.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></div>
+    ${campos}
+    <label>Clave de ${esc(p.label || 'la API')}</label><input class="input" type="password" id="wzKey" autocomplete="off" spellcheck="false" placeholder="${esc(ph)}" value="${esc(W.cloud.api_key)}">
+    <div class="wz-err" data-wz-err></div>
+    ${misma && W.cloud.provider === 'groq' && !W.provAbierto ? '<div class="help">¿Usas OpenAI, Azure o la API de tu empresa? <a href="#" data-wz="prov">Cambiar de proveedor</a></div>' : ''}
+    <div class="notice">${AVISO_NUBE}</div>`;
+}
+function wzPaso3() {
+  const lead = { local: `${esc(APP_NAME)} graba 3 s de tu voz y los transcribe en tu PC, igual que hará con tus reuniones.`,
+    agente: `${esc(APP_NAME)} graba 3 s de tu voz, los transcribe en tu PC y le pide a Claude que los resuma, igual que hará con tus reuniones.`,
+    api: `${esc(APP_NAME)} graba 3 s de tu voz y los manda a ${esc(wzProv())} para transcribirlos y resumirlos, igual que hará con tus reuniones.` }[W.modo];
+  return `<h2 tabindex="-1">Prueba que todo funciona</h2>
+    <p class="wz-lead">${lead}</p>
+    <div class="wz-di">Cuando te lo pida, di en voz alta: <b>«Hola, esto es una prueba»</b>.</div>
+    <div class="wz-probar"><button class="btn primary" type="button" data-wz="probar">Probar</button><span class="muted" data-wz-probando></span></div>
+    <div class="wz-check" data-wz-pasos role="status" aria-live="polite">${wzPasosHtml(W.prueba)}</div>
+    <div data-wz-res>${wzResHtml(W.prueba)}</div>`;
+}
+function wzPasosHtml(r) {
+  if (!r) return '';
+  return r.pasos.map(p => {
+    const ic = { ok: I.check, aviso: '!', error: '✕', en_curso: '<i class="wz-spin"></i>', espera: '' }[p.estado] || '';
+    const habla = p.estado === 'en_curso' && /^Habla ahora/.test(p.detalle || '');
+    const det = p.estado === 'error' ? 'Ha fallado: lo tienes explicado abajo' : p.detalle;  // la frase, una vez
+    return `<div class="wz-row ${p.estado}${habla ? ' habla' : ''}"><span class="ic">${ic}</span><span class="t">${esc(p.texto)}${det ? `<small>${esc(det)}</small>` : ''}</span><span class="sec">${p.segundos != null && p.estado !== 'espera' ? `${p.segundos} s` : ''}</span></div>`;
+  }).join('');
+}
+function wzResHtml(r) {
+  if (!r || !r.terminada) return '';
+  if (r.listo) return `<div class="wz-res ok"><b>Listo</b>${esc(r.resultado.replace(/^Listo\.\s*/, ''))}</div>`;
+  const a = r.fallo?.accion;
+  return `<div class="wz-res err">${esc(r.fallo?.frase || 'La prueba ha fallado.')}
+    ${a ? `<div class="acts"><button class="btn sm" type="button" data-wz-accion="${esc(a.tipo)}"${a.url ? ` data-url="${esc(a.url)}"` : ''}>${esc(a.etiqueta)}</button></div>` : ''}</div>`;
+}
+function wzPie() {
+  const r = W.prueba;
+  if (W.paso === 1) return `<button class="btn ghost" type="button" data-wz="cerrar">Ahora no</button><span class="sp"></span><button class="btn primary" type="button" data-wz="sig">Siguiente</button>`;
+  if (W.paso === 2) return `<button class="btn ghost" type="button" data-wz="atras">Atrás</button><span class="sp"></span>${W.modo === 'agente' ? `<button class="btn" type="button" data-wz="powershell">Abrir PowerShell</button>` : ''}<button class="btn primary" type="button" data-wz="sig">Siguiente</button>`;
+  const fallo = r && r.terminada && !r.listo, bien = r && r.terminada && r.listo;
+  return `<button class="btn ghost" type="button" data-wz="atras">Atrás</button><span class="sp"></span>
+    ${fallo || !r ? `<button class="btn ghost" type="button" data-wz="guardar">${fallo ? 'Guardar sin probar' : 'Guardar sin probar'}</button>` : ''}
+    <button class="btn${bien ? '' : ' primary'}" type="button" data-wz="terminar"${bien ? '' : ' disabled'}>Terminar</button>
+    ${bien ? `<button class="btn primary" type="button" data-wz="grabar">Grabar mi primera reunión</button>` : ''}`;
+}
+function wzPintar() {
+  const d = W.d;
+  if (!d) return;
+  wzParar();
+  d.innerHTML = `${wzCabecera()}<div class="wz-body">${[wzPaso1, wzPaso2, wzPaso3][W.paso - 1]()}</div><div class="wz-foot">${wzPie()}</div>`;
+  $('.wz-body h2', d)?.focus();
+  if (W.paso === 2 && W.modo !== 'api') {
+    const pm = $('#procModelos', d);
+    if (pm) { pm.hidden = false; if (typeof bindModelos === 'function') bindModelos(d); }
+    modelosRefrescar(3000);
+  }
+  if (W.paso === 2 && W.modo === 'agente') wzMirarClaude();
+  if (W.paso === 3 && W.prueba && !W.prueba.terminada) wzSeguir(W.prueba.id);
+}
+function wzRefrescarPie() { const f = $('.wz-foot', W.d); if (f) f.innerHTML = wzPie(); }
+/* paso 2 con Claude: ¿ya está instalado? (cada 3 s mientras se ve este paso) */
+async function wzMirarClaude() {
+  clearTimeout(W.agTimer);
+  if (!W.d || W.paso !== 2 || W.modo !== 'agente') return;
+  try {
+    const r = await api('/api/agente/estado');
+    const e = $('[data-wz-encontrado]', W.d), n = $('[data-wz-num]', W.d);
+    if (e) { e.textContent = r.encontrado ? 'Instalado en este PC' : 'Todavía no lo encuentro en este PC'; e.classList.toggle('ok', !!r.encontrado); }
+    if (n) { n.classList.toggle('ok', !!r.encontrado); n.innerHTML = r.encontrado ? I.check : '1'; }
+    if (S.config.agente) S.config.agente.encontrado = !!r.encontrado;
+  } catch { /* se reintenta */ }
+  W.agTimer = setTimeout(wzMirarClaude, 3000);
+}
+/* lo elegido, tal como lo usan /api/probar (candidata) y /api/settings */
+function wzCandidata() {
+  const out = { procesado: W.modo };
+  if (W.modo === 'agente') out.agente = { tipo: S.config.agente?.tipo || 'claude', modelo: S.config.agente?.modelo };
+  if (W.modo === 'api') {
+    const c = { provider: W.cloud.provider };
+    const misma = W.cloud.provider === (S.config.cloud?.provider || 'groq');
+    if (!misma) c.model = (S.config.providers?.[W.cloud.provider]?.models || [])[0] || '';
+    if (W.cloud.api_key) c.api_key = W.cloud.api_key;
+    if (W.cloud.provider === 'custom') c.base_url = W.cloud.base_url;
+    if (W.cloud.provider === 'azure') Object.assign(c, { azure_endpoint: W.cloud.azure_endpoint, azure_deployment: W.cloud.azure_deployment, azure_api_version: W.cloud.azure_api_version });
+    out.cloud = c;
+  }
+  return out;
+}
+function wzLeerCampos() {
+  const d = W.d, v = id => $(id, d)?.value?.trim();
+  if (v('#wzKey') != null) W.cloud.api_key = v('#wzKey') || '';
+  if (v('#wzBase') != null) W.cloud.base_url = v('#wzBase') || '';
+  if (v('#wzAzEp') != null) Object.assign(W.cloud, { azure_endpoint: v('#wzAzEp') || '', azure_deployment: v('#wzAzDep') || '', azure_api_version: v('#wzAzVer') || '' });
+}
+async function wzBajar() {  // los dos modelos del PC, ya (se ve en el paso 2 y la prueba los espera)
+  for (const m of cfgModelosNecesarios()) {
+    const st = S.modelos?.[m];
+    if (st && (st.ready || st.downloading)) continue;
+    try { await api('/api/modelos/descargar', { model: m }); } catch (err) { toast(esc(err.message), 'err'); }
+  }
+  modelosRefrescar(4000);
+}
+async function wzProbar() {
+  const b = $('[data-wz="probar"]', W.d);
+  if (b) b.disabled = true;
+  try {
+    const r = await api('/api/probar', { candidata: wzCandidata() });
+    W.prueba = { id: r.id, terminada: false, pasos: [] };
+    wzSeguir(r.id);
+  } catch (err) {
+    W.prueba = { terminada: true, listo: false, pasos: [], fallo: { frase: err.message, accion: null } };
+    wzPintarPrueba();
+  }
+}
+async function wzSeguir(id) {
+  clearTimeout(W.timer);
+  if (!W.d || W.paso !== 3) return;
+  try { W.prueba = await api('/api/probar?id=' + encodeURIComponent(id)); } catch (err) { W.prueba = { terminada: true, listo: false, pasos: W.prueba?.pasos || [], fallo: { frase: err.message } }; }
+  wzPintarPrueba();
+  if (!W.prueba.terminada) W.timer = setTimeout(() => wzSeguir(id), 400);
+}
+function wzPintarPrueba() {
+  const d = W.d;
+  if (!d) return;
+  const r = W.prueba, p = $('[data-wz-pasos]', d), res = $('[data-wz-res]', d), b = $('.wz-probar [data-wz="probar"]', d);
+  if (p) p.innerHTML = wzPasosHtml(r);
+  if (res) res.innerHTML = wzResHtml(r);
+  if (b) { b.disabled = !!(r && !r.terminada); b.textContent = r && !r.terminada ? 'Probando…' : r ? 'Probar otra vez' : 'Probar'; }
+  const t = $('[data-wz-probando]', d);
+  if (t) t.textContent = r && !r.terminada ? `${Math.round((Date.now() / 1000) - (r.empezada || Date.now() / 1000))} s` : '';
+  wzRefrescarPie();
+}
+async function wzGuardar(despues) {
+  // al salir de la API con trabajo en la nube: lo que espera allí se cancela (lo hace el servidor; aquí se avisa)
+  const enNube = S.config.procesado === 'api' && W.modo !== 'api'
+    && S.jobs.some(j => isActive(j) && j.kind !== 'summary' && (j.engine === 'cloud' || j.preset === 'nube'));
+  const n = S.jobs.filter(j => isActive(j) && j.kind !== 'summary' && (j.engine === 'cloud' || j.preset === 'nube')).length;
+  if (enNube && !await ask('¿Cambiar de opción?', `<p>Hay ${n} ${n === 1 ? 'transcripción esperando' : 'transcripciones esperando'} en ${esc(provName())}. Si cambias ahora, se cancelan y las podrás relanzar en este PC.</p>`, 'Cambiar')) return abrirConfigurar({ paso: 3, modo: W.modo });
+  try {
+    const c = await api('/api/settings', Object.assign(wzCandidata(), W.prueba?.id && W.prueba.terminada ? { prueba: W.prueba.id } : {}));
+    setConfig(c);
+    localStorage.setItem('procElegido', '1');
+    const volver = W.volver;
+    closeModal(true);
+    toast(`Guardado: ${esc(modoNombre(c.procesado))}. ${esc(modoLinea(c.live_preset || 'medium'))}.`);
+    if (c.descarga) modelosRefrescar(4000);
+    refreshView();
+    if (despues === 'grabar') openRec();
+    else if (volver) volver();
+  } catch (err) { toast(esc(err.message), 'err'); }
+}
+async function wzAccion(tipo, b) {
+  if (tipo === 'reintentar') return wzProbar();
+  if (tipo === 'abrir_powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
+  if (tipo === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(b.dataset.url, '_blank'));
+  if (tipo === 'asistente') { W.paso = 2; return wzPintar(); }
+  if (tipo === 'reintentar_descarga') { await wzBajar(); return wzProbar(); }
+  if (tipo === 'avanzado') { closeModal(false); return openSettings(); }
+  if (tipo === 'diagnostico') { try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); } }
+}
+document.addEventListener('change', e => {
+  if (!W.d || !W.d.contains(e.target)) return;
+  if (e.target.name === 'wzModo') { W.modo = e.target.value; W.prueba = null; wzPintar(); $(`input[name="wzModo"][value="${W.modo}"]`, W.d)?.focus(); }
+  if (e.target.id === 'wzProv') { wzLeerCampos(); W.cloud.provider = e.target.value; W.cloud.api_key = ''; W.provAbierto = true; W.prueba = null; wzPintar(); }
+});
+document.addEventListener('click', async e => {
+  if (!W.d || !W.d.contains(e.target)) return;
+  const accion = e.target.closest('[data-wz-accion]');
+  if (accion) { e.preventDefault(); return wzAccion(accion.dataset.wzAccion, accion); }
+  const b = e.target.closest('[data-wz]');
+  if (!b) return;
+  e.preventDefault();
+  const q = b.dataset.wz;
+  if (q === 'cerrar') return closeModal(false);
+  if (q === 'atras') { wzLeerCampos(); W.paso = Math.max(1, W.paso - 1); return wzPintar(); }
+  if (q === 'sig') {
+    if (W.paso === 1) { W.paso = 2; if (W.modo !== 'api') wzBajar(); return wzPintar(); }
+    if (W.paso === 2) {
+      wzLeerCampos();
+      if (W.modo === 'api') {
+        const c = S.config.cloud || {}, misma = W.cloud.provider === (c.provider || 'groq');
+        const err = !W.cloud.api_key && !(misma && c.has_key) ? 'Pega la clave para seguir.'
+          : W.cloud.provider === 'custom' && !W.cloud.base_url ? 'Escribe la dirección de la API.'
+            : W.cloud.provider === 'azure' && (!W.cloud.azure_endpoint || !W.cloud.azure_deployment) ? 'Faltan la dirección del recurso y el nombre del despliegue.' : '';
+        if (err) { const x = $('[data-wz-err]', W.d); if (x) x.textContent = err; return; }
+      }
+      W.paso = 3; return wzPintar();
+    }
+  }
+  if (q === 'prov') { W.provAbierto = true; return wzPintar(); }
+  if (q === 'claves') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(S.config.providers?.[W.cloud.provider]?.keys, '_blank'));
+  if (q === 'copiar') return copy('irm https://claude.ai/install.ps1 | iex', 'Copiado: pégalo en PowerShell y pulsa Intro');
+  if (q === 'powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
+  if (q === 'bajar') return wzBajar();
+  if (q === 'probar') return wzProbar();
+  if (q === 'guardar' || q === 'terminar') return wzGuardar();
+  if (q === 'grabar') return wzGuardar('grabar');
+});
+document.addEventListener('keydown', e => {
+  if (!W.d || !document.body.contains(W.d) || e.key !== 'Enter' || e.target.closest('textarea, select, a, button')) return;
+  const s = $('.wz-foot [data-wz="sig"]', W.d);
+  if (s) { e.preventDefault(); s.click(); }
+});
+document.addEventListener('modelos', () => {
+  const box = W.d && $('[data-wz-descarga]', W.d);
+  if (box) box.outerHTML = wzDescargaHtml(W.modo === 'agente');
+});
+
+/* Inicio: tras actualizar, una vez, si la configuración nunca se ha probado (decisión de Claudia, 07/11/2026) */
+function avisoProbarHtml() {
+  if (!S.config || S.config.ultima_prueba || localStorage.getItem('avisoProbar') || !localStorage.getItem('procElegido')) return '';
+  return `<div class="notice info aviso-probar" id="avisoProbar" style="margin:0 0 14px">${I.info}<span>${esc(APP_NAME)} puede probar ahora tu configuración de punta a punta: graba 3 s de tu voz, los transcribe y, si toca, los resume.</span>
+    <button class="btn sm primary" type="button" data-act="cfg-probar">Probar ahora</button><button class="btn sm ghost" type="button" data-act="cfg-aviso-no">Ahora no</button></div>`;
+}

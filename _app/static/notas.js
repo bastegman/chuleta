@@ -74,6 +74,15 @@ function welcomeCard(all) {
   const key = S.config.procesado === 'api' ? S.config.cloud?.has_key : true;  // sin API no hay nada que conectar
   const elegir = S.config.procesado === 'local' && !localStorage.getItem('procElegido');  // nadie ha elegido aun
   if (key && all.length && !elegir) return '';
+  // con el asistente (configurar.js): una frase y un botón; sin él, la lista de antes
+  if (typeof abrirConfigurar === 'function' && (elegir || !key)) {
+    return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
+      <b>${elegir ? `Bienvenido a ${APP_NAME}` : 'Falta la clave de la API'}</b>
+      <div style="margin:4px 0 12px">${elegir ? 'Antes de tu primera reunión, elige dónde se transcriben y se resumen. Son tres pasos y al final lo pruebas todo.'
+    : `Elegiste «Con una API externa», pero aún no hay clave: sin ella no se transcribe nada. Son tres pasos y al final lo pruebas todo.`}</div>
+      <button class="btn sm primary" data-act="cfg-abrir">${I.gear}Configurar ${esc(APP_NAME)}</button>
+      ${all.length ? '' : '<div class="help" style="margin-top:10px">También puedes arrastrar aquí audios que ya tengas.</div>'}</div></div>`;
+  }
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
     <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Transcripción en la nube: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}

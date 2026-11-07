@@ -3582,6 +3582,11 @@ class App:
             webbrowser.open(REPO_URL)
         elif que == "donar":
             webbrowser.open(DONAR_URL)
+        elif que == "claves":  # el asistente: la página de claves del proveedor (solo las de engines.PROVIDERS)
+            url = (engines.PROVIDERS.get(b.get("proveedor") or "groq") or {}).get("keys")
+            if not url:
+                raise ApiError("Ese proveedor no tiene página de claves: pídesela a quien te dio la API.")
+            webbrowser.open(url)
         else:
             raise ApiError("No sé qué abrir")
         return {"ok": True}

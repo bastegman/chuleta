@@ -21,6 +21,15 @@ Bernardo, 06/11/2026: «Lo de config es un desastre. El UX es muy difícil y mal
   barra, %, MB y tiempo, y que la grabación sigue sin perder nada. El hueco del texto ya no dice «Escuchando…» ni la
   Cola «al día» con 0:00 transcrito. En Grabar, si el modelo aún no está en el PC, lo avisa con su tamaño y
   «Descargar ahora».
+- **Asistente «Configurar Chuleta», en tres pasos.** 1, elegir dónde se procesan las reuniones (cada opción dice qué
+  transcribe y qué resume; el aviso de privacidad, el de siempre, solo bajo la elegida). 2, prepararlo: la descarga de
+  los dos modelos de Whisper del PC (el del directo y el de la cola) con una sola barra, los pasos de Claude Code
+  (línea para copiar, winget, «Abrir PowerShell», y se marca solo cuando Chuleta lo encuentra) o la clave de la API.
+  3, «Probar»: graba 3 s de tu voz («Di: hola, esto es una prueba»), los transcribe con el modo elegido y, si toca, los
+  resume; sin voz o sin micro, prueba la cadena con 1 s de silencio y lo dice. Se para en el primer fallo con una
+  frase y su botón. No guarda nada hasta «Terminar» (como «Aplicar ahora»). Se abre desde la tarjeta de bienvenida,
+  desde Ajustes («Configurar paso a paso») y, tras actualizar, desde un aviso único en Inicio si la configuración
+  nunca se ha probado. `/api/probar` corre en su hilo y la última prueba queda en Ajustes.
 - **Errores en una frase con qué hacer** (`explicar.py`): Claude Code sin sesión, sin instalar, sin respuesta o con el
   plan en su límite de uso; una pieza de la instalación que falta («No module named…»); un proxy que contesta en lugar
   de la API. Los de la nube y la descarga de modelos ya venían en una frase (`connection_error`, `cloud_http_error`): se

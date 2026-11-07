@@ -66,7 +66,7 @@ class Prueba(threading.Thread):
                      for p in self.pasos]
             return {"id": self.id, "modo": self.modo, "pasos": pasos, "fallo": self.fallo, "listo": self.listo,
                     "terminada": self.terminada, "resultado": self.resultado, "candidata": self.candidata,
-                    "cuando": self.acabada}
+                    "empezada": self.empezada, "cuando": self.acabada}
 
     def _set(self, pid, **kw):
         with self.lock:
