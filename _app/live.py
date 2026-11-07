@@ -728,8 +728,9 @@ def run(job, path, opts, write, log):
                         if err != st.get("last_error"):
                             st["last_error"] = err
                             log(f"   trozo sin transcribir ({err}); se sigue con el siguiente")
-                        stage(f"Sin respuesta de la nube ({err}). Se sigue con el siguiente trozo; el repaso final "
-                              "recupera el texto.")
+                        # err ya es una frase con lo que ha pasado y que hacer (engines.cloud_http_error…)
+                        stage(f"Sin respuesta de la nube: {err.rstrip('.')}. Se sigue con el siguiente trozo; el "
+                              "repaso final recupera el texto.")
                     if job.restart:  # se pidio rehacer mientras tanto: este trozo ya no vale
                         continue
                     t_paint = perf_counter()

@@ -497,7 +497,9 @@ class WorkflowsWindowsTests(unittest.TestCase):
                                                     "scripts/lookfeel_spike.py")),  # lo importa scripts/e2e/ventana.py
                               ("reunion-windows.yml", ("_app/**", "tests/**", "requirements.txt")),
                               # fix-windows: la suite en Windows con el formato regional español y la ventana real
-                              ("windows-real.yml", ("_app/**", "tests/**", "requirements.txt"))):
+                              ("windows-real.yml", ("_app/**", "tests/**", "requirements.txt")),
+                              # los tres modos de punta a punta (Whisper de verdad, Groq y Claude Code falsos)
+                              ("e2e-procesado.yml", ("_app/**", "tests/**", "requirements.txt"))):
             with self.subTest(nombre):
                 on = workflow(nombre)["on"]
                 self.assertIn("workflow_dispatch", eventos(on))  # a mano: Actions -> Run workflow

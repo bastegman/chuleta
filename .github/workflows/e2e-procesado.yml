@@ -1,0 +1,57 @@
+name: e2e-procesado
+
+# «Dónde se procesan tus reuniones» de punta a punta en Windows (07/11/2026, msgs 1169-1170 de Bernardo: con Groq
+# fallaba, con Claude no transcribía, «Modelo» parecía Groq y «Descargando modelo medium» no acababa). Elige cada modo
+# en Ajustes como él, descarga Whisper medium de verdad con su progreso en MB y %, lo carga, transcribe en directo y
+# desde la cola, y comprueba que lo que la interfaz enseña junto a «Modelo» cuadra con el modo. Groq, contra un falso en
+# 127.0.0.1 (nunca una clave real en la CI); Claude Code, un falso en el PATH. Capturas y server.log como artefacto.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, fix-transcripcion]
+    paths:
+      - "_app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/e2e-procesado.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      NOTAS_ARTEFACTOS: ${{ github.workspace }}\artefactos
+      CHULETA_E2E_PROCESADO: "1"
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: Lo que instala instalar.ps1 (faster-whisper, requests, truststore) y Playwright con su Chromium
+        run: |
+          python -m pip install --disable-pip-version-check "faster-whisper==1.2.1" requests truststore numpy playwright
+          python -m playwright install chromium
+          python -m pip list
+      - name: Voces del sistema (SAPI) con las que se sintetiza el audio de prueba
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Speech
+          (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() |
+            ForEach-Object { $_.VoiceInfo.Name + " · " + $_.VoiceInfo.Culture }
+      - name: E2E de los tres modos (falla si se salta)
+        working-directory: tests
+        shell: bash
+        run: |
+          python -m unittest -v test_e2e_procesado 2>&1 | tee salida.txt
+          test ${PIPESTATUS[0]} -eq 0
+          if grep -q "skipped" salida.txt; then echo "::error::la E2E se ha saltado"; exit 1; fi
+          grep -q "^Ran [1-9][0-9]* tests\?" salida.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: e2e-procesado
+          path: artefactos
+          if-no-files-found: warn
