@@ -17,6 +17,7 @@ ACCIONES = {
     "abrir_url": "Abrir {host}",
     "asistente": "Configurar Chuleta",
     "avanzado": "Ir a Avanzado",
+    "procesado": "Revisar en Ajustes",
     "diagnostico": "Copiar diagnóstico",
     "reintentar_descarga": "Reintentar",
 }
@@ -108,7 +109,10 @@ def explicar(err, proveedor=None):
     if m:  # 401: la clave no vale -> la página de claves del proveedor
         out["accion"] = _accion("abrir_url", url="https://" + m.group(1), host=m.group(1).split("/")[0])
         return out
-    if "no encuentra el modelo" in low or "minutos por trozo" in low:
+    if "no encuentra el modelo" in low:  # el modelo y la dirección están en Ajustes › Procesado (o en el paso 2)
+        out["accion"] = _accion("procesado")
+        return out
+    if "minutos por trozo" in low:
         out["accion"] = _accion("avanzado")
         return out
     if any(k in low for k in ("vuelve a probar", "está fallando", "pide esperar", "comprueba la conexión",

@@ -2039,6 +2039,10 @@ function procesadoFieldsetHtml() {
   </fieldset>`;
 }
 
+/* la ayuda del directo en Ajustes › Grabar: con la API, la nube y su cupo; sin ella, solo el PC */
+const lAyuda = api => 'El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. '
+  + (api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.'
+    : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.');
 /* Ajustes por secciones (07/11/2026, configurar.js): antes, un diálogo de 6 a 7,5 pantallas con «Guardar» al final.
    Todas las secciones están en el DOM (collect() lee de todas); solo se ve la elegida. opts.sec: la que se abre (si
    no, la última vista). Se llama también como manejador de clic: un Event no trae .sec. */
@@ -2084,7 +2088,7 @@ function openSettings(opts) {
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
       <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${enApi ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
-      <div class="help">El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. ${enApi ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.' : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.'}</div>
+      <div class="help" id="lAyuda">${esc(lAyuda(enApi))}</div>
     </fieldset>
     ${window.reunionFieldsetHtml?.() || ''}
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
@@ -2153,14 +2157,36 @@ function openSettings(opts) {
       $('.aj-main', d).scrollTop = 0;
     };
     d.irSec = irSec;
+    // «Hay cambios sin guardar» de verdad: se compara con cómo se abrió. Lo que se guarda solo (Voces, personas) o no
+    // es de «Guardar» (el vocabulario del instalador) no cuenta. Si un subdiálogo (Voces, vocabulario, carpeta,
+    // Apagar, el asistente) reabre Ajustes, lo escrito y sin guardar vuelve (S.ajBorrador).
+    const NO_CUENTA = new Set(['vzOn', 'xVocab']);
+    const campos = () => $$('.aj-main input[id], .aj-main select[id], .aj-main textarea[id]', d)
+      .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && x.type !== 'file' && x.type !== 'button');
+    const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
+    const inicial = foto();  // como viene de los ajustes guardados
+    if (S.ajBorrador) {
+      campos().forEach(x => {
+        if (!(x.id in S.ajBorrador)) return;
+        if (x.type === 'checkbox' || x.type === 'radio') x.checked = S.ajBorrador[x.id]; else x.value = S.ajBorrador[x.id];
+      });
+    }
+    const marcar = () => {
+      const ahora = foto(), cambios = Object.keys(ahora).some(k => ahora[k] !== inicial[k]);
+      S.ajBorrador = cambios ? ahora : null;
+      $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
+    };
+    d.ajMarcar = marcar;
+    if (S.ajBorrador) marcar();
+    document.body.classList.add('aj-abierto');
+    setTimeout(() => $('.aj-nav [data-sec].on', d)?.focus(), 0);  // el foco, dentro del diálogo (no en ⚙)
     d.addEventListener('click', e => {
       const x = e.target.closest('.aj-nav [data-sec], [data-sec-ir]');
       if (!x) return;
       e.preventDefault();
       irSec(x.dataset.sec || x.dataset.secIr);
     });
-    // «Hay cambios sin guardar»: cualquier cambio de un campo (no el de «Dónde se procesan», que dice lo suyo)
-    const pendiente = e => { if (e.target.closest('.aj-main') && e.target.name !== 'proc') $('.aj-pend', d).textContent = 'Hay cambios sin guardar'; };
+    const pendiente = e => { if (e.target.closest('.aj-main') && e.target.name !== 'proc' && !NO_CUENTA.has(e.target.id)) marcar(); };
     d.addEventListener('input', pendiente);
     d.addEventListener('change', pendiente);
     d.addEventListener('click', e => {  // la tarjeta de estado (configurar.js): «Probar» y «Cambiar…» abren el asistente
@@ -2168,8 +2194,10 @@ function openSettings(opts) {
       if (!x || typeof abrirConfigurar !== 'function') return;
       e.preventDefault();
       const volver = () => openSettings({ sec: 'procesado' });
-      abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver } : { volver });
+      abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver, empezar: true } : { volver });  // «Probar»: ya
     });
+    // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
+    function ajTarjeta() { const t = $('.cfg-estado', d); if (t && typeof cfgEstadoHtml === 'function') t.outerHTML = cfgEstadoHtml(); }
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
     // «Dónde se procesan» (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior sin
     // decirlo (al grabar seguía usando Groq). Ahora el cambio pendiente se dice junto a las opciones, con «Aplicar ahora»
@@ -2195,6 +2223,7 @@ function openSettings(opts) {
       if ($('#procModelos', d)) $('#procModelos', d).hidden = v === 'api';
       if ($('#procApiAv', d)) $('#procApiAv', d).hidden = v !== 'api';
       if ($('#lNube', d)) $('#lNube', d).hidden = v !== 'api';
+      if ($('#lAyuda', d)) $('#lAyuda', d).textContent = lAyuda(v === 'api');
       procPintar();
     }));
     $('#procGuardado', d).addEventListener('click', async e => {
@@ -2210,10 +2239,13 @@ function openSettings(opts) {
         if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
         d.modelosPoll?.();
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);
+        ajTarjeta();
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ No se ha podido aplicar: ${esc(err.message)}</span>`; }
     });
     S.modalCleanup = () => {  // al cerrar Ajustes (Cancelar, Esc, fuera) con el cambio sin aplicar: que se sepa
+      document.body.classList.remove('aj-abierto');
       if (!document.body.contains(d)) return;  // otro diálogo ocupó el hueco
+      S.ajBorrador = null;  // se cierra Ajustes (no un subdiálogo): lo escrito sin guardar se descarta
       const v = procPendiente();
       if (v) toast(`No se ha aplicado ${procNombre[v]}: sigue ${procNombre[S.config.procesado] || 'la opción de antes'}. Para cambiarlo, ⚙ Ajustes → «Aplicar ahora».`, 'err');
     };
@@ -2288,9 +2320,13 @@ function openSettings(opts) {
       const res = $('#cTestRes', d);
       res.textContent = 'Probando…';
       try {
-        setConfig(await api('/api/settings', collect()));
+        // guarda el modo elegido y la nube (para probar con la clave escrita), no el resto del formulario: «Cancelar»
+        // no deshace un guardado, y el resto sigue siendo «cambios sin guardar» (revisión del 07/11/2026)
+        const x = collect();
+        setConfig(await api('/api/settings', { procesado: x.procesado, cloud: x.cloud }));
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
         procPintar();  // «Probar conexión» guarda: el modo elegido ya está aplicado
+        ajTarjeta();
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
@@ -2341,6 +2377,7 @@ function openSettings(opts) {
       if (b.dataset.m === 'no') return closeModal(false);
       try {
         const c = await api('/api/settings', collect());
+        S.ajBorrador = null;
         setConfig(c); localStorage.setItem('procElegido', '1'); closeModal(true); toast('Ajustes guardados'); refreshView();
         if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
       }

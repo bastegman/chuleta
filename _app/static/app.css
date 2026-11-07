@@ -803,3 +803,4 @@ ol.pasos code { user-select: all; }
 .dialog.aj { height: 84vh; }
 .jitem .s.err .cfg-accion { margin-left: 8px; color: var(--ink-2); }
 .jobline .cfg-accion { margin-right: 8px; }
+body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen «Guardar» */

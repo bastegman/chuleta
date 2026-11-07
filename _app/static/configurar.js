@@ -201,7 +201,7 @@ const AVISO_NUBE = 'Las grabaciones de reuniones pueden ser información confide
 function abrirConfigurar(opts = {}) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
   const c = S.config.cloud || {};
-  Object.assign(W, { paso: opts.paso || 1, modo: opts.modo || S.config.procesado || 'local', prueba: null, volver: opts.volver || null,
+  Object.assign(W, { paso: opts.paso || 1, modo: opts.modo || S.config.procesado || 'local', prueba: null, volver: opts.volver || null, empezar: !!opts.empezar,
     cloud: { provider: c.provider || 'groq', api_key: '', base_url: c.base_url || '', azure_endpoint: c.azure_endpoint || '',
       azure_deployment: c.azure_deployment || '', azure_api_version: c.azure_api_version || '' } });
   W.guardado = false;
@@ -354,6 +354,7 @@ function wzPintar() {
   }
   if (W.paso === 2 && W.modo === 'agente') wzMirarClaude();
   if (W.paso === 3 && W.prueba && !W.prueba.terminada) wzSeguir(W.prueba.id);
+  if (W.paso === 3 && W.empezar && !W.prueba) { W.empezar = false; wzProbar(); }  // «Probar» de la tarjeta: ya
 }
 function wzRefrescarPie() {  // solo si cambia (repintarlo cada 400 ms le quitaba el foco a quien estuviera en él)
   const f = $('.wz-foot', W.d), r = W.prueba;
@@ -482,7 +483,7 @@ async function wzAccion(tipo, b) {
   if (tipo === 'reintentar') return wzProbar();
   if (tipo === 'abrir_powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
   if (tipo === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(b.dataset.url, '_blank'));
-  if (tipo === 'asistente') { W.paso = 2; return wzPintar(); }
+  if (tipo === 'asistente' || tipo === 'procesado') { W.paso = 2; return wzPintar(); }  // la clave y la dirección, ahí
   if (tipo === 'reintentar_descarga') { await wzBajar(); return wzProbar(); }
   if (tipo === 'avanzado') { closeModal(false); return openSettings({ sec: 'avanzado' }); }
   if (tipo === 'diagnostico') { try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); } }
@@ -586,7 +587,7 @@ document.addEventListener('click', async e => {
   if (t === 'abrir_powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
   if (t === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: S.config?.cloud?.provider }).catch(() => window.open(b.dataset.url, '_blank'));
   if (t === 'asistente') return abrirConfigurar({ paso: 2, modo: S.config?.procesado });
-  if (t === 'avanzado') return openSettings({ sec: 'avanzado' });
+  if (t === 'avanzado' || t === 'procesado') return openSettings({ sec: t });
   if (t === 'reintentar_descarga' && b.dataset.model) return modeloBajar(b.dataset.model);
   if (t === 'diagnostico') {
     try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); }

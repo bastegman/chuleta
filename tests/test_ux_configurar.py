@@ -85,7 +85,7 @@ class ExplicarTests(unittest.TestCase):
         R.status_code = 503
         self.assertEqual(self.accion(engines.cloud_http_error(R(), {"provider": "groq"})), "reintentar")
         R.status_code = 404
-        self.assertEqual(self.accion(engines.cloud_http_error(R(), {"provider": "groq"}, model="x")), "avanzado")
+        self.assertEqual(self.accion(engines.cloud_http_error(R(), {"provider": "groq"}, model="x")), "procesado")
 
         class SSLError(Exception):
             pass
