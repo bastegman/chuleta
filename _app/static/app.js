@@ -2143,6 +2143,7 @@ function openSettings(opts) {
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
       <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas y destinos hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
     </fieldset>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:10px"><input type="checkbox" id="sInicioWin" disabled> Arrancar ${esc(APP_NAME)} al iniciar Windows <span class="muted" id="sInicioWinNota" style="font-weight:400">· lo mismo que «Arrancar con Windows» en el menú del icono de la bandeja</span></label>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     </section>
@@ -2199,6 +2200,25 @@ function openSettings(opts) {
     // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
     function ajTarjeta() { const t = $('.cfg-estado', d); if (t && typeof cfgEstadoHtml === 'function') t.outerHTML = cfgEstadoHtml(); }
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
+    // «Arrancar con Windows» (la bandeja deja /api/inicio-windows): se aplica al marcarla, como en el menú del icono;
+    // null = no se puede (fuera de Windows o una copia sin instalar)
+    const ini = $('#sInicioWin', d);
+    if (ini) {
+      api('/api/inicio-windows').then(r => {
+        if (r.activado == null) { $('#sInicioWinNota', d).textContent = '· solo con la app instalada en Windows'; return; }
+        ini.checked = !!r.activado;
+        ini.disabled = false;
+      }).catch(() => { });
+      ini.onchange = async () => {
+        ini.disabled = true;
+        try {
+          const r = await api('/api/inicio-windows', { activado: ini.checked });
+          ini.checked = !!r.activado;
+          toast(r.activado ? `${esc(APP_NAME)} arrancará al iniciar Windows` : `${esc(APP_NAME)} ya no arrancará al iniciar Windows`);
+        } catch (err) { ini.checked = !ini.checked; toast(esc(err.message), 'err'); }
+        finally { ini.disabled = false; }
+      };
+    }
     // «Dónde se procesan» (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior sin
     // decirlo (al grabar seguía usando Groq). Ahora el cambio pendiente se dice junto a las opciones, con «Aplicar ahora»
     // (y su aviso si hay trabajo en la nube, que pasaría a este PC), y al cerrar sin aplicarlo se avisa. Un clic de

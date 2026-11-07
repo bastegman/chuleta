@@ -127,6 +127,12 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
+        # «Arrancar con Windows» (bandeja): sin la app instalada (aquí, y fuera de Windows) la casilla sale desactivada
+        # con su nota; la API de verdad contesta (GET /api/inicio-windows)
+        pg.wait_for_selector("#modal #sInicioWin", state="attached", timeout=5000)
+        nota = "document.querySelector('#sInicioWinNota').textContent.includes('solo con la app instalada')"
+        pg.wait_for_function(nota, timeout=10000)
+        self.assertTrue(pg.evaluate("document.querySelector('#sInicioWin').disabled"))
         # «Donde se procesan tus reuniones»: las tres opciones, y cada una ensena lo suyo (02/11/2026)
         for v in ("local", "agente", "api"):
             pg.wait_for_selector(f"#modal input[name='proc'][value='{v}']", state="attached", timeout=5000)

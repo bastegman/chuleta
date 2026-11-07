@@ -302,5 +302,22 @@ class InterfazTests(unittest.TestCase):
         self.assertNotIn("medio minuto", bloque)
 
 
+class ArrancarConWindowsTests(unittest.TestCase):
+    """Integración del 07/11: la casilla «Arrancar con Windows» de Ajustes usa la API que dejó la bandeja."""
+
+    def test_casilla_y_api(self):
+        js = open(os.path.join(APP, "static", "app.js"), encoding="utf-8").read()
+        self.assertIn('id="sInicioWin"', js)
+        self.assertIn("api('/api/inicio-windows')", js)
+        self.assertIn("api('/api/inicio-windows', { activado: ini.checked })", js)
+        src = open(os.path.join(APP, "server.py"), encoding="utf-8").read()
+        self.assertIn('"/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()}', src)
+        self.assertIn('"/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)}',
+                      src)
+        # y las rutas de Steve siguen en la tabla GET (el conflicto de la integración)
+        for r in ('"/api/probar": a.probar_estado', '"/api/agente/estado": a.agente_estado'):
+            self.assertIn(r, src)
+
+
 if __name__ == "__main__":
     unittest.main()
