@@ -477,6 +477,26 @@ SIN_ARREGLO = ("import runpy, sys\n"
                "import window\n"
                "window.Window._hook_native = lambda self: False\n"
                f"runpy.run_path({os.path.join(APP, 'server.py')!r}, run_name='__main__')\n")
+# la app de verdad con la ventana de un PC lento (en el de Bernardo, 31 s entre «arranque» y «ventana abierta» el
+# 02/11/2026): CHULETA_LENTO_INIT s antes de crear la ventana (cuando alive aún es False) y CHULETA_LENTO_START s más
+# dentro de webview.start (ventana creada, sin enseñar). Anota en server.log cuándo entra en cada fase.
+LENTA = ("import os, runpy, sys, time\n"
+         f"sys.path.insert(0, {APP!r})\n"
+         "import common, window\n"
+         "_renderer = window.renderer\n"
+         "def renderer(wv):\n"
+         "    common.log('(prueba) ventana: initialize')\n"
+         "    time.sleep(float(os.environ.get('CHULETA_LENTO_INIT') or 0))\n"
+         "    return _renderer(wv)\n"
+         "window.renderer = renderer\n"
+         "wv = window.import_webview()\n"
+         "_start = wv.start\n"
+         "def start(*a, **k):\n"
+         "    common.log('(prueba) ventana: start')\n"
+         "    time.sleep(float(os.environ.get('CHULETA_LENTO_START') or 0))\n"
+         "    return _start(*a, **k)\n"
+         "wv.start = start\n"
+         f"runpy.run_path({os.path.join(APP, 'server.py')!r}, run_name='__main__')\n")
 
 
 @unittest.skipUnless(WIN and os.environ.get("NOTAS_VENTANA_REAL"), "solo Windows con NOTAS_VENTANA_REAL=1")
@@ -613,6 +633,69 @@ class VentanaRealTests(unittest.TestCase):
             self.p.kill()
             for pid in pids:
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=60)
+
+    def app_windows(self, pid):
+        """Ventanas visibles de primer nivel con el título de la app y del proceso `pid`."""
+        from ctypes import wintypes
+        u = ctypes.WinDLL("user32")
+        found = []
+        proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def cb(hwnd, _):
+            owner = wintypes.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and u.IsWindowVisible(hwnd):
+                buf = ctypes.create_unicode_buffer(256)
+                u.GetWindowTextW(hwnd, buf, 256)
+                if buf.value == server.APP_NAME:
+                    found.append(hwnd)
+            return True
+        u.EnumWindows(proc(cb), 0)
+        return found
+
+    def doble_apertura(self, fase, **lento):
+        """Bernardo (msg 1143): «se me abrían como 2 veces la app». La primera copia, con la ventana de un PC lento; la
+        segunda, el acceso directo otra vez cuando la primera entra en `fase` («initialize»: la ventana aún no existe;
+        «start»: creada y sin enseñar). Una sola ventana, ningún Edge y la segunda termina sola, sin aviso de error."""
+        self.start(code=LENTA, **lento)
+        self.wait_log(rf"\(prueba\) ventana: {fase}")
+        out2 = open(os.path.join(self.data, "consola2.txt"), "wb")
+        p2 = subprocess.Popen([sys.executable, os.path.join(APP, "server.py"), "--port", str(self.port), "--data",
+                               self.data], cwd=APP, stdout=out2, stderr=subprocess.STDOUT)
+        edge = []
+        try:
+            try:
+                rc2 = p2.wait(60)
+            except subprocess.TimeoutExpired:
+                rc2 = None
+            m = self.wait_log(r"ventana abierta \(WebView2; hwnd (\d+)\)", timeout=120)
+            time.sleep(6)  # un Edge que se abra tarde (la segunda copia espera 5 s a /api/mostrar)
+            edge = self.edge_app_pids()
+            log = self.read_log()
+            detalle = log[-4000:]
+            self.assertEqual(edge, [], "se ha abierto Edge además de la ventana propia:\n" + detalle)
+            self.assertEqual(len(re.findall(r"ventana abierta \(WebView2", log)), 1, detalle)
+            self.assertIsNone(self.p.poll(), detalle)  # la primera sigue abierta
+            self.assertEqual(rc2, 0, detalle)  # la segunda termina sola y sin error («puerto ocupado»)
+            self.assertEqual(self.app_windows(self.p.pid), [int(m.group(1))], detalle)
+            self.assertNotIn("no ha podido arrancar", log)
+            return log
+        finally:
+            if p2.poll() is None:
+                p2.kill()
+            out2.close()
+            for pid in edge:
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=60)
+            src = os.path.join(self.data, "consola2.txt")
+            if os.path.isfile(src):
+                os.makedirs(ART, exist_ok=True)
+                shutil.copyfile(src, os.path.join(ART, f"{self.id().rsplit('.', 1)[-1]}.consola2.txt"))
+
+    def test_doble_apertura_antes_de_crear_la_ventana(self):
+        self.doble_apertura("initialize", CHULETA_LENTO_INIT="8", CHULETA_LENTO_START="2")
+
+    def test_doble_apertura_con_la_ventana_sin_ensenar(self):
+        self.doble_apertura("start", CHULETA_LENTO_INIT="0", CHULETA_LENTO_START="9")
 
 
 # ----------------------------------------------------------------------------- P1-12 · correcciones de la transcripción
