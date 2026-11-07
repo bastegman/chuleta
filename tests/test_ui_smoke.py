@@ -160,6 +160,60 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(err, [], err)
         self.assertEqual(red, [], red)
 
+    def test_asistente_configurar_tres_pasos_y_probar_sin_guardar(self):
+        """«Configurar Chuleta» (07/11/2026): tres pasos, «Probar» de verdad (aquí falla en la descarga del modelo,
+        contra un puerto cerrado, con su frase y su botón) y nada se guarda hasta terminar."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        antes = pg.evaluate("api('/api/config')")["procesado"]
+        pg.evaluate("abrirConfigurar()")
+        pg.wait_for_selector(".dialog.wz h2:has-text('¿Dónde se procesan tus reuniones?')", timeout=5000)
+        pg.check("input[name='wzModo'][value='agente']")
+        self.assertIn("se envía a Anthropic", pg.inner_text(".dialog.wz"))
+        pg.click("[data-wz='sig']")
+        pg.wait_for_selector(".dialog.wz h2:has-text('Conecta Claude Code')", timeout=5000)
+        self.assertIn("irm https://claude.ai/install.ps1 | iex", pg.inner_text(".dialog.wz"))
+        pg.click("[data-wz='atras']")
+        pg.check("input[name='wzModo'][value='local']")
+        pg.click("[data-wz='sig']")
+        pg.wait_for_selector(".dialog.wz h2:has-text('de transcripción')", timeout=5000)  # el modelo o los modelos
+        pg.click("[data-wz='sig']")
+        pg.wait_for_selector(".dialog.wz h2:has-text('Prueba que todo funciona')", timeout=5000)
+        pg.click(".wz-probar [data-wz='probar']")
+        # en la CI falla la descarga (puerto cerrado: «Reintentar»); en un PC con los modelos ya bajados y sin Whisper
+        # instalado, la transcripción («Copiar diagnóstico»). En los dos casos: una frase y su botón
+        pg.wait_for_selector(".wz-res.err [data-wz-accion]", timeout=90000)
+        self.assertTrue(pg.inner_text(".wz-res.err").strip())
+        self.assertTrue(pg.is_disabled("[data-wz='terminar']"))
+        self.assertEqual(pg.evaluate("api('/api/config')")["procesado"], antes)  # una prueba no guarda nada
+        pg.keyboard.press("Escape")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        # Ajustes por secciones: «Aplicar ahora» sigue aplicando (el 07/11/2026 una variable «api» tapó la función
+        # api() en todo Ajustes y solo lo vio la e2e de Windows) y la sección elegida se recuerda
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal:not(.hidden) .aj-nav", timeout=5000)
+        otro = "agente" if antes != "agente" else "local"
+        pg.check(f"#modal input[name='proc'][value='{otro}']")
+        pg.click("#procAplicar")
+        pg.wait_for_function("document.querySelector('#procGuardado').innerText.includes('Aplicado')", timeout=10000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["procesado"], otro)
+        pg.check(f"#modal input[name='proc'][value='{antes}']")
+        pg.click("#procAplicar")
+        pg.wait_for_function("document.querySelector('#procGuardado').innerText.includes('Aplicado')", timeout=10000)
+        pg.click(".aj-nav [data-sec='avanzado']")
+        pg.fill("#sThreads", "2")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        pg.click("#modal [data-m='ok']")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["threads"], 2)  # guardado desde una sección oculta al abrir
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal:not(.hidden) .aj-nav [data-sec='avanzado'].on", timeout=5000)  # la última vista
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [])
+        self.assertEqual(red, [])
+
     def test_sin_token_no_hay_sesion(self):
         """La pagina se sirve, pero sin la cookie la API contesta 403 y la pagina lo dice (no una pantalla muerta)."""
         pg, _, _ = self.pagina()

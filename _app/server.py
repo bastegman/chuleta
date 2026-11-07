@@ -37,7 +37,9 @@ from urllib.parse import parse_qs, urlparse
 
 import calendario
 import engines
+import explicar
 import live
+import probar
 import salidas
 import voices
 from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WINDOWS,  # noqa: F401 (re-exportados)
@@ -454,6 +456,7 @@ DEFAULT_SETTINGS = {
 }
 
 PROCESADOS = ("local", "agente", "api")
+PRUEBA_VOZ_DB = -35.0  # «Probar»: pico del micro (dB, cada 0,25 s) que cuenta como voz; supuesto, sin medir
 NUBE_OFF = ("La transcripción en la nube está desactivada: en Ajustes → «Dónde se procesan tus reuniones» elige "
             "«API externa».")
 
@@ -1788,6 +1791,8 @@ class Job:
         if self.live:
             d.update(live=True, recording=self.recording, recorded=round(self.recorded, 1),
                      transcribed=round(self.transcribed, 1), rev=self.rev, directo=self.directo)
+        if self.error:  # el error en una frase con qué hacer (explicar.py); «error» sigue siendo el técnico
+            d["aviso"] = explicar.explicar(self.error)
         return d
 
 
@@ -3577,6 +3582,11 @@ class App:
             webbrowser.open(REPO_URL)
         elif que == "donar":
             webbrowser.open(DONAR_URL)
+        elif que == "claves":  # el asistente: la página de claves del proveedor (solo las de engines.PROVIDERS)
+            url = (engines.PROVIDERS.get(b.get("proveedor") or "groq") or {}).get("keys")
+            if not url:
+                raise ApiError("Ese proveedor no tiene página de claves: pídesela a quien te dio la API.")
+            webbrowser.open(url)
         else:
             raise ApiError("No sé qué abrir")
         return {"ok": True}
@@ -3679,6 +3689,8 @@ class App:
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "procesado": mode, "agente": self._agente_info(st),
+                "ultima_prueba": (st.get("ultima_prueba") if (st.get("ultima_prueba") or {}).get("modo") == mode
+                                  else None),
                 "preset": st["preset"], "language": st["language"], "threads": st["threads"],
                 "prompt": st["prompt"], "cpu_count": os.cpu_count(),
                 "live_auto": bool(st.get("live_auto")), "live_preset": st.get("live_preset") or "medium",
@@ -4619,6 +4631,10 @@ class App:
                 new = [old.get(k.strip(), k.strip()) for k in incoming if isinstance(k, str) and k.strip()]
                 d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
+        p = (getattr(self, "pruebas", None) or {}).get(b.get("prueba")) if b.get("prueba") else None
+        if p is not None and p.terminada and p.firma == self._firma(self.settings.get()):
+            res = p.resumen()  # la del asistente: es de lo que se acaba de guardar
+            self.settings.update(lambda d: d.update(ultima_prueba=res))
         ahora = procesado_de(self.settings.get())
         if ahora != antes:
             log(f"   dónde se procesan las reuniones: {antes} → {ahora}")
@@ -4645,7 +4661,7 @@ class App:
             version, secs = ag.check(ruta, model=modelo)
         except engines.EngineError as e:
             log(f"   agente: {cls.label}: {e} ({self._agente_tiempos(ag, time.time() - t0)})")
-            raise ApiError(str(e))
+            raise ApiError(explicar.explicar(e)["frase"])
         t = getattr(ag, "tiempos", None)
         if isinstance(t, dict) and t:
             log(f"   agente: {self._agente_tiempos(ag, secs)}")
@@ -4662,11 +4678,253 @@ class App:
         return " · ".join(p for p in partes if p)
 
     def test_cloud(self, b):
+        cloud = self.settings.get()["cloud"]
         try:
-            secs = self.jobs.cloud.test(self.settings.get()["cloud"])
+            secs = self.jobs.cloud.test(cloud)
         except engines.EngineError as e:
-            raise ApiError(str(e))
+            prov = (engines.PROVIDERS.get(cloud.get("provider") or "groq") or {}).get("label")
+            raise ApiError(explicar.explicar(e, proveedor=prov)["frase"])
         return {"ok": True, "seconds": round(secs, 2)}
+
+    # --- «Probar» del asistente «Configurar Chuleta» (probar.py): prueba real con lo que se está eligiendo, sin guardar
+    def _candidata(self, b):
+        """(ajustes con lo elegido en el asistente encima, sin guardarlos; True si hay algo elegido). La clave nueva
+        solo si es una de verdad (no la máscara que enseña Ajustes)."""
+        st = copy.deepcopy(self.settings.get())
+        c = (b or {}).get("candidata")
+        if not isinstance(c, dict):
+            return st, False
+        if c.get("procesado") in PROCESADOS:
+            st["procesado"] = c["procesado"]
+        ag = c.get("agente")
+        if isinstance(ag, dict):
+            cls = engines.AGENTES.get(ag.get("tipo")) or agente_de(st)[0]
+            st["agente"] = {"tipo": cls.tipo,
+                            "modelo": ag.get("modelo") if ag.get("modelo") in dict(cls.MODELOS) else cls.MODELO}
+        cl = c.get("cloud") if isinstance(c.get("cloud"), dict) else {}
+        st["cloud"] = dict(st.get("cloud") or {})
+        for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
+            if k in cl:
+                st["cloud"][k] = (cl[k] or "").strip()
+        key = (cl.get("api_key") or "").strip()
+        if key and "…" not in key and "•" not in key:
+            st["cloud"]["api_key"] = key
+        return st, True
+
+    @staticmethod
+    def _prueba_motores(st):
+        """(preset del directo, [modelos de Whisper que hacen falta]) de esa configuración, sin «API externa» siempre
+        en el PC: el del directo y el de la cola (los dos se descargan juntos, decisión de Claudia 07/11/2026)."""
+        out = []
+        for key, local in (("live_preset", "medium"), ("preset", "rapido")):
+            p = engines.PRESETS_BY_ID.get(st.get(key) or local)
+            if not p or p["engine"] != "local":
+                p = engines.PRESETS_BY_ID[local]
+            out.append(p)
+        return out[0], list(dict.fromkeys(p["model"] for p in out))
+
+    def _prueba_hacer(self, st):
+        """Las funciones de verdad para probar.Prueba (micro, Whisper, nube, Claude) con esos ajustes."""
+        modo = procesado_de(st)
+        directo, modelos_pc = self._prueba_motores(st)
+        tmp = os.path.join(DATA_DIR, "tmp")
+        os.makedirs(tmp, exist_ok=True)
+
+        def modelos(report, cancelled):
+            if engines.MODELS is None:
+                return
+            names = [m for m in modelos_pc if m in engines.WHISPER_MODELS]
+            for m in names:
+                if engines.MODELS.path(m) is None:
+                    engines.MODELS.start(m)
+            while True:
+                sts = [engines.MODELS.state(m) for m in names]
+                if all(x["ready"] for x in sts):
+                    return
+                errs = [x["error"] for x in sts if x["error"] and not x["downloading"] and not x["ready"]
+                        and "cancelada" not in x["error"].lower()]
+                if errs:
+                    raise engines.EngineError(errs[0])
+                for m, x in zip(names, sts):
+                    if not x["ready"] and not x["downloading"]:
+                        engines.MODELS.start(m)  # sin empezar o cancelada en Ajustes: la prueba la necesita
+                total = sum(x["total_mb"] or x["size_mb"] or 0 for x in sts)
+                done = sum((x["total_mb"] or x["size_mb"] or 0) if x["ready"] else (x["done_mb"] or 0) for x in sts)
+                eta = max((x["eta_s"] or 0) for x in sts)
+                gb = lambda mb: f"{mb / 1000:.1f}".replace(".", ",")  # noqa: E731
+                report(f"Descargando · {int(100 * done / total) if total else 0} % · {gb(done)} de {gb(total)} GB"
+                       + (f" · quedan unos {engines.fmt_left(eta)}" if eta else ""))
+                if cancelled():
+                    raise probar.Cancelada()
+                time.sleep(0.5)
+
+        def grabar(segundos, report, cancelled):
+            if self.rec and self.rec.alive():
+                raise engines.EngineError("Estás grabando: prueba cuando termines la grabación.")
+            with self.rec_lock:
+                if self.monitor:
+                    self.monitor.stop(timeout=2)
+                    self.monitor = None
+            path = os.path.join(tmp, "prueba-micro.wav")
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            report("Prepárate: en un momento empieza a grabar…")
+            try:
+                # con «Sin micrófono» guardado, la prueba usa el predeterminado de Windows
+                mic = st.get("rec_mic") if st.get("rec_mic") not in (None, "", "none") else "default"
+                r = RecorderProcess(path, mic, "none", APP_DIR, DATA_DIR)
+            except Exception as e:  # sin Python para lanzarlo o sin permisos: la cadena con silencio
+                return None, False, e.__class__.__name__
+            fin = time.time() + 10
+            while time.time() < fin and r.alive() and r.status.get("t") is None:
+                if cancelled():
+                    r.stop(timeout=2)
+                    raise probar.Cancelada()
+                time.sleep(0.1)
+            if r.status.get("t") is None:
+                r.stop(timeout=2)
+                mic = r.status.get("mic") if isinstance(r.status.get("mic"), dict) else {}
+                log(f"   probar: el micro no ha arrancado ({mic.get('error') or 'sin estado'})")
+                return None, False, mic.get("error") or "el micro no ha arrancado"
+            t0, fin = r.status.get("t") or 0, time.time() + segundos + 8  # un grabador colgado no para la prueba
+            while r.alive() and (r.status.get("t") or 0) - t0 < segundos and time.time() < fin:
+                if cancelled():
+                    r.stop(timeout=2)
+                    raise probar.Cancelada()
+                quedan = max(1, int(segundos - ((r.status.get("t") or 0) - t0) + 0.99))
+                report(f"Habla ahora: di «{probar.FRASE}» · {quedan} s")
+                time.sleep(0.1)
+            r.stop(timeout=5)
+            mics = [m for _, m, _ in r.levels if m is not None]
+            voz = sum(1 for m in mics if m > PRUEBA_VOZ_DB) >= 3  # ≥ 0,75 s con voz (niveles cada 0,25 s)
+            log(f"   probar: micro {len(mics)} lecturas, máx {max(mics) if mics else '-'} dB, "
+                f"voz: {'sí' if voz else 'no'}")
+            return (path if os.path.isfile(path) else None), voz, None
+
+        def cuenta(report, cancelled):
+            cls, a = agente_de(st)
+            ruta = cls.find()
+            if not ruta:
+                raise engines.EngineError(f"No encuentro {cls.label} en este PC. Sigue el paso a paso y vuelve a "
+                                          "probar.")
+            report(f"Comprobando {cls.label} con tu cuenta…")
+            cls(settings_dir=DATA_DIR).check(ruta, model=a["modelo"], cancelled=cancelled)
+
+        def silencio():
+            import wave
+            path = os.path.join(tmp, "prueba-silencio.wav")
+            with wave.open(path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(b"\0\0" * 16000)
+            return path
+
+        def transcribir(wav, report, cancelled):
+            def rep(frac=None, stage=None, **k):
+                report(stage)
+            if modo == "api":
+                import numpy as np
+                y = engines.decode_16k(wav).astype(np.float32) / 32768.0
+                f = os.path.join(tmp, "prueba.flac")
+                engines.write_flac(f, y)
+                r = self.jobs.cloud._post(st["cloud"], f, "es", None, rep, cancelled, attempts=2, max_wait=10.0)
+                return (r.get("text") or "").strip()
+            if getattr(self, "local_prueba", None) is None:
+                self.local_prueba = engines.LocalEngine(DATA_DIR, "prueba", idle_s=60)
+            segs, _, _ = self.local_prueba.transcribe(wav, directo, "es", None, st.get("threads") or default_threads(),
+                                                      rep, cancelled)
+            return " ".join(t for _, _, t in segs).strip()
+
+        def resumir(texto, report, cancelled):
+            def rep(stage=None, **k):
+                report(stage)
+            sistema = "Resume en una sola frase corta, en español, lo que dice este texto."
+            if modo == "agente":
+                cls, a = agente_de(st)
+                out, _ = cls(settings_dir=DATA_DIR).chat(sistema, texto, 200, rep, cancelled, model=a["modelo"],
+                                                         timeout=engines.AGENTE_CHECK_S)
+                return out
+            out, _ = engines.Summarizer(keys=self.jobs.cloud.keys)._chat(
+                dict(st["cloud"], summary_model=st.get("summary_model")), sistema, texto, 200, rep, cancelled,
+                timeout=60, attempts=2)
+            return out
+
+        prov = (engines.PROVIDERS.get(st["cloud"].get("provider") or "groq") or {}).get("label") or "la API"
+        nombres = {"transcribe": f"con {prov}" if modo == "api" else "en este PC",
+                   "resume": "Claude (tu cuenta)" if modo == "agente" else prov,
+                   "proveedor": prov if modo == "api" else None}
+        return {"cuenta": cuenta, "modelos": modelos, "grabar": grabar, "silencio": silencio,
+                "transcribir": transcribir, "resumir": resumir}, nombres
+
+    @staticmethod
+    def _firma(st):
+        """Lo que hace distinta una configuración para «Probar» (la clave, como huella): una prueba solo vale para la
+        configuración que se probó (revisión del 07/11/2026: un «Listo» viejo sobrevivía a cambiar la clave)."""
+        c = st.get("cloud") or {}
+        key = (c.get("api_key") or "").strip()
+        return (procesado_de(st), (st.get("agente") or {}).get("modelo"), c.get("provider"), c.get("model"),
+                c.get("base_url"), c.get("azure_endpoint"), c.get("azure_deployment"),
+                hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else "")
+
+    def probar_empezar(self, b):
+        """POST /api/probar {candidata?}: empieza una prueba (una a la vez) y devuelve su id."""
+        if self.rec and self.rec.alive():
+            raise ApiError("Estás grabando: prueba cuando termines la grabación.")
+        with self.rec_lock:
+            cur = getattr(self, "prueba", None)
+            if cur is not None and cur.is_alive():  # otra configuración (o la misma otra vez): la de antes se cancela
+                cur.cancelar = True
+            st, candidata = self._candidata(b)
+            hacer, nombres = self._prueba_hacer(st)
+            p = probar.Prueba(procesado_de(st), hacer, nombres, candidata=candidata, al_terminar=self._prueba_fin,
+                              espera=cur if cur is not None and cur.is_alive() else None)
+            p.firma = self._firma(st)
+            if not hasattr(self, "pruebas"):
+                self.pruebas = {}
+            self.pruebas = {k: v for k, v in self.pruebas.items() if v.is_alive() or time.time() - v.empezada < 3600}
+            self.pruebas[p.id] = self.prueba = p
+            p.start()
+        log(f"   probar: {procesado_de(st)}{' (sin guardar)' if candidata else ''}")
+        return {"id": p.id}
+
+    def _prueba_fin(self, p):
+        r = p.public()
+        log(f"   probar: {'bien' if r['listo'] else 'falla'} · " + " · ".join(
+            f"{x['id']} {x['estado']} ({x['segundos']} s)" for x in r["pasos"])
+            + (f" · {r['fallo']['tecnico'] or r['fallo']['frase']}" if r["fallo"] else ""))
+        if p.nota_micro:
+            log(f"   probar: micro: {p.nota_micro}")
+        if not p.candidata:  # la de lo guardado (Ajustes › Probar): queda como última prueba
+            res = p.resumen()
+            self.settings.update(lambda d: d.update(ultima_prueba=res))
+
+    def probar_estado(self, q):
+        p = (getattr(self, "pruebas", None) or {}).get(q.get("id"))
+        if p is None:
+            raise ApiError("No encuentro esa prueba: vuelve a pulsar «Probar».")
+        return p.public()
+
+    def probar_cancelar(self, b):
+        p = (getattr(self, "pruebas", None) or {}).get((b or {}).get("id"))
+        if p is not None:
+            p.cancelar = True
+        return {"ok": True}
+
+    def agente_estado(self, q):
+        """Para el paso 2 del asistente: si Claude Code ya está en este PC (se mira cada pocos segundos)."""
+        cls, _ = agente_de(self.settings.get())
+        return {"encontrado": bool(cls.find()), "label": cls.label}
+
+    def abrir_powershell(self, b):
+        """«Abrir PowerShell» del asistente: una ventana vacía, sin ejecutar nada."""
+        if os.name != "nt":
+            raise ApiError("Este botón solo funciona en Windows: abre una terminal y sigue los pasos.")
+        subprocess.Popen(["powershell.exe", "-NoExit", "-NoLogo"], cwd=os.path.expanduser("~"),
+                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        return {"ok": True}
 
     # --- modelos de Whisper en este PC (engines.WhisperModels): estado, descarga con progreso y cancelar
     @staticmethod
@@ -5133,7 +5391,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
                   "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get,
-                  "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state}
+                  "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
+                  "/api/agente/estado": a.agente_estado}
         try:
             if u.path in routes:
                 t0 = time.time()
@@ -5167,6 +5426,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/cloud/test": a.test_cloud, "/api/live": a.start_live, "/api/live/model": a.live_model,
                   "/api/agente/comprobar": a.agente_comprobar,
                   "/api/modelos/descargar": a.modelos_descargar, "/api/modelos/cancelar": a.modelos_cancelar,
+                  "/api/probar": a.probar_empezar, "/api/probar/cancelar": a.probar_cancelar,
+                  "/api/abrir-powershell": a.abrir_powershell,
                   "/api/live/traducir": a.live_translate,
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,

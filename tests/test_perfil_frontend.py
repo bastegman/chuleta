@@ -35,7 +35,9 @@ class PerfilCargaTests(unittest.TestCase):
         for fn in GUARDED:
             self.assertRegex(src, rf"typeof {fn} === 'function'", fn)
         # el idioma ya no va dentro de las opciones del directo (es de la reunion, tambien con «Solo grabar»)
-        self.assertIn('<div id="rLiveOpts"><select id="rPreset">${presets}</select></div>', app)
+        # (07/11/2026: el selector va detrás de «Cambiar», con su etiqueta; dentro sigue sin haber idioma)
+        self.assertRegex(app, r'<div id="rLiveOpts"[^>]*>(<label[^<]*>Modelo del directo</label>)?'
+                              r'<select id="rPreset">\$\{presets\}</select></div>')
         self.assertNotIn("langSelect('rLang', S.config.language ?? 'es-en')}</div>", app)
         # el motor del directo, el idioma del resumen y las instrucciones extra viven en el perfil (con fallback)
         self.assertNotIn('<label>Motor para el directo</label>', app)

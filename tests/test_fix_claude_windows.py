@@ -154,6 +154,55 @@ class ErroresDeClaudeTests(unittest.TestCase):
         self.assertEqual(self.msg("algo raro"), "Claude Code ha fallado (código 1): algo raro")
 
 
+class ExplicarClaudeTests(unittest.TestCase):
+    """Las tres frases de ClaudeCode._why salen igual por explicar.py (Steve, ux-configurar), con su botón: en la Cola,
+    en «Probar» del asistente y en «Comprobar» de Ajustes."""
+    CASOS = (("API Error: 407 Proxy Authentication Required", "no puede conectar con Anthropic", "reintentar"),
+             ("API Error: Connection error. (unable to get local issuer certificate)",
+              "no puede conectar con Anthropic", "reintentar"),
+             ("Your organization has disabled Claude Code for this account.",
+              "no deja usar Claude Code con esta cuenta", "abrir_powershell"),
+             ("Claude Code on Windows requires git-bash (https://git-scm.com/downloads/win).",
+              "necesita Git para Windows", "abrir_powershell"))
+
+    def error(self, texto):
+        with self.assertRaises(engines.EngineError) as c:
+            engines.ClaudeCode()._parse(1, json.dumps({"type": "result", "is_error": True, "result": texto}), "", "s")
+        return c.exception
+
+    def test_frase_y_boton(self):
+        import explicar
+        for texto, trozo, accion in self.CASOS:
+            e = self.error(texto)
+            ex = explicar.explicar(e)
+            self.assertEqual(ex["frase"], str(e), texto)  # la frase de engines, tal cual
+            self.assertIn(trozo, ex["frase"], texto)
+            self.assertEqual(ex["accion"]["tipo"], accion, texto)
+            self.assertIn(ex["accion"]["etiqueta"], ("Probar otra vez", "Abrir PowerShell"))
+            self.assertTrue(ex["frase"].endswith("y vuelve a probar."), ex["frase"])  # vale en Ajustes y en «Probar»
+        # sin sesión sigue con la frase y el botón de Steve
+        ex = explicar.explicar(self.error("Not logged in · Please run /login"))
+        self.assertTrue(ex["frase"].startswith("Claude Code no tiene la sesión iniciada"), ex["frase"])
+        self.assertEqual(ex["accion"]["tipo"], "abrir_powershell")
+
+    def test_comprobar_del_servidor(self):
+        a = ServidorComprobarTests.app(self)
+        for texto, trozo, _ in self.CASOS:
+            e = self.error(texto)
+
+            def check(self_, path, model=None, cancelled=None, e=e):
+                raise e
+            with mock.patch.object(engines.ClaudeCode, "find", return_value="/x/claude"), \
+                    mock.patch.object(engines.ClaudeCode, "check", check), mock.patch.object(server, "log"):
+                with self.assertRaises(server.ApiError) as c:
+                    a.agente_comprobar({})
+            self.assertIn(trozo, c.exception.msg)
+
+    def setUp(self):  # para ServidorComprobarTests.app
+        self.tmp = tempfile.mkdtemp(prefix="chuleta-explicar-")
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, ignore_errors=True)
+
+
 class EntornoTests(unittest.TestCase):
     def test_sin_trafico_no_esencial_y_sin_claves(self):
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-no", "OTRA": "1"}):

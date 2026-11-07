@@ -54,6 +54,40 @@ Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1
 - Para medir una grabación: `python3 scripts/medir_eco.py GRABACION.wav` dice si hay voces dobles y con qué retardo
   (fijo: copia digital o eco estable; cambiante: eco que se mueve o los cortes de antes).
 
+### Configuración en tres pasos: dónde se procesa, a la vista y con las mismas palabras (07/11/2026)
+Bernardo, 06/11/2026: «Lo de config es un desastre. El UX es muy difícil y malo de seguir.»
+- **La línea del modo.** El diálogo Grabar, la cabecera del directo, la Cola y el chip «EN VIVO» dicen lo mismo y con
+  las mismas palabras: «Se transcribe en este PC (Normal) y al terminar la resume Claude con tu cuenta», «Se transcribe
+  en este PC (Normal). Sin resumen con IA» o «Se transcribe con Groq y al terminar la resume Groq». Cada modelo tiene
+  un solo nombre (Rápido, Normal, Preciso, Máxima). Los modelos del directo y «Rehacer con este modelo» quedan detrás
+  de «Cambiar».
+- **«Preparando la transcripción».** Mientras se descarga o se carga el modelo del directo, la cabecera lo dice con
+  barra, %, MB y tiempo, y que la grabación sigue sin perder nada. El hueco del texto ya no dice «Escuchando…» ni la
+  Cola «al día» con 0:00 transcrito. En Grabar, si el modelo aún no está en el PC, lo avisa con su tamaño y
+  «Descargar ahora».
+- **Asistente «Configurar Chuleta», en tres pasos.** 1, elegir dónde se procesan las reuniones (cada opción dice qué
+  transcribe y qué resume; el aviso de privacidad, el de siempre, solo bajo la elegida). 2, prepararlo: la descarga de
+  los dos modelos de Whisper del PC (el del directo y el de la cola) con una sola barra, los pasos de Claude Code
+  (línea para copiar, winget, «Abrir PowerShell», y se marca solo cuando Chuleta lo encuentra) o la clave de la API.
+  3, «Probar»: graba 3 s de tu voz («Di: hola, esto es una prueba»), los transcribe con el modo elegido y, si toca, los
+  resume; sin voz o sin micro, prueba la cadena con 1 s de silencio y lo dice. Se para en el primer fallo con una
+  frase y su botón. No guarda nada hasta «Terminar» (como «Aplicar ahora»). Se abre desde la tarjeta de bienvenida,
+  desde Ajustes («Configurar paso a paso») y, tras actualizar, desde un aviso único en Inicio si la configuración
+  nunca se ha probado. `/api/probar` corre en su hilo y la última prueba queda en Ajustes.
+- **Ajustes por secciones, con «Guardar» siempre a la vista.** Antes, un solo diálogo de 6 a 7,5 pantallas con
+  «Guardar» al final; ahora siete secciones a la izquierda (Procesado, Grabar, Vocabulario, Voces, Carpetas, Avanzado,
+  Ayuda) y un pie fijo con «Cancelar · Guardar» que avisa de «Hay cambios sin guardar». Arriba de Procesado, una
+  tarjeta dice lo que hay ahora (dónde se transcribe, quién resume y cuándo se probó por última vez) con «Probar» y
+  «Cambiar…» (el asistente). Debajo sigue el cambio rápido con «Aplicar ahora». Lo técnico de la nube (modelo del
+  directo, otras claves, trozos, paralelismo) pasa a Avanzado y solo sale con la API; «repasar la grabación entera» y
+  el cupo de Groq, en Grabar, también solo con la API. Voces queda tal cual. Ajustes se abre en la última sección vista
+  (o en la que toca: falta la clave → Procesado).
+- **Errores en una frase con qué hacer** (`explicar.py`): Claude Code sin sesión, sin instalar, sin respuesta o con el
+  plan en su límite de uso; una pieza de la instalación que falta («No module named…»); un proxy que contesta en lugar
+  de la API. Los de la nube y la descarga de modelos ya venían en una frase (`connection_error`, `cloud_http_error`): se
+  dejan igual y ganan su botón. La Cola, los avisos, «Comprobar» y «Probar conexión» usan la misma frase; el texto
+  técnico sigue en `server.log`.
+
 ### Transcribir con los tres modos: descarga de Whisper con progreso y la verdad sobre el motor (07/11/2026)
 Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta de Claude» no transcribía, al grabar
 «Modelo» parecía seguir en Groq y «Descargando modelo medium» no acababa.

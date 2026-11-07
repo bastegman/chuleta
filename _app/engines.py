@@ -2042,16 +2042,18 @@ class ClaudeCode(AgenteLocal):
         reunion y podria contener cualquier palabra)."""
         low = text.lower()
         detalle = " ".join(text.split())[:160]
+        # «vuelve a probar» y no «pulsa Comprobar»: salen igual en Ajustes («Comprobar») y en el asistente («Probar»);
+        # explicar.py les pone su boton (Abrir PowerShell / Probar otra vez)
         if any(k in low for k in self.POLITICA):
-            return (f"Tu organización no deja usar {self.label} con esta cuenta ({detalle}). Prueba con tu cuenta "
-                    "personal o pide acceso a tu IT; luego vuelve a pulsar «Comprobar».")
+            return (f"Tu organización no deja usar {self.label} con esta cuenta ({detalle}): entra con tu cuenta "
+                    "personal (en PowerShell escribe claude y luego /login) o pide acceso a tu IT, y vuelve a probar.")
         if any(k in low for k in self.RED):
             return (f"{self.label} no puede conectar con Anthropic desde esta red ({detalle}). En la red de una "
                     "empresa suele ser el proxy: prueba con otra red o pide a tu IT que permita api.anthropic.com y "
-                    "claude.ai; luego vuelve a pulsar «Comprobar».")
+                    "claude.ai, y vuelve a probar.")
         if any(k in low for k in self.GIT_BASH):
-            return (f"{self.label} necesita Git para Windows (Git Bash) en este PC ({detalle}). Instálalo desde "
-                    "git-scm.com y vuelve a pulsar «Comprobar».")
+            return (f"{self.label} necesita Git para Windows (Git Bash) en este PC ({detalle}): en PowerShell escribe "
+                    "winget install --id Git.Git -e (o descárgalo de git-scm.com) y vuelve a probar.")
         if any(k in low for k in self.SESION):
             return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
                     "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")
