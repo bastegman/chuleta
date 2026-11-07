@@ -1731,6 +1731,7 @@ AGENTE_TIMEOUT_S = 600   # un resumen de una reunion larga, en una sola llamada
 AGENTE_CHECK_S = 120     # «Comprobar»: la version y una peticion minima (la primera vez el programa arranca lento)
 AGENTE_VERSION_S = 30
 AGENTE_KILL_S = 5        # tras matarlo, cuanto se espera a que suelte las tuberias
+AGENTE_PIPE_GRACE_S = 2  # tras salir, cuanto se espera a lo que quede en sus tuberias (no a un hijo que las herede)
 VERSION_RX = re.compile(r"\d+(?:\.\d+)+")
 _NT = os.name == "nt"
 
@@ -1809,11 +1810,17 @@ class AgenteLocal:
         except Exception:
             pass
 
+    log = None  # el servidor pone aqui su log (lo que no se ve en la interfaz: tiempos, hijos con la salida abierta)
+
     @classmethod
     def run(cls, cmd, stdin_text=None, timeout=AGENTE_TIMEOUT_S, cancelled=lambda: False, cwd=None, env=None):
         """Lanza el programa sin ventana, le pasa stdin_text y devuelve (codigo, stdout, stderr). Se puede cancelar
         (se mata con sus hijos) y tiene tope de tiempo. La entrada se escribe desde un hilo propio: communicate() con
-        reintentos no sigue escribiendo en Python anterior a 3.13.10, y asi tampoco se bloquea mientras escribe."""
+        reintentos no sigue escribiendo en Python anterior a 3.13.10, y asi tampoco se bloquea mientras escribe.
+        Se espera a que SALGA el proceso, no a que se cierren sus tuberias (07/11/2026): communicate() esperaba al fin
+        de stdout y stderr, y en Windows un hijo que las herede y siga vivo (el actualizador de Claude Code, por
+        ejemplo) lo alarga hasta que ese hijo acaba. Al salir, AGENTE_PIPE_GRACE_S para recoger lo que quede."""
+        t0 = time.time()
         try:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     creationflags=NO_WINDOW, cwd=cwd, env=env)
@@ -1829,28 +1836,81 @@ class AgenteLocal:
             except (OSError, ValueError):
                 pass
         threading.Thread(target=feed, daemon=True, name="agente-stdin").start()
+        bufs = {"out": [], "err": []}
+
+        def drain(f, key):
+            try:
+                for chunk in iter(lambda: f.read1(65536), b""):
+                    bufs[key].append(chunk)
+            except (OSError, ValueError):
+                pass
+        readers = [threading.Thread(target=drain, args=(proc.stdout, "out"), daemon=True, name="agente-stdout"),
+                   threading.Thread(target=drain, args=(proc.stderr, "err"), daemon=True, name="agente-stderr")]
+        for r in readers:
+            r.start()
         end = time.time() + timeout
         while True:
             try:
-                out, err = proc.communicate(timeout=0.5)
+                proc.wait(timeout=0.5)
                 break
             except subprocess.TimeoutExpired:
                 if not cancelled() and time.time() <= end:
                     continue
                 cls._kill(proc)
                 try:
-                    proc.communicate(timeout=AGENTE_KILL_S)
+                    proc.wait(timeout=AGENTE_KILL_S)
                 except subprocess.TimeoutExpired:
                     pass
                 if cancelled():
                     raise Cancelled()
                 raise EngineError(f"{cls.label} no ha contestado en {timeout:.0f} s")
+        salida = time.time() - t0
+        plazo = time.time() + AGENTE_PIPE_GRACE_S  # uno para las dos tuberias, no uno detras de otro
+        for r in readers:
+            r.join(max(0.0, plazo - time.time()))
+        if any(r.is_alive() for r in readers) and cls.log:  # un hijo sigue con la salida abierta: no se le espera
+            cls.log(f"   agente: {cls.label} salió en {salida:.1f} s, pero un proceso hijo seguía con su salida "
+                    f"abierta; no se le espera ({os.path.basename(str(cmd[0]))} {' '.join(map(str, cmd[1:2]))})")
+        out, err = b"".join(bufs["out"]), b"".join(bufs["err"])
         return proc.returncode, out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _env():
+        return dict(os.environ)
+
+    @staticmethod
+    def argv0(path):
+        """Lo que hay que lanzar para `path`. Un .cmd de npm pasa por cmd.exe, que rompe una ruta con «&» o «%» (medido
+        en Windows el 07/11/2026: «'100%' is not recognized as an internal or external command») y no es de fiar con un
+        argumento vacio (--tools ""): se lanza lo mismo que lanza el .cmd, node con su .js o el .exe, sin cmd.exe. Si
+        el .cmd no es de los de npm, tal cual."""
+        if not str(path).lower().endswith((".cmd", ".bat")):
+            return [path]
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read(20000)
+        except OSError:
+            return [path]
+        d = os.path.dirname(path)
+        # «"%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*» (o …\bin\claude.exe): el ultimo es el programa
+        for rel in reversed(re.findall(r'"%~?dp0%?\\?([^"%]+)"', text)):
+            full = os.path.normpath(os.path.join(d, rel.replace("\\", "/").lstrip("/")))
+            low = full.lower()
+            if os.path.basename(low) == "node.exe" or not low.endswith((".js", ".mjs", ".cjs", ".exe")):
+                continue
+            if not os.path.isfile(full):
+                return [path]
+            if low.endswith(".exe"):
+                return [full]
+            node = os.path.join(d, "node.exe")
+            node = node if os.path.isfile(node) else shutil.which("node")
+            return [node, full] if node else [path]
+        return [path]
 
     @classmethod
     def version(cls, path):
         """«2.1.314» (lo que parece una version en la primera linea de --version; si no, esa linea)."""
-        code, out, err = cls.run([path, "--version"], timeout=AGENTE_VERSION_S)
+        code, out, err = cls.run(cls.argv0(path) + ["--version"], timeout=AGENTE_VERSION_S, env=cls._env())
         lines = (out or err).strip().splitlines()
         if code != 0 or not lines:
             detail = (err or out).strip()[:160]
@@ -1865,9 +1925,15 @@ class AgenteLocal:
         """«Comprobar» en Ajustes: la version y una peticion minima con la cuenta del usuario y el modelo elegido.
         Devuelve (version, segundos)."""
         t0 = time.time()
+        self.tiempos = {}  # lo que tarda cada paso, para el log (la primera vez en Windows puede ser mucho)
         version = self.version(path)
-        out, _ = self.chat("Responde exactamente con la palabra OK, sin nada más.", "OK", 10, lambda **k: None,
-                           cancelled, model=model, timeout=AGENTE_CHECK_S, path=path)
+        self.tiempos["version_s"] = round(time.time() - t0, 1)
+        t1 = time.time()
+        try:
+            out, _ = self.chat("Responde exactamente con la palabra OK, sin nada más.", "OK", 10, lambda **k: None,
+                               cancelled, model=model, timeout=AGENTE_CHECK_S, path=path)
+        finally:
+            self.tiempos["peticion_s"] = round(time.time() - t1, 1)
         if "OK" not in out.upper():
             raise EngineError(f"{self.label} ha contestado algo inesperado: {out.strip()[:80]!r}")
         return version, time.time() - t0
@@ -1890,6 +1956,14 @@ class ClaudeCode(AgenteLocal):
     MODELO = "sonnet"
     SESION = ("login", "log in", "not authenticated", "authentication required", "sign in", "auth token", "oauth",
               "invalid api key", "sesión")
+    # antes que SESION (07/11/2026): un proxy que pide credenciales («407 Proxy Authentication Required») contiene
+    # «authentication required» y se decia «sin sesion iniciada»: volver a iniciar sesion no lo arregla
+    RED = ("proxy", " 407", "connection error", "connection refused", "econnrefused", "econnreset", "etimedout",
+           "enotfound", "getaddrinfo", "certificate", "self signed", "self-signed", "unable to get local issuer",
+           "unable to verify", "network error", "socket hang up")
+    POLITICA = ("organization has disabled", "disabled by your organization", "not allowed by your organization",
+                "your organization does not allow", "blocked by your organization", "organization policy")
+    GIT_BASH = ("git-bash", "git bash")
 
     def _dir(self):
         return self.settings_dir or tempfile.gettempdir()
@@ -1920,8 +1994,14 @@ class ClaudeCode(AgenteLocal):
     @staticmethod
     def _env():
         """Sin ANTHROPIC_API_KEY ni ANTHROPIC_AUTH_TOKEN: con -p la clave del entorno se usaria siempre, y el gasto
-        iria a la API y no a la cuenta del usuario, que es lo que prometen los textos de Ajustes."""
-        return {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        iria a la API y no a la cuenta del usuario, que es lo que prometen los textos de Ajustes. Y sin trafico no
+        esencial (07/11/2026; CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, code.claude.com/docs/en/env-vars): ni
+        actualizacion automatica, ni telemetria, ni comprobaciones de disponibilidad en estas llamadas. En una red de
+        empresa que frena o bloquea esas peticiones, cada arranque las esperaba; y el actualizador en segundo plano no
+        nace de nuestro proceso. Solo para estos procesos: la instalacion de Claude Code del usuario no cambia."""
+        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        return env
 
     def chat(self, system, user, max_tokens, report, cancelled, model=None, timeout=None, path=None):
         path = path or self.find()
@@ -1929,8 +2009,9 @@ class ClaudeCode(AgenteLocal):
             raise EngineError(f"No encuentro {self.label} en este PC. Sigue el paso a paso de Ajustes y pulsa "
                               "«Comprobar».")
         model = model or self.MODELO
-        cmd = [path, "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
-               "--strict-mcp-config", "--settings", self._settings_file(), "--model", model, self.PROMPT]
+        cmd = self.argv0(path) + ["-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
+                                  "--strict-mcp-config", "--settings", self._settings_file(), "--model", model,
+                                  self.PROMPT]
         report(stage=f"Resumiendo con {self.label} ({model})…")
         code, out, err = self.run(cmd, f"INSTRUCCIONES:\n{system}\n\n{user}", timeout=timeout or AGENTE_TIMEOUT_S,
                                   cancelled=cancelled, cwd=self._cwd(), env=self._env())
@@ -1960,6 +2041,17 @@ class ClaudeCode(AgenteLocal):
         """Mensaje para Ajustes. text: solo stderr o el texto del resultado (nunca la salida entera, que lleva la
         reunion y podria contener cualquier palabra)."""
         low = text.lower()
+        detalle = " ".join(text.split())[:160]
+        if any(k in low for k in self.POLITICA):
+            return (f"Tu organización no deja usar {self.label} con esta cuenta ({detalle}). Prueba con tu cuenta "
+                    "personal o pide acceso a tu IT; luego vuelve a pulsar «Comprobar».")
+        if any(k in low for k in self.RED):
+            return (f"{self.label} no puede conectar con Anthropic desde esta red ({detalle}). En la red de una "
+                    "empresa suele ser el proxy: prueba con otra red o pide a tu IT que permita api.anthropic.com y "
+                    "claude.ai; luego vuelve a pulsar «Comprobar».")
+        if any(k in low for k in self.GIT_BASH):
+            return (f"{self.label} necesita Git para Windows (Git Bash) en este PC ({detalle}). Instálalo desde "
+                    "git-scm.com y vuelve a pulsar «Comprobar».")
         if any(k in low for k in self.SESION):
             return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
                     "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")

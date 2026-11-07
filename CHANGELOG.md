@@ -10,6 +10,25 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
+Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
+- La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja
+  en marcha (el actualizador en segundo plano, por ejemplo) heredaba esa salida y la llamada esperaba hasta que acabara.
+  Si pasa, queda una línea en `server.log`.
+- Las llamadas de la app a Claude Code van **sin tráfico no esencial** (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, de su
+  documentación): ni actualización automática, ni telemetría, ni comprobaciones de disponibilidad, que en una red de
+  empresa pueden frenarse. Solo para esas llamadas: el Claude Code del usuario no cambia.
+- Con Claude Code instalado por npm (`claude.cmd`), la app lanza lo mismo que el `.cmd` sin pasar por cmd.exe: una carpeta
+  con «&» o «%» rompía la orden («'100%' is not recognized…», medido en Windows).
+- «Comprobar» enseña los segundos mientras espera (y avisa de que la primera vez puede tardar uno o dos minutos) y deja en
+  `server.log` lo que tardó cada paso: `--version`, la petición mínima y el total.
+- Cuando Claude Code está pero falla, la frase dice qué es: la red o el proxy de la empresa (un proxy que pedía
+  credenciales, «407 Proxy Authentication Required», se tomaba por «sin sesión iniciada» y volver a iniciar sesión no lo
+  arreglaba), una organización que no deja usarlo con esa cuenta, o que falta Git para Windows. Sin sesión, como antes.
+- Desarrollo y CI: `claude-windows.yml` instala Claude Code de verdad en Windows (instalador nativo y npm en una carpeta
+  con espacios, «&» y «%»), sin sesión iniciada, con la app abierta desde antes, y mide cada llamada en frío y en
+  caliente.
+
 ### Transcribir con los tres modos: descarga de Whisper con progreso y la verdad sobre el motor (07/11/2026)
 Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta de Claude» no transcribía, al grabar
 «Modelo» parecía seguir en Groq y «Descargando modelo medium» no acababa.

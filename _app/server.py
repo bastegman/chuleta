@@ -4638,14 +4638,28 @@ class App:
         ruta = cls.find()
         if not ruta:
             raise ApiError(f"No encuentro {cls.label} en este PC. Haz los pasos 1 y 2 y vuelve a pulsar «Comprobar».")
+        # lo que tarda cada paso, al log (07/11/2026: en el PC de Bernardo «Comprobar» tardó minutos sin decir en que)
+        log(f"   agente: comprobando {cls.label} ({modelo})…")
+        ag, t0 = cls(settings_dir=DATA_DIR), time.time()
         try:
-            version, secs = cls(settings_dir=DATA_DIR).check(ruta, model=modelo)
+            version, secs = ag.check(ruta, model=modelo)
         except engines.EngineError as e:
-            log(f"   agente: {cls.label}: {e}")
+            log(f"   agente: {cls.label}: {e} ({self._agente_tiempos(ag, time.time() - t0)})")
             raise ApiError(str(e))
+        t = getattr(ag, "tiempos", None)
+        if isinstance(t, dict) and t:
+            log(f"   agente: {self._agente_tiempos(ag, secs)}")
         self.settings.update(lambda d: d.update(agente_version=version, agente_comprobado=time.time()))
         log(f"   agente: {cls.label} {version} comprobado ({secs:.1f} s)")
         return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta}
+
+    @staticmethod
+    def _agente_tiempos(ag, total):
+        """«--version 2.1 s · petición mínima 41.0 s · total 43.1 s» (lo que se sepa de cada paso)."""
+        t = getattr(ag, "tiempos", None) or {}
+        partes = [f"--version {t['version_s']} s" if "version_s" in t else None,
+                  f"petición mínima {t['peticion_s']} s" if "peticion_s" in t else None, f"total {total:.1f} s"]
+        return " · ".join(p for p in partes if p)
 
     def test_cloud(self, b):
         try:
@@ -5576,6 +5590,7 @@ def main():
     log(f"AppUserModelID {APP_ID}: {'fijado' if set_app_id() else 'no disponible'}")
     # los modelos de Whisper los descarga el servidor (con truststore y los proxies, como Groq), con progreso real;
     # antes de App(): la precarga y /api/config ya miran ahi (engines.WhisperModels)
+    engines.AgenteLocal.log = log  # tiempos y avisos de Claude Code (p. ej. un hijo que deja su salida abierta)
     engines.MODELS = engines.WhisperModels(os.path.join(DATA_DIR, "models", "whisper"), log=log,
                                            url=os.environ.get("CHULETA_PRUEBAS_URL_MODELOS") or engines.WHISPER_URL)
     if os.environ.get("CHULETA_PRUEBAS_URL_MODELOS"):
