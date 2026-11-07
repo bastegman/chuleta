@@ -52,7 +52,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         cls.datos = os.path.join(cls.tmp, "datos")
         cls.port = puerto_libre()
         cls.log = open(os.path.join(cls.tmp, "salida.log"), "w", encoding="utf-8")
-        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        # elegir un modo que transcribe en el PC empieza a bajar Whisper medium (1,5 GB): aquí, contra un puerto
+        # cerrado (falla al instante); la descarga de verdad la prueba e2e-procesado.yml
+        env = dict(os.environ, PYTHONIOENCODING="utf-8",
+                   CHULETA_PRUEBAS_URL_MODELOS="http://127.0.0.1:9/{repo}/resolve/{rev}/{file}")
         cls.proc = subprocess.Popen([sys.executable, os.path.join(cls.root, "_app", "server.py"), "--port",
                                      str(cls.port), "--data", cls.datos, "--no-browser"],
                                     cwd=cls.root, stdout=cls.log, stderr=subprocess.STDOUT, env=env)

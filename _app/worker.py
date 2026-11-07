@@ -82,13 +82,14 @@ def main():
         proto.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def model_for(req):
+        """El modelo cargado. path: la carpeta local que manda el servidor (desde el 07/11/2026 las descargas, con su
+        progreso, las hace el; este proceso no toca la red: HF_HUB_OFFLINE). Sin path, por nombre, como antes."""
         key = (req["model"], int(req["threads"]))
         if state["key"] != key:
             state["model"] = state["key"] = None  # libera la RAM del anterior
-            if not engines.model_cached(req["model"]):
-                send({"type": "progress", "stage": f"Descargando modelo {req['model']} (solo la primera vez)…"})
             from faster_whisper import WhisperModel
-            state["model"] = WhisperModel(key[0], device="cpu", compute_type="int8", cpu_threads=key[1])
+            state["model"] = WhisperModel(req.get("path") or key[0], device="cpu", compute_type="int8",
+                                          cpu_threads=key[1])
             state["key"] = key
         return state["model"]
 
@@ -143,11 +144,11 @@ def main():
     def transcribe_file(req):
         model = model_for(req)
         send({"type": "progress", "stage": "Leyendo audio…"})
-        from faster_whisper.audio import decode_audio
-        audio = decode_audio(req["path"])
+        # con el decodificador de la app, no con faster_whisper.audio.decode_audio: el de faster-whisper 1.2.1 llama a
+        # av.open(..., metadata_errors="ignore") y PyAV 19 (29/09/2026, lo que instala hoy pip) ya no lo admite:
+        # TypeError y ninguna transcripcion en local desde la cola (07/11/2026). Mismo remuestreo (s16, mono, 16 kHz)
         offset = float(req.get("start") or 0)  # continuar una transcripcion que se quedo a medias
-        if offset:
-            audio = audio[int(offset * 16000):]
+        audio = engines.decode_16k(req["path"], offset).astype(np.float32) / 32768.0
         fixed, multi, allowed = lang_mode(req.get("language"))
         lang = fixed
         with only_languages(model, allowed):  # el generador detecta al iterar: todo dentro del with

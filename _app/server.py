@@ -3644,6 +3644,8 @@ class App:
             d = {k: v for k, v in p.items()}
             d["speed"] = st["speed"].get(p["id"], p["speed"])
             d["cached"] = p["engine"] == "cloud" or engines.model_cached(p["model"])
+            m = engines.WHISPER_MODELS.get(p.get("model"))
+            d["size_mb"] = round(sum(s for _, s, _ in m[2]) / 1e6) if m else None  # lo que descarga la primera vez
             presets.append(d)
         cloud = dict(st["cloud"])
         cloud["has_key"] = bool(cloud.get("api_key"))
@@ -4544,11 +4546,19 @@ class App:
             if "worker_preload" in b:
                 d["worker_preload"] = bool(b["worker_preload"])
             if b.get("procesado") in PROCESADOS:
+                prev = procesado_de(d)
                 d["procesado"] = b["procesado"]
                 if d["procesado"] != "api":  # sin nube: los motores de la cola y del directo vuelven a ser locales
                     for k, local in (("preset", "rapido"), ("live_preset", "medium")):
                         if (engines.PRESETS_BY_ID.get(d.get(k)) or {}).get("engine") == "cloud":
                             d[k] = local
+                elif prev != "api" and (d["cloud"].get("api_key") or "").strip():
+                    # y al reves (07/11/2026): a «API externa» con la clave ya puesta, los motores pasan a la nube, como
+                    # con la primera clave; si no, se elegia la API y se seguia transcribiendo con Whisper en el PC.
+                    # Lo que se elija a la vez en esta misma peticion manda
+                    for k in ("preset", "live_preset"):
+                        if k not in b and (engines.PRESETS_BY_ID.get(d.get(k)) or {}).get("engine") != "cloud":
+                            d[k] = "nube"
             ag = b.get("agente") if isinstance(b.get("agente"), dict) else None
             if ag:
                 cur = d.get("agente") if isinstance(d.get("agente"), dict) else {}
@@ -4587,9 +4597,14 @@ class App:
                 new = [old.get(k.strip(), k.strip()) for k in incoming if isinstance(k, str) and k.strip()]
                 d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
-        if antes == "api" and procesado_de(self.settings.get()) != "api":
+        ahora = procesado_de(self.settings.get())
+        if ahora != antes:
+            log(f"   dónde se procesan las reuniones: {antes} → {ahora}")
+        if antes == "api" and ahora != "api":
             self.jobs.nube_apagada()  # lo que estuviera en la nube no sigue
-        return self.config({})
+        # elegido (o guardado) un modo que transcribe en este PC: el modelo del directo, ya, con su progreso en Ajustes
+        descarga = self._descargar_modelo_del_directo() if b.get("procesado") in ("local", "agente") else None
+        return dict(self.config({}), descarga=descarga)
 
     def agente_comprobar(self, b):
         """Ajustes → «Comprobar»: el agente esta instalado, responde a --version y contesta una peticion minima con la
@@ -4615,6 +4630,62 @@ class App:
         except engines.EngineError as e:
             raise ApiError(str(e))
         return {"ok": True, "seconds": round(secs, 2)}
+
+    # --- modelos de Whisper en este PC (engines.WhisperModels): estado, descarga con progreso y cancelar
+    @staticmethod
+    def _modelos_en_uso(st):
+        """modelo -> ["directo", "cola"]: los que usan el motor del directo y el de la cola si son locales."""
+        uso = {}
+        for key, what, default in (("live_preset", "directo", "medium"), ("preset", "cola", "rapido")):
+            p = engines.PRESETS_BY_ID.get(st.get(key) or default)
+            if p and p["engine"] == "local":
+                uso.setdefault(p["model"], []).append(what)
+        return uso
+
+    def modelos_state(self, q=None):
+        st = self.settings.get()
+        uso, out = self._modelos_en_uso(st), []
+        for p in engines.PRESETS:
+            if p["engine"] != "local":
+                continue
+            m = p["model"]
+            if engines.MODELS is not None:
+                s = engines.MODELS.state(m)
+            else:  # sin el gestor (no deberia pasar con la app arrancada): solo si esta o no
+                s = {"model": m, "ready": engines.model_cached(m), "size_mb": None, "downloading": False,
+                     "done_mb": 0, "total_mb": None, "frac": None, "speed_mbs": None, "eta_s": None, "error": None}
+            out.append(dict(s, preset=p["id"], label=p["label"], live_label=p["live_label"], uso=uso.get(m, [])))
+        return {"modelos": out, "procesado": procesado_de(st),
+                "carpeta": engines.MODELS.root if engines.MODELS is not None else None}
+
+    def modelos_descargar(self, b):
+        m = str((b or {}).get("model") or "")
+        if engines.MODELS is None or m not in engines.WHISPER_MODELS:
+            raise ApiError(f"No sé descargar el modelo «{m}».")
+        if engines.MODELS.path(m) is None:
+            engines.MODELS.start(m)
+            log(f"   modelo {m}: descarga pedida desde Ajustes")
+        return self.modelos_state()
+
+    def modelos_cancelar(self, b):
+        m = str((b or {}).get("model") or "")
+        if engines.MODELS is not None and engines.MODELS.cancel(m):
+            log(f"   modelo {m}: descarga cancelada desde Ajustes")
+        return self.modelos_state()
+
+    def _descargar_modelo_del_directo(self):
+        """Al pasar a «Solo en este PC» o «Con tu cuenta de Claude»: si falta el modelo del directo, se empieza a
+        descargar ya, con su progreso en Ajustes (antes se descargaba al empezar la primera reunion, sin progreso).
+        Devuelve el modelo que se ha puesto a descargar, o None."""
+        st = self.settings.get()
+        p = engines.PRESETS_BY_ID.get(st.get("live_preset") or "medium")
+        if engines.MODELS is None or not p or p["engine"] != "local" or p["model"] not in engines.WHISPER_MODELS:
+            return None
+        if engines.MODELS.path(p["model"]) is not None:
+            return None
+        engines.MODELS.start(p["model"])
+        log(f"   modelo {p['model']}: descarga empezada al elegir dónde se procesan las reuniones")
+        return p["model"]
 
     # --- quien habla (voces)
     def voices_state(self, q=None):
@@ -4954,7 +5025,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
                   "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get,
-                  "/api/diagnostico": a.diagnostico}
+                  "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state}
         try:
             if u.path in routes:
                 t0 = time.time()
@@ -4987,6 +5058,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/reveal": a.reveal, "/api/open": a.open_file, "/api/settings": a.save_settings,
                   "/api/cloud/test": a.test_cloud, "/api/live": a.start_live, "/api/live/model": a.live_model,
                   "/api/agente/comprobar": a.agente_comprobar,
+                  "/api/modelos/descargar": a.modelos_descargar, "/api/modelos/cancelar": a.modelos_cancelar,
                   "/api/live/traducir": a.live_translate,
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,
@@ -5408,6 +5480,17 @@ def main():
         pass
     # antes de cualquier ventana (la propia, el selector de carpetas o un aviso): la barra de tareas agrupa por este id
     log(f"AppUserModelID {APP_ID}: {'fijado' if set_app_id() else 'no disponible'}")
+    # los modelos de Whisper los descarga el servidor (con truststore y los proxies, como Groq), con progreso real;
+    # antes de App(): la precarga y /api/config ya miran ahi (engines.WhisperModels)
+    engines.MODELS = engines.WhisperModels(os.path.join(DATA_DIR, "models", "whisper"), log=log,
+                                           url=os.environ.get("CHULETA_PRUEBAS_URL_MODELOS") or engines.WHISPER_URL)
+    if os.environ.get("CHULETA_PRUEBAS_URL_MODELOS"):
+        log("PRUEBAS: los modelos de Whisper se descargan de una URL de pruebas (CHULETA_PRUEBAS_URL_MODELOS)")
+    if os.environ.get("CHULETA_PRUEBAS_URL_GROQ"):  # E2E: un Groq falso en local; nunca una clave real en la CI
+        base = os.environ["CHULETA_PRUEBAS_URL_GROQ"].rstrip("/")
+        engines.PROVIDERS["groq"] = dict(engines.PROVIDERS["groq"], url=base + "/audio/transcriptions")
+        engines.CHAT_URLS["groq"] = base + "/chat/completions"
+        log("PRUEBAS: Groq va a una URL de pruebas (CHULETA_PRUEBAS_URL_GROQ)")
     try:
         Handler.app = App()
     except Exception as e:

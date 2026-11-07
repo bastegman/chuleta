@@ -254,7 +254,13 @@ function liveModels(sel, j) {
   }).join('')}</div>`;
 }
 function liveStatus(a, j) {
-  if (!j) return a.recording ? 'La transcripción en directo está parada. Elige modelo y pulsa «Transcribir en directo».' : '';
+  if (!j) {
+    if (!a.recording) return '';
+    // el último directo de esta grabación falló: se dice por qué (antes solo quedaba un aviso que se iba)
+    const l = lastJobFor(a.path);
+    if (l && l.live && l.status === 'error' && l.error) return `<span class="motor-err"><b>No se ha podido transcribir en directo.</b> ${esc(l.error)}</span> La grabación sigue; cuando lo arregles, pulsa «Transcribir en directo».`;
+    return 'La transcripción en directo está parada. Elige modelo y pulsa «Transcribir en directo».';
+  }
   if (/Cargando|Descargando|Reinici|Rehaciendo|Empezando/.test(j.stage)) return esc(j.stage);
   const lag = Math.max(0, j.recorded - j.transcribed);
   const p = S.presetsById[j.preset] || {};
@@ -270,7 +276,7 @@ function renderLiveHero(a) {
   const mine = !!(S.rec.recording && S.rec.path === a.path);  // la esta grabando esta app (no OBS)
   syncClock(a);
   const muted = !!(mine && S.rec.mic_muted);
-  el.dataset.sig = (j ? j.id + j.preset : 'none') + sel + mine + muted;
+  el.dataset.sig = (j ? j.id + j.preset : 'none') + sel + mine + muted + (S.config.procesado || '');  // el modo: «Modelo» dice dónde
   el.innerHTML = `<div class="live-hero card" data-live-path="${esc(a.path)}">
     <div class="lh-row">
       <span class="rec-badge"><i class="recdot"></i>EN VIVO</span>
@@ -290,8 +296,9 @@ function renderLiveHero(a) {
     ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
     ${typeof perfilLiveHtml === 'function' ? perfilLiveHtml(a) : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
-    <div class="lh-label">Modelo ${j ? '<span class="muted">(el cambio se aplica desde el siguiente trozo)</span>' : ''}</div>
+    <div class="lh-label">Modelo${typeof motorHtml === 'function' ? motorHtml(sel) : ''} ${j ? '<span class="muted">(el cambio se aplica desde el siguiente trozo)</span>' : ''}</div>
     ${liveModels(sel, j)}
+    ${typeof motorNotaHtml === 'function' ? motorNotaHtml(sel, !!j) : ''}
     ${S.presetsById[sel]?.live_note ? `<div class="lh-note">${esc(S.presetsById[sel].live_note)}</div>` : ''}
     <div class="lh-actions">
       ${j ? `<button class="btn sm" data-act="live-restart" data-id="${j.id}">${I.refresh}Rehacer desde el principio con este modelo</button>` : ''}
@@ -307,7 +314,7 @@ function updateLiveHero(a) {
   const j = liveJob(a);
   const sel = j ? j.preset : (S.livePreset || S.config.live_preset || 'medium');
   const mine = !!(S.rec.recording && S.rec.path === a.path);
-  if (el.dataset.sig !== (j ? j.id + j.preset : 'none') + sel + mine + !!(mine && S.rec.mic_muted)) return renderLiveHero(a);
+  if (el.dataset.sig !== (j ? j.id + j.preset : 'none') + sel + mine + !!(mine && S.rec.mic_muted) + (S.config.procesado || '')) return renderLiveHero(a);
   syncClock(a);
   const st = $('[data-lh-status]', el);
   if (st) st.innerHTML = liveStatus(a, j);
@@ -460,13 +467,15 @@ async function openRec() {
         <label><input type="radio" name="rMode" value="rec"><b>Solo grabar</b><span>Si el portátil va lento: la transcribes al terminar</span></label>
       </div>
       <div id="rLiveOpts"><select id="rPreset">${presets}</select></div>
+      <div id="rMotor">${typeof motorNotaHtml === 'function' ? motorNotaHtml(S.config.live_preset || 'medium') : ''}</div>
       <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">${I.clipboard}Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
     if (typeof perfilBindRec === 'function') perfilBindRec(d);  // Proyecto/Tema, importar listas y «Guardar como perfil»
     const micVal = () => $('#rMicOn', d).checked ? $('#rMic', d).value : 'none';
     const monitor = () => api('/api/rec/monitor', { mic: micVal(), sys: $('#rSys', d).value }).catch(() => { });
     $('#rMic', d).onchange = $('#rSys', d).onchange = monitor;
     $('#rMicOn', d).onchange = () => { $('#rMicBox', d).classList.toggle('off', !$('#rMicOn', d).checked); monitor(); };
-    $('#rMode', d).onchange = () => { const live = d.querySelector('[name=rMode]:checked').value === 'live'; $$('#rMode label', d).forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#rLiveOpts', d).classList.toggle('off', !live); };
+    $('#rMode', d).onchange = () => { const live = d.querySelector('[name=rMode]:checked').value === 'live'; $$('#rMode label', d).forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#rLiveOpts', d).classList.toggle('off', !live); $('#rMotor', d).classList.toggle('off', !live); };
+    $('#rPreset', d).addEventListener('change', () => { if (typeof motorNotaHtml === 'function') $('#rMotor', d).innerHTML = motorNotaHtml($('#rPreset', d).value); });
     d.querySelector('[data-m="consent"]').onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
     // workstream: cuanto le cabe a Whisper y, al elegirlo, se graba en la carpeta de su proyecto
     const vocabSel = () => S.vocab.find(v => v.id === $('#rVocab', d)?.value);
@@ -1830,6 +1839,7 @@ function ask(title, html, ok = 'Aceptar') {
 
 function flatFolders() {
   const out = [];
+  if (!S.tree) return out;  // aún sin árbol (p. ej. «Reuniones» pulsado al arrancar): nada, no un TypeError
   (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); n.folders.forEach(f => w(f, d + 1)); })(S.tree, 0);
   return out;
 }
@@ -1944,6 +1954,8 @@ function procesadoFieldsetHtml() {
       ${opt('api', 'API externa (Groq, OpenAI, Azure…)', 'Transcripción rápida en la nube y resumen con el proveedor que elijas, con su API key.',
     'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.')}
     </div>
+    <div class="help" id="procGuardado" aria-live="polite">Se aplica en cuanto la eliges.</div>
+    ${typeof modelosHtml === 'function' ? modelosHtml() : ''}
     <div id="procAgente"${mode === 'agente' ? '' : ' hidden'}>
       <ol class="pasos">
         <li><b>Instala ${agLabel}</b> (hace falta una cuenta Pro, Max, Ultra, Team o Enterprise, o una de Console). En Windows, abre PowerShell y ejecuta <code>irm https://claude.ai/install.ps1 | iex</code> (o <code>winget install Anthropic.ClaudeCode</code>). No hace falta ser administrador.</li>
@@ -2035,11 +2047,25 @@ function openSettings() {
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
-    $$('input[name="proc"]', d).forEach(r => r.addEventListener('change', () => {
+    $$('input[name="proc"]', d).forEach(r => r.addEventListener('change', async () => {
       const v = $('input[name="proc"]:checked', d)?.value;
       $$('.proc', d).forEach(l => l.classList.toggle('on', l.querySelector('input').value === v));
       $('#procApi', d).hidden = v !== 'api';
       $('#procAgente', d).hidden = v !== 'agente';
+      if ($('#procModelos', d)) $('#procModelos', d).hidden = v === 'api';
+      // se aplica en el acto (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior
+      // sin decirlo, y al grabar seguía usando Groq
+      const res = $('#procGuardado', d);
+      res.textContent = 'Aplicando…';
+      try {
+        const c = await api('/api/settings', { procesado: v });
+        setConfig(c);
+        localStorage.setItem('procElegido', '1');
+        res.innerHTML = `<span style="color:var(--ok)">✓ Aplicado: ${esc({ local: 'transcribe Whisper en este PC; sin resumen con IA', agente: `transcribe Whisper en este PC y resume ${S.config.agente?.label || 'Claude Code'} con tu cuenta`, api: `transcribe y resume ${provName()} con tu API key` }[v] || v)}.</span>`;
+        if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
+        d.modelosPoll?.();
+        if (typeof motoresRefrescar === 'function') motoresRefrescar(d);
+      } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ No se ha podido aplicar: ${esc(err.message)}</span>`; }
     }));
     $('#agCheck', d).onclick = async () => {  // no guarda el formulario: solo comprueba con el modelo elegido
       const res = $('#agRes', d);
@@ -2079,6 +2105,7 @@ function openSettings() {
     $('#cProv', d).onchange = fields;
     $('#sAutoLocal', d).onchange = e => { $('#sAutoLocalAviso', d).hidden = !e.target.checked; if (e.target.checked) localStorage.setItem('sumOk', '1'); };
     bindVocesSettings(d);
+    if (typeof bindModelos === 'function') bindModelos(d);
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     window.bindReunionSettings?.(d);
     if (typeof bindPerfilSettings === 'function') bindPerfilSettings(d);
@@ -2092,18 +2119,27 @@ function openSettings() {
       if (p === 'custom') cloud.base_url = $('#cBase', d).value;
       if (typeof collectDirectoSettings === 'function') Object.assign(cloud, collectDirectoSettings(d));
       S.selLang = $('#sLang', d).value;
-      return { procesado: $('input[name="proc"]:checked', d)?.value, agente: { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value },
+      const out = { procesado: $('input[name="proc"]:checked', d)?.value, agente: { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value },
         cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
         summary: { auto: ($('input[name="proc"]:checked', d)?.value === 'agente' ? $('#sAutoAg', d) : $('#sAuto', d)).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
+      // los motores, solo si se han cambiado aquí: un selector sin tocar, pintado con el modo de antes, devolvía el directo
+      // a Whisper local tras elegir «API externa» y «Probar conexión» (07/11/2026)
+      for (const [id, k] of [['#lPreset', 'live_preset'], ['#pfPreset', 'preset']]) {
+        const el = $(id, d);
+        if (el && el.value === el.dataset.ini) delete out[k];
+      }
+      return out;
     };
+    for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = el.value; }
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
       res.textContent = 'Probando…';
       try {
         setConfig(await api('/api/settings', collect()));
+        if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
@@ -2152,7 +2188,11 @@ function openSettings() {
       const b = e.target.closest('[data-m]');
       if (!b) return;
       if (b.dataset.m === 'no') return closeModal(false);
-      try { setConfig(await api('/api/settings', collect())); localStorage.setItem('procElegido', '1'); closeModal(true); toast('Ajustes guardados'); refreshView(); }
+      try {
+        const c = await api('/api/settings', collect());
+        setConfig(c); localStorage.setItem('procElegido', '1'); closeModal(true); toast('Ajustes guardados'); refreshView();
+        if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
+      }
       catch (err) { toast(esc(err.message), 'err'); }
     });
   });

@@ -10,6 +10,42 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Transcribir con los tres modos: descarga de Whisper con progreso y la verdad sobre el motor (07/11/2026)
+Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta de Claude» no transcribía, al grabar
+«Modelo» parecía seguir en Groq y «Descargando modelo medium» no acababa.
+- **Whisper se descarga con progreso de verdad.** Antes lo bajaba faster-whisper dentro del proceso de Whisper la
+  primera vez que hacía falta: un único «Descargando modelo medium (solo la primera vez)…» durante minutos (medium son
+  1.531 MB), una hora de tope por intento sin detectar que se había parado, y desde un proceso sin los certificados de
+  Windows. Ahora lo descarga la app (`engines.WhisperModels`) con los mismos certificados y proxies que la nube: MB y %
+  con el tiempo que queda, reanuda donde se quedó, comprueba tamaño y huella (sha256) de cada modelo (revisión fija de
+  Hugging Face), da por parada una conexión sin datos en 60 s y lo reintenta, mira el espacio libre antes y, si falla,
+  lo dice en una frase con qué hacer. Lo que ya descargaron versiones anteriores se sigue usando sin bajar nada. El
+  proceso de Whisper solo carga carpetas locales (`HF_HUB_OFFLINE`).
+- **Ajustes › Dónde se procesan tus reuniones** se aplica en cuanto se elige (antes había que bajar hasta «Guardar»:
+  elegir la cuenta de Claude, pulsar «Comprobar» y cerrar dejaba la API externa y el directo seguía en Groq). Con «Solo
+  en este PC» y «Con tu cuenta de Claude» enseña los modelos de Whisper del PC con su estado y «Descargar»,
+  «Cancelar» o «Reintentar», deja claro que Claude no transcribe (solo resume) y empieza a bajar el modelo del directo
+  en ese momento, no en mitad de la primera reunión.
+- **Transcribir desde la cola en este PC volvía a funcionar solo con un PyAV antiguo.** faster-whisper 1.2.1 (su
+  última versión) abre el audio con `av.open(…, metadata_errors="ignore")`, y PyAV 19 (29/09/2026, lo que instala hoy
+  `pip`) ya no admite ese argumento: en una instalación nueva, cualquier transcripción local desde la cola acababa en
+  «TypeError: open() got an unexpected keyword argument 'metadata_errors'». El directo no lo usaba y seguía bien. Ahora
+  el proceso de Whisper lee el audio con el decodificador de la app (mismo remuestreo a 16 kHz mono).
+- **Elegir «API externa» con la clave ya puesta pasa los motores a la nube**, igual que la primera clave (y que, al
+  revés, salir de la API los devuelve al PC). Y «Guardar» ya no manda los selectores de motor del perfil si no se han
+  tocado: pintados con el modo de antes, después de «Probar conexión» devolvían el directo a Whisper en el PC. Esos
+  selectores se repintan al cambiar de modo.
+- **«Modelo» dice dónde se transcribe**: junto al directo y en el diálogo de grabar sale «en este PC · Whisper
+  medium» o «en la nube · Groq» y, con la cuenta de Claude, que Claude solo hace el resumen. Si el último directo de
+  una grabación falló, la cabecera dice por qué en lugar de «está parada».
+- **Errores de la nube en una frase con qué hacer**: certificado (proxy de empresa), proxy, sin DNS, tiempo agotado,
+  clave no válida (con dónde copiarla), 403, modelo inexistente, trozo demasiado grande, servicio caído, y una página
+  web de un proxy o un portal en lugar de la API. Antes: «sin conexión con el servicio (SSLError)» o «HTTP 401: …».
+- Desarrollo y CI: `tests/test_fix_transcripcion.py` (descargas contra un servidor HTTP local que corta, se para,
+  ignora `Range`, devuelve 403, HTML o bytes dañados) y la E2E `e2e-procesado.yml` en Windows: elige cada modo en
+  Ajustes, descarga y carga Whisper medium de verdad con su progreso, transcribe en directo y desde la cola, y comprueba
+  lo que enseña «Modelo»; Groq contra un falso local y Claude Code con uno falso en el PATH (nunca claves reales).
+
 ### Dónde se procesan tus reuniones (02/11/2026)
 - Ajustes empieza por una elección: **Solo en este PC** (Whisper local, nada sale del ordenador, sin resumen con IA),
   **Con tu cuenta de Claude** (transcripción local y resumen con Claude usando la suscripción del usuario, personal o

@@ -10,6 +10,7 @@ Motores de transcripcion.
 Ambos devuelven una lista de segmentos (inicio, fin, texto).
 """
 import glob
+import hashlib
 import itertools
 import json
 import os
@@ -204,6 +205,8 @@ def _load_tokenizer():
         import glob
         from tokenizers import Tokenizer
         files = glob.glob(os.path.join(hf_hub_cache(), "models--*whisper*", "snapshots", "*", "tokenizer.json"))
+        if MODELS is not None:  # los que descarga la app (DATA_DIR/models/whisper/<modelo>)
+            files += glob.glob(os.path.join(glob.escape(MODELS.root), "*", "tokenizer.json"))
         if files:
             _TOKENIZER["t"] = Tokenizer.from_file(sorted(files)[-1])
     except Exception:
@@ -461,29 +464,397 @@ def hf_hub_cache():
 
 
 def model_cached(name, ttl=None):
-    """True si el modelo ya esta descargado en la cache de Hugging Face. Sin importar nada (HF_REPOS, hf_hub_cache)
-    y con el resultado guardado un rato (MODEL_CACHED_TTL_S)."""
+    """True si el modelo ya esta en este PC: en la carpeta propia (MODELS) o en la cache de Hugging Face de una version
+    anterior. Sin importar nada (HF_REPOS, hf_hub_cache) y con el resultado guardado un rato (MODEL_CACHED_TTL_S; al
+    terminar una descarga se olvida)."""
     now = time.time()
     hit = _MODEL_CACHED.get(name)
     if hit and hit[0] > now:
         return hit[1]
+    if MODELS is not None:
+        found = MODELS.path(name) is not None
+    else:
+        found = hf_snapshot(name, need=("model.bin",)) is not None
+    _MODEL_CACHED[name] = (now + (MODEL_CACHED_TTL_S if ttl is None else ttl), found)
+    return found
+
+
+def hf_snapshot(name, need=("model.bin", "config.json", "tokenizer.json")):
+    """Carpeta de la cache de Hugging Face con ese modelo (lo descargo faster-whisper en una version anterior), o None.
+    Por defecto, solo si tiene lo que faster-whisper necesita para cargarlo sin red: model.bin, config.json,
+    tokenizer.json y el vocabulario. Sin importar la libreria de Hugging Face."""
     cache = hf_hub_cache()
     dirs = ["models--" + HF_REPOS[name].replace("/", "--")] if name in HF_REPOS else []
     try:  # por si el repositorio cambia de dueno: cualquier carpeta de la cache que acabe en el nombre del modelo
         dirs += [d for d in os.listdir(cache) if d.startswith("models--") and d.endswith("faster-whisper-" + name)]
     except OSError:
         pass
-    found = False
-    for d in dirs:
+    for d in dict.fromkeys(dirs):
         snaps = os.path.join(cache, d, "snapshots")
         try:
-            found = any(os.path.exists(os.path.join(snaps, x, "model.bin")) for x in os.listdir(snaps))
+            subs = [os.path.join(snaps, x) for x in os.listdir(snaps)]
         except OSError:
-            found = False
-        if found:
-            break
-    _MODEL_CACHED[name] = (now + (MODEL_CACHED_TTL_S if ttl is None else ttl), found)
-    return found
+            continue
+        for p in sorted(subs, key=lambda x: os.path.getmtime(x) if os.path.isdir(x) else 0, reverse=True):
+            if all(os.path.isfile(os.path.join(p, f)) for f in need) \
+                    and (len(need) < 3 or glob.glob(os.path.join(glob.escape(p), "vocabulary.*"))):
+                return p
+    return None
+
+
+# ----------------------------------------------------------------------------- modelos de Whisper en este PC
+# Hasta el 07/11/2026 los descargaba faster-whisper dentro de worker.py la primera vez que hacian falta: sin progreso
+# (la interfaz decia «Descargando modelo medium (solo la primera vez)…» durante minutos: medium son 1,5 GB; medido en
+# un Mac: tiny, 75 MB, 33 s con ese unico mensaje), con 1 h de tope por intento y desde un proceso sin truststore (los
+# certificados de Windows), asi que en una red que inspecciona HTTPS podia fallar aunque Groq funcionara. Ahora los
+# descarga el servidor con requests (certificados de Windows y proxies, como Groq) por HTTP simple: progreso en MB y %,
+# reanudacion, tamano y sha256 comprobados, a DATA_DIR/models/whisper/<modelo>. worker.py solo carga carpetas locales
+# y nunca toca la red. Lo que ya descargaron versiones anteriores (cache de Hugging Face) se usa sin descargar nada.
+# Revision fija (commit) y huella del model.bin leidas de la API de Hugging Face el 07/11/2026.
+WHISPER_URL = "https://huggingface.co/{repo}/resolve/{rev}/{file}"
+_TOK = ("tokenizer.json", 2203239, None)
+_VOC = ("vocabulary.txt", 459861, None)
+WHISPER_MODELS = {
+    "tiny": ("Systran/faster-whisper-tiny", "d90ca5fe260221311c53c58e660288d3deb8d356", (
+        ("config.json", 2249, None),
+        ("model.bin", 75538270, "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1"), _TOK, _VOC)),
+    "small": ("Systran/faster-whisper-small", "536b0662742c02347bc0e980a01041f333bce120", (
+        ("config.json", 2370, None),
+        ("model.bin", 483546902, "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"), _TOK, _VOC)),
+    "medium": ("Systran/faster-whisper-medium", "08e178d48790749d25932bbc082711ddcfdfbc4f", (
+        ("config.json", 2257, None),
+        ("model.bin", 1527906378, "9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae"), _TOK, _VOC)),
+    "large-v3": ("Systran/faster-whisper-large-v3", "edaa852ec7e145841d8ffdb056a99866b5f0a478", (
+        ("config.json", 2394, None),
+        ("model.bin", 3087284237, "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"),
+        ("preprocessor_config.json", 340, None), ("tokenizer.json", 2480617, None),
+        ("vocabulary.json", 1068114, None))),
+    "large-v3-turbo": ("mobiuslabsgmbh/faster-whisper-large-v3-turbo", "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf", (
+        ("config.json", 2263, None),
+        ("model.bin", 1617884929, "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da"),
+        ("preprocessor_config.json", 340, None), ("tokenizer.json", 2710337, None),
+        ("vocabulary.json", 1068114, None))),
+}
+WHISPER_HOST = "huggingface.co"
+DOWNLOAD_STALL_S = 60     # sin recibir nada en 60 s, la conexion se da por parada (se reintenta desde donde iba)
+DOWNLOAD_RETRIES = 3      # intentos seguidos sin avanzar antes de rendirse (cada uno sigue donde se quedo)
+DOWNLOAD_SPARE = 200e6    # espacio libre que se deja de margen, ademas de lo que falta por bajar
+DOWNLOAD_BLOCK = 1 << 20  # 1 MB por escritura
+LOAD_TIMEOUT_S = 600      # cargar un modelo ya descargado (el large-v3, 3 GB, con el antivirus mirandolo: minutos)
+MODELS = None             # WhisperModels del servidor (DATA_DIR/models/whisper); sin el, como antes (tests, worker)
+
+
+def fmt_mb(n):
+    """1531 -> «1.531» (MB, con punto de miles como en espanol)."""
+    return f"{n / 1e6:,.0f}".replace(",", ".")
+
+
+def fmt_left(secs):
+    if secs is None:
+        return ""
+    secs = max(0, int(secs))
+    if secs >= 3600:
+        return f"{secs // 3600} h {secs % 3600 // 60:02d} min"
+    if secs >= 90:
+        return f"{round(secs / 60)} min"
+    return f"{max(5, round(secs / 5) * 5)} s"
+
+
+def connection_error(e, host, what="la conexión"):
+    """Una frase con lo que ha pasado al hablar con `host` y que hacer, a partir de la excepcion de requests (sin
+    trazas). what: «la descarga», «la conexión»… Sirve para la descarga de modelos y para la nube. Mira los nombres de
+    las clases (no importa requests: los tests lo sustituyen por un doble)."""
+    names = {c.__name__ for c in type(e).__mro__}
+    low = str(e).lower()
+    if "SSLError" in names or "certificate verify failed" in low:
+        return (f"La conexión segura con {host} ha fallado (no se acepta su certificado). En la red de una empresa "
+                f"suele ser el proxy que revisa el tráfico: prueba con otra red o pide a tu IT que permita {host}.")
+    if "ProxyError" in names:
+        return (f"El proxy de la red no deja pasar {what} con {host}. Prueba con otra red o pide a tu IT que lo "
+                "permita.")
+    if "ConnectTimeout" in names:
+        return f"{host} no contesta (más de {CONNECT_TIMEOUT} s para conectar): comprueba la conexión a internet."
+    if "ReadTimeout" in names or "timed out" in low or "read timeout" in low:
+        return f"{host} ha dejado de enviar datos: comprueba la conexión a internet y vuelve a probar."
+    if any(k in low for k in ("getaddrinfo", "name or service", "nodename", "name resolution", "11001")):
+        return f"No se encuentra {host} (sin internet o sin DNS): comprueba la conexión y vuelve a probar."
+    if "ConnectionError" in names:
+        return (f"Se ha cortado {what} con {host} ({e.__class__.__name__}): comprueba la conexión a internet y "
+                "vuelve a probar.")
+    return f"Ha fallado {what} con {host} ({e.__class__.__name__}): vuelve a probar."
+
+
+class WhisperModels:
+    """Los modelos de Whisper de este PC: donde estan y su descarga. Una descarga por modelo a la vez, en su hilo; la
+    cola, el directo y Ajustes la comparten (si ya esta en marcha, esperan a esa). state() es para la interfaz: MB
+    bajados y totales, %, velocidad, tiempo que queda y, si fallo, una frase con lo que paso y que hacer. Si el
+    trabajo que esperaba se cancela, la descarga sigue: el modelo servira la proxima vez."""
+
+    def __init__(self, root, log=None, http=None, url=WHISPER_URL, models=None):
+        self.root, self.url = root, url
+        self.log = log or (lambda m: None)
+        self.http = http  # requests o un doble con get(url, headers, stream, timeout) (tests)
+        self.models = models or WHISPER_MODELS
+        self.lock = threading.Lock()
+        self.jobs = {}  # modelo -> estado de su ultima descarga
+        self.sleep = time.sleep  # los tests la sustituyen
+
+    # --- donde estan
+    def size(self, name):
+        m = self.models.get(name)
+        return sum(s for _, s, _ in m[2]) if m else None
+
+    def own_dir(self, name):
+        return os.path.join(self.root, name)
+
+    def complete(self, d, name):
+        """La carpeta propia tiene todos los ficheros del modelo con su tamano exacto."""
+        m = self.models.get(name)
+        if not m:
+            return False
+        for f, size, _ in m[2]:
+            try:
+                if os.path.getsize(os.path.join(d, f)) != size:
+                    return False
+            except OSError:
+                return False
+        return True
+
+    def path(self, name):
+        """Carpeta con el modelo completo, o None: la propia (DATA_DIR/models/whisper/<modelo>) o, si una version
+        anterior lo descargo con faster-whisper, la de la cache de Hugging Face."""
+        d = self.own_dir(name)
+        if self.complete(d, name):
+            return d
+        return hf_snapshot(name)
+
+    # --- descarga
+    def start(self, name):
+        """Empieza la descarga en segundo plano si no esta ya en el PC ni en marcha. Devuelve su estado (dict vivo)."""
+        if name not in self.models:
+            raise EngineError(f"No sé descargar el modelo «{name}».")
+        with self.lock:
+            j = self.jobs.get(name)
+            if j and j["running"]:
+                return j
+            j = {"running": True, "done": 0, "total": self.size(name), "error": None, "cancel": False,
+                 "samples": [], "finished": None}
+            self.jobs[name] = j
+        threading.Thread(target=self._run, args=(name, j), daemon=True, name=f"descarga-{name}").start()
+        return j
+
+    def cancel(self, name):
+        with self.lock:
+            j = self.jobs.get(name)
+            if j and j["running"]:
+                j["cancel"] = True
+                return True
+        return False
+
+    def ensure(self, name, report=None, cancelled=None):
+        """Carpeta del modelo: si falta, lo descarga (o espera a la descarga en marcha) contando el progreso con
+        report({"stage": …}). Cancelled si se cancela el trabajo que espera (la descarga sigue). EngineError con la
+        frase de lo que paso si no se ha podido. None si es un modelo sin datos para descargarlo."""
+        p = self.path(name)
+        if p or name not in self.models:
+            return p
+        j = self.start(name)
+        last = None
+        while True:
+            with self.lock:
+                running, err = j["running"], j["error"]
+            if not running:
+                break
+            if cancelled and cancelled():
+                raise Cancelled()
+            msg = self.progress_text(name)
+            if report and msg != last:
+                report({"stage": msg})
+                last = msg
+            self.sleep(0.5)
+        p = self.path(name)
+        if p:
+            return p
+        raise EngineError(err or f"No se ha podido descargar el modelo {name}.")
+
+    def state(self, name):
+        """Para la interfaz (y el texto de progreso de la cola y el directo)."""
+        ready = self.path(name) is not None
+        size = self.size(name) or 0
+        with self.lock:
+            j = self.jobs.get(name) or {}
+            done, total, samples = j.get("done") or 0, j.get("total") or size, list(j.get("samples") or [])
+            running, error = bool(j.get("running")), j.get("error")
+        speed = None
+        if len(samples) >= 2 and samples[-1][0] > samples[0][0]:
+            speed = (samples[-1][1] - samples[0][1]) / (samples[-1][0] - samples[0][0])
+        eta = (total - done) / speed if speed and speed > 0 and running else None
+        return {"model": name, "ready": ready, "size_mb": round(size / 1e6), "downloading": running,
+                "done_mb": round(done / 1e6), "total_mb": round(total / 1e6),
+                "frac": round(done / total, 4) if total and (running or error) else (1.0 if ready else 0.0),
+                "speed_mbs": round(speed / 1e6, 1) if speed else None, "eta_s": round(eta) if eta else None,
+                "error": None if ready or running else error}
+
+    def progress_text(self, name):
+        s = self.state(name)
+        if s["done_mb"] <= 0:
+            return f"Descargando el modelo {name} ({fmt_mb(s['total_mb'] * 1e6)} MB, solo la primera vez)…"
+        t = (f"Descargando el modelo {name} (solo la primera vez): {fmt_mb(s['done_mb'] * 1e6)} de "
+             f"{fmt_mb(s['total_mb'] * 1e6)} MB ({int((s['frac'] or 0) * 100)} %)")
+        return t + (f" · quedan ~{fmt_left(s['eta_s'])}" if s["eta_s"] else "")
+
+    def _progress(self, j, done):
+        now = time.time()
+        with self.lock:
+            j["done"] = done
+            j["samples"] = [x for x in j["samples"] if now - x[0] <= 10][-200:] + [(now, done)]
+
+    def _run(self, name, j):
+        repo, rev, files = self.models[name]
+        dest = self.own_dir(name)
+        t0 = time.time()
+        try:
+            os.makedirs(dest, exist_ok=True)
+            have = sum(self._have(dest, f, s) for f, s, _ in files)
+            self._progress(j, have)
+            free = shutil.disk_usage(dest).free
+            need = self.size(name) - have
+            if free < need + DOWNLOAD_SPARE:
+                raise EngineError(f"No hay espacio en el disco para el modelo {name}: hacen falta {fmt_mb(need)} MB y "
+                                  f"quedan {fmt_mb(free)} MB libres. Libera espacio y vuelve a probar.")
+            self.log(f"modelo {name}: descargando {fmt_mb(need)} MB de {WHISPER_HOST}"
+                     + (f" (ya había {fmt_mb(have)} MB)" if have else ""))
+            base = 0
+            for f, size, sha in files:
+                self._file(j, name, repo, rev, dest, f, size, sha, base)
+                base += size
+            self.log(f"modelo {name} descargado en {time.time() - t0:.0f} s")
+        except Cancelled:
+            j["error"] = "Descarga cancelada. Cuando vuelvas a pulsar «Descargar», sigue donde se quedó."
+            self.log(f"modelo {name}: descarga cancelada")
+        except EngineError as e:
+            j["error"] = str(e)
+            self.log(f"modelo {name}: no se pudo descargar: {e}")
+        except OSError as e:  # el disco: lleno, sin permiso, antivirus…
+            j["error"] = (f"No se ha podido guardar el modelo {name} en el disco ({e.__class__.__name__}: "
+                          f"{e.strerror or e}). Comprueba que hay espacio y vuelve a probar.")
+            self.log(f"modelo {name}: error de disco: {e.__class__.__name__}: {e}")
+        except Exception as e:  # nunca se queda «descargando» para siempre: lo inesperado tambien se dice
+            j["error"] = f"No se ha podido descargar el modelo {name} ({e.__class__.__name__}). Vuelve a probar."
+            self.log(f"modelo {name}: error inesperado en la descarga: {e.__class__.__name__}: {e}")
+        finally:
+            with self.lock:
+                j["running"], j["finished"] = False, time.time()
+            _MODEL_CACHED.pop(name, None)
+
+    @staticmethod
+    def _have(dest, f, size):
+        """Bytes que ya estan: el fichero entero si tiene su tamano, o lo que haya de su .part (reanudar)."""
+        for p in (os.path.join(dest, f), os.path.join(dest, f + ".part")):
+            try:
+                n = os.path.getsize(p)
+            except OSError:
+                continue
+            if p.endswith(".part"):
+                return min(n, size)
+            if n == size:
+                return n
+        return 0
+
+    def _file(self, j, name, repo, rev, dest, fname, size, sha, base):
+        import requests
+        http = self.http or requests
+        final = os.path.join(dest, fname)
+        if os.path.isfile(final) and os.path.getsize(final) == size:
+            return
+        part = final + ".part"
+        h = hashlib.sha256() if sha else None
+        have = os.path.getsize(part) if os.path.isfile(part) else 0
+        if have > size:
+            os.remove(part)
+            have = 0
+        if h and have:  # se sigue donde se quedo: la huella empieza por lo que ya habia
+            with open(part, "rb") as f:
+                for block in iter(lambda: f.read(4 << 20), b""):
+                    h.update(block)
+        url = self.url.format(repo=repo, rev=rev, file=fname)
+        fails, why = 0, None
+        while have < size:
+            if j["cancel"]:
+                raise Cancelled()
+            if fails:
+                if fails > DOWNLOAD_RETRIES:
+                    raise EngineError(f"No se ha podido descargar el modelo {name}. {why}")
+                self.log(f"modelo {name}: {fname}: reintento {fails} desde {fmt_mb(have)} MB ({why})")
+                self.sleep(min(30, 2 * 3 ** (fails - 1)))
+            headers = {"Range": f"bytes={have}-"} if have else {}
+            try:
+                r = http.get(url, headers=headers, stream=True, timeout=(CONNECT_TIMEOUT, DOWNLOAD_STALL_S))
+            except requests.RequestException as e:
+                fails, why = fails + 1, connection_error(e, WHISPER_HOST, "la descarga")
+                continue
+            try:
+                code = r.status_code
+                if code == 416 and have:  # lo pedido empieza al final: el .part ya esta entero
+                    break
+                if code in (429, 500, 502, 503, 504):
+                    fails, why = fails + 1, f"{WHISPER_HOST} no responde bien ahora mismo (HTTP {code})."
+                    continue
+                if code not in (200, 206):
+                    raise EngineError(self._http_error(name, code))
+                if "text/html" in (r.headers.get("content-type") or "").lower():
+                    raise EngineError(f"No se ha podido descargar el modelo {name}: la red ha devuelto una página web "
+                                      "en lugar del modelo (¿un portal de acceso o el proxy de la empresa?). Prueba "
+                                      "con otra red.")
+                if code == 200 and have:  # el servidor no ha hecho caso del Range: se empieza ese fichero de cero
+                    have = 0
+                    h = hashlib.sha256() if sha else None
+                with open(part, "ab" if have else "wb") as f:
+                    for chunk in r.iter_content(DOWNLOAD_BLOCK):
+                        if j["cancel"]:
+                            raise Cancelled()
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        if h:
+                            h.update(chunk)
+                        have += len(chunk)
+                        fails = 0  # avanza: los intentos cuentan desde aqui
+                        self._progress(j, base + have)
+            except requests.RequestException as e:  # cortada o parada DOWNLOAD_STALL_S: se sigue desde donde iba
+                fails, why = fails + 1, connection_error(e, WHISPER_HOST, "la descarga")
+            finally:
+                r.close()
+            if have > size:
+                break
+        if have != size:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            raise EngineError(f"El modelo {name} se ha descargado incompleto o de más ({fmt_mb(have)} de "
+                              f"{fmt_mb(size)} MB): vuelve a probar.")
+        if h and h.hexdigest() != sha:
+            os.remove(part)
+            raise EngineError(f"El modelo {name} se ha descargado dañado (no coincide su huella): vuelve a probar.")
+        for i in range(10):  # en Windows el antivirus puede tener el fichero abierto un momento al cerrarlo
+            try:
+                os.replace(part, final)
+                break
+            except PermissionError:
+                if i == 9:
+                    raise
+                self.sleep(0.5)
+
+    @staticmethod
+    def _http_error(name, code):
+        if code in (401, 403, 407, 451):
+            return (f"{WHISPER_HOST} ha rechazado la descarga del modelo {name} (HTTP {code}). En la red de una "
+                    "empresa suele ser el proxy que la bloquea: prueba con otra red o pide a tu IT que permita "
+                    f"{WHISPER_HOST}.")
+        if code == 404:
+            return f"{WHISPER_HOST} ya no tiene el modelo {name} (HTTP 404): hay que actualizar la app."
+        return f"{WHISPER_HOST} ha contestado HTTP {code} al descargar el modelo {name}: vuelve a probar más tarde."
 
 
 class WorkerTimeout(EngineError):
@@ -545,9 +916,12 @@ class WorkerClient:
         os.makedirs(self.log_dir, exist_ok=True)
         err = open(os.path.join(self.log_dir, f"worker-{self.name}.log"), "ab")
         here = os.path.dirname(os.path.abspath(__file__))
+        # con los modelos a cargo del servidor (MODELS), Whisper no baja nada por su cuenta: si un modelo faltara, mejor
+        # un error claro que una descarga de 1,5 GB sin progreso desde un proceso sin los certificados de Windows
+        env = dict(os.environ, HF_HUB_OFFLINE="1") if MODELS is not None else None
         self.p = subprocess.Popen([sys.executable, "-u", os.path.join(here, "worker.py")], cwd=here,
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
-                                  creationflags=NO_WINDOW | BELOW_NORMAL)
+                                  creationflags=NO_WINDOW | BELOW_NORMAL, env=env)
         err.close()
         self.q = queue.Queue()
         threading.Thread(target=self._reader, args=(self.p, self.q), daemon=True).start()
@@ -567,6 +941,8 @@ class WorkerClient:
         durante idle_timeout) o se cancela, mata el proceso."""
         import json
         import queue
+        if req.get("model") and not req.get("path") and MODELS is not None:  # la carpeta local: Whisper no baja nada
+            req = dict(req, path=MODELS.path(req["model"]))
         with self.lock:
             payload = audio.astype("<f4").tobytes() if audio is not None else b""
             msg = (json.dumps(dict(req, n=len(payload) // 4)) + "\n").encode("utf-8")
@@ -613,13 +989,15 @@ class WorkerClient:
                 return m
 
     def ensure(self, model, threads, on_progress=None, cancelled=None):
-        """Deja el modelo cargado (la primera vez puede descargarlo)."""
+        """Deja el modelo cargado. Si no esta en este PC, antes lo descarga MODELS con progreso real en on_progress
+        (MB y %) o espera a la descarga que ya este en marcha; si no se puede, EngineError con la causa."""
         if self.alive() and self.key == (model, int(threads)):
             return False
+        path = MODELS.ensure(model, on_progress, cancelled) if MODELS is not None else None
         if on_progress:
-            on_progress({"stage": f"{'Cargando' if model_cached(model) else 'Descargando'} modelo {model}…"})
-        self.request({"op": "load", "model": model, "threads": threads}, on_progress=on_progress,
-                     timeout=3600, cancelled=cancelled)
+            on_progress({"stage": f"Cargando el modelo {model}…"})
+        self.request({"op": "load", "model": model, "threads": threads, "path": path}, on_progress=on_progress,
+                     timeout=LOAD_TIMEOUT_S if MODELS is not None else 3600, cancelled=cancelled)
         return True
 
 
@@ -1009,15 +1387,15 @@ class CloudEngine:
                     r = HTTP.post(url, timeout, headers=headers, data=data,
                                   files={"file": (os.path.basename(chunk), fh, mime)})
                     tm["net"] = perf_counter() - t0
-            except requests.RequestException as e:
-                last = f"sin conexión con el servicio ({e.__class__.__name__})"
+            except requests.RequestException as e:  # una frase con lo que paso y que hacer (antes: «sin conexion»)
+                last = connection_error(e, url_host(url), "la conexión")
                 wait = 2 ** attempt
             else:
                 self.keys.note(key, family, r.status_code, r.headers, qm)
                 if r.status_code == 200:
                     tm["infer"] = processing_s(r.headers)
                     return json_body(r)
-                last = api_error(r)
+                last = cloud_http_error(r, cfg, data.get("model"))
                 others = not only_key and len(cloud_keys(cfg)) > 1
                 if r.status_code in (401, 403):  # clave no valida: queda marcada y, si hay otra, se sigue con ella
                     if others and self.keys.pick(cfg, family, model=qm) != key:
@@ -1036,7 +1414,7 @@ class CloudEngine:
             if attempt == attempts - 1:  # tras el ultimo intento no se espera: se falla ya
                 break
             wait = min(max(wait, 1.0), max_wait)
-            report(stage=f"La API pide esperar ({last}). Reintento en {wait:.0f} s…")
+            report(stage=f"{last} Reintento en {wait:.0f} s…")
             tm["wait"] += wait
             self._wait(wait, cancelled)
         raise EngineError(last or "la API no respondió")
@@ -1187,7 +1565,43 @@ def api_error(r):
         msg = msg or j.get("message")
     except (ValueError, AttributeError):
         msg = None
-    return f"HTTP {r.status_code}: {msg or r.text[:200]}"
+    if not msg:
+        text = str(getattr(r, "text", "") or "")
+        if "<html" in text[:500].lower() or "<!doctype" in text[:200].lower():  # el proxy o un portal, no la API
+            msg = "la red ha devuelto una página web en lugar de la API (¿un proxy o un portal de acceso?)"
+        else:
+            msg = " ".join(text.split())[:200]
+    return f"HTTP {r.status_code}: {msg}"
+
+
+def url_host(url):
+    m = re.match(r"https?://([^/:?#]+)", url or "")
+    return m.group(1) if m else "el servicio"
+
+
+def cloud_http_error(r, cfg, model=None):
+    """Una frase para un error HTTP de la API de transcripcion: lo que ha pasado (con el «HTTP NNN: mensaje» del
+    servicio, que el diagnostico sabe leer) y que hacer. Hasta el 07/11/2026 solo salia el «HTTP NNN: …»."""
+    base = api_error(r)
+    p = PROVIDERS.get((cfg or {}).get("provider", "groq")) or {}
+    prov = p.get("label") or "El servicio"
+    code = r.status_code
+    if code == 401:
+        donde = f" desde {p['keys'].replace('https://', '')}" if p.get("keys") else ""
+        return f"{prov} no acepta la API key ({base}). Cópiala de nuevo{donde} y pulsa «Probar conexión»."
+    if code == 403:
+        return (f"{prov} ha rechazado la petición ({base}). Si la clave es correcta y estás en la red de una empresa, "
+                "puede que su proxy bloquee el servicio: prueba con otra red.")
+    if code == 404:
+        return f"{prov} no encuentra el modelo o la dirección ({base}). Revisa el modelo en Ajustes" + (
+            f" (ahora «{model}»)." if model else ".")
+    if code == 413:
+        return f"El trozo de audio es demasiado grande para {prov} ({base}): baja «Minutos por trozo» en Ajustes."
+    if code in (500, 502, 503, 504):
+        return f"{prov} está fallando ahora mismo ({base}): vuelve a probar en unos minutos."
+    if code == 429:
+        return f"{prov} pide esperar ({base})."
+    return f"{prov} no acepta la petición ({base})."
 
 
 def json_body(r):
