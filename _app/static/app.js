@@ -2374,7 +2374,7 @@ function openSettings(opts) {
       const groups = {};
       S.vocab.forEach(v => (groups[v.project] ||= []).push(v));
       const conectar = typeof vocabConectar === 'function';
-      box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>${I.folder}${esc(p)}</b>${vs.every(v => v.conectada) ? ' <span class="muted" style="font-weight:400" title="Sus listas se leen de una carpeta conectada (abajo)">· carpeta conectada</span>' : ''}
+      box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>${I.folder}${esc(p)}${vs.every(v => v.conectada) ? '<span class="muted" style="font-weight:400" title="Sus listas se leen de una carpeta conectada (abajo)"> · carpeta conectada</span>' : ''}</b>
           <button class="btn ghost sm" type="button" data-vnew="${esc(p)}">${I.plus}Tema</button>
           <button class="btn ghost sm" type="button" data-vdir="${esc(vs[0].id.split('/').slice(0, -1).join('/'))}" title="Abrir su carpeta de listas">${I.ext}Carpeta</button></div>
         <table class="vtable">${vs.map(v => `<tr><td>${esc(v.name)}</td><td>${vocabFit(v)}</td>

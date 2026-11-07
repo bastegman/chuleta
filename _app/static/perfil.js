@@ -217,11 +217,12 @@ function vocabCarpetasHtml(carpetas) {
   carpetas = carpetas || [];
   const ayuda = `<div class="help">Cada <code>.txt</code> es un tema, con los términos separados por comas o uno por línea. Valen tres formas: los <code>.txt</code> sueltos (el proyecto es el nombre de la carpeta), una subcarpeta <code>Vocabulario</code>, o una carpeta por proyecto con su <code>Vocabulario</code> dentro. Lo que cambies en esos archivos se usa en la siguiente grabación. Quitar una carpeta no borra nada.</div>`;
   if (!carpetas.length) return `<div class="help" style="margin-top:0">Ninguna. Con «Usar las listas de una carpeta…» eliges la carpeta donde ya tienes tus listas (en OneDrive, por ejemplo) y ${esc(APP_NAME)} las lee de allí, sin copiarlas.</div>${ayuda}`;
-  return `<table class="vtable vc-carpetas">${carpetas.map(c => `<tr><td>${I.folder}<b>${esc(nfc(c.name))}</b></td>
-      <td><code title="${esc(c.path)}">${esc(c.path)}</code></td>
-      <td>${c.existe ? `${c.listas} ${c.listas === 1 ? 'lista' : 'listas'}` : '<span class="warn-txt">No se encuentra: ¿la has movido o renombrado, o falta la VPN?</span>'}</td>
-      <td style="white-space:nowrap">${c.existe ? `<button class="btn ghost sm" type="button" data-vopen="${esc(c.rel)}" title="Abrir la carpeta en el Explorador">${I.ext}Abrir</button>` : ''}<button class="btn ghost sm" type="button" data-vunlink="${esc(c.rel)}" title="Deja de leerla: no se borra nada">quitar</button></td></tr>${(c.avisos || []).map(a =>
-      `<tr><td colspan="4" class="warn-txt" style="font-size:12.5px">${esc(vocabAvisoText(a))}</td></tr>`).join('')}`).join('')}</table>${ayuda}`;
+  // la ruta, debajo del nombre y partible por cualquier sitio: una ruta larga de OneDrive no ensancha Ajustes
+  return `<table class="vtable vc-carpetas">${carpetas.map(c => `<tr><td style="width:100%">${I.folder}${esc(nfc(c.name))}
+      <div style="white-space:normal;overflow-wrap:anywhere;font-weight:400"><code title="${esc(c.path)}">${esc(c.path)}</code></div></td>
+      <td style="white-space:nowrap">${c.existe ? `${c.listas} ${c.listas === 1 ? 'lista' : 'listas'}` : '<span class="warn-txt">No se encuentra</span>'}</td>
+      <td style="white-space:nowrap">${c.existe ? `<button class="btn ghost sm" type="button" data-vopen="${esc(c.rel)}" title="Abrir la carpeta en el Explorador">${I.ext}Abrir</button>` : ''}<button class="btn ghost sm" type="button" data-vunlink="${esc(c.rel)}" title="Deja de leerla: no se borra nada">quitar</button></td></tr>${c.existe ? '' : `<tr><td colspan="3" class="warn-txt" style="font-size:12.5px;white-space:normal;font-weight:400">No se encuentra la carpeta: ¿la has movido o renombrado, o falta la VPN?</td></tr>`}${(c.avisos || []).map(a =>
+      `<tr><td colspan="3" class="warn-txt" style="font-size:12.5px;white-space:normal;font-weight:400">${esc(vocabAvisoText(a))}</td></tr>`).join('')}`).join('')}</table>${ayuda}`;
 }
 
 /* ---------------------------------------------------------------- página de la reunión y directo */

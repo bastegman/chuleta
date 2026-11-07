@@ -171,7 +171,8 @@ console.log(vocabCarpetasHtml([]).includes('Ninguna'));""")
         self.assertIn("«Sub\\Infra.txt» está solo en OneDrive", lines[2])
         self.assertIn("Mantener siempre en este dispositivo", lines[2])
         self.assertEqual(lines[3], "«Glosario.txt» pesa 120 KB: no parece una lista (se leen hasta 64 KB)")
-        self.assertEqual(lines[4], "3 true true false true true true true")  # la que no se encuentra: sin «Abrir»
+        # 2 carpetas + el aviso de la primera + «no se encuentra» de la segunda (que no lleva «Abrir»)
+        self.assertEqual(lines[4], "4 true true false true true true true")
         self.assertEqual(lines[5], "true")
 
 
