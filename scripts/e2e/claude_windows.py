@@ -234,7 +234,7 @@ def main():
             msg = json.dumps(out, ensure_ascii=False)
             if code == 200 and out.get("ok"):
                 paso(f"comprobar_{i}_ok_sin_sesion_inesperado", nota="respondió OK sin sesión iniciada")
-            elif "sesión iniciada" not in msg:  # «sin sesión iniciada» (engines) o «no tiene la sesión iniciada» (explicar)
+            elif "sesión iniciada" not in msg:  # «sin sesión iniciada» (engines) o «no tiene la sesión…» (explicar)
                 fallos.append(f"«Comprobar» {i} no llega a «sesión iniciada»: {msg[:300]}")
         app.post("/api/settings", {"procesado": "agente"})
         code, out, _ = app.post("/api/summarize", {"path": rel})
