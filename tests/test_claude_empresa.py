@@ -57,7 +57,22 @@ ERRORES = {
     "tls": "Unable to connect to API: SSL certificate verification failed (UNABLE_TO_GET_ISSUER_CERT_LOCALLY). The "
            "certificates the server sent don't lead to a trusted authority.",
     "ajustes_org": "Couldn't load your organization's settings. Check your connection, then restart Claude Code.",
+    # con -p (revisión del 08/11/2026: ye() = no interactivo elige otros textos)
+    "p_caducada": "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "p_revocada": "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+    "p_renovando": "Failed to refresh OAuth token: another Claude Code process is refreshing it",
+    "p_disco": "Failed to refresh OAuth token: the disk that holds the Claude Code config directory (~/.claude by "
+               "default), or your disk quota on it, is full. Delete files you no longer need on that disk and retry; "
+               "signing in again won't help",
+    "p_ajustes_obligatorios": "Your organization requires remote managed settings to load, but they could not be "
+                              "loaded.",
+    # compuesto con trozos del binario (la función de los ajustes que exige la organización)
+    "p_ajustes_renovando": "Claude Code couldn't reach Anthropic yet (its sign-in token was still being refreshed, "
+                           "often by another Claude Code process), so it couldn't load your organization's settings. "
+                           "Your organization requires them before a session can start. Run the command again",
 }
+PLAN = ("Claude Opus is not available with the Claude Pro plan. If you have updated your subscription plan recently, "
+        "sign out and sign in again")
 MODELO = ("There's an issue with the selected model (claude-sonnet-5-5). It may not exist or you may not have access "
           "to it. Run /model to pick a different model.")
 
@@ -79,6 +94,10 @@ if caso == "modelo":  # la empresa no tiene el elegido: sin --model, el suyo
     error(MODELO) if "--model" in argv else ok("claude-opus-5-5")
 if caso == "modelo_siempre":
     error(MODELO)
+if caso == "plan":
+    error(PLAN) if "--model" in argv else ok("claude-sonnet-5-5")
+if caso == "modelo_y_luego_sesion":
+    error(MODELO) if "--model" in argv else error(ERRORES["p_caducada"])
 if caso == "pasarela":  # pasarela de la empresa con su certificado: sin su token, sin sesión
     if env.get("ANTHROPIC_BASE_URL") and env.get("ANTHROPIC_AUTH_TOKEN") and env.get("NODE_EXTRA_CA_CERTS"):
         ok("empresa-sonnet")
@@ -181,6 +200,18 @@ class SesionDeEmpresaTests(ConFalso):
     def test_sin_sesion_sigue_igual(self):
         self.assertIn("sin sesión iniciada", self.error("sin_sesion"))
 
+    def test_textos_de_p(self):
+        for caso in ("p_caducada", "p_revocada"):
+            self.assertTrue(self.error(caso).startswith("La sesión de Claude Code ha caducado ("), caso)
+        self.assertTrue(self.error("p_renovando").startswith("Claude Code está renovando tu sesión"))
+        self.assertIn("el disco donde guarda su configuración está lleno", self.error("p_disco"))
+
+    def test_no_cargar_los_ajustes_de_la_empresa_no_es_que_no_deje(self):
+        m = self.error("p_ajustes_obligatorios")
+        self.assertIn("no puede conectar con Anthropic desde esta red", m)
+        self.assertNotIn("Tu organización no deja", m)
+        self.assertTrue(self.error("p_ajustes_renovando").startswith("Claude Code está renovando tu sesión"))
+
 
 class ModeloDeEmpresaTests(ConFalso):
     def test_sin_el_modelo_elegido_usa_el_de_su_claude_code(self):
@@ -215,6 +246,29 @@ class ModeloDeEmpresaTests(ConFalso):
         self.error("caducada")
         self.assertEqual(len(self.llamadas()), 1)
 
+    def test_modelo_del_plan(self):
+        _, (text, used) = self.chat("plan", model="opus")
+        self.assertEqual((text, used, len(self.llamadas())), ("OK", "claude-sonnet-5-5", 2))
+
+    def test_si_el_segundo_falla_por_otra_cosa_cuenta_ese(self):
+        m = self.error("modelo_y_luego_sesion")
+        self.assertTrue(m.startswith("La sesión de Claude Code ha caducado"), m)
+
+    def test_cancelado_no_repite(self):
+        def cancelled():  # se cancela en cuanto ha terminado la primera llamada
+            return len(self.llamadas()) >= 1
+        with mock.patch.dict(os.environ, {"FAKE_CASO": "modelo", "FAKE_LOG": self.log}):
+            ag = engines.ClaudeCode(settings_dir=os.path.join(self.tmp, "datos"))
+            with self.assertRaises(engines.Cancelled):
+                ag.chat("s", "u", 10, lambda **k: None, cancelled, timeout=60, path=self.exe)
+        self.assertEqual(len(self.llamadas()), 1)
+
+    def test_sin_tiempo_no_repite(self):
+        with mock.patch.object(engines.time, "time", side_effect=[0.0] + [100.0] * 50):
+            m = self.error("modelo_siempre")
+        self.assertTrue(m.startswith("Claude Code no puede usar el modelo elegido"), m)
+        self.assertEqual(len(self.llamadas()), 1)
+
 
 class PasarelaTests(ConFalso):
     def test_pasarela_con_certificado_propio_conserva_su_token(self):
@@ -225,9 +279,21 @@ class PasarelaTests(ConFalso):
         self.assertEqual(self.llamadas()[0]["claves"], ["ANTHROPIC_AUTH_TOKEN"])
 
     def test_la_api_de_anthropic_no_es_una_pasarela(self):
+        for url in ("https://api.anthropic.com", "https://user:pw@api.anthropic.com", "api.anthropic.com/v1"):
+            self.assertIsNone(engines.ClaudeCode._pasarela({"ANTHROPIC_BASE_URL": url,
+                                                            "USERPROFILE": self.tmp}), url)
         self.error("pasarela", extra_env={"ANTHROPIC_BASE_URL": "https://api.anthropic.com",
                                           "ANTHROPIC_AUTH_TOKEN": "x", "NODE_EXTRA_CA_CERTS": "c.pem"})
         self.assertEqual(self.llamadas()[0]["claves"], [])
+
+    def test_pasarela_en_los_ajustes_de_claude_code_y_token_en_el_entorno(self):
+        cfg = os.path.join(self.tmp, "cfg")
+        os.makedirs(cfg)
+        with open(os.path.join(cfg, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"env": {"ANTHROPIC_BASE_URL": "https://llm.empresa.example"}}, f)
+        env = {"CLAUDE_CONFIG_DIR": cfg, "ANTHROPIC_AUTH_TOKEN": "gw-token"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(engines.ClaudeCode._env().get("ANTHROPIC_AUTH_TOKEN"), "gw-token")
 
 
 def _arbol_vscode(home, carpetas, editor=".vscode", obsolete=None):
@@ -285,6 +351,13 @@ class VSCodeTests(ConFalso):
             self.assertEqual(engines.ClaudeCode.find(), "/usr/local/bin/claude")
         self.assertEqual(engines.ClaudeCode.origen("/usr/local/bin/claude"), "Claude Code")
 
+    def test_capa_native_binaries_por_plataforma(self):
+        rel = engines.ClaudeCode.ext_bins()[0]
+        d = os.path.join(self.home, ".vscode", "extensions", "anthropic.claude-code-2.1.120", *rel[:-1])
+        p = self.falso(os.path.join(d, rel[-1]))
+        self.assertEqual(rel[:2], ("resources", "native-binaries"))
+        self.assertEqual(engines.ClaudeCode.find(), p)
+
     def test_sin_nada_no_encuentra(self):
         self.assertIsNone(engines.ClaudeCode.find())
 
@@ -330,19 +403,20 @@ class RegistroTests(unittest.TestCase):
                 raise OSError("no existe")
             return Key(reg[root])
 
-        def EnumValue(k, i):
+        def EnumValue(k, i):  # valor (REG_SZ) o (valor, tipo)
             items = list(k.vals.items())
             if i >= len(items):
                 raise OSError("no hay más")
-            return items[i][0], items[i][1], 1
+            n, v = items[i]
+            return (n,) + (v if isinstance(v, tuple) else (v, 1))
 
         def QueryValueEx(k, name):
             for n, v in k.vals.items():
                 if n.upper() == name.upper():
-                    return v, 2
+                    return (v[0] if isinstance(v, tuple) else v), 2
             raise OSError("no existe")
-        return types.SimpleNamespace(HKEY_LOCAL_MACHINE="HKLM", HKEY_CURRENT_USER="HKCU", OpenKey=OpenKey,
-                                     EnumValue=EnumValue, QueryValueEx=QueryValueEx)
+        return types.SimpleNamespace(HKEY_LOCAL_MACHINE="HKLM", HKEY_CURRENT_USER="HKCU", REG_EXPAND_SZ=2,
+                                     OpenKey=OpenKey, EnumValue=EnumValue, QueryValueEx=QueryValueEx)
 
     def env(self, reg, base):
         with mock.patch.object(engines, "_NT", True), mock.patch.dict(sys.modules, {"winreg": self.winreg(reg)}), \
@@ -360,6 +434,17 @@ class RegistroTests(unittest.TestCase):
             self.assertIn(trozo, env["PATH"])
         self.assertNotIn("ANTHROPIC_API_KEY", cc)  # aunque venga del registro
         self.assertEqual(cc["NODE_EXTRA_CA_CERTS"], r"C:\certs\empresa.pem")
+
+    def test_tipos_y_usuario(self):
+        reg = {"HKLM": {"USERNAME": "SYSTEM", "Path": "C:\\W"},
+               "HKCU": {"HTTPS_PROXY": "http://u:pa$$w0rd%x@proxy:8080",
+                        "NODE_EXTRA_CA_CERTS": ("%USERPROFILE%\\certs\\empresa.pem", 2),
+                        "OTRO": ("%NO_EXISTE%\\x", 2)}}
+        env, _ = self.env(reg, {"PATH": "/h", "USERNAME": "bernardo", "USERPROFILE": "C:\\Users\\b"})
+        self.assertEqual(env["HTTPS_PROXY"], "http://u:pa$$w0rd%x@proxy:8080")  # REG_SZ: tal cual
+        self.assertEqual(env["NODE_EXTRA_CA_CERTS"], "C:\\Users\\b\\certs\\empresa.pem")  # REG_EXPAND_SZ
+        self.assertEqual(env["OTRO"], "%NO_EXISTE%\\x")
+        self.assertEqual(env["USERNAME"], "bernardo")  # no el SYSTEM del registro de sistema
 
     def test_sin_registro_lo_heredado(self):
         env, _ = self.env({}, {"PATH": "/heredado", "OTRA": "1"})

@@ -306,6 +306,9 @@ def instalar(env):
 
 
 def main():
+    if MODO in ("vscode", "pasarela") and os.environ.get("CI") != "true":
+        # deja en el perfil una extensión o variables de una pasarela falsa: en un PC de verdad romperían su Claude Code
+        raise SystemExit(f"«{MODO}» solo en la CI (GitHub pone CI=true): cambia el perfil del usuario")
     os.makedirs(ART, exist_ok=True)
     root = os.path.join(TEMP, "raiz " + RARO)
     datos = os.path.join(TEMP, "datos " + RARO)

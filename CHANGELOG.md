@@ -29,6 +29,28 @@ Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1
   con espacios, «&» y «%»), sin sesión iniciada, con la app abierta desde antes, y mide cada llamada en frío y en
   caliente.
 
+### «Con tu cuenta de Claude» con la cuenta de la empresa (SSO) y Claude Code de VS Code (08/11/2026)
+Lo que pidió: que funcione con su cuenta de Claude de empresa, con SSO, y él usa Claude Code en VS Code (msgs 1224-1228).
+- Sin Claude Code instalado aparte, la app usa la copia que trae la **extensión de VS Code** (también Cursor, Windsurf y
+  VSCodium; la versión más nueva): la extensión no pone `claude` en el PATH y antes la app decía «No encuentro Claude
+  Code». «Comprobar» y `server.log` dicen de dónde salió («Claude Code de VS Code»). La sesión es la misma que la de
+  VS Code (se guarda en la carpeta `.claude` del usuario).
+- Lo que el usuario o su IT pongan en las variables de Windows con la app ya abierta (proxy, certificados de la empresa,
+  `CLAUDE_CONFIG_DIR`, una pasarela…) llega a Claude Code, como a una PowerShell nueva; antes solo el PATH.
+- Si el modelo elegido no está para esa cuenta (o para su plan), se repite una vez con el predeterminado de su Claude
+  Code; queda en `server.log` y en la respuesta de «Comprobar» (la interfaz aún no lo enseña). Si la organización
+  restringe modelos, Claude Code ya cambia a uno permitido por su cuenta.
+- Frases nuevas, con los textos de Claude Code 2.1.319 (los de la terminal y los de `-p`, que son otros): sesión
+  caducada o revocada (la empresa limita lo que dura), otra ventana renovando la sesión (VS Code abierto), disco lleno,
+  el modelo, y la organización que no deja (ya no sugiere la cuenta personal: son reuniones del trabajo). Si no se han
+  podido cargar los ajustes que exige la empresa, es la red, no que no deje. Sin sesión en la copia de VS Code, dice
+  que se entre en VS Code.
+- Con una pasarela de la empresa (`ANTHROPIC_BASE_URL` propia en el entorno o en los ajustes de Claude Code), la app ya
+  no le quita su credencial del entorno.
+- Desarrollo y CI: `claude-windows.yml` suma dos pasadas: «vscode» (solo la copia de la extensión, del paquete de Open
+  VSX) y «pasarela» (una pasarela falsa en el runner, puesta en el registro con la app abierta: Claude Code real
+  contesta a través de ella, sin Anthropic ni credenciales).
+
 ### Voces dobles en la grabación (07/11/2026, msgs 1154 y 1156)
 - La grabadora pone cada fuente (micro y salidas) en una línea de tiempo común según cuándo llega su audio. Antes cada
   fuente se tomaba por la cabeza de su cola: tras un corte (reabrir el dispositivo al cambiar de cascos o de salida,
