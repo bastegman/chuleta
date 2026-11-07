@@ -68,7 +68,7 @@ class CapasTests(unittest.TestCase):
         p = resolver(pedido={"vocab": AI, "cambios": {"carpeta": ":abc/Actas"}}, links={"abc": "OneDrive Alfa"})
         l = lineas(p)["carpeta"]
         self.assertEqual((l["rel"], l["valor"], l["origen"]), (":abc/Actas", "OneDrive Alfa\\Actas\\", "reunion"))
-        self.assertEqual(p["rec"]["folder"], ":abc/Actas")
+        self.assertEqual((p["rec"]["folder"], p["rec"]["recordar_carpeta"]), (":abc/Actas", False))
 
     def test_carpeta_de_la_reunion_si_la_rama_de_carpetas_la_da(self):
         p = resolver(pedido={"nombre": "Comité", "vocab": A},
@@ -130,10 +130,14 @@ class ProyectoTests(unittest.TestCase):
 
     def test_lo_elegido_y_el_fijo_de_ajustes(self):
         sug = {"name": "Comité de seguimiento", "source": "teams"}
-        p = resolver({"perfil": {"vocab": B}}, sug=sug)
+        p = resolver({"perfil": {"vocab": B}}, sug=sug)  # la misma reunión grabada antes manda sobre el fijo
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), (AI, "historial"))
+        p = resolver({"perfil": {"vocab": B}}, sug={"name": "Otra cosa", "source": "teams"})
         self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), (B, "ajustes"))
         p = resolver({"perfil": {"vocab": B}}, sug=sug, pedido={"vocab": ""})
         self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), ("", "elegido"))
+        p = resolver({"language": "es"}, pedido={"vocab": A, "cambios": {"idioma": "xx-yy-zz"}})  # no vale: no se usa
+        self.assertEqual((lineas(p)["idioma"]["code"], lineas(p)["idioma"]["origen"]), ("es", "ajustes"))
         p = resolver(sug=sug, pedido={"vocab": "No/Existe.txt"})  # una lista que ya no está: como si no se eligiera
         self.assertEqual(p["proyecto"]["origen"], "historial")
 
@@ -156,7 +160,8 @@ class RecTests(unittest.TestCase):
         self.assertEqual(p["rec"], {"name": "Comité de seguimiento", "vocab": AI, "folder": "Alfa/Reuniones",
                                     "language": "en-pt", "contexto": "Seguimiento semanal", "mic": "m1",
                                     "sys": "default", "live": True, "preset": "rapido",
-                                    "participantes": "Ana, Luis", "sugerido": "outlook", "plan": True})
+                                    "participantes": "Ana, Luis", "sugerido": "outlook", "plan": True,
+                                    "recordar_carpeta": True})
         self.assertEqual((b["idioma"]["code"], b["carpeta"]["rel"], b["audio"]["mic"], b["transcribe"]["preset"]),
                          (p["rec"]["language"], p["rec"]["folder"], p["rec"]["mic"], p["rec"]["preset"]))
         self.assertEqual(p["resumen"], "Comité de seguimiento → Alfa › Infra · Inglés + portugués")
@@ -252,13 +257,53 @@ class ServidorPlanTests(TempTree):
             r = a.rec_start(dict(p["rec"], resumen=p["resumen"]))
         st = a.settings.get()
         self.assertEqual((st["rec_mic"], st["live_preset"], st["project_folders"]), ("default", "medium", {}))
-        self.assertEqual((st["rec_folder"], st["rec_vocab"]), ("Alfa/Reuniones", "Alfa/Vocabulario/General.txt"))
+        # la carpeta era de solo esta reunión (y de un proyecto): no pasa a ser «la última usada» (revisión de B1)
+        self.assertEqual((st["rec_folder"], st["rec_vocab"]), ("", "Alfa/Vocabulario/General.txt"))
         self.assertTrue(r["path"].startswith("Alfa/Reuniones/"))
         self.assertEqual(a.jobs.started[0][1], "rapido")
         self.assertEqual(a.rec_resumen, p["resumen"])
         md = os.path.splitext(server.safe(r["path"]))[0] + ".md"
         props = server.parse_notes(server.read_text(md))[0]
         self.assertEqual((props["proyecto"], props["workstream"]), ("Alfa", "General"))
+
+    def test_la_carpeta_de_una_reunion_no_se_cuela_en_las_siguientes(self):
+        """Revisión de B1: «solo esta reunión» no pasa a ser «la última usada»; la carpeta fija de Ajustes es la de
+        las reuniones sin proyecto (no tapa la del proyecto); un proyecto sin carpeta asignada usa la suya del árbol,
+        no la última usada de otro proyecto."""
+        os.makedirs(os.path.join(self.root, "Beta", "Actas"))
+        os.makedirs(os.path.join(self.root, "Sueltas"))
+        a = self.app(rec_folder="Beta/Actas")
+        A, L = "Alfa/Vocabulario/General.txt", "Beta/Vocabulario/Legal.txt"
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["rel"], "Alfa")  # su carpeta, no Beta/Actas
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["origen_txt"], "carpeta de Alfa")
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": ""}))["carpeta"]["origen"], "ultima")  # sin proyecto
+        a.grabar_recordar({"clave": "carpeta", "valor": "Sueltas", "alcance": "ajustes"})
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": ""}))["carpeta"]["rel"], "Sueltas")
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["rel"], "Alfa")  # la fija no tapa Alfa
+        a.grabar_recordar({"clave": "carpeta", "valor": "Alfa/Reuniones", "alcance": "proyecto", "vocab": A})
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["rel"], "Alfa/Reuniones")
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": L}))["carpeta"]["rel"], "Beta")
+        # solo esta reunión: graba ahí y no cambia «la última usada»
+        p = a.grabar_plan_api({"vocab": "", "cambios": {"carpeta": "Beta/Actas"}})
+        with mock.patch.object(server, "RecorderProcess", FakeRec), mock.patch.object(server, "log"):
+            r = a.rec_start(dict(p["rec"], name="Una"))
+        self.assertTrue(r["path"].startswith("Beta/Actas/"))
+        self.assertEqual(a.settings.get()["rec_folder"], "Beta/Actas")  # (el de antes: no lo ha tocado)
+        a.settings.update(lambda d: d.update(rec_folder=""))
+        a.rec = None
+        p = a.grabar_plan_api({"vocab": "", "cambios": {"carpeta": "Beta/Actas"}})
+        with mock.patch.object(server, "RecorderProcess", FakeRec), mock.patch.object(server, "log"):
+            a.rec_start(dict(p["rec"], name="Otra"))
+        self.assertEqual(a.settings.get()["rec_folder"], "")
+
+    def test_ctrl_alt_r_con_asistentes_sin_origen_toma_el_de_la_reunion(self):
+        a = self.app()
+        self.sug.update(source="outlook", participants=["Ana"])
+        vistos = []
+        a.rec_start = lambda b: vistos.append(b) or {"path": "x.wav", "workstream": None}
+        with mock.patch.object(server, "cue"), mock.patch.object(server, "notify"):
+            a.rec_toggle({"source": "otra-app", "participantes": "Eva"})
+        self.assertEqual((vistos[0]["participantes"], vistos[0]["sugerido"]), ("Eva", "outlook"))
 
     def test_usarlo_en_el_proyecto_o_en_ajustes(self):
         a = self.app(language="es-en")

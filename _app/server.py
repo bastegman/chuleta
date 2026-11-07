@@ -3405,7 +3405,7 @@ class App:
                 p = self.plan_grabar({}, st=st, sug=sug)
                 body = dict(p["rec"], resumen=p["resumen"])
                 if b.get("participantes"):
-                    body.update(participantes=b["participantes"], sugerido=b.get("sugerido") or "")
+                    body.update(participantes=b["participantes"], sugerido=b.get("sugerido") or sug.get("source") or "")
                 cue("start")  # antes de empezar: asi el pitido no queda grabado
                 r = self.rec_start(body)
                 notify(f"● Grabando en {APP_NAME}", p["resumen"] + " · Ctrl+Alt+R para parar"
@@ -3454,6 +3454,29 @@ class App:
             return "ajustes", f"la carpeta de {APP_NAME}" if not rel else "Ajustes › Al grabar"
         return origen
 
+    def _carpeta_plan(self, v, st, full):
+        """La carpeta base de una grabación nueva: la que decide rec_folder_for. Con proyecto, si esa no es suya (la
+        fija de Ajustes, que es la de las reuniones sin proyecto, o la última usada, que puede ser la de otro cliente),
+        la del proyecto: la del workstream, la asignada al proyecto o, sin asignar, la carpeta del proyecto en el árbol
+        (la que contiene su Vocabulario; 11a′ del rediseño, msg 1158). Cuando la rama de carpetas exponga
+        rec_folder_origen, su rec_folder_for ya lo decide así y esto no hace nada."""
+        fv = full.get(v["id"]) if v else None
+        rel = self.rec_folder_for(fv, st)
+        if not fv or getattr(self, "rec_folder_origen", None):
+            return rel
+        if self._carpeta_origen(st, full)(v, rel)[0] not in ("ultima", "ajustes"):
+            return rel
+        for cand in ((st.get("workstream_folders") or {}).get(v["id"]),
+                     (st.get("project_folders") or {}).get(v["project"]), rel_of(_project_dir(fv))):
+            if cand is None:
+                continue
+            try:
+                if not in_app_dir(safe(cand, "dir")):
+                    return cand
+            except ApiError:
+                continue
+        return rel  # sin carpeta propia en la app (p. ej. listas de una carpeta conectada): lo de siempre, a la vista
+
     def plan_grabar(self, pedido, st=None, sug=None):
         """El plan de una grabación nueva con el origen de cada valor (ver plan.py). `pedido`: lo elegido en la
         tarjeta; `sug`: la reunión en curso (si no se da, la última lectura del vigilante o Teams al momento)."""
@@ -3479,7 +3502,7 @@ class App:
         reunion = globals().get("carpeta_reunion")  # rama de carpetas (B1b): la carpeta de la reunión en la base
         return grabar_plan.resolver(
             st, listas, sug, hist, pedido,
-            carpeta_de=lambda v: self.rec_folder_for(full.get(v["id"]) if v else None, st),
+            carpeta_de=lambda v: self._carpeta_plan(v, st, full),
             carpeta_origen=self._carpeta_origen(st, full),
             sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
             motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
@@ -3676,7 +3699,8 @@ class App:
                     if "vocab" in b:
                         d["rec_vocab"] = v["id"] if v else ""
                     # la proxima vez (y con Ctrl+Alt+R) se graba en la misma carpeta
-                    d["rec_folder"] = rel_of(folder)
+                    if not b.get("plan") or (not v and b.get("recordar_carpeta", True)):
+                        d["rec_folder"] = rel_of(folder)
                     if b.get("plan"):
                         # desde el plan (tarjeta, Ctrl+Alt+R, aviso): lo de esta reunion no pasa a ser el
                         # predeterminado ni la carpeta del proyecto; eso se guarda a proposito con «Usarlo en»

@@ -61,6 +61,7 @@ async function abrirGrabar(opts = {}) {
 
 async function grMontar(d) {
   G.d = d;
+  if (G.tocado.nombre && 'nombre' in G.pedido) $('#grNombre', d).value = G.pedido.nombre;  // al volver de editar una lista
   d.addEventListener('click', e => { if (e.target.closest('[data-m="no"]')) closeModal(false); });
   d.querySelector('[data-m="consent"]').onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
   $('#rGo', d).onclick = grEmpezar;
@@ -87,7 +88,7 @@ async function grMontar(d) {
   // la reunión llegó tarde (Outlook tarda): si no has tocado nada, se rellena; si sí, se propone sin pisar lo tuyo
   reunion.then(async sug => {
     if (G !== g || !sug.name || sug.name === g.plan?.sugerencia?.nombre) return;
-    if (!g.tocado.nombre && !g.tocado.vocab) return grPedir();
+    if (!g.tocado.nombre && !g.tocado.vocab && !g.tocado.algo && !g.abierto) return grPedir();
     grProponer(sug);
   });
   if (!S.vocab.length) $('#grNombre', d).focus();
@@ -136,7 +137,8 @@ function grPintar() {
   $('#grAsistL', d).classList.toggle('hidden', !part.length);
   $('#grAsist', d).classList.toggle('hidden', !part.length);
   if (part.length) {
-    $('#grAsist', d).innerHTML = `<span title="${esc(part.join(', '))}"><b>${part.length} ${part.length === 1 ? 'asistente' : 'asistentes'}</b> de ${p.rec.sugerido === 'outlook' ? 'Outlook' : 'Teams'}</span>`
+    const nombres = part.slice(0, 4).join(', ') + (part.length > 4 ? ` y ${part.length - 4} más` : '');
+    $('#grAsist', d).innerHTML = `<span title="${esc(part.join(', '))}"><b>${esc(nombres)}</b> · de ${p.rec.sugerido === 'outlook' ? 'Outlook' : 'Teams'}</span>`
       + ` <span class="muted">Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a los destinos hasta que los confirmes.</span>`
       + ` <a href="#" data-gr-sin-asist>Quitar</a>`;
   }
@@ -194,8 +196,11 @@ function grPintarFilas() {
   if (panel && g.panelProy !== grProyecto(p)) {
     g.panelProy = grProyecto(p);
     const nuevo = grAlcanceHtml(g.abierto), viejo = panel.querySelector('.gr-alcance');
+    const marcado = viejo?.querySelector('input:checked')?.value;  // lo que habías marcado se queda, si sigue
     if (viejo) viejo.outerHTML = nuevo;
     else if (nuevo) panel.querySelector('.gr-panel-pie')?.insertAdjacentHTML('beforebegin', nuevo);
+    const r = marcado && panel.querySelector(`.gr-alcance input[value="${marcado}"]`);
+    if (r) r.checked = true;
   }
 }
 
@@ -260,6 +265,7 @@ function grAbrirPanel(k) {
   if (g.abierto && g.abierto !== k) grCerrarPanel();
   if (g.abierto === k) return grListo(k);
   g.abierto = k;
+  g.tocado.algo = true;
   g.panelProy = grProyecto(g.plan);
   const panel = box.querySelector(`[data-panel="${k}"]`);
   panel.innerHTML = grPanelHtml(k);
@@ -285,12 +291,17 @@ function grCerrarPanel() {
 async function grListo(k) {
   const g = G, panel = $(`[data-panel="${k}"]`, g.d);
   const alc = panel?.querySelector(`input[name="grAlc_${k}"]:checked`)?.value || 'reunion';
+  // lo cambiado en el panel o, si no has cambiado nada, lo que se ve: «Usarlo en» guarda ese valor
+  const l = grFila(g.plan, k) || {};
+  const actual = { carpeta: l.rel, idioma: l.code, contexto: l.valor, live: l.live, preset: l.preset, mic: l.mic, sys: l.sys };
   const claves = (GR_CLAVES[k] || []).filter(c => c in g.pedido.cambios);
-  if (alc !== 'reunion' && claves.length) {
+  const guardar = claves.length ? claves : (GR_CLAVES[k] || []).filter(c => actual[c] !== undefined);
+  if (alc !== 'reunion' && guardar.length) {
     try {
-      for (const c of claves) {
+      for (const c of guardar) {
         const clave = k === 'transcribe' || k === 'audio' ? c : k;
-        await api('/api/grabar/recordar', { clave, valor: g.pedido.cambios[c], alcance: alc, vocab: g.plan.proyecto.vocab || '' });
+        const valor = c in g.pedido.cambios ? g.pedido.cambios[c] : actual[c];
+        await api('/api/grabar/recordar', { clave, valor, alcance: alc, vocab: g.plan.proyecto.vocab || '' });
         delete g.pedido.cambios[c];
       }
       const cfg = await api('/api/config');
@@ -346,6 +357,7 @@ function grClick(e) {
 async function grCambio(e) {
   const x = e.target.closest('[data-gr]');
   if (!x || !G) return;
+  G.tocado.algo = true;
   const k = x.dataset.gr, c = G.pedido.cambios;
   if (k === 'carpeta' && x.value === '__pick') {  // otra carpeta: se vincula y se elige
     x.value = grFila(G.plan, 'carpeta')?.rel || '';
@@ -374,7 +386,7 @@ function grProyectoElegido(val) {
   grPedir();
 }
 function grTecla(e) {
-  if (e.key !== 'Enter' || e.isComposing) return;
+  if (e.key !== 'Enter' || e.isComposing || e.defaultPrevented) return;
   const t = e.target;
   if (t.id === 'grNombre' && !$('#grSug', G.d).classList.contains('hidden') && G.sugIdx >= 0) return;  // lo lleva el autocompletado
   if (t.closest('.gr-panel')) { if (t.tagName !== 'BUTTON' && t.tagName !== 'A') { e.preventDefault(); grListo(G.abierto); } return; }
@@ -411,6 +423,7 @@ function grNombreEventos(d) {
       inp.setAttribute('aria-activedescendant', G.sugIdx >= 0 ? `grSug${G.sugIdx}` : '');
     } else if (e.key === 'Enter' && G.sugIdx >= 0) {
       e.preventDefault();
+      e.stopPropagation();  // elige la reunión y enseña su plan: Intro otra vez, y entonces graba
       grElegirReciente(+items[G.sugIdx].dataset.sugTitulo);
     } else if (e.key === 'Escape') {
       e.stopPropagation();

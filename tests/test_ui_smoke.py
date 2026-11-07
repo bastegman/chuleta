@@ -49,6 +49,15 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         os.makedirs(os.path.join(cls.root, "Proyecto", "Vocabulario"))
         with open(os.path.join(cls.root, "Proyecto", "Vocabulario", "General.txt"), "w", encoding="utf-8") as f:
             f.write("término uno, término dos\n")
+        # una reunión ya grabada, para el autocompletado de la tarjeta de grabar (su proyecto sale de su cabecera)
+        base = os.path.join(cls.root, "Proyecto", "2026-10-30 10-00-00 - Comité de prueba")
+        with open(base + ".wav", "wb") as f:
+            f.write(b"RIFF" + (36 + 32000).to_bytes(4, "little") + b"WAVEfmt " + (16).to_bytes(4, "little")
+                    + (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + (16000).to_bytes(4, "little")
+                    + (32000).to_bytes(4, "little") + (2).to_bytes(2, "little") + (16).to_bytes(2, "little")
+                    + b"data" + (32000).to_bytes(4, "little") + b"\0" * 32000)
+        with open(base + ".md", "w", encoding="utf-8") as f:
+            f.write("---\nproyecto: Proyecto\nworkstream: General\n---\n")
         cls.datos = os.path.join(cls.tmp, "datos")
         cls.port = puerto_libre()
         cls.log = open(os.path.join(cls.tmp, "salida.log"), "w", encoding="utf-8")
@@ -252,6 +261,17 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         b = pg.evaluate("(() => { const r = document.querySelector('#rGo').getBoundingClientRect();"
                         " return [r.top, r.bottom, innerHeight]; })()")
         self.assertTrue(0 <= b[0] and b[1] <= b[2], b)  # «Empezar a grabar» a la vista en 900×600
+        # el autocompletado: Intro elige la reunión y trae su proyecto, pero no empieza a grabar (revisión de B1)
+        pg.fill("#grNombre", "")
+        pg.type("#grNombre", "Comit")
+        pg.wait_for_selector("#grSug:not(.hidden) [data-sug-titulo]", timeout=5000)
+        pg.keyboard.press("ArrowDown")
+        pg.keyboard.press("Enter")
+        pg.wait_for_function("document.querySelector('#grMotivo').textContent.includes('como la última')", timeout=5000)
+        self.assertEqual(pg.input_value("#grNombre"), "Comité de prueba")
+        self.assertEqual(pg.input_value("#grProy"), "Proyecto/Vocabulario/General.txt")
+        self.assertTrue(pg.is_visible("#modal .dialog.gr"))
+        self.assertEqual(enviados, [])
         # escribes un nombre; luego llega la reunión de Teams: se propone, no se pisa
         pg.fill("#grNombre", "Mi reunión")
         sug = {"name": "Comité", "source": "teams", "vocab": "", "participants": []}

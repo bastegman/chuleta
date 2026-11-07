@@ -15,6 +15,7 @@ versiones anteriores) › la misma reunión grabada antes (historial local) › 
 Lógica pura: el servidor le pasa ajustes, listas de vocabulario, la sugerencia de la reunión en curso, el historial y
 la carpeta que decide rec_folder_for (la frontera con la rama de carpetas: aquí no se decide dónde se guarda).
 """
+import re
 from datetime import datetime
 
 from common import APP_NAME, fold
@@ -27,6 +28,7 @@ MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "
 DIAS = ("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
 CLAVES_CAMBIOS = ("carpeta", "idioma", "contexto", "mic", "sys", "live", "preset")
 ALCANCES = ("reunion", "proyecto", "workstream", "ajustes")
+IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")  # el mismo que server.IDIOMA_RE
 
 
 def idioma_txt(code):
@@ -152,10 +154,6 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         want = str(pedido.get("vocab") or "")
         if not want or want in por_id:
             vid, p_origen, motivo = want, "elegido", "elegido por ti" if want else "sin proyecto, elegido por ti"
-    if vid is None:
-        fijo = (st.get("perfil") or {}).get("vocab")
-        if isinstance(fijo, str) and (fijo == "" or fijo in por_id):
-            vid, p_origen, motivo = fijo, "ajustes", "fijado en Ajustes"
     if vid is None and nombre:
         k = norm_titulo(nombre)
         h = next((h for h in historial if norm_titulo(h["titulo"]) == k and h["vocab"] in por_id), None)
@@ -163,6 +161,10 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
             f = fecha_corta(h["fecha"])
             vid, p_origen = h["vocab"], "historial"
             motivo = f"como la última «{h['titulo']}»" + (f" ({f})" if f else "")
+    if vid is None:  # el proyecto fijo de Ajustes es un valor por defecto: la misma reunión grabada antes manda
+        fijo = (st.get("perfil") or {}).get("vocab")
+        if isinstance(fijo, str) and (fijo == "" or fijo in por_id):
+            vid, p_origen, motivo = fijo, "ajustes", "fijado en Ajustes"
     if vid is None:
         tv = ""
         if n_origen in ("teams", "outlook") and sug.get("vocab") in por_id:
@@ -199,6 +201,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
                          rel=base, sub=sub))
 
     # --- idioma: esta reunión › workstream › proyecto › Ajustes
+    if "idioma" in cambios and not IDIOMA_RE.match(str(cambios["idioma"] or "auto").strip().lower()):
+        cambios.pop("idioma")  # uno que no vale (rec_start lo dejaría en «detectar»): no se enseña como si se usara
     if "idioma" in cambios:
         lang, l_origen, l_txt = str(cambios["idioma"] or "").strip().lower(), "reunion", "cambiado para esta reunión"
     elif v and v["id"] in (st.get("workstream_langs") or {}):
@@ -262,7 +266,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         sugerido = (sug.get("source") or "") if part else ""
 
     rec = {"name": nombre, "vocab": vid, "folder": base, "language": lang, "contexto": ctx, "mic": mic,
-           "sys": sys_dev, "live": live, "preset": preset, "participantes": part, "sugerido": sugerido, "plan": True}
+           "sys": sys_dev, "live": live, "preset": preset, "participantes": part, "sugerido": sugerido, "plan": True,
+           "recordar_carpeta": c_origen != "reunion"}
     proyecto = {"vocab": vid, "texto": proyecto_txt(v), "proyecto": v["project"] if v else "",
                 "workstream": v["name"] if v else "", "origen": p_origen, "motivo": motivo}
     plan = {"nombre": {"valor": nombre, "origen": n_origen, "texto": n_txt}, "proyecto": proyecto,
