@@ -565,11 +565,11 @@ class ProtegidasTests(Base):
 
         class Lenta(FakeApp):
             def GetNamespace(s, name):
-                time.sleep(0.6)
+                time.sleep(0.8)
                 return super().GetNamespace(name)
 
         with mock.patch.object(calendario, "LENTO", 0.3):
-            m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: Lenta([it], []), fmt=DIA, timeout=0.7)
+            m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: Lenta([it], []), fmt=DIA, timeout=1.2)
             esperar_hilo_com()
         self.assertEqual(m["subject"], "Comité")
         self.assertEqual(calendario.ASISTENTES["estado"], "si")

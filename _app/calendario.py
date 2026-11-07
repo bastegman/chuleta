@@ -748,7 +748,9 @@ def _leer_caja(caja, timeout):
     if cands is None:  # sin lo básico: colgado conectando o leyendo
         return None, _sin_respuesta(timeout)
     if not caja["fin"] and caja.get("fase") == "protegidas":  # los asistentes no llegan
-        if time.monotonic() - caja.get("fase_desde", 0.0) >= LENTO:  # tanto, solo con el aviso de Outlook delante
+        # tanto (LENTO es lo que se ha esperado aquí; 50 ms de margen: en Windows el reloj va a saltos de ~16 ms y la
+        # espera puede volver un poco antes), solo con el aviso de Outlook delante
+        if time.monotonic() - caja.get("fase_desde", 0.0) >= LENTO - 0.05:
             _marcar_asistentes("pregunta")
         i = caja.get("elegida")
         cands = [dict(m, blocked=sorted(set(m["blocked"]) | {"asistentes"})) if j == i else m
