@@ -115,6 +115,45 @@ class ShimNpmTests(unittest.TestCase):
         self.assertEqual(seen[1][seen[1].index("--tools") + 1], "")
 
 
+class ErroresDeClaudeTests(unittest.TestCase):
+    """Qué frase ve el usuario cuando Claude Code está pero falla: los textos imitan salidas de Claude Code (en
+    windows-latest, sin sesión, la de verdad ya acaba en «sin sesión iniciada»: claude-windows.yml)."""
+
+    def msg(self, text, json_result=False):
+        ag = engines.ClaudeCode()
+        out = json.dumps({"type": "result", "is_error": True, "result": text}) if json_result else ""
+        with self.assertRaises(engines.EngineError) as c:
+            ag._parse(1, out, "" if json_result else text, "sonnet")
+        return str(c.exception)
+
+    def test_proxy_407_no_es_sin_sesion(self):
+        m = self.msg("API Error: 407 Proxy Authentication Required", json_result=True)
+        self.assertIn("no puede conectar con Anthropic desde esta red", m)
+        self.assertNotIn("sin sesión", m)
+
+    def test_red(self):
+        for t in ("API Error: Connection error. (unable to get local issuer certificate)",
+                  "API Error: Connection error. (getaddrinfo ENOTFOUND api.anthropic.com)",
+                  "Error: self signed certificate in certificate chain", "connect ETIMEDOUT 160.79.104.10:443"):
+            self.assertIn("no puede conectar con Anthropic desde esta red", self.msg(t), t)
+
+    def test_politica_de_empresa(self):
+        m = self.msg("Your organization has disabled Claude Code for this account.", json_result=True)
+        self.assertTrue(m.startswith("Tu organización no deja usar Claude Code con esta cuenta"), m)
+
+    def test_git_bash(self):
+        m = self.msg("Claude Code on Windows requires git-bash (https://git-scm.com/downloads/win).")
+        self.assertIn("necesita Git para Windows (Git Bash)", m)
+
+    def test_sin_sesion_sigue_igual(self):
+        for t in ("Invalid API key · Please run /login", "Not logged in · Please run /login",
+                  "OAuth token has expired. Please obtain a new token or refresh your existing token."):
+            self.assertIn("sin sesión iniciada", self.msg(t, json_result=True), t)
+
+    def test_lo_demas_tal_cual(self):
+        self.assertEqual(self.msg("algo raro"), "Claude Code ha fallado (código 1): algo raro")
+
+
 class EntornoTests(unittest.TestCase):
     def test_sin_trafico_no_esencial_y_sin_claves(self):
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-no", "OTRA": "1"}):

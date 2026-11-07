@@ -1956,6 +1956,14 @@ class ClaudeCode(AgenteLocal):
     MODELO = "sonnet"
     SESION = ("login", "log in", "not authenticated", "authentication required", "sign in", "auth token", "oauth",
               "invalid api key", "sesión")
+    # antes que SESION (07/11/2026): un proxy que pide credenciales («407 Proxy Authentication Required») contiene
+    # «authentication required» y se decia «sin sesion iniciada»: volver a iniciar sesion no lo arregla
+    RED = ("proxy", " 407", "connection error", "connection refused", "econnrefused", "econnreset", "etimedout",
+           "enotfound", "getaddrinfo", "certificate", "self signed", "self-signed", "unable to get local issuer",
+           "unable to verify", "network error", "socket hang up")
+    POLITICA = ("organization has disabled", "disabled by your organization", "not allowed by your organization",
+                "your organization does not allow", "blocked by your organization", "organization policy")
+    GIT_BASH = ("git-bash", "git bash")
 
     def _dir(self):
         return self.settings_dir or tempfile.gettempdir()
@@ -2033,6 +2041,17 @@ class ClaudeCode(AgenteLocal):
         """Mensaje para Ajustes. text: solo stderr o el texto del resultado (nunca la salida entera, que lleva la
         reunion y podria contener cualquier palabra)."""
         low = text.lower()
+        detalle = " ".join(text.split())[:160]
+        if any(k in low for k in self.POLITICA):
+            return (f"Tu organización no deja usar {self.label} con esta cuenta ({detalle}). Prueba con tu cuenta "
+                    "personal o pide acceso a tu IT; luego vuelve a pulsar «Comprobar».")
+        if any(k in low for k in self.RED):
+            return (f"{self.label} no puede conectar con Anthropic desde esta red ({detalle}). En la red de una "
+                    "empresa suele ser el proxy: prueba con otra red o pide a tu IT que permita api.anthropic.com y "
+                    "claude.ai; luego vuelve a pulsar «Comprobar».")
+        if any(k in low for k in self.GIT_BASH):
+            return (f"{self.label} necesita Git para Windows (Git Bash) en este PC ({detalle}). Instálalo desde "
+                    "git-scm.com y vuelve a pulsar «Comprobar».")
         if any(k in low for k in self.SESION):
             return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
                     "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")

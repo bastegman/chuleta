@@ -22,6 +22,9 @@ Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1
   con «&» o «%» rompía la orden («'100%' is not recognized…», medido en Windows).
 - «Comprobar» enseña los segundos mientras espera (y avisa de que la primera vez puede tardar uno o dos minutos) y deja en
   `server.log` lo que tardó cada paso: `--version`, la petición mínima y el total.
+- Cuando Claude Code está pero falla, la frase dice qué es: la red o el proxy de la empresa (un proxy que pedía
+  credenciales, «407 Proxy Authentication Required», se tomaba por «sin sesión iniciada» y volver a iniciar sesión no lo
+  arreglaba), una organización que no deja usarlo con esa cuenta, o que falta Git para Windows. Sin sesión, como antes.
 - Desarrollo y CI: `claude-windows.yml` instala Claude Code de verdad en Windows (instalador nativo y npm en una carpeta
   con espacios, «&» y «%»), sin sesión iniciada, con la app abierta desde antes, y mide cada llamada en frío y en
   caliente.
