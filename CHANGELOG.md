@@ -10,6 +10,34 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Vocabulario desde una carpeta conectada (07/11/2026)
+Lo que pidió: «me gustaría poder conectar a una carpeta, no tener que pegarlo o escribirlo ahí mismo» (msg 1148).
+- **«Usar las listas de una carpeta…»** (Ajustes → Vocabulario; en ● Grabar, al final del selector de proyecto y, sin
+  listas, como botón): eliges la carpeta donde ya tienes tus listas y la app las lee de allí **en vivo**, sin copiarlas.
+  Lo que cambies en esos `.txt` vale desde la siguiente grabación (en directo, desde el siguiente trozo). Ajustes
+  enseña cada carpeta con cuántas listas da, «Abrir» y «quitar» (no borra nada).
+- Valen tres formas: `.txt` sueltos en la carpeta (el proyecto es el nombre de la carpeta; si se llama `Vocabulario`,
+  el de la de encima), `<carpeta>\Vocabulario\*.txt` y `<carpeta>\<Proyecto>\Vocabulario\*.txt`. Cada `.txt` es un
+  tema, con los términos separados por comas, punto y coma o **uno por línea**.
+- Se saltan, con aviso en Ajustes: un `.txt` «solo en línea» de OneDrive (leerlo lo descargaría y, sin conexión, podía
+  dejar esperando) y uno de más de 64 KB (no es una lista). Sin aviso: los ocultos (`._x.txt` de un USB de Mac) y las
+  transcripciones de una grabación de al lado.
+- No se puede conectar la carpeta de la app ni una de dentro de una vinculada (sus listas ya se leen solas), una que
+  contenga la de la app o tu usuario, una de destinos de salida ni una con grabaciones; tampoco se puede elegir una
+  carpeta conectada como destino de salida (los documentos se tomarían por listas).
+- La carpeta conectada no sale en el árbol de reuniones ni en «Carpeta de destino»: ahí no se graba ni se mueve nada.
+  Editar o crear un tema de un proyecto conectado escribe en esa carpeta (es tuya); el editor lo dice.
+- Las listas se leen también si las guardó el Bloc de notas antiguo o Excel (`cp1252`, «Texto Unicode» en UTF-16,
+  columnas separadas por tabuladores): antes «José» llegaba a Whisper como «Jos�». Vale para todas las listas.
+- Al guardar un tema de un proyecto que se llama igual que otro, se queda en su carpeta (antes se mudaba a la del
+  primero).
+- «Importar listas de otra carpeta…» se llama ahora **«Copiar listas de otra carpeta…»** y hace lo mismo (copia a la
+  carpeta de la app, sin pisar).
+- API: `POST /api/vocab/link/add {path, name?}` y `/api/vocab/link/remove {rel}`; `/api/vocab` lleva `carpetas` (cada
+  una con `listas` y `avisos`) y cada lista conectada, `conectada`; `/api/config` lleva `vocab_links`. Las listas
+  conectadas tienen ids `:v<id>/…`, que `safe()` no resuelve. Ajuste nuevo `vocab_links`, que se rescata de un
+  `settings.json` roto como las carpetas vinculadas.
+
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
 - La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja

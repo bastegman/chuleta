@@ -2367,27 +2367,35 @@ function openSettings(opts) {
     $('#lnAdd', d).onclick = async () => { if (await linkFolder()) drawLinks(); };
     // la confirmacion usa el mismo hueco que Ajustes: al responder, se vuelve a Ajustes
     d.addEventListener('click', async e => { const u = e.target.closest('[data-unlink]'); if (u) { await unlinkFolder(u.dataset.unlink); openSettings(); } });
-    loadVocab(S.config.language ?? 'es-en').then(() => {
+    const drawVocab = () => {
       const box = $('#sVocab', d);
       if (!box) return;
       // agrupado por proyecto: cada uno con sus temas y un boton para anadir otro
       const groups = {};
       S.vocab.forEach(v => (groups[v.project] ||= []).push(v));
-      box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>${I.folder}${esc(p)}</b>
+      const conectar = typeof vocabConectar === 'function';
+      box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>${I.folder}${esc(p)}</b>${vs.every(v => v.conectada) ? ' <span class="muted" style="font-weight:400" title="Sus listas se leen de una carpeta conectada (abajo)">· carpeta conectada</span>' : ''}
           <button class="btn ghost sm" type="button" data-vnew="${esc(p)}">${I.plus}Tema</button>
-          <button class="btn ghost sm" type="button" data-vdir="${esc(vs[0].id.split('/').slice(0, -1).join('/'))}" title="Abrir su carpeta Vocabulario">${I.ext}Carpeta</button></div>
+          <button class="btn ghost sm" type="button" data-vdir="${esc(vs[0].id.split('/').slice(0, -1).join('/'))}" title="Abrir su carpeta de listas">${I.ext}Carpeta</button></div>
         <table class="vtable">${vs.map(v => `<tr><td>${esc(v.name)}</td><td>${vocabFit(v)}</td>
           <td><button class="btn ghost sm" type="button" data-vedit="${esc(v.id)}">editar</button></td></tr>`).join('')}</table>`).join('')}
         ${typeof perfilVocabEmptyHtml === 'function' && !S.vocab.length ? perfilVocabEmptyHtml() : ''}
-        <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button>${typeof perfilImportar === 'function' ? `<button class="btn sm" type="button" id="sVocabImport">${I.folder}Importar listas de otra carpeta…</button>` : ''}</div>
-        <div class="help">Cada tema es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>`;
-    });
+        <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button>${conectar ? `<button class="btn sm" type="button" id="sVocabConectar" title="Elige la carpeta donde tienes tus listas: se leen al grabar, sin copiarlas">${I.folder}Usar las listas de una carpeta…</button>` : ''}${typeof perfilImportar === 'function' ? `<button class="btn ghost sm" type="button" id="sVocabImport" title="${esc(typeof VOCAB_COPIAR_TITLE === 'string' ? VOCAB_COPIAR_TITLE : '')}">Copiar listas de otra carpeta…</button>` : ''}</div>
+        <div class="help">Cada tema es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>
+        ${conectar ? `<label>Carpetas con tus listas <span class="muted" style="font-weight:400">· se leen en vivo al grabar: nada se copia</span></label><div id="sVocabCarpetas">${vocabCarpetasHtml(S.vocabCarpetas)}</div>` : ''}`;
+    };
+    loadVocab(S.config.language ?? 'es-en').then(drawVocab);
+    const redrawVocab = () => loadVocab(S.config.language ?? 'es-en').then(drawVocab);
     d.addEventListener('click', e => {
       const ed = e.target.closest('[data-vedit]'), nw = e.target.closest('[data-vnew]'), r = e.target.closest('[data-vdir]');
+      const vo = e.target.closest('[data-vopen]'), vu = e.target.closest('[data-vunlink]');
       if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', openSettings);
+      if (e.target.closest('#sVocabConectar') && typeof vocabConectar === 'function') vocabConectar(redrawVocab);
+      if (vu && typeof vocabDesconectar === 'function') vocabDesconectar(vu.dataset.vunlink, redrawVocab);
       if (ed) openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit));
       if (nw) openVocabEditor(null, openSettings, nw.dataset.vnew);
-      if (r) api('/api/reveal', { path: r.dataset.vdir }).catch(err => toast(esc(err.message), 'err'));
+      const rev = r ? r.dataset.vdir : vo ? vo.dataset.vopen : null;
+      if (rev != null) api('/api/reveal', { path: rev }).catch(err => toast(esc(err.message), 'err'));
     });
     $('#xExport', d).onclick = async () => {
       const res = $('#xRes', d);

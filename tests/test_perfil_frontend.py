@@ -53,10 +53,12 @@ class PerfilCargaTests(unittest.TestCase):
 
     def test_textos_y_sin_nada_externo(self):
         js = read("perfil.js")
-        for s in ("Guardar como perfil por defecto", "Importar listas de otra carpeta…", "Sin vocabulario", "Nuevo…",
+        # «Importar listas…» pasó a «Copiar listas…» con las carpetas conectadas (backlog 10, msg 1148)
+        for s in ("Guardar como perfil por defecto", "Copiar listas de otra carpeta…", "Sin vocabulario", "Nuevo…",
+                  "Usar las listas de una carpeta…", "/api/vocab/link/add", "/api/vocab/link/remove",
                   "Perfil de reunión", "Destinos de salida", "Añadir carpeta…", "subcarpeta por proyecto",
                   "Markdown (.md)", "Texto (.txt)", "Word (.docx)", "/api/perfil", "/api/vocab/import",
-                  "/api/link/pick", "Vocabulario\\\\&lt;Tema&gt;.txt", "junto a <code>_app</code>", "Por defecto · ",
+                  "/api/link/pick", "<Proyecto>\\\\Vocabulario\\\\*.txt", "uno por línea", "Por defecto · ",
                   "Automática · la última usada", "Automático · el que sugiera la reunión", "Contexto",
                   "el directo lo usa desde el siguiente trozo", "${esc(APP_NAME)}"):
             self.assertIn(s, js, s)
@@ -68,8 +70,10 @@ class PerfilCargaTests(unittest.TestCase):
                    "perfilTemaOptions", "perfilTemaHtml", "perfilBindTema", "perfilCamposHtml", "perfilBindRec",
                    "perfilRecExtra", "perfilImportar", "perfilImportText", "perfilPropsHtml", "perfilLiveHtml",
                    "perfilSavedText", "perfilFieldsetHtml", "perfilOutsHtml", "bindPerfilOuts", "bindPerfilSettings",
-                   "collectPerfilSettings", "perfilVocabEmptyHtml"):
+                   "collectPerfilSettings", "perfilVocabEmptyHtml", "vocabConectar", "vocabConectadaText",
+                   "vocabDesconectar", "vocabAvisoText", "vocabCarpetasHtml"):
             self.assertRegex(js, re.compile(rf"^(async )?function {fn}\(", re.M), fn)
+        self.assertNotIn("Importar listas de otra carpeta", js + read("app.js"))
 
 
 @unittest.skipUnless(shutil.which("node"), "node no instalado")
@@ -80,7 +84,9 @@ class PerfilHelpersTests(unittest.TestCase):
         defs = js_defs(app, ["esc", "nfc"]) + "\n" + langs + "\nconst S = {selLang: null, config: {language: 'pt'}};\n"
         defs += js_defs(read("perfil.js"), ["perfilLangLabel", "perfilLangOptions", "perfilLangOf", "perfilResolve",
                                             "perfilGroups", "perfilTemaOptions", "perfilImportText", "perfilSavedText",
-                                            "perfilOutsHtml", "PERFIL_FORMATS"])
+                                            "perfilOutsHtml", "PERFIL_FORMATS", "vocabConectadaText", "vocabAvisoText",
+                                            "vocabCarpetasHtml"])
+        defs = "const I = {folder: '[F]', ext: '[E]', check: '[C]'}; const APP_NAME = 'Chuleta';\n" + defs
         r = subprocess.run(["node", "-e", defs + "\n" + code], capture_output=True, text=True, encoding="utf-8",
                            timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -145,6 +151,28 @@ console.log(perfilOutsHtml([]));""")
         self.assertEqual(lines[4], "Contexto guardado · se usará al transcribirla")
         self.assertEqual(lines[5], "2 true true true true")
         self.assertIn("Ninguno", lines[6])
+
+    def test_carpetas_conectadas(self):
+        out = self.run_js("""
+console.log(vocabConectadaText({name: 'Listas <W>', listas: 3, avisos: [], ya: false}));
+console.log(vocabConectadaText({name: 'L', listas: 1, avisos: [{lista: 'a.txt', motivo: 'nube'}], ya: true}));
+console.log(vocabAvisoText({lista: 'Sub\\\\Infra.txt', motivo: 'nube'}));
+console.log(vocabAvisoText({lista: 'Glosario.txt', motivo: 'grande', kb: 120}));
+const h = vocabCarpetasHtml([{rel: ':vabc123', name: 'Listas', path: 'C:\\\\OneDrive\\\\Listas', existe: true,
+  listas: 2, avisos: [{lista: 'G.txt', motivo: 'grande', kb: 70}]},
+  {rel: ':vdef456', name: 'Vieja', path: 'D:\\\\X', existe: false, listas: 0, avisos: []}]);
+console.log((h.match(/<tr>/g) || []).length, h.includes('data-vunlink=":vabc123"'), h.includes('data-vopen=":vabc123"'),
+  h.includes('data-vopen=":vdef456"'), h.includes('data-vunlink=":vdef456"'), h.includes('2 listas'),
+  h.includes('No se encuentra'), h.includes('pesa 70 KB'));
+console.log(vocabCarpetasHtml([]).includes('Ninguna'));""")
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "[C]Conectada «Listas &lt;W&gt;» · 3 listas · se leen al grabar, sin copiarlas")
+        self.assertEqual(lines[1], "«L» ya estaba conectada · 1 lista · 1 se salta: lo ves en Ajustes › Vocabulario")
+        self.assertIn("«Sub\\Infra.txt» está solo en OneDrive", lines[2])
+        self.assertIn("Mantener siempre en este dispositivo", lines[2])
+        self.assertEqual(lines[3], "«Glosario.txt» pesa 120 KB: no parece una lista (se leen hasta 64 KB)")
+        self.assertEqual(lines[4], "3 true true false true true true true")  # la que no se encuentra: sin «Abrir»
+        self.assertEqual(lines[5], "true")
 
 
 if __name__ == "__main__":
