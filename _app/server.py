@@ -3107,10 +3107,12 @@ DIAG_LINES = (
     "la app ya estaba abierta: se ensena su ventana",
     # doble apertura al arrancar (fix-doble-apertura): la segunda copia, la marca de instancia y la ventana en camino
     "la app ya estaba abierta: se enseña su ventana · pid {n}",
-    "la app ya se está abriendo en otra copia (arrancando): su ventana saldrá sola · pid {n}",
-    "la app ya se está abriendo en otra copia (libre): su ventana saldrá sola · pid {n}",
-    "la app ya se está abriendo en otra copia (otro): su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (arrancando): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (libre): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (otro): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (hermana): si se está abriendo, su ventana saldrá sola · pid {n}",
     "   aún se está abriendo: su ventana saldrá sola",
+    "   la otra copia: pid {n}, desde hace {n} s",
     "   no contesta a /api/mostrar: se abre en Edge desde aquí",
     "   /api/mostrar: {e}",
     "   Edge se ha abierto hace {n} s: no se abre otro",
@@ -5314,21 +5316,26 @@ def ui_url(token=None):
     return URL + (f"?t={token}" if token else "")
 
 
-UI_REOPEN_GAP = 15.0  # s en los que esta copia no abre otro Edge: el primero aun puede estar abriendose
-_UI_OPENED = [0.0]  # time.monotonic() de la ultima vez que esta copia abrio Edge (0: nunca)
+UI_REOPEN_GAP = 15.0  # s alrededor del Edge del arranque en los que no se abre otro: aun puede estar abriendose
+_UI_OPENED = {"inicio": 0.0, "ultimo": 0.0}  # time.monotonic() del Edge del arranque y del ultimo (0: nunca)
 _UI_LOCK = threading.Lock()
 
 
-def open_ui(token=None):
+def open_ui(token=None, inicio=False):
     """La interfaz en Edge (modo app, sin barra de direcciones) o, sin Edge, en el navegador por defecto. Es el
-    camino de siempre y el de reserva cuando no hay ventana propia (window.py). No repite en UI_REOPEN_GAP s: con
-    dos lanzamientos seguidos, el Edge del arranque y el del acceso directo serian dos ventanas. True si lo abre."""
+    camino de siempre y el de reserva cuando no hay ventana propia (window.py). Con dos lanzamientos seguidos, el Edge
+    del arranque (`inicio`) y el que pide el acceso directo serian dos ventanas: en UI_REOPEN_GAP s alrededor del
+    primero no se abre otro, en ningun orden. Despues, cada peticion abre el suyo (Edge cerrado: hay que volver a
+    abrirlo). True si lo abre."""
     with _UI_LOCK:
-        ahora, antes = time.monotonic(), _UI_OPENED[0]
+        ahora = time.monotonic()
+        antes = _UI_OPENED["ultimo" if inicio else "inicio"]
         if antes and ahora - antes < UI_REOPEN_GAP:
             log(f"   Edge se ha abierto hace {ahora - antes:.0f} s: no se abre otro")
             return False
-        _UI_OPENED[0] = ahora
+        _UI_OPENED["ultimo"] = ahora
+        if inicio:
+            _UI_OPENED["inicio"] = ahora
     url = ui_url(token)
     for exe in (r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
                 r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"):
@@ -5419,9 +5426,12 @@ def retire_other_version(token=None, wait=10.0):
     puerto (probe_running) o "grabando"."""
     token = read_token(DATA_DIR) if token is None else token
     try:
-        vieja = _local_request("api/ping", token).get("version") or "anterior al 02/11/2026"
+        ping = _local_request("api/ping", token)
     except Exception:
-        vieja = "desconocida"
+        ping = {}
+    if ping.get("version") == VERSION:  # entretanto el puerto lo ha tomado una copia de esta version: no se toca
+        return "app"
+    vieja, vieja_pid = ping.get("version") or ("anterior al 02/11/2026" if ping else "desconocida"), ping.get("pid")
     log(f"otra versión de {APP_NAME} ({vieja}) tiene el puerto {PORT}: se le pide que se cierre")
     try:
         if _local_request("api/rec/status", token).get("recording"):
@@ -5436,9 +5446,9 @@ def retire_other_version(token=None, wait=10.0):
     if _wait_port_free(wait / 2, token):
         log("   cerrada")
         return "libre"
-    if WINDOWS:
+    if WINDOWS and probe_running(token) != "app":  # si el puerto es ya de una copia de esta version, no se mata
         pid = _port_owner_pid(PORT)
-        if pid and pid != os.getpid() and _is_python_process(pid):
+        if pid and pid != os.getpid() and (not vieja_pid or pid == vieja_pid) and _is_python_process(pid):
             log(f"   no se ha cerrado: se termina su proceso (pid {pid})")
             try:
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
@@ -5492,6 +5502,9 @@ def ask_running_to_show(token=None):
 
 INSTANCE_FILE = "instancia-{port}.lock"
 _INSTANCE = []  # el descriptor del fichero bloqueado: abierto mientras viva el proceso (el sistema lo suelta al morir)
+_LOCK_BYTE = 1 << 30  # en Windows se bloquea este byte, lejos del contenido (pid y hora), que las demas copias leen
+INSTANCE_WAIT = 8.0  # s que una segunda copia espera a que la otra conteste o suelte la marca (si se esta cerrando)
+INSTANCE_STUCK = 180.0  # s con la marca sin contestar a partir de los que se avisa de que la otra copia no responde
 
 
 def _lock_once(path):
@@ -5504,7 +5517,8 @@ def _lock_once(path):
     try:
         if WINDOWS:
             import msvcrt
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # el primer byte (desde la posicion 0), sin esperar
+            os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)  # msvcrt.locking bloquea desde la posicion actual (sin esperar)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -5514,8 +5528,34 @@ def _lock_once(path):
             return False
         log(f"   marca de instancia: no se puede bloquear ({e})")
         return None
+    try:  # quien la tiene y desde cuando: lo lee una segunda copia para saber si esta se ha quedado colgada
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()} {int(time.time())}\n".encode("ascii"))
+    except OSError:
+        pass
     _INSTANCE[:] = [fd]
     return True
+
+
+def instance_holder(data_dir, port):
+    """(pid, segundos desde que tomo la marca) de la copia que la tiene, o (None, None) si no se sabe."""
+    try:
+        with open(os.path.join(data_dir, INSTANCE_FILE.format(port=port)), "rb") as f:
+            pid, t = f.read(64).decode("ascii").split()[:2]
+        return int(pid), max(0, int(time.time()) - int(t))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None, None
+
+
+def release_instance():
+    """Suelta la marca antes de tiempo (fatal: esta copia no va a arrancar; que la siguiente no la espere)."""
+    for fd in _INSTANCE:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _INSTANCE[:] = []
 
 
 def instance_lock(data_dir, port, wait=0.0):
@@ -5538,12 +5578,49 @@ def instance_lock(data_dir, port, wait=0.0):
         time.sleep(0.25)
 
 
+def wait_instance(estado, wait=None):
+    """Otra copia tiene la marca y no contesta como la app (`estado`): arranca (doble clic en el acceso directo), se
+    esta cerrando (Apagar y volver a abrir enseguida), tarda en contestar (abierta pero ocupada) o, en una
+    actualizacion, esta retirando la version anterior ("hermana"). Hasta INSTANCE_WAIT s a que conteste (se le pedira
+    la ventana) o suelte la marca (entonces arranca esta). Devuelve (instancia, estado) como en main()."""
+    end = time.monotonic() + (INSTANCE_WAIT if wait is None else wait)
+    while time.monotonic() < end:
+        time.sleep(0.5)
+        instancia = instance_lock(DATA_DIR, PORT)
+        if instancia is not False:  # la ha soltado (o ya no se puede comprobar): esta copia sigue como un arranque
+            return instancia, probe_running()
+        estado = probe_running(timeout=1.5)
+        if estado == "app":
+            break
+    return False, estado
+
+
+def _holder_is_port_owner():
+    """La marca la tiene quien contesta en el puerto (su /api/ping lleva su pid desde el 07/11/2026). Si no (la otra
+    version es anterior a la marca), la tiene una copia hermana de esta version."""
+    pid, _ = instance_holder(DATA_DIR, PORT)
+    try:
+        return bool(pid) and pid == _local_request("api/ping", read_token(DATA_DIR)).get("pid")
+    except Exception:
+        return False
+
+
 def show_running(no_browser, estado="app"):
     """Esta copia sobra (la app ya corre, o se esta abriendo en otra copia): le pide su ventana y termina. Sin
     respuesta de la otra (`estado` distinto de "app": aun no sirve), nada: su ventana saldra sola al terminar de
-    arrancar. Si contesta pero no ensena nada (no deberia pasar con la misma version), Edge desde aqui, como antes."""
+    arrancar; si lleva mas de INSTANCE_STUCK s sin contestar, se avisa de que no responde. Si contesta pero no ensena
+    nada (no deberia pasar con la misma version), Edge desde aqui, como antes."""
     if estado != "app":
-        log(f"la app ya se está abriendo en otra copia ({estado}): su ventana saldrá sola · pid {os.getpid()}")
+        log(f"otra copia tiene la marca y no contesta ({estado}): si se está abriendo, su ventana saldrá sola · pid "
+            f"{os.getpid()}")
+        pid, hace = instance_holder(DATA_DIR, PORT)
+        if pid:
+            log(f"   la otra copia: pid {pid}, desde hace {hace} s")
+        if pid and hace > INSTANCE_STUCK:
+            alert(f"{APP_NAME} no responde",
+                  f"{APP_NAME} ya está abierta (pid {pid}, desde hace {hace // 60} min) pero no contesta.\n\nSi su "
+                  f"ventana no aparece, ciérrala en el Administrador de tareas (pythonw.exe, pid {pid}) y vuelve a "
+                  f"abrir {APP_NAME}.")
         return
     log(f"la app ya estaba abierta: se enseña su ventana · pid {os.getpid()}")
     if no_browser:
@@ -5658,6 +5735,7 @@ def arg(name, default=None):
 
 def fatal(text):
     """Error de arranque: al log, a la consola si la hay y, sin consola (pythonw.exe), un aviso de Windows."""
+    release_instance()  # mientras el aviso esta abierto, otro lanzamiento no debe esperar a esta copia
     alert(f"{APP_NAME} no ha podido arrancar", text)
     sys.exit(1)
 
@@ -5679,6 +5757,10 @@ def main():
     # ventana tarda) lo sabe al instante, aunque la primera copia aun no conteste
     instancia = instance_lock(DATA_DIR, PORT)
     estado = probe_running()
+    if instancia is False and estado == "otra_version" and not _holder_is_port_owner():
+        estado = "hermana"  # actualizacion con doble clic: la marca es de otra copia nueva, que retira la vieja
+    if instancia is False and estado not in ("app", "otra_version"):  # la otra copia arranca, se cierra o tarda
+        instancia, estado = wait_instance(estado)
     if estado == "otra_version":  # una version anterior seguia abierta (actualizacion en el sitio, acceso viejo)
         estado = retire_other_version()
         if estado == "grabando":
@@ -5747,7 +5829,7 @@ def main():
         else:
             log("no se pudo abrir la ventana propia (detalle arriba): se abre en Edge")
             WINDOW = None
-            open_ui()
+            open_ui(inicio=True)
         try:
             while True:  # el servidor sigue en su hilo; con consola, Ctrl+C sale
                 time.sleep(1)
@@ -5756,7 +5838,7 @@ def main():
         return
     WINDOW = None
     if not no_browser:
-        threading.Timer(0.3, open_ui).start()
+        threading.Timer(0.3, open_ui, kwargs={"inicio": True}).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

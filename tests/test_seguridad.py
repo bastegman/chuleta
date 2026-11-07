@@ -362,6 +362,7 @@ class FicheroDelTokenTests(unittest.TestCase):
 
     def test_open_ui_abre_la_url_con_token(self):
         with mock.patch.object(server.Handler, "token", "abc"), mock.patch.object(server, "URL", "http://h:1/"), \
+                mock.patch.object(server, "_UI_OPENED", {"inicio": 0.0, "ultimo": 0.0}), \
                 mock.patch.object(server.os.path, "exists", return_value=False), \
                 mock.patch.object(server.webbrowser, "open") as wb:
             server.open_ui()

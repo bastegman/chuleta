@@ -142,6 +142,19 @@ def open_ui(token=None):  # en vez de abrir Edge, se anota (con el pid de quien 
 
 
 server.open_ui = open_ui
+if os.environ.get("CHULETA_FALSO_PING_LENTO"):  # la app abierta pero ocupada: su primer /api/ping tarda
+    import threading
+    _get, _n, _lk = server.Handler.do_GET, [0], threading.Lock()
+
+    def do_GET(self):
+        if self.path.startswith("/api/ping"):
+            with _lk:
+                _n[0] += 1
+                primero = _n[0] == 1
+            if primero:
+                time.sleep(float(os.environ["CHULETA_FALSO_PING_LENTO"]))
+        return _get(self)
+    server.Handler.do_GET = do_GET
 if os.environ.get("CHULETA_FALSO_PORT_WAIT"):
     server.PORT_WAIT = float(os.environ["CHULETA_FALSO_PORT_WAIT"])
 sys.argv = [os.path.join(os.environ["CHULETA_FALSO_APP"], "server.py"), "--port", os.environ["CHULETA_FALSO_PUERTO"],
@@ -182,6 +195,19 @@ class Arranques:
         p.t0, p.out = time.time(), out
         self.procs.append(p)
         return p
+
+    def ocultar(self):
+        """POST /api/ocultar con el token, como la página al cerrar la ventana con la X."""
+        import json
+        import urllib.request
+        with open(os.path.join(self.datos, "sesion.token"), encoding="utf-8") as f:
+            token = f.read().strip()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/ocultar", data=b"{}", method="POST",
+                                     headers={"X-Chuleta-Token": token, "X-Audios": "1",
+                                              "Content-Type": "application/json"})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=10) as r:
+            return json.load(r)
 
     def eventos_de(self, que):
         try:
@@ -234,15 +260,17 @@ class DobleAperturaTests(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def escenario(self, nombre, retraso, tiempos, extra=None, segunda_vez=False):
+    def escenario(self, nombre, retraso, tiempos, extra=None, segunda_vez=False, ocultar=False, extra1=None):
         """Lanza la primera copia, espera `retraso` s y lanza la segunda. Devuelve lo que pasó."""
         a = Arranques(self.tmp, self.app_dir, self.fake_dir, **tiempos)
         r = {"nombre": nombre, "a": a}
         try:
-            p1 = a.lanzar(**(extra or {}))
+            p1 = a.lanzar(**dict(extra or {}, **(extra1 or {})))
             if segunda_vez:  # la ventana ya está abierta: el acceso directo la vuelve a enseñar
                 a.esperar(lambda: a.eventos_de("ventana"), 60)
                 time.sleep(1.0)
+                if ocultar:  # cerrada con la X: oculta, la app sigue en segundo plano
+                    r["ocultar"] = a.ocultar()
             time.sleep(retraso)
             p2 = a.lanzar(**(extra or {}))
             # una de las dos se queda (la primera, salvo si se lanzan a la vez) y la otra termina
@@ -257,6 +285,7 @@ class DobleAperturaTests(unittest.TestCase):
             r["ventanas"] = a.eventos_de("ventana")
             r["edge"] = a.eventos_de("edge")
             r["show"] = a.eventos_de("show")
+            r["hide"] = a.eventos_de("hide")
             r["log"] = a.log()
         finally:
             a.cerrar()
@@ -299,10 +328,17 @@ class DobleAperturaTests(unittest.TestCase):
             dict(nombre="la primera aún no sirve (importa pywebview)", retraso=1.0,
                  tiempos={"importar": 6, "crear": 1, "mostrar": 1}, extra={"chuleta_falso_port_wait": 3}),
             dict(nombre="ya abierta", retraso=0.0, tiempos={"crear": 0.5, "mostrar": 0.5}, segunda_vez=True),
+            # revisión independiente (P1-1): abierta, oculta con la X y su primer ping tarda más que el sondeo (1,5 s)
+            dict(nombre="ya abierta, oculta y ocupada", retraso=0.0, tiempos={"crear": 0.5, "mostrar": 0.5},
+                 segunda_vez=True, ocultar=True, extra1={"chuleta_falso_ping_lento": 2.5}),
         ])
         for r in res:
             with self.subTest(r["nombre"]):
-                self.comprobar(r, show=r["nombre"] == "ya abierta")
+                self.comprobar(r, show=r["nombre"].startswith("ya abierta"))
+                if "oculta" in r["nombre"]:
+                    self.assertEqual(r.get("ocultar"), {"ok": True})
+                    self.assertEqual(len(r["hide"]), 1)
+                    self.assertIn("ya estaba abierta", r["log"])
 
 
 # ----------------------------------------------------------------------------- la ventana «en camino» (window.py)
@@ -456,16 +492,38 @@ class VentanaEnCaminoTests(unittest.TestCase):
 
 
 class EdgeUnaVezTests(unittest.TestCase):
-    def test_open_ui_no_repite_en_unos_segundos(self):
-        with mock.patch.object(server, "_UI_OPENED", [0.0]), mock.patch.object(server.subprocess, "Popen") as popen, \
-                mock.patch.object(server.webbrowser, "open") as wb, mock.patch.object(server, "log") as log:
-            self.assertTrue(server.open_ui())
-            self.assertFalse(server.open_ui())  # el Edge del arranque y el del acceso directo: uno
-            self.assertEqual(popen.call_count + wb.call_count, 1)
-            self.assertIn("no se abre otro", log.call_args[0][0])
-            server._UI_OPENED[0] = time.monotonic() - server.UI_REOPEN_GAP - 1  # el usuario lo cerró hace rato
-            self.assertTrue(server.open_ui())
-            self.assertEqual(popen.call_count + wb.call_count, 2)
+    def abrir(self):
+        p = [mock.patch.object(server, "_UI_OPENED", {"inicio": 0.0, "ultimo": 0.0}),
+             mock.patch.object(server.subprocess, "Popen"), mock.patch.object(server.webbrowser, "open"),
+             mock.patch.object(server, "log")]
+        m = [x.start() for x in p]
+        for x in p:
+            self.addCleanup(x.stop)
+        self.abiertos = lambda: m[1].call_count + m[2].call_count
+        return m[3]
+
+    def test_el_edge_del_arranque_y_el_del_acceso_directo_son_uno(self):
+        log = self.abrir()
+        self.assertTrue(server.open_ui(inicio=True))
+        self.assertFalse(server.open_ui())  # el acceso directo mientras se abre
+        self.assertEqual(self.abiertos(), 1)
+        self.assertIn("no se abre otro", log.call_args[0][0])
+
+    def test_en_cualquier_orden(self):
+        self.abrir()
+        self.assertTrue(server.open_ui())  # /api/mostrar se atiende antes que el Timer del arranque
+        self.assertFalse(server.open_ui(inicio=True))
+        self.assertEqual(self.abiertos(), 1)
+
+    def test_despues_del_arranque_cada_peticion_abre_el_suyo(self):
+        """Revisión independiente (P2-2): Edge cerrado al rato y el acceso directo otra vez: tiene que abrirse."""
+        self.abrir()
+        self.assertTrue(server.open_ui(inicio=True))
+        server._UI_OPENED["inicio"] -= server.UI_REOPEN_GAP + 1
+        server._UI_OPENED["ultimo"] -= server.UI_REOPEN_GAP + 1
+        self.assertTrue(server.open_ui())
+        self.assertTrue(server.open_ui())  # aunque se acabe de abrir otro: no es el del arranque
+        self.assertEqual(self.abiertos(), 3)
 
 
 HOLD = ("import sys\n"
@@ -516,6 +574,21 @@ class InstanciaUnicaTests(unittest.TestCase):
         self.assertIs(server.instance_lock(self.data, 8765, wait=5), True)
         self.close_fds()
 
+    def test_quien_tiene_la_marca(self):
+        otra = self.hold(8765)
+        pid, hace = server.instance_holder(self.data, 8765)
+        self.assertEqual(pid, otra.pid)
+        self.assertLess(hace, 60)
+        self.assertEqual(server.instance_holder(self.data, 8799), (None, None))  # nadie
+
+    def test_fatal_suelta_la_marca(self):
+        """Mientras el aviso de error está abierto, otro lanzamiento no tiene que esperar a esta copia."""
+        self.assertIs(server.instance_lock(self.data, 8765), True)
+        with mock.patch.object(server, "alert"), self.assertRaises(SystemExit):
+            server.fatal("prueba")
+        self.assertEqual(server._INSTANCE, [])
+        self.hold(8765)  # otra copia la toma
+
     def test_sin_carpeta_de_datos_sigue_como_antes(self):
         fichero = os.path.join(self.data, "no-es-carpeta")
         with open(fichero, "w") as f:
@@ -524,23 +597,77 @@ class InstanciaUnicaTests(unittest.TestCase):
             self.assertIsNone(server.instance_lock(fichero, 8765))
 
 
+class RetirarSoloOtraVersionTests(unittest.TestCase):
+    """retire_other_version nunca apaga ni mata una copia de esta misma versión (en una actualización con doble clic,
+    el puerto puede pasar a la copia hermana entre la pregunta y la orden)."""
+
+    def retirar(self, ping, estado_puerto="otra_version", duenio=4242):
+        llamadas, corridos = [], []
+
+        def local(path, token, data=None, timeout=1.5):
+            llamadas.append(path)
+            if path == "api/ping":
+                return ping
+            if path == "api/rec/status":
+                return {"recording": False}
+            raise OSError("sin respuesta")
+        with mock.patch.object(server, "_local_request", local), mock.patch.object(server, "WINDOWS", True), \
+                mock.patch.object(server, "_wait_port_free", return_value=False), \
+                mock.patch.object(server, "probe_running", return_value=estado_puerto), \
+                mock.patch.object(server, "_port_owner_pid", return_value=duenio), \
+                mock.patch.object(server, "_is_python_process", return_value=True), \
+                mock.patch.object(server.subprocess, "run", lambda argv, **k: corridos.append(argv)), \
+                mock.patch.object(server, "log", lambda *a: None):
+            estado = server.retire_other_version(token="t", wait=0.2)
+        return estado, llamadas, corridos
+
+    def test_misma_version_no_se_toca(self):
+        estado, llamadas, corridos = self.retirar({"app": "audios", "version": server.VERSION, "pid": 4242})
+        self.assertEqual(estado, "app")
+        self.assertEqual(llamadas, ["api/ping"])  # ni rec/status ni apagar
+        self.assertEqual(corridos, [])
+
+    def test_no_mata_si_el_puerto_ya_es_de_esta_version(self):
+        estado, _, corridos = self.retirar({"app": "audios", "version": "vieja"}, estado_puerto="app")
+        self.assertEqual(corridos, [])
+
+    def test_no_mata_otro_pid_que_el_de_la_vieja(self):
+        _, _, corridos = self.retirar({"app": "audios", "version": "vieja", "pid": 1111}, duenio=4242)
+        self.assertEqual(corridos, [])
+        _, _, corridos = self.retirar({"app": "audios", "version": "vieja", "pid": 4242}, duenio=4242)
+        self.assertEqual([c[:3] for c in corridos], [["taskkill", "/PID", "4242"]])
+
+
 class SegundaCopiaTests(unittest.TestCase):
     """main() con la marca de instancia: lo que hace la copia que sobra según lo que vea en el puerto."""
 
-    def run_main(self, instancia, estados, retirar="libre", mostrar=None, reserve=None):
+    @staticmethod
+    def secuencia(valores):
+        """Devuelve los valores en orden y, acabados, repite el último (main() puede volver a preguntar)."""
+        it, ultimo = iter(valores), [valores[-1]]
+
+        def f(*a, **k):
+            ultimo[0] = next(it, ultimo[0])
+            return ultimo[0]
+        return f
+
+    def run_main(self, instancia, estados, retirar="libre", mostrar=None, reserve=None, holder=(None, None)):
         argv = ["server.py", "--port", "8797", "--data", tempfile.mkdtemp(prefix="chuleta-datos-")]
         srv, lines, m = mock.MagicMock(), [], {}
         patches = [mock.patch.object(sys, "argv", argv), mock.patch.object(server, "Window"),
                    mock.patch.object(server, "setup_logging"), mock.patch.object(server, "start_session"),
                    mock.patch.object(server, "set_app_id", return_value=False),
-                   mock.patch.object(server, "probe_running", side_effect=estados),
+                   mock.patch.object(server, "probe_running", side_effect=self.secuencia(estados)),
+                   mock.patch.object(server, "INSTANCE_WAIT", 1.2),
+                   mock.patch.object(server, "instance_holder", return_value=holder),
                    mock.patch.object(server, "PORT", server.PORT), mock.patch.object(server, "URL", server.URL),
                    mock.patch.object(server, "DATA_DIR", server.DATA_DIR), mock.patch.object(server, "SERVER", None),
                    mock.patch.object(server, "WINDOW", None), mock.patch.object(server.Handler, "app", None),
                    mock.patch.dict(os.environ), mock.patch.object(server, "log", lines.append)]
         nombrados = {"App": mock.patch.object(server, "App"),
                      "fatal": mock.patch.object(server, "fatal", side_effect=SystemExit(1)),
-                     "lock": mock.patch.object(server, "instance_lock", side_effect=instancia),
+                     "lock": mock.patch.object(server, "instance_lock", side_effect=self.secuencia(instancia)),
+                     "alert": mock.patch.object(server, "alert"),
                      "retire": mock.patch.object(server, "retire_other_version", return_value=retirar),
                      "reserve": mock.patch.object(server, "reserve_port", **(reserve or {"return_value": srv})),
                      "ask": mock.patch.object(server, "ask_running_to_show", return_value=mostrar),
@@ -558,14 +685,14 @@ class SegundaCopiaTests(unittest.TestCase):
         m["log"] = "\n".join(lines)
         return m
 
-    def test_otra_copia_arrancando_sale_sin_esperar_ni_avisar(self):
+    def test_otra_copia_que_no_contesta_sale_sin_avisar(self):
         for estado in ("arrancando", "libre", "otro"):
             with self.subTest(estado):
                 r = self.run_main([False], [estado])
                 self.assertFalse(r["exited"])
                 for k in ("App", "reserve", "ask", "open_ui", "fatal"):
                     r[k].assert_not_called()
-                self.assertIn(f"ya se está abriendo en otra copia ({estado}): su ventana saldrá sola", r["log"])
+                self.assertIn(f"no contesta ({estado}): si se está abriendo, su ventana saldrá sola", r["log"])
 
     def test_otra_copia_abierta_le_pide_la_ventana(self):
         r = self.run_main([False], ["app"], mostrar={"ok": True, "pending": True})
@@ -582,7 +709,8 @@ class SegundaCopiaTests(unittest.TestCase):
         r["App"].assert_not_called()
 
     def test_otra_version_con_marca_se_retira_y_se_arranca(self):
-        r = self.run_main([False, True], ["otra_version"], retirar="libre")
+        with mock.patch.object(server, "_holder_is_port_owner", return_value=True):  # la marca es de la vieja
+            r = self.run_main([False, True], ["otra_version"], retirar="libre")
         r["retire"].assert_called_once()
         self.assertEqual(r["lock"].call_args_list[1], mock.call(mock.ANY, mock.ANY, wait=5.0))
         r["reserve"].assert_called_once()
@@ -590,11 +718,50 @@ class SegundaCopiaTests(unittest.TestCase):
         r["ask"].assert_not_called()
 
     def test_otra_version_que_no_se_cierra_acaba_en_el_aviso_de_siempre(self):
-        r = self.run_main([False], ["otra_version"], retirar="otra_version", reserve={"side_effect": SystemExit(1)})
+        with mock.patch.object(server, "_holder_is_port_owner", return_value=True):
+            r = self.run_main([False], ["otra_version"], retirar="otra_version",
+                              reserve={"side_effect": SystemExit(1)})
         self.assertTrue(r["exited"])
         r["reserve"].assert_called_once()  # reserve_port da el aviso «otra versión que no se ha podido cerrar»
         r["App"].assert_not_called()
         r["ask"].assert_not_called()
+
+    def test_la_segunda_espera_a_que_la_primera_conteste_y_le_pide_la_ventana(self):
+        r = self.run_main([False], ["arrancando", "arrancando", "app"], mostrar={"ok": True, "pending": True})
+        r["ask"].assert_called_once()
+        r["App"].assert_not_called()
+        r["open_ui"].assert_not_called()
+
+    def test_apagar_y_volver_a_abrir_enseguida_arranca(self):
+        """La copia que se está cerrando aún tiene la marca (y ya no contesta): en cuanto la suelta, esta arranca."""
+        r = self.run_main([False, False, True], ["libre"])
+        r["reserve"].assert_called_once()
+        r["App"].assert_called_once()
+        r["ask"].assert_not_called()
+
+    def test_otra_copia_colgada_se_avisa(self):
+        r = self.run_main([False], ["arrancando"], holder=(4321, 600))
+        r["alert"].assert_called_once()
+        self.assertIn("pid 4321", r["alert"].call_args[0][1])
+        self.assertIn("la otra copia: pid 4321, desde hace 600 s", r["log"])
+        r["App"].assert_not_called()
+        r = self.run_main([False], ["arrancando"], holder=(4321, 20))  # arrancando de verdad: sin aviso
+        r["alert"].assert_not_called()
+
+    def test_actualizacion_con_doble_clic_la_retira_la_hermana(self):
+        """Revisión independiente (P2-3): la versión vieja no tiene la marca; la tiene la otra copia nueva, que la
+        está retirando. Esta no la retira otra vez: espera a que conteste y le pide la ventana."""
+        with mock.patch.object(server, "_holder_is_port_owner", return_value=False):
+            r = self.run_main([False], ["otra_version", "otra_version", "app"], mostrar={"ok": True, "pending": True})
+        r["retire"].assert_not_called()
+        r["ask"].assert_called_once()
+        r["App"].assert_not_called()
+
+    def test_la_version_vieja_con_la_marca_se_retira_sin_esperar(self):
+        with mock.patch.object(server, "_holder_is_port_owner", return_value=True):
+            r = self.run_main([False, True], ["otra_version"], retirar="libre")
+        r["retire"].assert_called_once()
+        r["App"].assert_called_once()
 
     def test_sin_marca_de_instancia_como_antes(self):
         r = self.run_main([None], ["arrancando"])
