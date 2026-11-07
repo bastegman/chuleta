@@ -1215,27 +1215,40 @@ VOCAB_MAX_BYTES = 64 * 1024  # una .txt de una carpeta conectada mas grande no e
 
 def _decode_list(raw):
     """Texto de una lista: UTF-8 (con o sin BOM), UTF-16 con BOM (Excel «Texto Unicode», el Bloc de notas «Unicode») o,
-    si no es UTF-8, la pagina de codigos de Windows (cp1252: el Bloc de notas antiguo y Excel «Texto delimitado por
-    tabulaciones»). Antes todo se leia como UTF-8 y «José» llegaba a Whisper como «Jos�»."""
+    linea a linea, la pagina de codigos de Windows donde no es UTF-8 (cp1252: el Bloc de notas antiguo y Excel «Texto
+    delimitado por tabulaciones»). Antes todo se leia como UTF-8 y «José» llegaba a Whisper como «Jos�». Por lineas:
+    un byte suelto (o un fichero leido a medio guardar) solo cambia su linea; con BOM de UTF-8, esa linea lleva «�»."""
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
         return raw.decode("utf-16", errors="replace")
-    try:
-        return raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return raw.decode("cp1252", errors="replace")
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    out = []
+    for line in (raw[3:] if bom else raw).split(b"\n"):
+        try:
+            out.append(line.decode("utf-8"))
+        except UnicodeDecodeError:
+            out.append(line.decode("utf-8", errors="replace") if bom else line.decode("cp1252", errors="replace"))
+    return "\n".join(out)
 
 
 def read_vocab(path):
     desc, terms = [], []
     with open(path, "rb") as f:
-        text = _decode_list(f.read()).replace("\r\n", "\n").replace("\r", "\n")
-    for line in text.split("\n"):
+        text = _decode_list(f.read())
+    for line in text.splitlines():
         s = line.strip()
         if s.startswith("#"):
             desc.append(s.lstrip("#").strip())
         elif s:
             terms += engines.split_terms(s.replace("\t", ","))  # columnas de Excel separadas por tabuladores
     return " ".join(d for d in desc if d), terms
+
+
+def _one_per_line(path):
+    """La lista esta escrita con un termino por linea (sin comas, puntos y comas ni tabuladores) y tiene mas de uno."""
+    with open(path, "rb") as f:
+        lines = [s.strip() for s in _decode_list(f.read()).splitlines()]
+    lines = [s for s in lines if s and not s.startswith("#")]
+    return len(lines) > 1 and not any(re.search(r"[,;\t]", s) for s in lines)
 
 
 def vocab_link_name(path):
@@ -1268,7 +1281,9 @@ def _vocab_link_ok(f, base, audio_stems, avisos):
     if st.st_size > VOCAB_MAX_BYTES:
         avisos.append({"lista": rel, "motivo": "grande", "kb": -(-st.st_size // 1024)})
         return False
-    return True
+    # un documento de reunion de los destinos de salida (lleva la marca «generado_por» arriba): un destino con
+    # «subcarpeta por proyecto» que contiene la carpeta conectada los escribiria ahi
+    return not salidas.is_ours(f.path, "txt")
 
 
 def _list_vocab(avisos=None):
@@ -1332,9 +1347,21 @@ def _list_vocab(avisos=None):
             loose = txts(base, ok)
         except OSError:
             continue  # la carpeta ya no esta (renombrada, sin VPN, disco desconectado): sin listas
+        first = len(out)
         for f in loose:
             add(f, unicodedata.normalize("NFC", l["name"]), base, dict(extra, _dir=base))
         walk(base, 0, max_depth=1, ok=ok, extra=extra)
+        # dentro de una misma carpeta conectada, un tema por proyecto: Infra.txt suelta y Vocabulario\Infra.txt se
+        # llamarian igual y, por nombres, no se sabria cual usar (find_vocab daria ninguna). Vale la primera
+        seen_names, keep = set(), out[:first]
+        for v in out[first:]:
+            key = (fold(v["project"]), fold(v["name"]))
+            if key in seen_names:
+                warn.append({"lista": os.path.relpath(v["_abs"], base).replace(os.sep, "\\"), "motivo": "repetida"})
+                continue
+            seen_names.add(key)
+            keep.append(v)
+        out[:] = keep
     return out
 
 
@@ -1428,7 +1455,11 @@ def find_vocab(project, name, id_=None, near=None):
     if len(named) == 1:
         return named[0]
     if named:  # varios proyectos con ese nombre: el que contiene la reunion
-        return _closest(named, near)
+        hit = _closest(named, near)
+        own = [v for v in named if not v.get("conectada")]
+        # si no, la de la app o la vinculada si solo hay una: conectar una carpeta con las mismas listas (las que se
+        # importaron de ella, por ejemplo) no deja sin vocabulario a las reuniones que ya lo tenian
+        return hit or (own[0] if len(own) == 1 and len(own) < len(named) else None)
     if id_ or not near or _project_known(project, vs):
         return None
     root = _norm_dir(ROOT)  # la raiz no cuenta: las contiene todas y sus listas solo valen por su nombre
@@ -1639,11 +1670,18 @@ def check_perfil(b, known=None):
         roots = [ROOT] + [l["path"] for l in LINKS.values()]  # donde viven las grabaciones: ahi no van documentos
         old = [d["path"] for d in salidas.destinos_de(known)]
         out["outputs"] = salidas.check_destinos(b["outputs"], APP_DIR, roots, old)
-        for o in out["outputs"]:  # ni en una carpeta de listas conectada: sus .txt se tomarian por listas
-            hit = next((l for l in list(VOCAB_LINKS.values()) if _inside(o["path"], l["path"])), None)
-            if hit and not any(_inside(o["path"], k) and _inside(k, o["path"]) for k in old):
-                raise ApiError(f"Esa carpeta es la de tus listas de vocabulario («{hit['name']}»): los documentos de "
-                               "las reuniones se tomarían por listas. Elige otra carpeta para los documentos.")
+        for o in out["outputs"]:  # ni en una carpeta de listas conectada ni encima de una (con «subcarpeta por
+            # proyecto», los documentos caerian dentro): sus .txt se tomarian por listas
+            if any(_inside(o["path"], k) and _inside(k, o["path"]) for k in old):
+                continue  # ya estaba guardado: se acepta (si no, no se podria guardar ningun otro ajuste)
+            for l in list(VOCAB_LINKS.values()):
+                if _inside(o["path"], l["path"]):
+                    raise ApiError(f"Esa carpeta es la de tus listas de vocabulario («{l['name']}»): los documentos "
+                                   "de las reuniones se tomarían por listas. Elige otra carpeta para los documentos.")
+                if _inside(l["path"], o["path"]):
+                    raise ApiError(f"Dentro de esa carpeta está la de tus listas de vocabulario («{l['name']}»): con "
+                                   "«subcarpeta por proyecto», los documentos de las reuniones podrían caer en ella. "
+                                   "Elige otra carpeta para los documentos.")
     if "language" in b:
         lang = str(b["language"] or "").strip().lower()
         if lang and not IDIOMA_RE.match(lang):
@@ -4076,9 +4114,12 @@ class App:
             if other != lid and (_inside(path, l["path"]) or _inside(l["path"], path)):
                 raise ApiError(f"Se solapa con la carpeta ya vinculada «{l['name']}».")
         if lid not in LINKS:
+            before = self._vocab_ids() if VOCAB_LINKS else {}  # una carpeta de listas conectada puede quedar dentro
             LINKS[lid] = {"name": clean_name(b.get("name") or os.path.basename(path)), "path": path}
             self._save_links()
             log(f"🔗 carpeta vinculada: {path}")
+            if before:
+                self._vocab_ids_moved(before)
         return {"rel": LINK + lid, "name": LINKS[lid]["name"]}
 
     def link_remove(self, b):
@@ -4091,8 +4132,11 @@ class App:
                    for j in self.jobs.snapshot())
         if busy or (self.rec and self.rec.alive() and rel_of(self.rec.path).startswith(LINK + lid)):
             raise ApiError("Se está grabando o transcribiendo algo de esa carpeta; espera a que termine.")
+        before = self._vocab_ids() if VOCAB_LINKS else {}
         l = LINKS.pop(lid)
         self._save_links()
+        if before:
+            self._vocab_ids_moved(before)
         self.settings.update(lambda d: d.update(
             favorites=[f for f in d.get("favorites", []) if not f["path"].startswith(LINK + lid)],
             rec_folder="" if (d.get("rec_folder") or "").startswith(LINK + lid) else d.get("rec_folder", ""),
@@ -4142,6 +4186,11 @@ class App:
             raise ApiError("Escribe al menos un término (separados por comas).")
         desc = " ".join((b.get("desc") or "").split())
         old = find_vocab(None, None, b["id"]) if b.get("id") else None
+        if old and old.get("conectada") and fold(old["project"]) != fold(project):
+            # sacarla de la carpeta conectada seria borrar alli el archivo del usuario (os.remove, sin papelera)
+            raise ApiError(f"«{old['name']}» está en tu carpeta de listas conectada: su proyecto («{old['project']}») "
+                           "sale del nombre de su carpeta y aquí no se cambia. Cámbialo en el Explorador, o crea el "
+                           "tema en el otro proyecto con «Nuevo».")
         same = next((v for v in list_vocab() if fold(v["project"]) == fold(project)), None)
         if old and fold(old["project"]) == fold(project):
             # mismo proyecto: en su misma carpeta (la conectada, si es de una). Antes se iba a la del primer proyecto
@@ -4153,8 +4202,17 @@ class App:
         moved = old and os.path.normcase(old["_abs"]) != os.path.normcase(path)
         if (not old or moved) and os.path.exists(path):
             raise ApiError(f"Ya hay un tema «{name}» en {project}.")
+        per_line = False
+        if old:
+            try:
+                if not moved and read_vocab(old["_abs"]) == (desc, terms):
+                    return {"id": old["id"]}  # sin cambios: no se reescribe (la lista puede ser un fichero suyo)
+                per_line = _one_per_line(old["_abs"])
+            except OSError:
+                pass
         os.makedirs(vdir, exist_ok=True)
-        save_text(path, (f"# {desc}\n" if desc else "") + ", ".join(terms) + "\n", "utf-8")
+        # como estaba escrita: un termino por linea si la lista era asi (las de las carpetas conectadas suelen serlo)
+        save_text(path, (f"# {desc}\n" if desc else "") + ("\n" if per_line else ", ").join(terms) + "\n", "utf-8")
         if moved:  # se ha renombrado (o cambiado de proyecto): fuera el archivo anterior
             os.remove(old["_abs"])
             # el perfil y el ultimo tema elegido lo siguen (si no, Ctrl+Alt+R se quedaba sin vocabulario)
@@ -4178,7 +4236,32 @@ class App:
                                                    "path": l["path"]}
 
     def _save_vocab_links(self):
-        self.settings.update(lambda d: d.update(vocab_links=[dict(l) for l in VOCAB_LINKS.values()]))
+        self.settings.update(lambda d: d.update(vocab_links=[dict(l) for l in list(VOCAB_LINKS.values())]))
+
+    @staticmethod
+    def _vocab_ids():
+        """El id de cada lista por su ruta: para seguir a las que cambian de id al vincular o desvincular carpetas."""
+        try:
+            return {os.path.normcase(v["_abs"]): v["id"] for v in list_vocab()}
+        except OSError:
+            return {}
+
+    def _vocab_ids_moved(self, before):
+        """Listas que han cambiado de id (una carpeta conectada que queda dentro de una vinculada, o al reves): el tema
+        fijo del perfil, el ultimo elegido y el de cada reunion las siguen. Si no, Ctrl+Alt+R grababa sin vocabulario
+        (el id guardado ya no era el de ninguna lista)."""
+        after = self._vocab_ids()
+        pares = [(old, after[k]) for k, old in before.items() if k in after and after[k] != old]
+        if not pares:
+            return
+
+        def upd(d):
+            for old, new in pares:
+                settings_moved(d, old, new)
+        self.settings.update(upd)
+        for old, new in pares:
+            temas().moved(old, new, folder=True)  # solo cambian los valores: ninguna reunion tiene esa ruta
+        log(f"   {len(pares)} listas de vocabulario con ruta interna nueva: el perfil y los temas las siguen")
 
     @staticmethod
     def _vocab_links_public():
@@ -5513,16 +5596,36 @@ class App:
         return {"path": rel_of(out), "ext": ".hablantes.txt"}
 
     def export_package(self, b):
+        import tempfile
         dest = os.path.join(desktop_dir(), f"{APP_NAME} - instalador.zip")
-        vocab = []
-        if b.get("vocab"):  # las de carpetas vinculadas (":id/…") van como <raiz>/<proyecto>/Vocabulario/<tema>.txt
-            vocab = [(v["_abs"], PKG_ROOT + "/" + (v["id"] if not v["id"].startswith(LINK)
-                                                   else f"{v['project']}/Vocabulario/{v['name']}.txt"))
-                     for v in list_vocab()]
+        vocab, seen, tmp = [], set(), None
+        # las de carpetas vinculadas o conectadas (":id/…", ":v<id>/…"), como <raiz>/<proyecto>/Vocabulario/<tema>.txt
+        for v in (list_vocab() if b.get("vocab") else []):
+            arc = PKG_ROOT + "/" + (v["id"] if not v["id"].startswith(LINK)
+                                    else f"{v['project']}/Vocabulario/{v['name']}.txt")
+            if arc.lower() in seen:  # dos listas con el mismo proyecto y tema: una sola en el zip (la primera)
+                continue
+            src = v["_abs"]
+            try:
+                with open(src, "rb") as f:
+                    raw = f.read()
+                raw.decode("utf-8")
+            except UnicodeDecodeError:  # cp1252 o UTF-16 (de una carpeta conectada): en el zip, en UTF-8
+                tmp = tmp or tempfile.mkdtemp(prefix="chuleta-listas-")
+                src = os.path.join(tmp, f"{len(vocab)}.txt")
+                with open(src, "w", encoding="utf-8") as f:
+                    f.write(_decode_list(raw))
+            except OSError:
+                continue
+            seen.add(arc.lower())
+            vocab.append((src, arc))
         try:
             n = build_package(dest, vocab)
         except OSError as e:
             raise ApiError(f"No se pudo crear el paquete: {e}")
+        finally:
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
         if WINDOWS:
             subprocess.Popen(f'explorer /select,"{dest}"')
         return {"ok": True, "path": dest, "files": n, "size": os.path.getsize(dest), "vocab": len(vocab)}

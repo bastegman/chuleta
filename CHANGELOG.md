@@ -26,9 +26,20 @@ Lo que pidió: «me gustaría poder conectar a una carpeta, no tener que pegarlo
   contenga la de la app o tu usuario, una de destinos de salida ni una con grabaciones; tampoco se puede elegir una
   carpeta conectada como destino de salida (los documentos se tomarían por listas).
 - La carpeta conectada no sale en el árbol de reuniones ni en «Carpeta de destino»: ahí no se graba ni se mueve nada.
-  Editar o crear un tema de un proyecto conectado escribe en esa carpeta (es tuya); el editor lo dice.
+  Editar o crear un tema de un proyecto conectado escribe en esa carpeta (es tuya); el editor lo dice. Guardar sin
+  cambios no reescribe el archivo, y una lista con un término por línea se guarda igual. El proyecto de una lista
+  conectada no se cambia desde la app (sale del nombre de su carpeta): antes eso la sacaba de tu carpeta.
+- Tampoco cuentan como listas los documentos de los destinos de salida (llevan la marca `generado_por`), ni un tema
+  repetido dentro de la misma carpeta conectada (`Infra.txt` suelta y `Vocabulario\Infra.txt`: vale la primera, con
+  aviso). Un destino de salida no puede contener una carpeta conectada.
+- Si una lista conectada se llama igual que una de la app (las que importaste de esa carpeta, por ejemplo), las
+  reuniones que ya usaban la de la app la siguen usando.
+- Si vinculas (o desvinculas) la carpeta que contiene una conectada, el tema fijo del perfil, el último elegido y el de
+  cada reunión siguen a sus listas: antes Ctrl+Alt+R se quedaba sin vocabulario.
 - Las listas se leen también si las guardó el Bloc de notas antiguo o Excel (`cp1252`, «Texto Unicode» en UTF-16,
-  columnas separadas por tabuladores): antes «José» llegaba a Whisper como «Jos�». Vale para todas las listas.
+  columnas separadas por tabuladores): antes «José» llegaba a Whisper como «Jos�». Vale para todas las listas, y línea
+  a línea: un carácter suelto en otra codificación solo cambia su línea. En el paquete para otro PC van en UTF-8 y sin
+  temas repetidos.
 - Al guardar un tema de un proyecto que se llama igual que otro, se queda en su carpeta (antes se mudaba a la del
   primero).
 - «Importar listas de otra carpeta…» se llama ahora **«Copiar listas de otra carpeta…»** y hace lo mismo (copia a la

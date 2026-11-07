@@ -120,8 +120,8 @@ class IdsTests(CarpetaTests):
     def test_ids_con_prefijo_propio_y_fuera_de_safe(self):
         write(os.path.join(self.ext, "Infra.txt"), "VPN\n")
         rel = self.connect()
-        self.assertTrue(rel.startswith(":v"))
-        self.assertNotIn(rel[1:], server.LINKS)  # un id de LINKS es hexadecimal: nunca «v…»
+        self.assertRegex(rel, r"^:v[0-9a-f]{6}$")
+        self.assertRegex(server.link_id(self.ext), r"^[0-9a-f]{6}$")  # el de LINKS es hexadecimal: nunca «v…»
         p = os.path.join(self.ext, "Infra.txt")
         self.assertEqual(server.rel_of(p), rel + "/Infra.txt")
         self.assertEqual(server.vocab_link_path(rel + "/Infra.txt"), p)
@@ -444,6 +444,135 @@ class CopiarSigueCopiandoTests(CarpetaTests):
         self.assertEqual(r, {"copiadas": 1, "omitidas": 0, "proyectos": ["Proyecto Gamma"]})
         self.assertTrue(os.path.isfile(os.path.join(self.root, "Proyecto Gamma", "Vocabulario", "Legal.txt")))
         self.assertEqual(os.listdir(self.ext), ["Infra.txt"])
+
+
+class RefutadorTests(RutasTests):
+    """Lo que encontró la revisión independiente de f6d2bdd (07-nov)."""
+
+    def test_cambiar_el_proyecto_de_una_conectada_no_la_saca_de_su_carpeta(self):
+        p = write(os.path.join(self.ext, "Infra.txt"), "VPN\n")
+        rel = self.connect()
+        code, msg = self.error("/api/vocab/save", {"id": rel + "/Infra.txt", "project": "Cliente Acme",
+                                                   "name": "Infra", "terms": "VPN, Proxy"})
+        self.assertEqual(code, 400)
+        self.assertIn("carpeta de listas conectada", msg)
+        self.assertEqual(server.read_text(p), "VPN\n")  # el fichero del usuario, intacto
+        self.assertFalse(os.path.exists(os.path.join(self.root, "Cliente Acme")))
+
+    def test_guardar_sin_cambios_no_reescribe_y_uno_por_linea_se_conserva(self):
+        p = os.path.join(self.ext, "Equipo.txt")
+        raw = "# Equipo del cliente\r\nJosé Peña\r\nBegoña Ruiz\r\n".encode("cp1252")
+        with open(p, "wb") as f:
+            f.write(raw)
+        rel = self.connect()
+        body = {"id": rel + "/Equipo.txt", "project": "Listas Whisper", "name": "Equipo", "desc": "Equipo del cliente",
+                "terms": "José Peña, Begoña Ruiz"}
+        with mock.patch.object(server, "log"):
+            self.assertEqual(self.call("/api/vocab/save", body)["id"], rel + "/Equipo.txt")
+        with open(p, "rb") as f:
+            self.assertEqual(f.read(), raw)  # sin cambios: ni codificación ni formato tocados
+        with mock.patch.object(server, "log"):
+            self.call("/api/vocab/save", dict(body, terms="José Peña, Begoña Ruiz, Íñigo"))
+        self.assertEqual(server.read_text(p), "# Equipo del cliente\nJosé Peña\nBegoña Ruiz\nÍñigo\n")
+
+    def test_un_destino_que_contiene_la_carpeta_tampoco_vale(self):
+        acme = os.path.join(self.tmp, "Clientes", "Acme")
+        write(os.path.join(acme, "General.txt"), "A\n")
+        self.connect(acme)
+        with self.assertRaises(server.ApiError) as cm:
+            server.check_perfil({"outputs": [{"path": os.path.dirname(acme), "format": "txt", "by_project": True}]})
+        self.assertIn("Dentro de esa carpeta", str(cm.exception))
+
+    def test_los_documentos_de_los_destinos_no_son_listas(self):
+        write(os.path.join(self.ext, "General.txt"), "A\n")
+        write(os.path.join(self.ext, "2026-11-07 10-00-00 - Semanal.txt"),
+              "Semanal\ngenerado_por: Chuleta (desde la app; ...)\nFecha: 2026-11-07\n\nRESUMEN\n=======\nAlgo\n")
+        self.connect(name="Acme")
+        self.assertEqual(self.pares(), [("Acme", "General")])
+
+    def test_repetidas_en_la_misma_carpeta_vale_la_primera_con_aviso(self):
+        write(os.path.join(self.ext, "Infra.txt"), "suelta\n")
+        write(os.path.join(self.ext, "Vocabulario", "Infra.txt"), "en Vocabulario\n")
+        rel = self.connect()
+        avisos = {}
+        vs = server._list_vocab(avisos)
+        self.assertEqual([v["id"] for v in vs], [rel + "/Infra.txt"])
+        self.assertEqual(avisos[rel[2:]], [{"lista": "Vocabulario\\Infra.txt", "motivo": "repetida"}])
+        self.assertEqual(server.find_vocab("Listas Whisper", "Infra")["id"], rel + "/Infra.txt")
+
+    def test_conectar_la_carpeta_de_la_que_se_importaron_no_deja_sin_vocabulario(self):
+        self.write("Acme/Vocabulario/Infra.txt", "Acme, SAP\n")  # importada antes
+        audio = self.wav("Reuniones/2026-11-07 10-00-00.wav")
+        self.write("Reuniones/2026-11-07 10-00-00.md", "---\nproyecto: Acme\nworkstream: Infra\n---\n")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "Acme, SAP")
+        write(os.path.join(self.ext, "Infra.txt"), "Acme, SAP\n")
+        self.connect(name="Acme")
+        self.assertEqual(server.vocab_for(audio, {"prompt": "general"}), "Acme, SAP")  # antes: «general»
+
+    def test_vincular_y_desvincular_la_carpeta_de_encima_mueve_los_ids(self):
+        proyecto = os.path.join(self.tmp, "OneDrive", "Proyecto Alfa")
+        listas = os.path.join(proyecto, "Listas")
+        write(os.path.join(listas, "General.txt"), "API, SLA\n")
+        rel = self.connect(listas)
+        audio = self.wav("R/2026-11-07 10-00-00.wav")
+        self.app.settings.update(lambda d: d.update(rec_vocab=rel + "/General.txt",
+                                                    perfil=dict(d["perfil"], vocab=rel + "/General.txt")))
+        server.temas().set(server.rel_of(audio), rel + "/General.txt")
+        self.app.jobs = types.SimpleNamespace(snapshot=lambda: [])
+        self.app.rec = None
+        with mock.patch.object(server, "log"):
+            r = self.call("/api/link/add", {"path": proyecto})
+        nuevo = r["rel"] + "/Listas/General.txt"
+        st = self.app.settings.get()
+        self.assertEqual((st["rec_vocab"], st["perfil"]["vocab"]), (nuevo, nuevo))
+        self.assertEqual(server.temas().get(server.rel_of(audio)), nuevo)
+        self.assertEqual(server.perfil_vocab_fijo(st), nuevo)  # Ctrl+Alt+R sigue con su vocabulario
+        with mock.patch.object(server, "log"):
+            self.call("/api/link/remove", {"path": r["rel"]})
+        st = self.app.settings.get()
+        self.assertEqual((st["rec_vocab"], st["perfil"]["vocab"]), (rel + "/General.txt", rel + "/General.txt"))
+        self.assertEqual(server.temas().get(server.rel_of(audio)), rel + "/General.txt")
+
+    def test_exportar_en_utf8_y_sin_repetidas(self):
+        import zipfile
+        with open(os.path.join(self.ext, "Equipo.txt"), "wb") as f:
+            f.write("José Peña, Begoña\r\n".encode("cp1252"))
+        with open(os.path.join(self.ext, "Excel.txt"), "wb") as f:
+            f.write("Íñigo\tAcme\r\n".encode("utf-16"))
+        self.connect(name="Alfa")
+        self.write("Alfa/Vocabulario/Equipo.txt", "de la app\n")  # mismo proyecto y tema: va la primera
+        tmp_listas = os.path.join(self.tmp, "temporal de listas")
+        os.makedirs(tmp_listas)
+        with mock.patch.object(server, "desktop_dir", return_value=self.tmp), \
+                mock.patch.object(server, "WINDOWS", False), mock.patch("tempfile.mkdtemp", return_value=tmp_listas):
+            r = self.call("/api/export", {"vocab": True})
+        self.assertFalse(os.path.exists(tmp_listas))  # las copias en UTF-8 se borran al terminar
+        self.assertEqual(r["vocab"], 2)
+        with zipfile.ZipFile(r["path"]) as z:
+            names = [n for n in z.namelist() if "/Vocabulario/" in n]
+            self.assertEqual(sorted(names), [f"{server.PKG_ROOT}/Alfa/Vocabulario/Equipo.txt",
+                                             f"{server.PKG_ROOT}/Alfa/Vocabulario/Excel.txt"])
+            equipo = z.read(f"{server.PKG_ROOT}/Alfa/Vocabulario/Equipo.txt").decode("utf-8-sig")
+            excel = z.read(f"{server.PKG_ROOT}/Alfa/Vocabulario/Excel.txt").decode("utf-8-sig")
+        self.assertEqual(equipo, "de la app\r\n")  # la de la app va primero (y es la que lee el otro PC)
+        self.assertEqual(excel, "Íñigo\tAcme\r\n")
+
+
+class LecturaPorLineasTests(CarpetaTests):
+    def test_un_byte_suelto_solo_cambia_su_linea(self):
+        p = os.path.join(self.ext, "a.txt")
+        with open(p, "wb") as f:
+            f.write("\ufeff# Equipo de Begoña\nJosé Peña\n".encode("utf-8") + b"M\xfcller\n")
+        self.assertEqual(server.read_vocab(p), ("Equipo de Begoña", ["José Peña", "M\ufffdller"]))  # con BOM
+        with open(p, "wb") as f:
+            f.write("# Equipo de Begoña\nJosé Peña\n".encode("utf-8") + b"M\xfcller\n")
+        self.assertEqual(server.read_vocab(p), ("Equipo de Begoña", ["José Peña", "Müller"]))  # sin BOM: cp1252
+
+    def test_saltos_de_linea_de_siempre(self):
+        p = os.path.join(self.ext, "b.txt")
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write("Acme\x0bZeta Corp\x0bSAP\n# desc\u2028Beta, Gamma\n")
+        self.assertEqual(server.read_vocab(p), ("desc", ["Acme", "Zeta Corp", "SAP", "Beta", "Gamma"]))
 
 
 class SettingsRotosTests(unittest.TestCase):
