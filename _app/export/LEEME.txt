@@ -132,10 +132,15 @@ QUIÉN HABLA (opcional)
     y, al terminar cada transcripción, la app separa las voces en segundo plano (unos 2 s por
     minuto de reunión, sin molestar). En la transcripción cada cambio de voz empieza párrafo con
     una etiqueta: «Persona 1», «Persona 2», «Tú» (tu micro), «varios» (hablan a la vez).
-  - Clic en la etiqueta: ponle nombre. Marca «Recordar en próximas reuniones» para que la app
-    reconozca esa voz la próxima vez (sale ya con su nombre; si no está segura pregunta «¿Nombre?»).
-    También «Soy yo», «Fusionar con…» (dos etiquetas eran la misma persona), «No es esta persona»
-    y «Olvidar persona».
+  - Clic en la etiqueta: escribe quién es. Si ya hay alguien con ese nombre, es esa persona; si
+    no, se crea. Marca «Recordar en próximas reuniones» para que la app reconozca esa voz la
+    próxima vez (sale ya con su nombre; si no está segura pregunta «¿Nombre?»). Poner un nombre
+    nunca cambia el de otra persona ni el tuyo: para corregir una errata en todas sus reuniones,
+    marca «solo corrijo el nombre» (o cámbialo en Ajustes > Voces).
+  - «Tú» sale de tu micro o de tu voz guardada. Si se equivoca, escribe el nombre de quien era o
+    pulsa «No soy yo»; si eres tú y no sale, «Soy yo». También «Es…» / «Fusionar con…» (dos
+    etiquetas eran la misma persona), «No es esta persona» y «Olvidar persona». «Volver a
+    identificar» conserva lo que ya hayas corregido a mano.
   - El resumen con IA usa esos nombres (responsables y participantes) y «Exportar con hablantes»
     guarda <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
   - Privacidad: las voces se separan y se reconocen en tu PC, y las huellas no salen de él. Los

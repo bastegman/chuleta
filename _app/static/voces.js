@@ -6,7 +6,7 @@ const spkInfo = h => (S.spk && S.spk.hablantes && S.spk.hablantes[h]) || null;
 const spkLabel = h => h === 'varios' ? 'varios' : (spkInfo(h) || {}).label || (h ? 'Persona ' + h.replace(/^h/, '') : '');
 function spkChip(h) {
   if (!h) return '';
-  const i = spkInfo(h), cls = h === 'varios' ? ' many' : i && i.usuario ? ' me' : i && i.breve ? ' brief' : i && i.provisional ? ' doubt' : i && i.persona ? ' known' : '';
+  const i = spkInfo(h), cls = h === 'varios' ? ' many' : i && i.usuario && !i.provisional ? ' me' : i && i.breve ? ' brief' : i && i.provisional ? ' doubt' : i && i.persona ? ' known' : '';
   return `<button class="spk${cls}${/^h\d+$/.test(h) ? ' c' + ((parseInt(h.slice(1), 10) - 1) % 5 + 1) : ''}" data-spk="${esc(h)}" title="${h === 'varios' ? 'Hablan varias personas a la vez' : 'Quién habla · clic para poner nombre, recordar o corregir'}">${esc(spkLabel(h))}</button>`;
 }
 const fmtSecs = s => s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`;
@@ -35,7 +35,7 @@ function renderVoicesBar(a) {
     html = `<span class="vz-st">${I.voice}${esc(j.status === 'queued' ? 'En cola para identificar voces' : j.stage)}${j.status === 'running' ? ` (${Math.round(j.progress * 100)} %)` : ''}</span>
       <span class="sp"></span><button class="btn ghost sm danger" data-act="cancel-job" data-id="${j.id}">Cancelar</button>`;
   } else if (s && s.exists) {
-    html = `<span class="vz-st">${I.voice}Voces: ${s.n} ${s.n === 1 ? 'persona' : 'personas'} · ${s.known} reconocida${s.known === 1 ? '' : 's'}${s.tu ? ' · Tú' : ''}</span>
+    html = `<span class="vz-st">${I.voice}Voces: ${s.n} ${s.n === 1 ? 'persona' : 'personas'} · ${s.known} reconocida${s.known === 1 ? '' : 's'}${s.tu || Object.values(s.hablantes || {}).some(x => x.usuario) ? ' · Tú' : ''}</span>
       <span class="muted">· clic en una etiqueta para poner nombre</span><span class="sp"></span>
       ${S.tx && S.tx.kind === 'srt' ? `<button class="btn ghost sm" data-act="voz-export" title="Guarda <reunión>.hablantes.txt junto al audio">${I.text}Exportar con hablantes</button>` : ''}
       ${on ? `<button class="btn ghost sm" data-act="voz-identify" title="Repetir la identificación">${I.refresh}Volver a identificar</button>` : ''}`;
@@ -58,6 +58,24 @@ function onVoicesJobs(prev) {
 }
 
 /* ---------------------------------------------------------------- popover de un hablante */
+/* Lo que se manda al servidor desde la etiqueta (funciones puras, probadas en tests/test_fix_voces.py). Escribir un
+   nombre dice QUIÉN es este hablante (alguien que ya se llama así, o una persona nueva): nunca renombra a la persona
+   que tenía salvo que se marque «solo corrijo el nombre», y nunca a la tuya (msg 1170: «asume que soy yo»). */
+function spkNameBody(a, h, cur, nombre, opts) {
+  const own = cur && !cur.es_usuario;
+  return { id: own ? cur.id : undefined, renombrar: !!(own && opts.corregir), path: a.path, h, nombre, recordar: !!opts.recordar, consentimiento: !!opts.consentimiento };
+}
+function spkMeBody(a, h, s, cur, nombre, recordar) {
+  // el nombre del cuadro solo sirve para crear tu persona si aún no existe, y no si es el de la persona que ya tenía
+  const nuevo = !s.usuario && nombre && !(cur && nombre === cur.nombre) ? nombre : undefined;
+  return { path: a.path, h, es_usuario: true, nombre: nuevo, recordar: !!recordar, consentimiento: !!recordar };
+}
+function spkPickBody(a, h, i, target) {
+  // «Es…»: un hablante sin persona o que eres tú se reasigna. «Fusionar con…» solo si ya es de otra persona (nunca se
+  // funde tu persona dentro de otra: esa persona pasaría a ser «Tú» con tus huellas)
+  return i.persona && !i.usuario ? ['/api/voces/fusionar', { id_a: target, id_b: i.persona }] : ['/api/voces/reasignar', { path: a.path, h, persona: target }];
+}
+
 function closeSpkPop() { $$('.spk-pop').forEach(p => p.remove()); }
 function openSpeakerPop(h, anchor) {
   closePop(); closeSpkPop();
@@ -65,21 +83,25 @@ function openSpeakerPop(h, anchor) {
   if (!a || !s || h === 'varios') return;
   const i = spkInfo(h) || {}, personas = s.personas || [];
   const cur = i.persona ? personas.find(p => p.id === i.persona) : null;
+  const other = cur && !cur.es_usuario, doubtOther = i.provisional && other, merge = i.persona && !i.usuario;
   const pop = document.createElement('div');
   pop.className = 'spk-pop';
   pop.innerHTML = `<div class="sp-h">${esc(spkLabel(h))} <span class="muted">· ${fmtSecs(i.segundos || 0)} de voz${i.score != null ? ` · parecido ${String(Math.round(i.score * 100))} %` : ''}${i.breve ? ' · habla poco' : ''}</span></div>
-    ${i.provisional && cur ? `<div class="notice info">Parece <b>${esc(cur.nombre)}</b>, pero no es seguro. Si lo es, pulsa <b>Confirmar</b> (se guarda esta voz como otra huella suya).</div>` : ''}
+    ${doubtOther ? `<div class="notice info">Parece <b>${esc(cur.nombre)}</b>, pero no es seguro. Si lo es, pulsa <b>Confirmar</b> (se guarda esta voz como otra huella suya).</div>` : ''}
+    ${i.usuario && i.provisional ? '<div class="notice info">Parece tu voz, pero no es seguro. Si eres tú, pulsa <b>Soy yo</b>; si no, escribe su nombre.</div>' : ''}
+    ${i.usuario && !i.provisional ? '<div class="notice info">Sale como «Tú» por tu micrófono o tu voz guardada. Si no eres tú, escribe su nombre o pulsa <b>No soy yo</b>.</div>' : ''}
     <label>Nombre</label>
-    <div class="row"><input class="input" id="spName" value="${esc(cur && !i.usuario ? cur.nombre : '')}" placeholder="p. ej. Javier" autocomplete="off" spellcheck="false" list="spNames">
+    <div class="row"><input class="input" id="spName" value="${esc(other ? cur.nombre : '')}" placeholder="p. ej. Javier" autocomplete="off" spellcheck="false" list="spNames">
       <datalist id="spNames">${personas.filter(p => !p.es_usuario).map(p => `<option value="${esc(p.nombre)}">`).join('')}</datalist>
-      <button class="btn sm primary" data-sa="name">${i.provisional && cur ? 'Confirmar' : 'Guardar'}</button></div>
-    <label class="chk"><input type="checkbox" id="spRem" ${i.provisional && cur ? 'checked' : ''}> Recordar en próximas reuniones <span class="muted">(guarda una huella de su voz, solo en este PC)</span></label>
+      <button class="btn sm primary" data-sa="name">${doubtOther ? 'Confirmar' : 'Guardar'}</button></div>
+    ${other && !i.provisional ? `<label class="chk sub hidden" id="spFixRow"><input type="checkbox" id="spFix"> Es la misma persona: solo corrijo el nombre de «${esc(cur.nombre)}» (en todas sus reuniones)</label>` : ''}
+    <label class="chk"><input type="checkbox" id="spRem" ${doubtOther ? 'checked' : ''}> Recordar en próximas reuniones <span class="muted">(guarda una huella de su voz, solo en este PC)</span></label>
     <label class="chk sub"><input type="checkbox" id="spConsent"> Tengo el consentimiento de esta persona para guardar su huella de voz en este PC</label>
     <div class="row sp-actions">
-      <button class="btn sm${i.usuario ? ' on' : ''}" data-sa="me" title="Este hablante soy yo${s.usuario ? '' : ' (se crea tu persona para reconocerte también en reuniones presenciales)'}">${i.usuario ? '✓ Soy yo' : 'Soy yo'}</button>
-      <select id="spMerge" class="sm" title="Si esta persona y otra ya guardada son la misma"><option value="">Fusionar con…</option>${personas.filter(p => p.id !== i.persona).map(p => `<option value="${esc(p.id)}">${esc(p.nombre)}${p.es_usuario ? ' (tú)' : ''}</option>`).join('')}</select>
-      ${i.persona ? '<button class="btn sm" data-sa="notme">No es esta persona</button>' : ''}
-      ${cur && !cur.es_usuario ? '<button class="btn sm ghost danger" data-sa="forget" title="Borra su nombre y sus huellas de este PC">Olvidar persona</button>' : ''}
+      <button class="btn sm${i.usuario && !i.provisional ? ' on' : ''}" data-sa="me" title="Este hablante soy yo${s.usuario ? '' : ' (se crea tu persona para reconocerte también en reuniones presenciales)'}">${i.usuario && !i.provisional ? '✓ Soy yo' : 'Soy yo'}</button>
+      <select id="spMerge" class="sm" title="${merge ? 'Si esta persona y otra ya guardada son la misma' : 'Este hablante es una persona ya guardada'}"><option value="">${merge ? 'Fusionar con…' : 'Es…'}</option>${personas.filter(p => p.id !== i.persona).map(p => `<option value="${esc(p.id)}">${esc(p.nombre)}${p.es_usuario ? ' (tú)' : ''}</option>`).join('')}</select>
+      ${i.persona || i.usuario ? `<button class="btn sm" data-sa="notme">${i.usuario ? 'No soy yo' : 'No es esta persona'}</button>` : ''}
+      ${other ? '<button class="btn sm ghost danger" data-sa="forget" title="Borra su nombre y sus huellas de este PC">Olvidar persona</button>' : ''}
     </div>`;
   document.body.append(pop);
   const r = anchor.getBoundingClientRect();
@@ -91,13 +113,15 @@ function openSpeakerPop(h, anchor) {
   const remember = () => $('#spRem', pop).checked;
   const consent = () => $('#spConsent', pop).checked;
   const run = async fn => { try { await fn(); } catch (err) { toast(esc(err.message), 'err'); } };
+  const fixRow = $('#spFixRow', pop);
   $('#spName', pop).addEventListener('keydown', e => { if (e.key === 'Enter') $('[data-sa="name"]', pop).click(); });
+  $('#spName', pop).addEventListener('input', e => { if (fixRow) fixRow.classList.toggle('hidden', !e.target.value.trim() || e.target.value.trim() === cur.nombre); });
   $('#spMerge', pop).onchange = () => run(async () => {
     const target = $('#spMerge', pop).value;
     if (!target) return;
-    if (i.persona) await api('/api/voces/fusionar', { id_a: target, id_b: i.persona });
-    else await api('/api/voces/reasignar', { path: a.path, h, persona: target });
-    await refresh(i.persona ? 'Personas fusionadas: las reuniones anteriores ya muestran el nombre único' : 'Hablante asignado');
+    const [url, body] = spkPickBody(a, h, i, target);
+    await api(url, body);
+    await refresh(url.endsWith('fusionar') ? 'Personas fusionadas: las reuniones anteriores ya muestran el nombre único' : 'Hablante asignado');
   });
   pop.addEventListener('click', e => {
     const b = e.target.closest('[data-sa]');
@@ -106,17 +130,17 @@ function openSpeakerPop(h, anchor) {
     run(async () => {
       if (act === 'name') {
         const nombre = $('#spName', pop).value.trim();
-        if (!nombre && !i.usuario) return toast('Escribe un nombre');
+        if (!nombre) return toast(i.usuario ? 'Escribe su nombre (o pulsa «Soy yo» si eres tú)' : 'Escribe un nombre');
         if (remember() && !consent()) return toast('Para guardar la huella marca la casilla de consentimiento', 'err');
-        const r = await api('/api/voces/persona', { id: cur && cur.nombre === nombre ? cur.id : (cur && !i.provisional ? cur.id : undefined), path: a.path, h, nombre, recordar: remember(), consentimiento: consent() });
-        await refresh(remember() ? `🗣 ${esc(nombre)}: huella guardada (${r.huellas}). Se reconocerá en las próximas reuniones.` : `🗣 ${esc(nombre)} en esta reunión. Marca «Recordar» si quieres reconocerle otras veces.`);
+        const corregir = !!(fixRow && !fixRow.classList.contains('hidden') && $('#spFix', pop).checked);
+        const r = await api('/api/voces/persona', spkNameBody(a, h, cur, nombre, { corregir, recordar: remember(), consentimiento: consent() }));
+        await refresh(remember() ? `🗣 ${esc(nombre)}: huella guardada (${r.huellas}). Se reconocerá en las próximas reuniones.` : corregir ? `🗣 Nombre corregido en todas sus reuniones: ${esc(nombre)}` : `🗣 ${esc(nombre)} en esta reunión. Marca «Recordar» si quieres reconocerle otras veces.`);
       } else if (act === 'me') {
-        const nombre = $('#spName', pop).value.trim();
-        await api('/api/voces/persona', { id: s.usuario || undefined, path: a.path, h, es_usuario: true, nombre: nombre || undefined, recordar: remember(), consentimiento: remember() });
+        await api('/api/voces/persona', spkMeBody(a, h, s, cur, $('#spName', pop).value.trim(), remember()));
         await refresh(remember() ? 'Marcado como «Tú» y huella guardada: también te reconocerá en reuniones presenciales' : 'Marcado como «Tú» en esta reunión');
       } else if (act === 'notme') {
         await api('/api/voces/reasignar', { path: a.path, h, persona: null });
-        await refresh('Desasignado: vuelve a ser una persona sin nombre en esta reunión');
+        await refresh(i.usuario ? 'Ya no sale como «Tú»: vuelve a ser una persona sin nombre en esta reunión' : 'Desasignado: vuelve a ser una persona sin nombre en esta reunión');
       } else if (act === 'forget') {
         if (!confirm(`¿Olvidar a «${cur.nombre}»? Se borran su nombre y sus huellas de voz de este PC. Las reuniones pasadas lo mostrarán como «Persona N».`)) return;
         await api('/api/voces/olvidar', { id: cur.id });

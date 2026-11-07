@@ -215,9 +215,12 @@ class SidecarTests(TempTree):
         self.assertEqual(data["tu"], "h4")
         self.assertEqual(hs["h4"]["persona"], yo["id"])  # el micro ya dice que soy yo
         names = v.names()
-        self.assertEqual([voices.label(h, data, names) for h in ("h1", "h2", "h3", "h4", "varios", None)],
+        hs_ = ("h1", "h2", "h3", "h4", "varios", None)
+        self.assertEqual([voices.label(h, data, names, usuario=yo["id"]) for h in hs_],
                          ["Ana", "¿Ana?", "(breve)", "Tú", "varios", None])
-        self.assertEqual(voices.label("h4", data, names, for_llm=True), "Yo")
+        self.assertEqual(voices.label("h4", data, names, for_llm=True, usuario=yo["id"]), "Yo")
+        self.assertEqual(hs["h4"]["origen"], "micro")
+        self.assertEqual((hs["h1"]["origen"], hs["h3"].get("origen")), ("huella", None))
         self.assertEqual(voices.label("h7", {"hablantes": {"h7": {}}}, {}), "Persona 7")
         segs = [{"start": 0, "end": 4, "text": "hola"}, {"start": 5, "end": 9, "text": "qué tal"},
                 {"start": 31, "end": 35, "text": "bien"}]

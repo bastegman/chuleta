@@ -10,6 +10,28 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Quién habla: poner nombre ya no te convierte en «Tú» (07/11/2026)
+- Poner nombre a un hablante dice quién es ese hablante en esta reunión: una persona que ya se llama así (sin
+  distinguir mayúsculas ni tildes: elegir «Ana» de la lista ya no crea otra Ana) o una nueva. Antes, si ese hablante
+  salía como «Tú» (por el micro o por tu huella), «Guardar» le cambiaba el nombre a TU persona y, con «Recordar», le
+  guardaba la voz de la otra persona: desde ahí esa persona salía como tú en otras reuniones y sus frases iban al
+  resumen con tu nombre. Ahora tu persona solo cambia de nombre en Ajustes > Voces y solo recibe huellas de un
+  hablante que eres tú. Corregir una errata del nombre en todas sus reuniones es una casilla aparte («solo corrijo el
+  nombre»).
+- La persona asignada manda sobre la heurística del micro: un hablante al que pones nombre deja de salir como «Tú»,
+  igual en pantalla que en el resumen. «No soy yo» quita un «Tú» mal puesto; «Soy yo» lo mueve al hablante bueno (y el
+  que lo era solo por el micro vuelve a «Persona N»). «Soy yo» ya no renombra tu persona con el nombre que hubiera en
+  el cuadro. «Fusionar con…» desde «Tú» ya no funde tu persona dentro de otra (esa persona pasaba a ser «Tú» con tus
+  huellas): en ese caso el desplegable es «Es…» y reasigna; el servidor rechaza la fusión.
+- Si el micro y la huella no cuadran, pregunta en vez de decidir: «¿Ana?» si el micro dice «Tú» y la huella dice Ana;
+  «¿Tú?» si la huella dice que eres tú pero en esa grabación ese hablante casi nunca habla por tu micro.
+- La línea de tiempo del micro (de donde sale «Tú») iba unos 0,9 s adelantada respecto al audio (la grabadora estampa
+  cada nivel con lo ya escrito, y escribe 1 s por detrás) y con ~1 de cada 6 pasos vacíos: con turnos cortos «Tú» no
+  salía. Se corrige al leerla, también en las reuniones ya grabadas al «Volver a identificar».
+- «Volver a identificar» conserva lo que ya corregiste a mano (nombres, «Soy yo», «No soy yo»), casando hablantes
+  nuevos y antiguos por tiempo; si falla o se cancela, el sidecar queda como estaba. Las huellas en memoria de la
+  identificación anterior se descartan antes de rediarizar (con «Recordar» se podía guardar la voz de otro hablante).
+
 ### Dónde se procesan tus reuniones (02/11/2026)
 - Ajustes empieza por una elección: **Solo en este PC** (Whisper local, nada sale del ordenador, sin resumen con IA),
   **Con tu cuenta de Claude** (transcripción local y resumen con Claude usando la suscripción del usuario, personal o

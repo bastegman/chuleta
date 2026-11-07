@@ -26,6 +26,7 @@ import sys
 import tarfile
 import threading
 import time
+import unicodedata
 import uuid
 
 import numpy as np
@@ -43,6 +44,11 @@ BLOQUE_S = 1800.0        # audio mas largo se diariza por bloques de <= 30 min e
 HUELLA_MAX_S = 90.0      # voz que se concatena para una huella (los tramos mas largos primero)
 SR = 16000
 MIC_PASO, MIC_DB, MIC_SOBRE_SYS_DB = 0.25, -40.0, 6.0
+# La grabadora estampa cada nivel con lo que YA ha escrito del WAV, pero el pico es de lo que acaba de llegar del
+# dispositivo, que se escribe LAT (1 s) despues (recorder.py): la linea de tiempo del micro va adelantada respecto al
+# audio. Se corrige al leerla; una linea de tiempo ya alineada lleva "desfase": 0. Medido: tests/test_fix_voces.py.
+MIC_DESFASE_S = 0.875
+MIC_NO_ES_TU = 0.2       # grabacion propia: un hablante que casi nunca coincide con el micro activo no es el usuario
 SIDECAR_EXT = ".hablantes.json"
 IDLE_PRIORITY = getattr(__import__("subprocess"), "IDLE_PRIORITY_CLASS", 0)
 
@@ -411,30 +417,64 @@ def mic_timeline(levels, paso=MIC_PASO):
     return {"paso": paso, "activo": bits.decode("ascii")}
 
 
-def mark_user(tramos, micro, skip=()):
-    """Hablante que coincide >= 60 % con el micro activo (y el siguiente <= 30 %), o None."""
+def close_gaps(bits):
+    """Un paso suelto sin actividad entre dos activos cuenta como activo: los niveles llegan cada ~0,28 s y los pasos
+    son de 0,25 s, asi que ~1 de cada 6 pasos se queda sin nivel (medido: 9 de 49) aunque se este hablando."""
+    if "101" not in bits:
+        return bits
+    b = bytearray(bits, "ascii")
+    for i in range(1, len(b) - 1):
+        if b[i] == 48 and b[i - 1] == 49 and b[i + 1] == 49:
+            b[i] = 49
+    return b.decode("ascii")
+
+
+def mic_ratios(tramos, micro, skip=()):
+    """Fraccion de la voz de cada hablante con el micro activo, {h: 0..1}; {} sin linea de tiempo. Lo que el desfase
+    deja fuera (antes del primer paso o justo despues del ultimo) no cuenta; mas alla del final cuenta como inactivo."""
     if not micro or not micro.get("activo"):
-        return None
-    paso, act = float(micro.get("paso") or MIC_PASO), micro["activo"]
+        return {}
+    paso, act = float(micro.get("paso") or MIC_PASO), close_gaps(micro["activo"])
+    shift = max(0.0, float(micro.get("desfase", MIC_DESFASE_S) or 0.0))
+    unknown_end = len(act) + int(math.ceil(shift / paso))
     tot, on = {}, {}
     for t in tramos:
         h = t["h"]
         if h in skip:
             continue
-        for i in range(int(float(t["inicio"]) / paso), int(math.ceil(float(t["fin"]) / paso))):
+        a, b = float(t["inicio"]) - shift, float(t["fin"]) - shift
+        for i in range(max(0, int(math.floor(a / paso))), int(math.ceil(b / paso))):
+            if len(act) <= i < unknown_end:
+                continue
             tot[h] = tot.get(h, 0) + 1
             if i < len(act) and act[i] == "1":
                 on[h] = on.get(h, 0) + 1
-    ranked = sorted(((on.get(h, 0) / n, h) for h, n in tot.items() if n), reverse=True)
+    return {h: on.get(h, 0) / n for h, n in tot.items() if n}
+
+
+def pick_user(ratios):
+    """El hablante que coincide >= 60 % con el micro activo (y el siguiente <= 30 %), o None."""
+    ranked = sorted(((r, h) for h, r in ratios.items()), reverse=True)
     if ranked and ranked[0][0] >= 0.6 and (len(ranked) < 2 or ranked[1][0] <= 0.3):
         return ranked[0][1]
     return None
+
+
+def mark_user(tramos, micro, skip=()):
+    """Hablante que coincide >= 60 % con el micro activo (y el siguiente <= 30 %), o None."""
+    return pick_user(mic_ratios(tramos, micro, skip))
 
 
 # ----------------------------------------------------------------------------- voces.json (personas y huellas)
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def name_key(nombre):
+    """Clave para comparar nombres de personas: sin tildes, sin mayusculas y con los espacios normalizados."""
+    s = unicodedata.normalize("NFKD", " ".join(str(nombre or "").split()))
+    return "".join(c for c in s if not unicodedata.combining(c)).casefold()
 
 
 class Voices:
@@ -512,6 +552,16 @@ class Voices:
         with self.lock:
             return next((p for p in self.data["personas"] if p.get("es_usuario")), None)
 
+    def by_name(self, nombre):
+        """La persona que ya se llama asi (sin distinguir mayusculas, tildes ni espacios de mas), o None. Asi elegir
+        «Ana» de la lista asigna la Ana que ya existe en vez de crear otra."""
+        key = name_key(nombre)
+        if not key:
+            return None
+        with self.lock:
+            hit = next((p for p in self.data["personas"] if name_key(p.get("nombre")) == key), None)
+            return json.loads(json.dumps(hit)) if hit else None
+
     # --- escritura
     def create(self, nombre=None, es_usuario=False, consentimiento=None):
         with self.lock:
@@ -577,6 +627,8 @@ class Voices:
             a, b = self.find(keep), self.find(other)
             if not a or not b:
                 raise KeyError(other if a else keep)
+            if b.get("es_usuario"):  # fundir al usuario DENTRO de otra persona la haria «Tu» con sus huellas
+                raise ValueError("Tu persona no se puede fundir con otra")
             both = (a.get("huellas") or []) + (b.get("huellas") or [])
             a["huellas"] = sorted(both, key=lambda h: h.get("fecha") or "")
             del a["huellas"][:-MAX_HUELLAS]
@@ -638,9 +690,16 @@ def write_micro(path, micro):
 
 
 def identify(data, huellas, voices, micro=None):
-    """Completa hablantes{persona, score, provisional} contra voces.json y «tu» por el micro. Modifica data."""
+    """Completa hablantes{persona, score, provisional, origen} contra voces.json y «tu» por el micro. Modifica data.
+    origen: "huella" (emparejada con voces.json), "micro" (el usuario, por el micro) o "manual" (assign()).
+
+    Cuando el micro y la huella no cuadran no se decide solo, se pregunta (provisional): el micro dice «tu» y la
+    huella dice otra persona; o la huella dice «usuario» y ese hablante casi nunca habla por el micro."""
     personas = voices.personas() if voices else []
-    for h, info in data.get("hablantes", {}).items():
+    u = voices.user() if voices else None
+    uid = u["id"] if u else None
+    hablantes = data.setdefault("hablantes", {})
+    for h, info in hablantes.items():
         info.setdefault("persona", None)
         info.setdefault("score", None)
         info.setdefault("provisional", False)
@@ -649,18 +708,79 @@ def identify(data, huellas, voices, micro=None):
             continue
         m = match(huellas[h], personas)
         info.update(persona=m["persona"], score=m["score"], provisional=bool(m["provisional"]) or secs < MIN_HUELLA_S,
-                    segunda=m["segunda"])
+                    segunda=m["segunda"], origen="huella" if m["persona"] else None)
     micro = micro or data.get("micro")
     if micro:
         data["micro"] = micro
-    breve = {h for h, i in data.get("hablantes", {}).items() if i.get("breve")}
-    data["tu"] = mark_user(data.get("tramos", []), micro, skip=breve) if micro else data.get("tu")
-    if data.get("tu") and voices:
-        u = voices.user()
-        info = data["hablantes"].get(data["tu"])
-        if u and info and not info.get("persona"):  # el micro ya dice que eres tu: no hace falta huella
-            info.update(persona=u["id"], provisional=False)
+    breve = {h for h, i in hablantes.items() if i.get("breve")}
+    ratios = mic_ratios(data.get("tramos", []), micro, skip=breve) if micro else {}
+    if micro:
+        data["tu"] = pick_user(ratios)
+    tu = data.get("tu")
+    for h, info in hablantes.items():
+        if info.get("origen") != "huella" or not info.get("persona"):
+            continue
+        if info["persona"] == uid:
+            if h != tu and h in ratios and ratios[h] <= MIC_NO_ES_TU:
+                info["provisional"] = True
+        elif h == tu:
+            info["provisional"] = True
+    if tu and uid:
+        info = hablantes.get(tu)
+        if info and not info.get("persona"):  # el micro ya dice que eres tu: no hace falta huella
+            info.update(persona=uid, provisional=False, origen="micro")
     return data
+
+
+def assign(data, h, pid, usuario=None):
+    """El usuario dice quien es el hablante h en esta reunion (pid, o None = nadie). Modifica data y mantiene «tu»:
+    si pid es el usuario, h pasa a ser «tu» y deja de serlo quien lo era solo por el micro; si no, h deja de ser
+    «tu». Nunca toca voces.json."""
+    hablantes = data.get("hablantes") or {}
+    info = hablantes.get(h)
+    if info is None:
+        raise KeyError(h)
+    info.update(persona=pid, provisional=False, origen="manual")
+    if pid and pid == usuario:
+        data["tu"] = h
+        for k, other in hablantes.items():
+            if k != h and other.get("persona") == usuario and other.get("origen") == "micro":
+                other.update(persona=None, provisional=False, origen=None)
+    elif data.get("tu") == h:
+        data["tu"] = None
+    return data
+
+
+def carry_manual(old, new, usuario=None, known=None):
+    """Volver a identificar no borra lo que el usuario ya dijo: cada hablante nuevo hereda la decision manual del
+    hablante antiguo con el que mas coincide en el tiempo (si cubre al menos la mitad de su voz), salvo que esa
+    persona ya no exista (`known`: ids que siguen en voces.json). Modifica new."""
+    olds = {h: i for h, i in (old.get("hablantes") or {}).items() if i.get("origen") == "manual"}
+    if not olds or not new.get("tramos"):
+        return new
+    step = 0.1  # mascaras de 0,1 s: lineal en la duracion (dos horas son 72.000 casillas por hablante)
+    end = min(max(float(t["fin"]) for t in (old.get("tramos") or []) + new["tramos"]), 12 * 3600.0)
+    n = int(math.ceil(end / step)) + 1
+
+    def mask(tramos, h):
+        m = np.zeros(n, bool)
+        for t in tramos:
+            if t.get("h") == h:
+                m[max(0, int(float(t["inicio"]) / step)):max(0, int(math.ceil(float(t["fin"]) / step)))] = True
+        return m
+    old_masks = {k: mask(old.get("tramos") or [], k) for k in olds}
+    for h in list(new.get("hablantes") or {}):
+        mine = mask(new["tramos"], h)
+        total = int(mine.sum())
+        if not total:
+            continue
+        best, cover = max(((k, int((mine & m).sum())) for k, m in old_masks.items()), key=lambda x: x[1])
+        if cover / total >= 0.5:
+            pid = olds[best].get("persona")
+            if pid and known is not None and pid not in known:
+                continue
+            assign(new, h, pid, usuario)
+    return new
 
 
 def refresh_frases(data, segs):
@@ -671,27 +791,42 @@ def refresh_frases(data, segs):
     return who
 
 
-def label(h, data, names, for_llm=False):
-    """Etiqueta de un hablante: nombre de la persona, «Tu»/«Yo», «Persona N», «varios», «(breve)»."""
+def label(h, data, names, for_llm=False, usuario=None):
+    """Etiqueta de un hablante. Manda la persona asignada (a mano, por huella o por el micro): su nombre, o «Tú» si es
+    la del usuario (`usuario` = su id; en el resumen, su nombre o «Yo»), con «¿…?» si es provisional. Sin persona,
+    «Tú» si el micro lo dice; si no, «(breve)» o «Persona N». También «varios» y None."""
     if h is None:
         return None
     if h == "varios":
         return "varios"
     info = (data.get("hablantes") or {}).get(h) or {}
-    pid, name = info.get("persona"), None
-    if pid and pid in names:
-        name = names[pid]
+    pid = info.get("persona")
+    name = names.get(pid) if pid else None  # None tambien si la persona se olvido
+    doubt = bool(info.get("provisional"))
+    if name is not None and (name or pid == usuario):
+        if pid == usuario:
+            shown = (name or "Yo") if for_llm else "Tú"
+        else:
+            shown = name
+        return f"¿{shown}?" if doubt else shown
     if data.get("tu") == h:
-        return name if (for_llm and name) else ("Yo" if for_llm else "Tú")
-    if name:
-        return f"¿{name}?" if info.get("provisional") else name
+        return "Yo" if for_llm else "Tú"
     if info.get("breve"):
         return "(breve)"
     n = h[1:] if h.startswith("h") and h[1:].isdigit() else h
     return f"Persona {n}"
 
 
-def export_text(segs, who, data, names):
+def is_user(h, data, names, usuario=None):
+    """El hablante h es el usuario en esta reunion: su persona es la del usuario o, sin persona, el micro lo dice."""
+    info = (data.get("hablantes") or {}).get(h) or {}
+    pid = info.get("persona")
+    if pid and pid in names:
+        return pid == usuario
+    return data.get("tu") == h
+
+
+def export_text(segs, who, data, names, usuario=None):
     """<audio>.hablantes.txt: un parrafo por turno, con la etiqueta delante y el minuto del primer segmento."""
     out, cur, cur_h, t0 = [], [], object(), None
     for s, w in zip(segs, who):
@@ -706,7 +841,7 @@ def export_text(segs, who, data, names):
     lines = []
     for h, t, text in out:
         stamp = "" if t is None else f"[{int(t) // 60}:{int(t) % 60:02d}] "
-        who_ = label(h, data, names)
+        who_ = label(h, data, names, usuario=usuario)
         lines.append(f"{stamp}{who_ + ': ' if who_ else ''}{text}")
     return "\n\n".join(lines) + "\n"
 
