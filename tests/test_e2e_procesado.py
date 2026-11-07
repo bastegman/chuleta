@@ -293,6 +293,9 @@ class TresModosE2E(unittest.TestCase):
             self.pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=10000)
         self.pg.click("#btnSettings")
         self.pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=10000)
+        # Ajustes abre en «Al grabar» desde el rediseño B2 (07/11/2026): lo de aquí está en Procesado
+        self.pg.click(".aj-nav [data-sec='procesado']")
+        self.pg.wait_for_selector("#modal input[name='proc'][value='local']", state="visible", timeout=10000)
 
     def elegir(self, modo):
         """Elige el modo en «Dónde se procesan tus reuniones»: elegirlo solo no cambia nada (se dice que falta
