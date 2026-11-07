@@ -8,6 +8,7 @@ Aquí, en cualquier sistema: dos server.py de verdad con un pywebview falso que 
 para lo que en Windows tarda (importar pythonnet y pywebview, `initialize()` y crear la ventana de WebView2). open_ui()
 no abre Edge: lo anota. En windows-real, lo mismo con la ventana de verdad (test_auditoria_windows.VentanaRealTests).
 """
+import contextlib
 import os
 import shutil
 import socket
@@ -17,8 +18,10 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
-from support import REPO
+from support import APP, REPO, server
+import window  # noqa: E402
 
 FAKE_WEBVIEW = r'''
 """pywebview falso para test_doble_apertura (lo que importa del 6.2.1). Tiempos por variables de entorno."""
@@ -300,6 +303,303 @@ class DobleAperturaTests(unittest.TestCase):
         for r in res:
             with self.subTest(r["nombre"]):
                 self.comprobar(r, show=r["nombre"] == "ya abierta")
+
+
+# ----------------------------------------------------------------------------- la ventana «en camino» (window.py)
+
+
+class FakeEvt:
+    """Como webview.event.Event, en síncrono: += manejadores; set() los llama y marca; is_set()."""
+
+    def __init__(self):
+        self.handlers, self._set = [], False
+
+    def __iadd__(self, fn):
+        self.handlers.append(fn)
+        return self
+
+    def set(self):
+        self._set = True
+        for h in self.handlers:
+            h()
+
+    def is_set(self):
+        return self._set
+
+
+class FakeW:
+    def __init__(self, closed=None):
+        self.events = type("E", (), {})()
+        self.events.closing, self.events.shown = FakeEvt(), FakeEvt()
+        self.native, self.calls, self.closed = None, [], closed or threading.Event()
+
+    def show(self):
+        self.calls.append("show")
+
+    def hide(self):
+        self.calls.append("hide")
+
+    def destroy(self):
+        self.calls.append("destroy")
+        self.closed.set()
+
+    def evaluate_js(self, js):
+        return "no"
+
+
+class FakeWv:
+    """start() espera a que el test diga «ya» (la ventana creada, sin enseñar) y luego la enseña hasta destroy()."""
+
+    def __init__(self):
+        self.win, self.go, self.started = None, threading.Event(), threading.Event()
+
+    def create_window(self, title, url, **kw):
+        self.win = FakeW()
+        return self.win
+
+    def start(self, **kw):
+        self.started.set()
+        self.go.wait(10)
+        self.win.events.shown.set()
+        self.win.closed.wait(10)
+
+
+def esperar(cond, timeout=5.0):
+    fin = time.time() + timeout
+    while time.time() < fin and not cond():
+        time.sleep(0.02)
+    return cond()
+
+
+class VentanaEnCaminoTests(unittest.TestCase):
+    def make(self, wv):
+        return window.Window("http://127.0.0.1:8765/", tempfile.mkdtemp(prefix="chuleta-win-"),
+                             os.path.join(APP, "static", "chuleta.ico"), webview=wv)
+
+    def test_en_camino_hasta_que_se_ensena_y_entonces_al_frente(self):
+        wv = FakeWv()
+        w = self.make(wv)
+        self.assertTrue(w.pending)
+        self.assertEqual(w.request_show(), "pending")  # antes de crearla (en Windows, initialize)
+        t = threading.Thread(target=w.run, daemon=True)
+        with mock.patch.object(window.Window, "_to_front") as front:
+            t.start()
+            self.assertTrue(wv.started.wait(5))
+            self.assertTrue(w.alive)
+            self.assertTrue(w.pending)
+            self.assertEqual(w.request_show(), "pending")  # creada y sin enseñar: nada de esperar a «shown»
+            self.assertNotIn("show", wv.win.calls)
+            wv.go.set()
+            self.assertTrue(esperar(lambda: not w.pending))
+            front.assert_called_once()  # la pidieron mientras se abría: al enseñarse, delante
+            self.assertFalse(w.want_front)
+            self.assertEqual(w.request_show(), "shown")
+            self.assertIn("show", wv.win.calls)
+            w.destroy()
+            t.join(5)
+        self.assertFalse(w.alive)
+        self.assertFalse(w.pending)
+        self.assertIsNone(w.request_show())  # cerrada: Edge (lo decide server.mostrar)
+
+    def test_sin_peticiones_no_se_trae_al_frente(self):
+        wv = FakeWv()
+        w = self.make(wv)
+        t = threading.Thread(target=w.run, daemon=True)
+        with mock.patch.object(window.Window, "_to_front") as front:
+            t.start()
+            wv.started.wait(5)
+            wv.go.set()
+            self.assertTrue(esperar(lambda: not w.pending))
+            front.assert_not_called()
+            w.destroy()
+            t.join(5)
+
+    def test_si_no_se_puede_abrir_deja_de_estar_en_camino(self):
+        wv = FakeWv()
+        wv.create_window = mock.Mock(side_effect=RuntimeError("sin WebView2"))
+        w = self.make(wv)
+        self.assertFalse(w.run())
+        self.assertFalse(w.pending)
+        self.assertIsNone(w.request_show())
+
+    def test_sin_pywebview_nunca_esta_en_camino(self):
+        with mock.patch.object(window, "import_webview", return_value=None):
+            w = window.Window("http://127.0.0.1:8765/", tempfile.mkdtemp(), "x.ico")
+        self.assertFalse(w.pending)
+        self.assertIsNone(w.request_show())
+
+    def test_show_justo_despues_de_shown_no_abre_edge(self):
+        """pywebview (event.py) lanza el hilo de los manejadores de «shown» ANTES de marcar el evento: si alguien pide
+        la ventana justo cuando _on_shown la da por enseñada, el evento aún puede no estar marcado. No es «perdida»."""
+        w = self.make(FakeWv())
+        w.w, w.alive = FakeW(), True
+        w._on_shown()  # el manejador ya ha corrido; el evento de pywebview, todavía no
+        self.assertFalse(w.w.events.shown.is_set())
+        self.assertEqual(w.request_show(), "shown")
+        self.assertEqual(w.w.calls, ["show"])
+
+    def test_en_camino_caduca_y_show_no_espera_a_shown(self):
+        """Una ventana que no llega a enseñarse en PENDING_MAX s se da por perdida (entonces Edge), y show() no
+        llama a pywebview (su show() esperaría a «shown» hasta 20 s y la otra copia se cansa a los 5)."""
+        w = self.make(FakeWv())
+        w.w, w.alive = FakeW(), True
+        w._pending_since = time.monotonic() - window.PENDING_MAX - 1
+        self.assertFalse(w.pending)
+        self.assertIsNone(w.request_show())
+        self.assertEqual(w.w.calls, [])
+        w.w.events.shown.set()
+        self.assertEqual(w.request_show(), "shown")
+        self.assertEqual(w.w.calls, ["show"])
+
+
+# ----------------------------------------------------------------------------- server.py: Edge una vez, instancia única
+
+
+class EdgeUnaVezTests(unittest.TestCase):
+    def test_open_ui_no_repite_en_unos_segundos(self):
+        with mock.patch.object(server, "_UI_OPENED", [0.0]), mock.patch.object(server.subprocess, "Popen") as popen, \
+                mock.patch.object(server.webbrowser, "open") as wb, mock.patch.object(server, "log") as log:
+            self.assertTrue(server.open_ui())
+            self.assertFalse(server.open_ui())  # el Edge del arranque y el del acceso directo: uno
+            self.assertEqual(popen.call_count + wb.call_count, 1)
+            self.assertIn("no se abre otro", log.call_args[0][0])
+            server._UI_OPENED[0] = time.monotonic() - server.UI_REOPEN_GAP - 1  # el usuario lo cerró hace rato
+            self.assertTrue(server.open_ui())
+            self.assertEqual(popen.call_count + wb.call_count, 2)
+
+
+HOLD = ("import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import server\n"
+        "print(server.instance_lock(sys.argv[2], int(sys.argv[3])), flush=True)\n"
+        "sys.stdin.read()\n")
+
+
+class InstanciaUnicaTests(unittest.TestCase):
+    def setUp(self):
+        self.data = tempfile.mkdtemp(prefix="chuleta-instancia-")
+        p = mock.patch.object(server, "_INSTANCE", [])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def hold(self, port):
+        p = subprocess.Popen([sys.executable, "-c", HOLD, APP, self.data, str(port)], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(p.stdout.close)
+        self.addCleanup(lambda: p.stdin.closed or p.stdin.close())
+        self.addCleanup(lambda: p.poll() is None and (p.kill() or p.wait(15)))
+        self.assertEqual(p.stdout.readline().strip(), "True")
+        return p
+
+    def close_fds(self):
+        for fd in server._INSTANCE:
+            os.close(fd)
+        server._INSTANCE[:] = []
+
+    def test_una_sola_copia_por_carpeta_de_datos_y_puerto(self):
+        otra = self.hold(8765)
+        t = time.time()
+        self.assertIs(server.instance_lock(self.data, 8765), False)  # al instante, sin esperar a ningún puerto
+        self.assertLess(time.time() - t, 1)
+        self.assertIs(server.instance_lock(self.data, 8766), True)  # otro puerto: otra copia (--port, pruebas)
+        self.assertFalse(os.get_inheritable(server._INSTANCE[0]))  # los procesos hijos no se la quedan
+        self.close_fds()
+        otra.stdin.close()  # la otra copia termina: el sistema suelta la marca
+        otra.wait(15)
+        self.assertIs(server.instance_lock(self.data, 8765, wait=5), True)
+        self.close_fds()
+
+    def test_la_marca_se_suelta_aunque_maten_el_proceso(self):
+        otra = self.hold(8765)
+        otra.kill()
+        otra.wait(15)
+        self.assertIs(server.instance_lock(self.data, 8765, wait=5), True)
+        self.close_fds()
+
+    def test_sin_carpeta_de_datos_sigue_como_antes(self):
+        fichero = os.path.join(self.data, "no-es-carpeta")
+        with open(fichero, "w") as f:
+            f.write("x")
+        with mock.patch.object(server, "log"):
+            self.assertIsNone(server.instance_lock(fichero, 8765))
+
+
+class SegundaCopiaTests(unittest.TestCase):
+    """main() con la marca de instancia: lo que hace la copia que sobra según lo que vea en el puerto."""
+
+    def run_main(self, instancia, estados, retirar="libre", mostrar=None, reserve=None):
+        argv = ["server.py", "--port", "8797", "--data", tempfile.mkdtemp(prefix="chuleta-datos-")]
+        srv, lines, m = mock.MagicMock(), [], {}
+        patches = [mock.patch.object(sys, "argv", argv), mock.patch.object(server, "Window"),
+                   mock.patch.object(server, "setup_logging"), mock.patch.object(server, "start_session"),
+                   mock.patch.object(server, "set_app_id", return_value=False),
+                   mock.patch.object(server, "probe_running", side_effect=estados),
+                   mock.patch.object(server, "PORT", server.PORT), mock.patch.object(server, "URL", server.URL),
+                   mock.patch.object(server, "DATA_DIR", server.DATA_DIR), mock.patch.object(server, "SERVER", None),
+                   mock.patch.object(server, "WINDOW", None), mock.patch.object(server.Handler, "app", None),
+                   mock.patch.dict(os.environ), mock.patch.object(server, "log", lines.append)]
+        nombrados = {"App": mock.patch.object(server, "App"),
+                     "fatal": mock.patch.object(server, "fatal", side_effect=SystemExit(1)),
+                     "lock": mock.patch.object(server, "instance_lock", side_effect=instancia),
+                     "retire": mock.patch.object(server, "retire_other_version", return_value=retirar),
+                     "reserve": mock.patch.object(server, "reserve_port", **(reserve or {"return_value": srv})),
+                     "ask": mock.patch.object(server, "ask_running_to_show", return_value=mostrar),
+                     "open_ui": mock.patch.object(server, "open_ui")}
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            for k, p in nombrados.items():
+                m[k] = stack.enter_context(p)
+            try:
+                server.main()
+                m["exited"] = False
+            except SystemExit:
+                m["exited"] = True
+        m["log"] = "\n".join(lines)
+        return m
+
+    def test_otra_copia_arrancando_sale_sin_esperar_ni_avisar(self):
+        for estado in ("arrancando", "libre", "otro"):
+            with self.subTest(estado):
+                r = self.run_main([False], [estado])
+                self.assertFalse(r["exited"])
+                for k in ("App", "reserve", "ask", "open_ui", "fatal"):
+                    r[k].assert_not_called()
+                self.assertIn(f"ya se está abriendo en otra copia ({estado}): su ventana saldrá sola", r["log"])
+
+    def test_otra_copia_abierta_le_pide_la_ventana(self):
+        r = self.run_main([False], ["app"], mostrar={"ok": True, "pending": True})
+        r["ask"].assert_called_once()
+        r["open_ui"].assert_not_called()
+        r["App"].assert_not_called()
+        r["reserve"].assert_not_called()
+        self.assertIn("ya estaba abierta", r["log"])
+        self.assertIn("aún se está abriendo: su ventana saldrá sola", r["log"])
+
+    def test_si_la_otra_no_contesta_a_mostrar_edge_desde_aqui(self):
+        r = self.run_main([False], ["app"], mostrar=None)
+        r["open_ui"].assert_called_once()
+        r["App"].assert_not_called()
+
+    def test_otra_version_con_marca_se_retira_y_se_arranca(self):
+        r = self.run_main([False, True], ["otra_version"], retirar="libre")
+        r["retire"].assert_called_once()
+        self.assertEqual(r["lock"].call_args_list[1], mock.call(mock.ANY, mock.ANY, wait=5.0))
+        r["reserve"].assert_called_once()
+        r["App"].assert_called_once()
+        r["ask"].assert_not_called()
+
+    def test_otra_version_que_no_se_cierra_acaba_en_el_aviso_de_siempre(self):
+        r = self.run_main([False], ["otra_version"], retirar="otra_version", reserve={"side_effect": SystemExit(1)})
+        self.assertTrue(r["exited"])
+        r["reserve"].assert_called_once()  # reserve_port da el aviso «otra versión que no se ha podido cerrar»
+        r["App"].assert_not_called()
+        r["ask"].assert_not_called()
+
+    def test_sin_marca_de_instancia_como_antes(self):
+        r = self.run_main([None], ["arrancando"])
+        r["reserve"].assert_called_once()
+        r["App"].assert_called_once()
 
 
 if __name__ == "__main__":

@@ -119,6 +119,33 @@ Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta
   café (`/api/acerca/abrir` con `que: "donar"` lo abre en el navegador del sistema). Sin ventanas emergentes ni
   recordatorios.
 
+### Doble apertura al arrancar (07/11/2026)
+Lo que se veía como «se me abrían como 2 veces la app»: al pulsar el acceso directo otra vez mientras la app
+arrancaba (en el portátil de la prueba del 02/11/2026, 31 s entre el arranque y la ventana), salían la ventana de
+Chuleta y otra de Edge con la misma interfaz, o un aviso de «No se puede usar el puerto 8765: lo tiene otro programa».
+- **Instancia única de verdad.** Al arrancar, la app bloquea `instancia-8765.lock` en su carpeta de datos (el sistema
+  lo suelta al terminar el proceso, también si se cuelga o se mata). Un segundo lanzamiento lo ve al instante: si la
+  primera copia ya contesta, le pide su ventana; si aún no, termina sin más, porque la ventana saldrá sola. Ya no se
+  queda 20 s esperando al puerto ni acaba en el aviso de «puerto ocupado».
+- **La ventana «en camino».** Desde que la app empieza a abrir su ventana hasta que se ve, `/api/mostrar` (lo que pide
+  el acceso directo) ya no abre Edge: contesta que está en camino y, cuando aparece, se pone delante. Antes, en ese
+  rato, la ventana aún no existía (y se abría Edge) o existía sin enseñarse: pywebview esperaba hasta 20 s y el
+  acceso directo, cansado a los 5, abría Edge él mismo. Si en 2 minutos no llega a verse, se da por perdida y entonces
+  sí se abre Edge.
+- **Edge una sola vez.** Sin ventana propia (sin WebView2), un segundo lanzamiento a los pocos segundos ya no abre
+  otro Edge encima del que se está abriendo (15 s).
+- **Al frente.** El acceso directo cede a la app que ya corre el permiso de Windows para ponerse delante
+  (`AllowSetForegroundWindow`; Windows solo se lo da al programa que acaba de abrir el usuario), y la ventana que se
+  estaba abriendo se pone delante al aparecer si alguien la pidió mientras tanto.
+- El log dice qué copia es cada una (`pid` en «arranque», en `/api/ping` y en las líneas de la segunda copia), y
+  «Copiar diagnóstico» enseña las líneas nuevas y «ventana abierta (WebView2; hwnd …)».
+- Tests: `tests/test_doble_apertura.py` (dos `server.py` de verdad con un pywebview falso que espera a «shown» como
+  el 6.2.1 y los tiempos de un PC lento; la marca de instancia entre procesos, también matando al primero; la ventana
+  en camino; Edge una vez; lo que hace `main()` en cada caso) y `VentanaRealTests` en windows-real con WebView2 de
+  verdad (la segunda copia antes de crear la ventana y con la ventana creada sin enseñar). Sin el arreglo, 4 de 5
+  escenarios y los 2 de windows-real fallaban con una ventana de Edge de más. lookfeel-e2e pulsa además el acceso
+  directo justo cuando el instalador abre la app: una ventana, ningún Edge, la segunda copia termina sola.
+
 ### Arranque, primera pantalla y detección de llamadas (pruebas del 02/11/2026)
 Lo que falló en la primera prueba de la versión del 01/11/2026 en un portátil de empresa, con su causa y su arreglo.
 - **La interfaz ya no depende de importar Whisper.** Al abrirse, la página pide `/api/config`, que comprobaba qué

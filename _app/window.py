@@ -11,6 +11,9 @@ ventana mas de Edge. Si pywebview no esta instalado o no puede crear la ventana,
     (server.shutdown): ocultar ahi es lo que hacia que Windows dijera que la app impide apagar.
   - Sin el runtime de WebView2, pywebview usaria MSHTML (el motor de Internet Explorer): run() no abre la ventana y
     server.py abre Edge.
+  - Desde que se crea Window hasta que la ventana se ensena (evento shown) esta «en camino» (pending): en un PC lento
+    son decenas de segundos y el usuario vuelve a pulsar el acceso directo. Si en ese rato otra copia pide
+    /api/mostrar, no se abre Edge (eran las «2 veces la app» del 02/11/2026): la ventana sale sola y se trae al frente.
 """
 import os
 import threading
@@ -99,6 +102,9 @@ QUIT_REASONS = ("WindowsShutDown", "TaskManagerClosing")
 LET_CLOSE = QUIT_REASONS + ("ApplicationExitCall",)  # Application.Exit: la app ya se esta cerrando
 END_SESSION_WAIT = 5.0  # s que el hilo de la ventana espera al apagado limpio mientras Windows espera la respuesta
 _END_SESSION = []  # [fn]: el apagado limpio de server.py, shutdown(motivo) (Window.set_end_session)
+# s que la ventana puede estar «en camino» sin ensenarse: pasado ese tiempo se da por perdida y /api/mostrar abre Edge
+# (en el PC de Bernardo tardo 31 s el 02/11/2026; un arranque normal, 2-10 s)
+PENDING_MAX = 120.0
 
 
 def close_reason(v):
@@ -117,6 +123,17 @@ class Window:
         self.native = False  # True con los manejadores propios de FormClosing/FormClosed enganchados (WinForms)
         self.ended = False   # ya se ha lanzado el apagado por fin de sesion
         self.on_end_session = None  # si no, el registrado con set_end_session (los tests ponen aqui un doble)
+        self._lock = threading.Lock()
+        # «en camino» desde aqui hasta shown (o hasta que run() vuelva): ver pending
+        self._pending_since = time.monotonic() if self.webview is not None else None
+        self.want_front = False  # otra copia la ha pedido mientras se abria: al ensenarse, al frente
+        self.shown_once = False  # _on_shown ha corrido (pywebview lanza su hilo ANTES de marcar events.shown)
+
+    @property
+    def pending(self):
+        """La ventana propia se esta abriendo (aun no se ha ensenado) y no hace PENDING_MAX s que empezo."""
+        t = self._pending_since
+        return t is not None and time.monotonic() - t < PENDING_MAX
 
     @staticmethod
     def set_end_session(fn):
@@ -159,6 +176,8 @@ class Window:
             return False
         finally:
             self.alive = False
+            with self._lock:
+                self._pending_since = None  # se ha cerrado o no se ha podido abrir: ya no esta en camino
 
     # --- eventos (hilo de la ventana)
     def _on_shown(self):
@@ -171,6 +190,16 @@ class Window:
             log(f"ventana abierta ({'WebView2' if WINDOWS else 'pywebview'}; hwnd {self.hwnd})")
         except Exception:
             log_exc()
+        finally:
+            with self._lock:
+                self.shown_once, self._pending_since = True, None
+                front, self.want_front = self.want_front, False
+            if front:  # el acceso directo se pulso otra vez mientras se abria
+                log("   se ha vuelto a abrir mientras arrancaba: la ventana se trae al frente")
+                try:
+                    self._to_front()
+                except Exception:
+                    log_exc()
 
     def _hook_native(self):
         """Manejadores propios de FormClosing y FormClosed en la Form de WinForms, despues de los de pywebview: son los
@@ -308,22 +337,42 @@ class Window:
         return found[0] if found else None
 
     # --- desde otros hilos
+    def request_show(self):
+        """POST /api/mostrar (el acceso directo, desde otra copia): "shown" si se ha ensenado; "pending" si aun se esta
+        abriendo (sale sola y, al salir, se trae al frente: no hay que abrir nada mas); None si no hay ventana propia
+        (entonces, Edge)."""
+        with self._lock:
+            if self.pending:
+                self.want_front = True
+                return "pending"
+        return "shown" if self.show() else None
+
     def show(self):
-        """Vuelve a ensenar la ventana (POST /api/mostrar). False si ya no hay ventana (entonces, el navegador)."""
+        """Vuelve a ensenar la ventana. False si ya no hay ventana (entonces, el navegador) o si nunca llego a
+        ensenarse: pywebview esperaria a «shown» hasta 20 s (_shown_call) y quien la pide se cansa a los 5."""
         if not (self.alive and self.w):
+            return False
+        shown = getattr(getattr(self.w, "events", None), "shown", None)
+        if not self.shown_once and callable(getattr(shown, "is_set", None)) and not shown.is_set():
+            log(f"la ventana propia no se ha enseñado en {PENDING_MAX:.0f} s: se abre en Edge")
             return False
         try:
             self.w.show()  # Show() + Activate()
-            if WINDOWS and self.hwnd:
-                import ctypes
-                user32 = ctypes.windll.user32
-                if user32.IsIconic(self.hwnd):
-                    user32.ShowWindow(self.hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(self.hwnd)  # si Windows no lo permite, parpadea en la barra
+            self._to_front()
             return True
         except Exception:
             log_exc()
             return False
+
+    def _to_front(self):
+        """Restaura si esta minimizada y la pone delante. Windows solo lo deja si este proceso tiene permiso: el acceso
+        directo se lo cede (server.allow_foreground); si no, parpadea en la barra de tareas."""
+        if WINDOWS and self.hwnd:
+            import ctypes
+            user32 = ctypes.windll.user32
+            if user32.IsIconic(self.hwnd):
+                user32.ShowWindow(self.hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(self.hwnd)
 
     def destroy(self):
         """Cierra de verdad (apagar): run() vuelve en el hilo principal."""

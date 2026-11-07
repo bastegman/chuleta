@@ -279,7 +279,7 @@ class OtraVersionTests(unittest.TestCase):
 
     def test_el_ping_lleva_la_version(self):
         src = read_app("server.py")
-        self.assertIn('"/api/ping": lambda q: {"app": "audios", "version": VERSION}', src)
+        self.assertIn('"/api/ping": lambda q: {"app": "audios", "version": VERSION, "pid": os.getpid()}', src)
 
     def retirar(self, respuestas, puerto_libre, windows=True, pid=4242, python=True):
         llamadas, corridos = [], []

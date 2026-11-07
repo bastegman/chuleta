@@ -315,6 +315,15 @@ if (Test-Path -LiteralPath (Join-Path $logDir "instalar.log")) { Remove-Item -Li
 $env:NOTAS_INSTALADOR_AUTOCERRAR = "15"
 $env:NOTAS_INSTALADOR_SIMULAR_FALLO = ""
 $rc = Run-Installer $dir1 "c.instalador" 25  # pip real (faster-whisper, sherpa-onnx, pywebview, pywin32): 5-14 min segun el runner
+# doble apertura (Bernardo, msg 1143: "se me abrian como 2 veces la app"): el instalador acaba de abrir la app (como
+# "Abrir"; aqui, el autocierre) y el usuario pulsa ademas el acceso directo mientras arranca. Se comprueba en e)
+$deskDoble = Join-Path ([Environment]::GetFolderPath("Desktop")) "$App.lnk"
+$doble = $null
+if (Test-Path -LiteralPath $deskDoble) {
+    $ldoble = Get-Lnk $deskDoble
+    $doble = Start-Process -FilePath $ldoble.TargetPath -ArgumentList $ldoble.Arguments -WorkingDirectory $ldoble.WorkingDirectory -PassThru
+    $null = $doble.Handle  # sin el handle, PowerShell 5.1 no guarda ExitCode cuando el proceso termina
+}
 Copy-Logs "c"
 $ilog = Last-Run-Log 400
 Check "c.exitcode_0" ($rc -eq 0) $rc
@@ -427,6 +436,14 @@ Check "e.proceso_pythonw" ($proc -and $proc.Name -ieq "pythonw") $(if ($proc) { 
 $w = Ventana "icons" "app"
 Check "e.ventana_visible" ($w.hwnd -and $w.visible) ("hwnd=$($w.hwnd) clase=$($w.class) visible=$($w.visible) pid=$($w.pid)")
 Check "e.titulo" ($w.title -eq $App) "$($w.title)"
+# la segunda copia (el acceso directo pulsado durante el arranque) termina sola, sin aviso de error, y no deja Edge
+$dobleSalio = [bool]($doble -and $doble.WaitForExit(30000))
+Check "e.doble_apertura_segunda_termina" ($dobleSalio -and $doble.ExitCode -eq 0) $(if ($doble) { "pid $($doble.Id) exit=$(if ($dobleSalio) { $doble.ExitCode } else { 'sigue viva' })" } else { "sin acceso directo" })
+$edgeApp = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { "$($_.CommandLine)" -like "*--app=http://127.0.0.1:$Port*" })
+Check "e.doble_apertura_sin_edge" ($edgeApp.Count -eq 0) ("msedge --app: " + $edgeApp.Count)
+$slogDoble = Tail-Log "server.log" 200
+Note "e.doble_apertura_log" (($slogDoble -split "`n" | Select-String "abriendo|ya estaba abierta|cookie entregada") -join " | ")
+Check "e.doble_apertura_sin_aviso" (-not ($slogDoble -match "no ha podido arrancar")) (($slogDoble -split "`n" | Select-String "no ha podido arrancar") -join " | ")
 Check "e.pid_ventana_es_el_servidor" ($w.pid -eq $appPid) "$($w.pid) vs $appPid"
 Note "e.iconos_hwnd" ($(if ($w.icons) { ($w.icons.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value.px)" }) -join " " } else { "" }))
 Check "e.icon_big_256" ($w.icons -and $w.icons.ICON_BIG.px -eq "256x256") "$($w.icons.ICON_BIG.px)"
