@@ -10,6 +10,23 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Configuración en tres pasos: dónde se procesa, a la vista y con las mismas palabras (07/11/2026)
+Bernardo, 06/11/2026: «Lo de config es un desastre. El UX es muy difícil y malo de seguir.»
+- **La línea del modo.** El diálogo Grabar, la cabecera del directo, la Cola y el chip «EN VIVO» dicen lo mismo y con
+  las mismas palabras: «Se transcribe en este PC (Normal) y al terminar la resume Claude con tu cuenta», «Se transcribe
+  en este PC (Normal). Sin resumen con IA» o «Se transcribe con Groq y al terminar la resume Groq». Cada modelo tiene
+  un solo nombre (Rápido, Normal, Preciso, Máxima). Los modelos del directo y «Rehacer con este modelo» quedan detrás
+  de «Cambiar».
+- **«Preparando la transcripción».** Mientras se descarga o se carga el modelo del directo, la cabecera lo dice con
+  barra, %, MB y tiempo, y que la grabación sigue sin perder nada. El hueco del texto ya no dice «Escuchando…» ni la
+  Cola «al día» con 0:00 transcrito. En Grabar, si el modelo aún no está en el PC, lo avisa con su tamaño y
+  «Descargar ahora».
+- **Errores en una frase con qué hacer** (`explicar.py`): Claude Code sin sesión, sin instalar, sin respuesta o con el
+  plan en su límite de uso; una pieza de la instalación que falta («No module named…»); un proxy que contesta en lugar
+  de la API. Los de la nube y la descarga de modelos ya venían en una frase (`connection_error`, `cloud_http_error`): se
+  dejan igual y ganan su botón. La Cola, los avisos, «Comprobar» y «Probar conexión» usan la misma frase; el texto
+  técnico sigue en `server.log`.
+
 ### Transcribir con los tres modos: descarga de Whisper con progreso y la verdad sobre el motor (07/11/2026)
 Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta de Claude» no transcribía, al grabar
 «Modelo» parecía seguir en Groq y «Descargando modelo medium» no acababa.

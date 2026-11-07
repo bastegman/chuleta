@@ -37,6 +37,7 @@ from urllib.parse import parse_qs, urlparse
 
 import calendario
 import engines
+import explicar
 import live
 import salidas
 import voices
@@ -1788,6 +1789,8 @@ class Job:
         if self.live:
             d.update(live=True, recording=self.recording, recorded=round(self.recorded, 1),
                      transcribed=round(self.transcribed, 1), rev=self.rev, directo=self.directo)
+        if self.error:  # el error en una frase con qué hacer (explicar.py); «error» sigue siendo el técnico
+            d["aviso"] = explicar.explicar(self.error)
         return d
 
 
@@ -4642,16 +4645,18 @@ class App:
             version, secs = cls(settings_dir=DATA_DIR).check(ruta, model=modelo)
         except engines.EngineError as e:
             log(f"   agente: {cls.label}: {e}")
-            raise ApiError(str(e))
+            raise ApiError(explicar.explicar(e)["frase"])
         self.settings.update(lambda d: d.update(agente_version=version, agente_comprobado=time.time()))
         log(f"   agente: {cls.label} {version} comprobado ({secs:.1f} s)")
         return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta}
 
     def test_cloud(self, b):
+        cloud = self.settings.get()["cloud"]
         try:
-            secs = self.jobs.cloud.test(self.settings.get()["cloud"])
+            secs = self.jobs.cloud.test(cloud)
         except engines.EngineError as e:
-            raise ApiError(str(e))
+            prov = (engines.PROVIDERS.get(cloud.get("provider") or "groq") or {}).get("label")
+            raise ApiError(explicar.explicar(e, proveedor=prov)["frase"])
         return {"ok": True, "seconds": round(secs, 2)}
 
     # --- modelos de Whisper en este PC (engines.WhisperModels): estado, descarga con progreso y cancelar

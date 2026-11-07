@@ -332,7 +332,8 @@ class TresModosE2E(unittest.TestCase):
         rel = "Pruebas/" + time.strftime("%Y-%m-%d %H-%M-%S") + f" - {nombre}.wav"
         grab = GrabacionEnCurso(os.path.join(self.root, rel), self.pcm)
         self.abrir(rel)
-        self.pg.wait_for_selector(".lh-label .motor", timeout=30000)
+        # los modelos del directo van detrás de «Cambiar» (la línea del modo se ve; ellos, en el DOM)
+        self.pg.wait_for_selector(".lh-label .motor", state="attached", timeout=30000)
         etapas, motor, j = set(), None, []
         fin = time.time() + 30
         while time.time() < fin:  # el directo arranca solo en ~3 s; se mira lo que enseña la cabecera
@@ -411,7 +412,9 @@ class TresModosE2E(unittest.TestCase):
         rel, motor, job, _ = self.directo("Directo con Claude")
         self.foto("2-directo-claude")
         self.assertEqual(motor, "en este PC · Whisper medium")  # Claude no transcribe: Whisper en el PC
-        self.assertIn("Claude Code solo hace el resumen", pg.inner_text("#lHero"))
+        # la línea del modo (configurar.js, 07/11/2026) dice dónde se transcribe y quién resume
+        self.assertIn("Se transcribe en este PC (Normal) y al terminar la resume Claude con tu cuenta",
+                      pg.inner_text("#lHero [data-modo-linea]"))
         self.assertNotIn("groq", pg.text_content(".lh-label").lower())
         self.esperar_texto(rel, "test", 300)
         self.assertFalse([p for p in self.groq.peticiones], "con Claude no puede salir nada hacia Groq")

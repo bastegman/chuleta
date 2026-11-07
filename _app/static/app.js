@@ -258,15 +258,22 @@ function liveStatus(a, j) {
     if (!a.recording) return '';
     // el último directo de esta grabación falló: se dice por qué (antes solo quedaba un aviso que se iba)
     const l = lastJobFor(a.path);
-    if (l && l.live && l.status === 'error' && l.error) return `<span class="motor-err"><b>No se ha podido transcribir en directo.</b> ${esc(l.error)}</span> La grabación sigue; cuando lo arregles, pulsa «Transcribir en directo».`;
+    if (l && l.live && l.status === 'error' && l.error) return `<span class="motor-err"><b>No se ha podido transcribir en directo.</b> ${esc(l.aviso?.frase || l.error)}</span> La grabación sigue; cuando lo arregles, pulsa «Transcribir en directo».`;
     return 'La transcripción en directo está parada. Elige modelo y pulsa «Transcribir en directo».';
   }
+  if (typeof prepEstado === 'function' && prepEstado(j)) return '';  // lo dice «Preparando la transcripción», con su %
   if (/Cargando|Descargando|Reinici|Rehaciendo|Empezando/.test(j.stage)) return esc(j.stage);
   const lag = Math.max(0, j.recorded - j.transcribed);
   const p = S.presetsById[j.preset] || {};
   if (lag <= 75) return `<b>Al día</b> · el texto va unos ${Math.max(5, Math.round(lag / 5) * 5)} s por detrás de lo que se dice`;
   const slow = (p.live_speed || 1) < 1.05 && j.recording;
   return `<b>Poniéndose al día</b> · ${fmtLeft(lag)} por detrás${slow ? ' · este modelo no da abasto en directo: terminará después de la grabación' : ''}`;
+}
+/* lo que obliga a repintar la cabecera del directo entera (el resto se refresca en su sitio) */
+function liveHeroSig(a, j, sel, mine, muted) {
+  const p = S.presetsById[sel] || {}, falta = !j && p.cached === false ? (S.modelos?.[p.model]?.downloading ? 'd' : 'f') : '';
+  return (j ? j.id + j.preset : 'none') + sel + mine + muted + (S.config.procesado || '') + (S.lhModelos ? 'm' : '')
+    + (typeof prepEstado === 'function' && prepEstado(j) ? 'p' : '') + falta;
 }
 function renderLiveHero(a) {
   const el = $('#lHero');
@@ -276,7 +283,7 @@ function renderLiveHero(a) {
   const mine = !!(S.rec.recording && S.rec.path === a.path);  // la esta grabando esta app (no OBS)
   syncClock(a);
   const muted = !!(mine && S.rec.mic_muted);
-  el.dataset.sig = (j ? j.id + j.preset : 'none') + sel + mine + muted + (S.config.procesado || '');  // el modo: «Modelo» dice dónde
+  el.dataset.sig = liveHeroSig(a, j, sel, mine, muted);  // el modo y «Cambiar»: la línea del modo dice dónde
   el.innerHTML = `<div class="live-hero card" data-live-path="${esc(a.path)}">
     <div class="lh-row">
       <span class="rec-badge"><i class="recdot"></i>EN VIVO</span>
@@ -296,12 +303,15 @@ function renderLiveHero(a) {
     ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
     ${typeof perfilLiveHtml === 'function' ? perfilLiveHtml(a) : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
-    <div class="lh-label">Modelo${typeof motorHtml === 'function' ? motorHtml(sel) : ''} ${j ? '<span class="muted">(el cambio se aplica desde el siguiente trozo)</span>' : ''}</div>
+    ${typeof modoLineaHtml === 'function' ? modoLineaHtml(sel, { cambiar: 'lh-modelos', abierto: S.lhModelos, falta: !j }) + prepHtml(j) : ''}
+    <div class="lh-modelos${S.lhModelos || typeof modoLineaHtml !== 'function' ? '' : ' hidden'}">
+    <div class="lh-label">Modelo del directo${typeof motorHtml === 'function' ? motorHtml(sel) : ''} ${j ? '<span class="muted">(el cambio se aplica a lo que se diga a partir de ahora)</span>' : ''}</div>
     ${liveModels(sel, j)}
-    ${typeof motorNotaHtml === 'function' ? motorNotaHtml(sel, !!j) : ''}
     ${S.presetsById[sel]?.live_note ? `<div class="lh-note">${esc(S.presetsById[sel].live_note)}</div>` : ''}
+    ${j && typeof modoLineaHtml === 'function' ? `<div class="lh-actions"><button class="btn sm" data-act="live-restart" data-id="${j.id}">${I.refresh}Rehacer desde el principio con este modelo</button></div>` : ''}
+    </div>
     <div class="lh-actions">
-      ${j ? `<button class="btn sm" data-act="live-restart" data-id="${j.id}">${I.refresh}Rehacer desde el principio con este modelo</button>` : ''}
+      ${j && typeof modoLineaHtml !== 'function' ? `<button class="btn sm" data-act="live-restart" data-id="${j.id}">${I.refresh}Rehacer desde el principio con este modelo</button>` : ''}
       <button class="btn sm" data-act="play-live" data-path="${esc(a.path)}">${I.play}Escuchar lo grabado</button>
       <button class="btn sm" data-act="consent" title="Texto para pegar en el chat de Teams">${I.clipboard}Copiar aviso de grabación</button>
       <button class="btn sm" data-act="reveal" data-path="${esc(a.path)}">${I.ext}Mostrar en carpeta</button>
@@ -314,10 +324,14 @@ function updateLiveHero(a) {
   const j = liveJob(a);
   const sel = j ? j.preset : (S.livePreset || S.config.live_preset || 'medium');
   const mine = !!(S.rec.recording && S.rec.path === a.path);
-  if (el.dataset.sig !== (j ? j.id + j.preset : 'none') + sel + mine + !!(mine && S.rec.mic_muted) + (S.config.procesado || '')) return renderLiveHero(a);
+  if (el.dataset.sig !== liveHeroSig(a, j, sel, mine, !!(mine && S.rec.mic_muted))) return renderLiveHero(a);
   syncClock(a);
   const st = $('[data-lh-status]', el);
   if (st) st.innerHTML = liveStatus(a, j);
+  const pr = $('[data-prep]', el);
+  if (pr && typeof prepHtml === 'function') pr.outerHTML = prepHtml(j);
+  const hueco = $('[data-prep-hueco]');
+  if (hueco && typeof prepHueco === 'function') hueco.textContent = prepHueco(j) || hueco.dataset.base || '';
   const bar = $('[data-lh-bar]', el);
   if (bar && j) bar.style.width = (100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1) + '%';
 }
@@ -329,7 +343,9 @@ function renderLiveChip() {
   syncClock(a);
   chip.href = href('a', a.path);
   $('[data-rec-clock]', chip).dataset.recClock = a.path;
-  chip.title = lives.length > 1 ? `${lives.length} grabaciones en curso` : 'Grabación en curso: ' + fullTitle(a);
+  const lj = liveJob(a);
+  chip.title = lives.length > 1 ? `${lives.length} grabaciones en curso` : 'Grabación en curso: ' + fullTitle(a)
+    + (typeof modoLinea === 'function' ? `. ${modoLinea(lj ? lj.preset : (S.livePreset || S.config.live_preset || 'medium'))}.` : '');
 }
 function liveBanner(a) {
   const j = liveJob(a);
@@ -466,16 +482,33 @@ async function openRec() {
         <label class="on"><input type="radio" name="rMode" value="live" checked><b>Transcribir en directo</b><span>El texto va apareciendo mientras se habla</span></label>
         <label><input type="radio" name="rMode" value="rec"><b>Solo grabar</b><span>Si el portátil va lento: la transcribes al terminar</span></label>
       </div>
-      <div id="rLiveOpts"><select id="rPreset">${presets}</select></div>
-      <div id="rMotor">${typeof motorNotaHtml === 'function' ? motorNotaHtml(S.config.live_preset || 'medium') : ''}</div>
+      <div id="rMotor">${typeof modoLineaHtml === 'function' ? modoLineaHtml(S.config.live_preset || 'medium', { cambiar: 'r-cambiar', falta: true })
+        : typeof motorNotaHtml === 'function' ? motorNotaHtml(S.config.live_preset || 'medium') : ''}</div>
+      <div id="rLiveOpts"${typeof modoLineaHtml === 'function' ? ' class="hidden"' : ''}><label style="margin-top:8px">Modelo del directo</label><select id="rPreset">${presets}</select></div>
       <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">${I.clipboard}Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
     if (typeof perfilBindRec === 'function') perfilBindRec(d);  // Proyecto/Tema, importar listas y «Guardar como perfil»
     const micVal = () => $('#rMicOn', d).checked ? $('#rMic', d).value : 'none';
     const monitor = () => api('/api/rec/monitor', { mic: micVal(), sys: $('#rSys', d).value }).catch(() => { });
     $('#rMic', d).onchange = $('#rSys', d).onchange = monitor;
     $('#rMicOn', d).onchange = () => { $('#rMicBox', d).classList.toggle('off', !$('#rMicOn', d).checked); monitor(); };
-    $('#rMode', d).onchange = () => { const live = d.querySelector('[name=rMode]:checked').value === 'live'; $$('#rMode label', d).forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#rLiveOpts', d).classList.toggle('off', !live); $('#rMotor', d).classList.toggle('off', !live); };
-    $('#rPreset', d).addEventListener('change', () => { if (typeof motorNotaHtml === 'function') $('#rMotor', d).innerHTML = motorNotaHtml($('#rPreset', d).value); });
+    // la línea del modo: el motor del directo o, con «Solo grabar», el de la cola (configurar.js)
+    const motorRec = () => d.querySelector('[name=rMode]:checked').value === 'live' ? $('#rPreset', d).value : (S.config.preset || 'rapido');
+    const pintaMotor = () => {
+      if (typeof modoLineaHtml !== 'function') return;
+      const live = d.querySelector('[name=rMode]:checked').value === 'live', m = $('#rMotor', d);
+      m.dataset.preset = motorRec();
+      m.innerHTML = modoLineaHtml(m.dataset.preset, { cambiar: live ? 'r-cambiar' : '', abierto: !$('#rLiveOpts', d).classList.contains('hidden'), falta: true });
+    };
+    $('#rMotor', d).dataset.preset = motorRec();
+    $('#rMotor', d).addEventListener('click', e => {
+      if (!e.target.closest('[data-act="r-cambiar"]')) return;
+      e.preventDefault();
+      $('#rLiveOpts', d).classList.toggle('hidden');
+      pintaMotor();
+    });
+    d.pintaMotor = pintaMotor;  // al llegar el % de una descarga (configurar.js)
+    $('#rMode', d).onchange = () => { const live = d.querySelector('[name=rMode]:checked').value === 'live'; $$('#rMode label', d).forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#rLiveOpts', d).classList.toggle('off', !live); if (!live) $('#rLiveOpts', d).classList.add('hidden'); pintaMotor(); };
+    $('#rPreset', d).addEventListener('change', pintaMotor);
     d.querySelector('[data-m="consent"]').onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
     // workstream: cuanto le cabe a Whisper y, al elegirlo, se graba en la carpeta de su proyecto
     const vocabSel = () => S.vocab.find(v => v.id === $('#rVocab', d)?.value);
@@ -828,7 +861,9 @@ function jobSub(j) {
   if (j.live) {
     parts.push(`transcrito hasta ${fmtClock(j.transcribed)} de ${fmtClock(j.recorded)}${j.recording ? ' grabados' : ''}`);
     const lag = j.recorded - j.transcribed;
-    if (j.status === 'running' && j.recording) parts.push(lag > 90 ? `poniéndose al día (${fmtLeft(lag)} por detrás)` : 'al día');
+    const prep = typeof prepCola === 'function' ? prepCola(j) : '';  // descargando o cargando el modelo: aún no va «al día»
+    if (j.status === 'running' && j.recording) parts.push(prep || (lag > 90 ? `poniéndose al día (${fmtLeft(lag)} por detrás)` : 'al día'));
+    else if (prep) parts.push(prep);
     if (j.status === 'done' && j.elapsed) parts.push(`terminado`);
     return parts.join(' · ');
   }
@@ -851,9 +886,16 @@ function jobStage(j) {
   if (j.status === 'queued') return 'En cola';
   if (j.status === 'done') return j.live ? 'Grabación transcrita' : 'Transcripción lista';
   if (j.status === 'cancelled') return j.live ? 'Directo detenido' : 'Cancelado';
-  if (j.live && j.status === 'running') return `● En directo · ${j.stage}`;
+  if (j.live && j.status === 'running') return `● En directo · ${typeof prepEstado === 'function' && prepEstado(j) ? 'preparando la transcripción' : j.stage}`;
   if (j.status === 'error') return 'No se pudo transcribir';
   return j.stage;
+}
+
+/* el hueco del texto del directo: escuchando o, mientras se descarga o carga el modelo, lo que falta (configurar.js) */
+function txEscuchando(lj) {
+  const base = `Escuchando… el texto aparecerá aquí en cuanto se hable (${lj.engine === 'cloud' || S.presetsById[lj.preset]?.engine === 'cloud' ? 'unos 5–10 s' : 'unos 20–40 s'} de retraso).`;
+  const prep = typeof prepHueco === 'function' ? prepHueco(lj) : '';
+  return `<div data-prep-hueco data-base="${esc(base)}">${esc(prep || base)}</div>`;
 }
 
 /* ---------------------------------------------------------------- vistas */
@@ -1001,7 +1043,7 @@ function renderAudioJob(a) {
   if (el.dataset.id === j.id + j.status) return updateJobLine(el, j);
   el.dataset.id = j.id + j.status;
   if (j.status === 'error') {
-    el.innerHTML = `<div class="card jobline error"><div><div class="st">No se pudo transcribir</div><div class="sub">${esc(j.error)}</div></div><button class="btn sm" data-act="tx-toggle">Reintentar</button></div>`;
+    el.innerHTML = `<div class="card jobline error"><div><div class="st">No se pudo transcribir</div><div class="sub">${esc(j.aviso?.frase || j.error)}</div></div><button class="btn sm" data-act="tx-toggle">Reintentar</button></div>`;
     return;
   }
   el.innerHTML = `<div class="card jobline${j.live ? ' live' : ''}"><div><div class="st" data-st></div><div class="sub" data-sub></div></div>`
@@ -1074,7 +1116,7 @@ function renderTxSection() {
   if (!tx.segs.length) {
     const a = S.audios.get(tx.path), lj = a && liveJob(a);
     sec.innerHTML = S.viewMode === 'live'
-      ? `<div class="card empty tx-empty">${lj ? `<div class="typing"><i></i><i></i><i></i></div><div>Escuchando… el texto aparecerá aquí en cuanto se hable (${lj.engine === 'cloud' || S.presetsById[lj.preset]?.engine === 'cloud' ? 'unos 5–10 s' : 'unos 20–40 s'} de retraso).</div>`
+      ? `<div class="card empty tx-empty">${lj ? `<div class="typing"><i></i><i></i><i></i></div>${txEscuchando(lj)}`
         : '<div>La transcripción en directo está parada.</div>'}</div>`
       : `<div class="card empty tx-empty">${I.text}<div>Aún no hay transcripción.</div></div>`;
     return;
@@ -1579,6 +1621,8 @@ main.addEventListener('click', async e => {
         pollJobs(true);
       } catch (err) { toast(esc(err.message), 'err'); }
     }
+    else if (a === 'lh-modelos') { e.preventDefault(); S.lhModelos = !S.lhModelos; const au = curAudio(); if (au) renderLiveHero(au); }
+    else if (a === 'modelo-bajar') { e.preventDefault(); act.disabled = true; if (typeof modeloBajar === 'function') modeloBajar(act.dataset.model); }
     else if (a === 'live-model') {
       const preset = act.dataset.preset, pr = S.presetsById[preset];
       if (pr.engine === 'cloud' && !S.config.cloud.has_key) return openSettings();
@@ -1737,6 +1781,7 @@ async function pollJobs(now) {
 function onJobs(jobs) {
   const prev = S.jobsById;
   S.jobs = jobs;
+  if (typeof prepVigilar === 'function') prepVigilar(jobs);
   S.jobsById = new Map(jobs.map(j => [j.id, j]));
   let finished = false;
   for (const j of jobs) {
@@ -1786,13 +1831,13 @@ function notifyJob(j) {
   if (j.kind === 'voces') {
     const a = S.audios.get(j.path), title = a ? fullTitle(a) : j.name;
     if (j.status === 'done') toast(`🗣 ${esc(j.stage)}: ${esc(title)}`, 'ok', () => go('a', j.path));
-    else toast(`No se pudieron identificar las voces de ${esc(title)}: ${esc(j.error)}`, 'err', () => go('a', j.path));
+    else toast(`No se pudieron identificar las voces de ${esc(title)}: ${esc(j.aviso?.frase || j.error)}`, 'err', () => go('a', j.path));
     return;
   }
-  if (j.kind === 'summary') { if (j.status === 'error') toast(`No se pudo resumir: ${esc(j.error)}`, 'err'); return; }  // el aviso de listo lo da notas.js
+  if (j.kind === 'summary') { if (j.status === 'error') toast(`No se pudo resumir: ${esc(j.aviso?.frase || j.error)}`, 'err'); return; }  // el aviso de listo lo da notas.js
   const a = S.audios.get(j.path), title = a ? fullTitle(a) : j.name;
   if (j.status === 'done') toast(`<b>✓</b> ${j.live ? 'Grabación transcrita' : 'Transcrito'}: ${esc(title)}`, 'ok', () => go('a', j.path));
-  else toast(`No se pudo transcribir ${esc(title)}: ${esc(j.error)}`, 'err', () => go('a', j.path));
+  else toast(`No se pudo transcribir ${esc(title)}: ${esc(j.aviso?.frase || j.error)}`, 'err', () => go('a', j.path));
   if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(j.status === 'done' ? 'Transcripción lista' : 'Error al transcribir', { body: title });
     n.onclick = () => { window.focus(); go('a', j.path); };
@@ -1806,7 +1851,7 @@ function renderJobsPanel() {
       const a = S.audios.get(j.path), title = a ? fullTitle(a) : j.name;
       const pct = j.status === 'done' ? 100 : Math.round(j.progress * 100);
       const bar = isActive(j) ? `<div class="pbar${j.status === 'running' && j.progress < 0.004 ? ' indet' : ''}" style="grid-column:1/-1"><i style="width:${pct}%"></i></div>` : '';
-      const sub = j.status === 'error' ? `<div class="s err">${esc(j.error)}</div>` : `<div class="s">${esc(jobStage(j))} · ${jobSub(j)}</div>`;
+      const sub = j.status === 'error' ? `<div class="s err" title="${esc(j.error)}">${esc(j.aviso?.frase || j.error)}</div>` : `<div class="s">${esc(jobStage(j))} · ${jobSub(j)}</div>`;
       const btn = isActive(j) ? `<button class="btn ghost sm danger" data-jact="cancel" data-id="${j.id}">${j.live ? 'Detener' : 'Cancelar'}</button>`
         : `<span class="pill ${j.status === 'done' ? 'ok' : j.status === 'error' ? 'err' : ''}">${{ done: 'Hecho', error: 'Error', cancelled: 'Cancelado' }[j.status]}</span>`;
       return `<div class="jitem"><span class="n" data-jgo="${esc(j.path)}">${esc(title)}</span>${btn}${bar}${sub}</div>`;
