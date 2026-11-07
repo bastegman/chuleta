@@ -17,12 +17,22 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
   guardaba la voz de la otra persona: desde ahí esa persona salía como tú en otras reuniones y sus frases iban al
   resumen con tu nombre. Ahora tu persona solo cambia de nombre en Ajustes > Voces y solo recibe huellas de un
   hablante que eres tú. Corregir una errata del nombre en todas sus reuniones es una casilla aparte («solo corrijo el
-  nombre»).
+  nombre»). Escribir tu propio nombre en otro hablante crea otra persona (un compañero puede llamarse igual): tú te
+  marcas con «Soy yo», que ya no usa el nombre del cuadro (tu persona se llama «Yo» hasta que la cambies en Ajustes).
 - La persona asignada manda sobre la heurística del micro: un hablante al que pones nombre deja de salir como «Tú»,
   igual en pantalla que en el resumen. «No soy yo» quita un «Tú» mal puesto; «Soy yo» lo mueve al hablante bueno (y el
   que lo era solo por el micro vuelve a «Persona N»). «Soy yo» ya no renombra tu persona con el nombre que hubiera en
   el cuadro. «Fusionar con…» desde «Tú» ya no funde tu persona dentro de otra (esa persona pasaba a ser «Tú» con tus
-  huellas): en ese caso el desplegable es «Es…» y reasigna; el servidor rechaza la fusión.
+  huellas): en ese caso el desplegable es «Es…» y reasigna. Tu persona ya no se fusiona con ninguna otra, en ningún
+  sentido (al revés te quedabas con la voz de la otra); el servidor lo rechaza.
+- Lo que dejó el fallo en `voces.json`: si tu persona guarda huellas que no se parecen entre sí (la voz de otra
+  persona guardada como tuya), Ajustes > Voces lo marca con ⚠ y, mientras, tu voz no se reconoce sola por huella
+  (pregunta «¿Tú?»). Al decir que un hablante que salía como tú es otra persona (o «No soy yo»), se quitan de tu
+  persona las huellas casi iguales a esa voz (coseno ≥ 0,8). Remedio completo: «Olvidar» tu fila y volver a guardarte
+  con «Soy yo».
+- Mientras se identifican las voces de una reunión no se pueden corregir sus hablantes (lo dicho se perdería), y una
+  etiqueta abierta sobre una identificación anterior pide volver a abrirse antes de guardar nada (con otra
+  identificación, «Persona 2» puede ser otra voz y «Recordar» guardaría la huella de otro).
 - Si el micro y la huella no cuadran, pregunta en vez de decidir: «¿Ana?» si el micro dice «Tú» y la huella dice Ana;
   «¿Tú?» si la huella dice que eres tú pero en esa grabación ese hablante casi nunca habla por tu micro.
 - La línea de tiempo del micro (de donde sale «Tú») iba unos 0,9 s adelantada respecto al audio (la grabadora estampa

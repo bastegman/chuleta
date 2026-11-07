@@ -138,9 +138,11 @@ QUIÉN HABLA (opcional)
     nunca cambia el de otra persona ni el tuyo: para corregir una errata en todas sus reuniones,
     marca «solo corrijo el nombre» (o cámbialo en Ajustes > Voces).
   - «Tú» sale de tu micro o de tu voz guardada. Si se equivoca, escribe el nombre de quien era o
-    pulsa «No soy yo»; si eres tú y no sale, «Soy yo». También «Es…» / «Fusionar con…» (dos
-    etiquetas eran la misma persona), «No es esta persona» y «Olvidar persona». «Volver a
-    identificar» conserva lo que ya hayas corregido a mano.
+    pulsa «No soy yo»; si eres tú y no sale, «Soy yo» (tu persona se llama «Yo» hasta que le
+    cambies el nombre en Ajustes > Voces). También «Es…» / «Fusionar con…» (dos etiquetas eran la
+    misma persona), «No es esta persona» y «Olvidar persona». «Volver a identificar» conserva lo
+    que ya hayas corregido a mano. Si en Ajustes > Voces tu fila lleva ⚠, puede guardar la voz de
+    otra persona: pulsa «Olvidar» en ella y vuelve a marcarte con «Soy yo» y «Recordar».
   - El resumen con IA usa esos nombres (responsables y participantes), «Copiar texto» copia la
     transcripción con el nombre de quien habla y «Exportar con hablantes» guarda
     <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.

@@ -1381,7 +1381,7 @@ function transcriptText() {
   const who = whoFor(tx);
   return paragraphs(tx.segs, who).map(p => {
     const w = who && who[p[0]] && (p[0] === 0 || who[p[0]] !== who[p[0] - 1]) ? spkLabel(who[p[0]]) : '';
-    return (w ? w + ': ' : '') + p.map(i => tx.segs[i].text).join(' ');
+    return (w ? w + ': ' : '') + p.map(i => tx.segs[i].text).filter(Boolean).join(' ');
   }).join('\n\n');
 }
 

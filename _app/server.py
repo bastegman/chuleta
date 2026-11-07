@@ -2777,7 +2777,12 @@ class Jobs:
                     raise engines.EngineError(str(e))
             side = voices.sidecar_path(abs_path)
             old = voices.read_sidecar(side) or {}  # lo que el usuario ya dijo de esta reunion (se conserva)
-            restore = (side, old) if old.get("tramos") else None
+            restore = (side, json.loads(json.dumps(old))) if old else None
+            uid = (self.voices.user() or {}).get("id")
+            sin_huellas = {p["id"] for p in self.voices.personas() if not p.get("huellas")}
+            for i in (old.get("hablantes") or {}).values():  # sidecar de antes del 07/11/2026, sin «origen»: una
+                if not i.get("origen") and i.get("persona") in sin_huellas - {uid}:  # persona sin huellas solo
+                    i["origen"] = "manual"  # pudo ponerse a mano
             # el subproceso reescribe el sidecar con hablantes nuevos (h1, h2… otra vez): las huellas en memoria de la
             # identificacion anterior ya no son de esos hablantes y «Recordar» guardaria la voz de otro
             self.voice_vectors.pop(job.path, None)
@@ -2787,7 +2792,7 @@ class Jobs:
             if not data or not data.get("tramos"):
                 raise engines.EngineError("No se ha detectado voz en la grabación.")
             voices.identify(data, huellas, self.voices)
-            voices.carry_manual(old, data, usuario=(self.voices.user() or {}).get("id"), known=self.voices.names())
+            voices.carry_manual(old, data, usuario=uid, known=self.voices.names())
             srt = Transcripts().load(os.path.splitext(abs_path)[0])
             if srt and srt["kind"] == "srt":
                 voices.refresh_frases(data, srt["segments"])
@@ -4693,11 +4698,41 @@ class App:
                 "n": len(real), "known": sum(1 for i in real if i.get("persona") and not i.get("provisional")),
                 "personas": self.jobs.voices.public(), "usuario": (self.jobs.voices.user() or {}).get("id")}
 
-    def _speaker_update(self, abs_path, h, fn):
-        side = voices.sidecar_path(abs_path)
-        data = voices.read_sidecar(side)
+    def _speaker_check(self, abs_path, h, creado=None, data=None):
+        """Antes de corregir un hablante: que exista, que no se esten identificando las voces de esa reunion (lo que
+        se dijera ahora se perderia) y que la etiqueta se abriera sobre esta identificacion y no sobre una anterior
+        (`creado` del sidecar: con otra, «h2» puede ser otra voz y «Recordar» guardaria la huella de otro)."""
+        if self.jobs.active_for(rel_of(abs_path), kinds=("voces",)):
+            raise ApiError("Se están identificando las voces de esta reunión: espera a que termine para corregirlas.")
+        data = data or voices.read_sidecar(voices.sidecar_path(abs_path))
         if not data or h not in (data.get("hablantes") or {}):
             raise ApiError("Ese hablante ya no está en esta reunión (¿se volvió a identificar?).")
+        if creado and data.get("creado") and creado != data["creado"]:
+            raise ApiError("Las voces de esta reunión se han vuelto a identificar: abre otra vez la etiqueta.")
+        return data
+
+    def _not_the_user(self, rel, h, before, target):
+        """El usuario dice que el hablante h (que la app tomaba por el: `before`) es otra persona o nadie: se quitan de
+        su persona las huellas casi iguales a esa voz (la de otra persona guardada como suya). Si no se puede calcular
+        la huella de h, no se toca nada."""
+        v = self.jobs.voices
+        uid = (v.user() or {}).get("id")
+        if not uid or before != uid or target == uid or not (v.find(uid) or {}).get("huellas") \
+                or not self.jobs.voices_on():
+            return 0
+        try:
+            vec, _ = self.jobs.speaker_vector(rel, h)
+        except Exception:
+            return 0
+        n = v.drop_similar(uid, vec)
+        if n:
+            log(f"🗣 {n} huella{'s' if n != 1 else ''} quitada{'s' if n != 1 else ''} de tu persona: era la voz de "
+                "otro hablante")
+        return n
+
+    def _speaker_update(self, abs_path, h, fn, creado=None):
+        side = voices.sidecar_path(abs_path)
+        data = self._speaker_check(abs_path, h, creado)
         fn(data["hablantes"][h], data)
         voices.write_sidecar(side, data)
         self.library.at = 0
@@ -4705,16 +4740,14 @@ class App:
         return data
 
     def _persona_for_speaker(self, v, b, nombre, consent):
-        """Quien es un hablante segun lo que se pide desde su etiqueta: la persona del usuario («Soy yo», o escribir
-        su nombre), una que ya se llama asi, la que tenia con el nombre corregido (solo con `renombrar`, y nunca la
-        del usuario) o una nueva. Escribir un nombre distinto NO renombra a nadie: dice que es otra persona."""
+        """Quien es un hablante segun lo que se pide desde su etiqueta: la persona del usuario («Soy yo»; escribir
+        su nombre nunca: un compañero puede llamarse igual), una que ya se llama asi, la que tenia con el nombre
+        corregido (solo con `renombrar`, y nunca la del usuario) o una nueva. Escribir un nombre distinto NO renombra
+        a nadie: dice que es otra persona."""
         when = time.strftime("%Y-%m-%dT%H:%M:%S") if consent else None
         user = v.user()
-        if b.get("es_usuario"):
-            if user:
-                return user["id"]  # «Soy yo» nunca le cambia el nombre (eso, en Ajustes)
-            taken = v.by_name(nombre) if nombre else None  # el cuadro puede traer el nombre de otra persona
-            return v.create(nombre if nombre and not taken else "Yo", True, when)["id"]
+        if b.get("es_usuario"):  # «Soy yo» no usa el cuadro (puede traer el nombre de otra persona): «Yo», y el
+            return user["id"] if user else v.create("Yo", True, when)["id"]  # nombre se cambia en Ajustes
         if not nombre:
             raise ApiError("Escribe un nombre.")
         same = v.by_name(nombre)
@@ -4747,12 +4780,14 @@ class App:
             if not (abs_path and h):
                 raise ApiError("Falta de qué reunión y hablante tomar la huella.")
         if abs_path and h:
-            side = voices.read_sidecar(voices.sidecar_path(abs_path))
-            if not side or h not in (side.get("hablantes") or {}):  # antes de crear a nadie
-                raise ApiError("Ese hablante ya no está en esta reunión (¿se volvió a identificar?).")
+            side = self._speaker_check(abs_path, h, b.get("creado"))  # antes de crear a nadie
+            if b.get("recordar") and side.get("creado") and not b.get("creado"):  # guardar una huella: solo de la
+                raise ApiError("Vuelve a abrir la etiqueta para guardar la huella.")  # identificacion que se ve
+            before = side["hablantes"][h].get("persona")
             pid = self._persona_for_speaker(v, b, nombre, consent)
             uid = (v.user() or {}).get("id")
-            self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid))
+            self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid), b.get("creado"))
+            self._not_the_user(rel_of(abs_path), h, before, pid)
         elif not pid:
             if not nombre and not b.get("es_usuario"):
                 raise ApiError("Escribe un nombre.")
@@ -4785,8 +4820,8 @@ class App:
         except KeyError:
             raise ApiError("Alguna de las dos personas ya no existe.")
         except ValueError:
-            raise ApiError("Tu persona no se puede fundir con otra: si ese hablante no eres tú, ponle su nombre o "
-                           "pulsa «No soy yo».")
+            raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
+                           "«No soy yo»; si eres tú, «Soy yo».")
         n = 0
         if removed:
             self.library.refresh(max_age=5)
@@ -4830,7 +4865,9 @@ class App:
         if pid and not v.find(pid):
             raise ApiError("Esa persona ya no existe.")
         uid = (v.user() or {}).get("id")
-        self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid))
+        before = (self._speaker_check(abs_path, h, b.get("creado"))["hablantes"][h]).get("persona")
+        self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid), b.get("creado"))
+        self._not_the_user(rel_of(abs_path), h, before, pid)
         return self.speakers_get({"path": b.get("path")})
 
     def voices_export(self, b):

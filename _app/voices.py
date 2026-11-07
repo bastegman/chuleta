@@ -264,6 +264,15 @@ def cosine(a, b):
     return float(np.dot(a, b) / (na * nb)) if na > 0 and nb > 0 else 0.0
 
 
+def mixed(huellas, umbral=DUDOSO):
+    """Alguna huella de la persona no se parece a ninguna de las otras (coseno < umbral, lo que el emparejado
+    llamaria «otra persona»): puede llevar la voz de alguien mas (p. ej. por el fallo de antes del 07/11/2026)."""
+    vs = [h["vector"] for h in huellas or [] if h.get("vector")]
+    if len(vs) < 2:
+        return False
+    return any(max(cosine(a, b) for j, b in enumerate(vs) if j != i) < umbral for i, a in enumerate(vs))
+
+
 def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift=0.5):
     """Devuelve {"tramos": [{inicio, fin, h}], "hablantes": {h: {segundos, breve, …}}, "huellas": {h: [floats]},
     "duracion_s"}. Audio > 30 min: por bloques, enlazando los clusteres de cada bloque por huella (coseno >= umbral)."""
@@ -432,10 +441,15 @@ def close_gaps(bits):
 def mic_ratios(tramos, micro, skip=()):
     """Fraccion de la voz de cada hablante con el micro activo, {h: 0..1}; {} sin linea de tiempo. Lo que el desfase
     deja fuera (antes del primer paso o justo despues del ultimo) no cuenta; mas alla del final cuenta como inactivo."""
-    if not micro or not micro.get("activo"):
+    if not micro or not isinstance(micro.get("activo"), str) or not micro["activo"]:
         return {}
-    paso, act = float(micro.get("paso") or MIC_PASO), close_gaps(micro["activo"])
-    shift = max(0.0, float(micro.get("desfase", MIC_DESFASE_S) or 0.0))
+    act = close_gaps(micro["activo"])
+    try:  # un sidecar tocado a mano o danado no impide identificar
+        paso, shift = float(micro.get("paso") or MIC_PASO), float(micro.get("desfase", MIC_DESFASE_S) or 0.0)
+    except (TypeError, ValueError):
+        paso, shift = MIC_PASO, MIC_DESFASE_S
+    paso = paso if math.isfinite(paso) and paso > 0 else MIC_PASO
+    shift = min(max(0.0, shift), 10.0) if math.isfinite(shift) else MIC_DESFASE_S
     unknown_end = len(act) + int(math.ceil(shift / paso))
     tot, on = {}, {}
     for t in tramos:
@@ -537,6 +551,7 @@ class Voices:
             out.append({"id": p["id"], "nombre": p["nombre"], "creada": p.get("creada"),
                         "es_usuario": bool(p.get("es_usuario")), "consentimiento": p.get("consentimiento"),
                         "huellas": len(p.get("huellas") or []), "ultima": max(fechas) if fechas else None,
+                        "mezcla": mixed(p.get("huellas")),
                         "reuniones": sorted({h.get("reunion") for h in p.get("huellas") or [] if h.get("reunion")})})
         return out
 
@@ -554,12 +569,15 @@ class Voices:
 
     def by_name(self, nombre):
         """La persona que ya se llama asi (sin distinguir mayusculas, tildes ni espacios de mas), o None. Asi elegir
-        «Ana» de la lista asigna la Ana que ya existe en vez de crear otra."""
+        «Ana» de la lista asigna la Ana que ya existe en vez de crear otra. Nunca devuelve la del usuario: un compañero
+        puede llamarse como el, y antes del 07/11/2026 la persona del usuario pudo quedarse con el nombre de otra
+        (el fallo del msg 1170); el usuario se marca con «Soy yo»."""
         key = name_key(nombre)
         if not key:
             return None
         with self.lock:
-            hit = next((p for p in self.data["personas"] if name_key(p.get("nombre")) == key), None)
+            hit = next((p for p in self.data["personas"]
+                        if not p.get("es_usuario") and name_key(p.get("nombre")) == key), None)
             return json.loads(json.dumps(hit)) if hit else None
 
     # --- escritura
@@ -596,6 +614,22 @@ class Voices:
             self.save()
             return len(p["huellas"])
 
+    def drop_similar(self, pid, vector, umbral=0.8):
+        """Quita de la persona las huellas casi iguales a `vector` (coseno >= umbral: la misma voz por el mismo canal da
+        0,97-0,99 y dos personas distintas rara vez pasan de 0,8) y devuelve cuantas. Para la del
+        usuario cuando dice que una voz que la app tomaba por la suya es de otra persona: esa huella es la de esa
+        persona (antes del 07/11/2026 se guardaba asi por error). Sin copia .bak de lo quitado."""
+        with self.lock:
+            p = self.find(pid)
+            if not p or vector is None:
+                return 0
+            keep = [h for h in p.get("huellas") or [] if not h.get("vector") or cosine(h["vector"], vector) < umbral]
+            n = len(p.get("huellas") or []) - len(keep)
+            if n:
+                p["huellas"] = keep
+                self.save(backup=False)
+            return n
+
     def rename(self, pid, nombre):
         nombre = " ".join((nombre or "").split())
         if not nombre:
@@ -627,8 +661,8 @@ class Voices:
             a, b = self.find(keep), self.find(other)
             if not a or not b:
                 raise KeyError(other if a else keep)
-            if b.get("es_usuario"):  # fundir al usuario DENTRO de otra persona la haria «Tu» con sus huellas
-                raise ValueError("Tu persona no se puede fundir con otra")
+            if a.get("es_usuario") or b.get("es_usuario"):  # dentro de otra la haria «Tu» con sus huellas; al reves,
+                raise ValueError("Tu persona no se puede fundir con otra")  # tu persona se quedaria con otra voz
             both = (a.get("huellas") or []) + (b.get("huellas") or [])
             a["huellas"] = sorted(both, key=lambda h: h.get("fecha") or "")
             del a["huellas"][:-MAX_HUELLAS]
@@ -698,6 +732,7 @@ def identify(data, huellas, voices, micro=None):
     personas = voices.personas() if voices else []
     u = voices.user() if voices else None
     uid = u["id"] if u else None
+    u_mixed = bool(u and mixed(u.get("huellas")))  # puede llevar la voz de otra persona: no se decide por huella
     hablantes = data.setdefault("hablantes", {})
     for h, info in hablantes.items():
         info.setdefault("persona", None)
@@ -720,8 +755,8 @@ def identify(data, huellas, voices, micro=None):
     for h, info in hablantes.items():
         if info.get("origen") != "huella" or not info.get("persona"):
             continue
-        if info["persona"] == uid:
-            if h != tu and h in ratios and ratios[h] <= MIC_NO_ES_TU:
+        if info["persona"] == uid:  # salvo que el micro lo confirme (h == tu)
+            if h != tu and (u_mixed or (h in ratios and ratios[h] <= MIC_NO_ES_TU)):
                 info["provisional"] = True
         elif h == tu:
             info["provisional"] = True
@@ -740,11 +775,13 @@ def assign(data, h, pid, usuario=None):
     info = hablantes.get(h)
     if info is None:
         raise KeyError(h)
+    old_tu = data.get("tu")
     info.update(persona=pid, provisional=False, origen="manual")
     if pid and pid == usuario:
         data["tu"] = h
-        for k, other in hablantes.items():
-            if k != h and other.get("persona") == usuario and other.get("origen") == "micro":
+        for k, other in hablantes.items():  # sin «origen» (sidecar de antes del 07/11/2026): el que era «tu»
+            by_micro = other.get("origen") == "micro" or (not other.get("origen") and k == old_tu)
+            if k != h and other.get("persona") == usuario and by_micro:
                 other.update(persona=None, provisional=False, origen=None)
     elif data.get("tu") == h:
         data["tu"] = None

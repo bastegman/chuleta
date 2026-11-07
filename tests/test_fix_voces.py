@@ -26,6 +26,11 @@ def unit(i, dim=voices.DIM):
     return v
 
 
+def mix(a, b, cos_a):
+    """Vector con coseno cos_a respecto a `a` (unitario) y el resto sobre `b` (ortogonal)."""
+    return a * cos_a + b * float(np.sqrt(1 - cos_a ** 2))
+
+
 def voices_app(t):
     """Un App sin hilos con lo que usan las rutas de voces: ajustes (voces activadas), biblioteca y Jobs."""
     app = server.App.__new__(server.App)
@@ -165,19 +170,20 @@ class NombrarAlHablanteTuTests(Reunion):
 
     def test_soy_yo_sin_persona_crea_la_del_usuario(self):
         self.identificar(micro_en=None)
-        r = self.app.voices_person({"path": "r.wav", "h": "h3", "es_usuario": True, "nombre": "Bernardo",
+        r = self.app.voices_person({"path": "r.wav", "h": "h3", "es_usuario": True, "nombre": "Ana",
                                     "recordar": True, "consentimiento": True})
-        yo = self.v.user()
-        self.assertEqual((yo["id"], yo["nombre"], len(yo["huellas"])), (r["id"], "Bernardo", 1))
+        yo = self.v.user()  # el cuadro puede traer el nombre de otra persona: «Yo» (se cambia en Ajustes)
+        self.assertEqual((yo["id"], yo["nombre"], len(yo["huellas"])), (r["id"], "Yo", 1))
         labels, data = self.etiquetas()
         self.assertEqual((data["tu"], labels["h3"]), ("h3", ("Tú", True)))
 
 
 class NombrarOtrosHablantesTests(Reunion):
     def test_reconocido_por_huella_como_usuario(self):
-        """La huella confunde a h3 con el usuario (sale «Tú»); al escribir su nombre no se renombra al usuario."""
+        """La huella confunde a h3 con el usuario (coseno 0,6: sale «Tú»); al escribir su nombre no se renombra al
+        usuario ni se le toca su huella (no se parece lo bastante a la de h3 como para ser la misma voz)."""
         yo = self.usuario()
-        self.identificar(micro_en=None, huellas=dict(self.HUELLAS, h3=unit(0)))
+        self.identificar(micro_en=None, huellas=dict(self.HUELLAS, h3=mix(unit(0), unit(6), 0.6)))
         labels, _ = self.etiquetas()
         self.assertEqual(labels["h3"], ("Tú", True))
         self.app.voices_person({"id": yo, "path": "r.wav", "h": "h3", "nombre": "Carlos", "recordar": True,
@@ -216,14 +222,16 @@ class NombrarOtrosHablantesTests(Reunion):
         self.assertEqual(len(self.v.find(ana)["huellas"]), 2)
         self.assertEqual(self.leer()["hablantes"]["h1"]["persona"], ana)
 
-    def test_escribir_el_nombre_del_usuario_es_soy_yo(self):
+    def test_nombre_igual_al_del_usuario_es_otra_persona(self):
+        """Refutador P1-a: un compañero que se llama como el usuario no es «Tú» (el usuario se marca con «Soy yo»)."""
         yo = self.usuario()
         self.identificar()
-        self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "bernardo"})
+        r = self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "bernardo", "recordar": True,
+                                    "consentimiento": True})
+        self.assertNotEqual(r["id"], yo)
         labels, data = self.etiquetas()
-        self.assertEqual((data["hablantes"]["h1"]["persona"], data["tu"]), (yo, "h1"))
-        self.assertEqual(labels["h1"], ("Tú", True))
-        self.assertEqual(labels["h2"], ("Persona 2", False))  # el «Tú» del micro deja de valer
+        self.assertEqual((labels["h1"], labels["h2"], data["tu"]), (("bernardo", False), ("Tú", True), "h2"))
+        self.assertEqual(len(self.v.find(yo)["huellas"]), 1)
 
     def test_corregir_el_nombre_solo_si_se_pide(self):
         """Corregir una errata («Javi» → «Javier») renombra en todas las reuniones solo con `renombrar`; sin el,
@@ -286,8 +294,9 @@ class MergeUsuarioTests(TempTree):
         ana = v.create("Ana")["id"]
         with self.assertRaises(ValueError):
             v.merge(ana, yo)
-        self.assertEqual(v.merge(yo, ana), ana)  # al reves si: «esta persona era yo»
-        self.assertEqual((v.user()["id"], len(v.personas())), (yo, 1))
+        with self.assertRaises(ValueError):  # refutador P1-d: al reves, el usuario se quedaria con la voz de Ana
+            v.merge(yo, ana)
+        self.assertEqual((v.user()["id"], len(v.personas())), (yo, 2))
 
 
 class LineaDeTiempoDelMicroTests(unittest.TestCase):
@@ -408,6 +417,178 @@ class VolverAIdentificarTests(Reunion):
         self.assertEqual(self.leer()["hablantes"]["h1"]["persona"], ana)
 
 
+class DatosDeAntesDelArregloTests(Reunion):
+    """Hallazgos del refutador de contexto limpio (07/11/2026) con lo que dejo main en voces.json y en los sidecars."""
+
+    def contaminado(self):
+        """Lo que dejaba main al escribir «Ana» con «Recordar» en un «Tú» del usuario: su persona llamada «Ana» y con
+        la huella de Ana (e4) junto a la suya (e0)."""
+        yo = self.usuario()
+        self.v.rename(yo, "Ana")
+        self.v.remember(yo, unit(4), 20, "r.wav", RECORDAR)
+        return yo
+
+    def test_p0_escribir_ana_con_la_persona_contaminada(self):
+        yo = self.contaminado()
+        self.assertTrue(next(p for p in self.v.public() if p["id"] == yo)["mezcla"])  # Ajustes lo marca (⚠)
+        # h2 es la voz de Ana (e4): la huella dice «usuario», pero su persona esta mezclada → se pregunta
+        data = self.identificar(micro_en="h1", huellas=dict(self.HUELLAS, h1=unit(0)))
+        self.assertEqual((data["hablantes"]["h2"]["persona"], data["hablantes"]["h2"]["provisional"]), (yo, True))
+        self.app.voices_person({"path": "r.wav", "h": "h2", "nombre": "Ana", "recordar": True,
+                                "consentimiento": True})
+        labels, data = self.etiquetas()
+        self.assertEqual((labels["h2"], labels["h1"]), (("Ana", False), ("Tú", True)))
+        huellas = self.v.find(yo)["huellas"]  # la de Ana sale de su persona (era la voz de h2) y no entra otra
+        self.assertEqual([int(np.argmax(h["vector"])) for h in huellas], [0])
+        self.assertFalse(next(p for p in self.v.public() if p["id"] == yo)["mezcla"])
+        ana = next(p for p in self.v.personas() if p["nombre"] == "Ana" and not p["es_usuario"])
+        self.assertEqual(len(ana["huellas"]), 1)
+
+    def test_p0_presencial_con_la_persona_contaminada_no_dice_tu_sin_preguntar(self):
+        yo = self.contaminado()
+        data = self.identificar(micro_en=None, huellas=dict(self.HUELLAS, h1=unit(0), h2=unit(4)))
+        for h in ("h1", "h2"):
+            self.assertEqual((data["hablantes"][h]["persona"], data["hablantes"][h]["provisional"]), (yo, True))
+        labels, _ = self.etiquetas()
+        self.assertEqual((labels["h1"][0], labels["h2"][0]), ("¿Tú?", "¿Tú?"))
+        self.assertEqual(self.app.voices_forget({"id": yo})["personas"], [])  # el remedio: olvidarla
+
+    def test_p0_corregir_limpia_la_huella_ajena_del_usuario(self):
+        """Refutador P0 (empate permanente): si la app tomaba a h3 por el usuario porque su persona guardaba esa voz,
+        decir quien es (o «No soy yo») quita esa huella de su persona; la suya se queda."""
+        yo = self.usuario()
+        self.v.remember(yo, unit(5), 20, "r.wav", RECORDAR)  # la voz de h3 guardada como suya (main)
+        self.identificar(micro_en=None)
+        self.assertEqual(self.etiquetas()[0]["h3"][0], "¿Tú?")  # persona mezclada: pregunta
+        self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": None})  # «No soy yo»
+        self.assertEqual([int(np.argmax(h["vector"])) for h in self.v.find(yo)["huellas"]], [0])
+        other = self.v.create("Luis")["id"]
+        self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Luis"})  # h1 no era el usuario: nada
+        self.assertEqual(len(self.v.find(yo)["huellas"]), 1)
+        self.assertTrue(self.v.find(other))
+
+    def test_recordar_exige_la_identificacion_que_se_ve(self):
+        data = self.identificar(micro_en=None)
+        data["creado"] = "2026-11-07T12:00:00"
+        voices.write_sidecar(self.sidecar(), data)
+        with self.assertRaises(server.ApiError):  # una peticion sin `creado` (interfaz anterior en una ventana vieja)
+            self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana", "recordar": True,
+                                    "consentimiento": True})
+        r = self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana", "recordar": True,
+                                    "consentimiento": True, "creado": "2026-11-07T12:00:00"})
+        self.assertEqual(r["huellas"], 1)
+
+    def test_p1b_corregir_al_nombre_del_usuario_no_da_tu(self):
+        self.usuario()
+        self.identificar(micro_en=None)
+        javi = self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Javi"})["id"]
+        self.app.voices_person({"id": javi, "path": "r.wav", "h": "h1", "nombre": "Bernardo", "renombrar": True})
+        labels, _ = self.etiquetas()
+        self.assertEqual(labels["h1"], ("Bernardo", False))
+        self.assertEqual(self.v.find(javi)["nombre"], "Bernardo")
+
+    def sidecar_de_main(self, yo, **extra):
+        """Sidecar como lo dejaba main: sin «origen»; h2 del usuario por el micro."""
+        data = {"version": 1, "creado": "2026-11-05T10:00:00",
+                "tramos": [{"inicio": 0, "fin": 10, "h": "h1"}, {"inicio": 10, "fin": 20, "h": "h2"},
+                           {"inicio": 20, "fin": 30, "h": "h1"}, {"inicio": 30, "fin": 40, "h": "h3"}],
+                "hablantes": {"h1": {"segundos": 20.0, "persona": None, "score": 0.1, "provisional": False},
+                              "h2": {"segundos": 20.0, "persona": yo, "score": None, "provisional": False},
+                              "h3": {"segundos": 20.0, "persona": None, "score": None, "provisional": False}},
+                "tu": "h2", "micro": {"paso": 0.25, "activo": "0" * 40 + "1" * 40 + "0" * 80}}
+        for h, persona in extra.items():
+            data["hablantes"][h]["persona"] = persona
+        voices.write_sidecar(self.sidecar(), data)
+        self.app.jobs.voice_vectors["r.wav"] = {h: list(map(float, v)) for h, v in self.HUELLAS.items()}
+
+    def test_p1c_soy_yo_en_un_sidecar_de_main(self):
+        yo = self.usuario()
+        self.sidecar_de_main(yo)
+        self.app.voices_person({"path": "r.wav", "h": "h1", "es_usuario": True})
+        labels, data = self.etiquetas()
+        self.assertEqual((labels["h1"], labels["h2"], data["tu"]), (("Tú", True), ("Persona 2", False), "h1"))
+
+    def test_p1d_no_se_funde_a_otra_dentro_del_usuario(self):
+        yo = self.usuario()
+        ana = self.v.create("Ana")["id"]
+        with self.assertRaises(server.ApiError):
+            self.app.voices_merge({"id_a": yo, "id_b": ana})
+        self.assertEqual((len(self.v.find(yo)["huellas"]), bool(self.v.find(ana))), (1, True))
+
+    def test_p2_1_volver_a_identificar_conserva_nombres_de_main(self):
+        from unittest import mock
+        yo = self.usuario()
+        luis = self.v.create("Luis")["id"]  # sin huellas: en main solo pudo ponerse a mano
+        self.sidecar_de_main(yo, h3=luis)
+        jobs = self.app.jobs
+
+        def fake_subprocess(job, args, idle_timeout=1800):
+            new = voices.read_sidecar(self.sidecar())
+            for i in new["hablantes"].values():
+                i.update(persona=None, score=None, provisional=False)
+            new["creado"], new["tu"] = "2026-11-07T12:00:00", None
+            voices.write_sidecar(args[args.index("--out") + 1], new)
+            return {"huellas": {h: list(map(float, v)) for h, v in self.HUELLAS.items()}}
+        jobs._voices_subprocess, jobs.auto_summary = fake_subprocess, (lambda rel: None)
+        job = server.Job("r.wav", "r.wav", "voces", None)
+        with mock.patch.object(voices, "models_ready", return_value=True):
+            jobs._run_voices(job)
+        self.assertEqual(job.status, "done", job.error)
+        labels, _ = self.etiquetas()
+        self.assertEqual(labels["h3"], ("Luis", False))
+
+    def test_p2_2_no_se_corrige_mientras_se_identifica(self):
+        self.identificar(micro_en=None)
+        self.app.jobs.list.append(server.Job("r.wav", "r.wav", "voces", None))
+        self.app.jobs.list[-1].status = "running"
+        n = len(self.v.personas())
+        for b in ({"path": "r.wav", "h": "h1", "nombre": "Ana"}, {"path": "r.wav", "h": "h1", "es_usuario": True}):
+            with self.assertRaises(server.ApiError):
+                self.app.voices_person(b)
+        with self.assertRaises(server.ApiError):
+            self.app.voices_reassign({"path": "r.wav", "h": "h1", "persona": None})
+        self.assertEqual(len(self.v.personas()), n)  # no se crea a nadie
+
+    def test_p2_3_primera_identificacion_cancelada_vuelve_a_solo_el_micro(self):
+        from unittest import mock
+        micro = {"paso": 0.25, "activo": "1" * 40}
+        voices.write_micro(self.sidecar(), micro)
+        jobs = self.app.jobs
+
+        def fake_subprocess(job, args, idle_timeout=1800):
+            voices.write_sidecar(args[args.index("--out") + 1], {"version": 1, "tramos": [{"inicio": 0, "fin": 10,
+                                                                 "h": "h1"}], "hablantes": {"h1": {"segundos": 10}}})
+            raise server.engines.Cancelled()
+        jobs._voices_subprocess, jobs.auto_summary = fake_subprocess, (lambda rel: None)
+        job = server.Job("r.wav", "r.wav", "voces", None)
+        with mock.patch.object(voices, "models_ready", return_value=True):
+            jobs._run_voices(job)
+        self.assertEqual(self.leer(), {"version": 1, "micro": micro})
+
+    def test_p2_4_etiqueta_abierta_sobre_otra_identificacion(self):
+        data = self.identificar(micro_en=None)
+        data["creado"] = "2026-11-07T12:00:00"
+        voices.write_sidecar(self.sidecar(), data)
+        n = len(self.v.personas())
+        with self.assertRaises(server.ApiError):
+            self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana", "creado": "2026-11-07T11:00:00",
+                                    "recordar": True, "consentimiento": True})
+        with self.assertRaises(server.ApiError):
+            self.app.voices_reassign({"path": "r.wav", "h": "h1", "persona": None, "creado": "2026-11-07T11:00:00"})
+        self.assertEqual(len(self.v.personas()), n)
+        self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana", "creado": "2026-11-07T12:00:00"})
+        self.assertEqual(self.etiquetas()[0]["h1"], ("Ana", False))
+
+    def test_p2_5_linea_de_tiempo_malformada(self):
+        tramos = [{"inicio": 0, "fin": 10, "h": "h1"}]
+        for micro in ({"paso": "x", "activo": "1" * 40}, {"paso": float("nan"), "activo": "1" * 40},
+                      {"paso": 0.25, "activo": "1" * 40, "desfase": "abc"},
+                      {"paso": 0.25, "activo": "1" * 40, "desfase": float("inf")},
+                      {"paso": -1, "activo": "1" * 40}, {"paso": 0.25, "activo": 7}, {"paso": 0.25, "activo": None}):
+            r = voices.mic_ratios(tramos, micro)  # no revienta
+            self.assertTrue(r == {} or 0.0 <= r["h1"] <= 1.0, micro)
+
+
 def node(code):
     r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert r.returncode == 0, r.stderr
@@ -438,28 +619,31 @@ J(spkNameBody(a, 'h3', null, 'Luis', {}));""")
         self.assertNotIn("id", out[4])
 
     def test_soy_yo_no_lleva_el_nombre_de_otra_persona(self):
-        out = self.run_js("""const a = {path: 'r.wav'}, ana = {id: 'pa', nombre: 'Ana'};
-J(spkMeBody(a, 'h1', {usuario: 'pu'}, ana, 'Ana', false));
-J(spkMeBody(a, 'h1', {usuario: null}, ana, 'Ana', true));
-J(spkMeBody(a, 'h1', {usuario: null}, null, 'Bernardo', true));""")
-        self.assertEqual([o.get("nombre") for o in out], [None, None, "Bernardo"])
-        self.assertEqual([(o["es_usuario"], o["recordar"], o["consentimiento"]) for o in out],
-                         [(True, False, False), (True, True, True), (True, True, True)])
+        out = self.run_js("""const a = {path: 'r.wav'};
+J(spkMeBody(a, 'h1', {usuario: 'pu', creado: 'c1'}, false));
+J(spkMeBody(a, 'h1', {usuario: null, creado: 'c1'}, true));""")
+        self.assertEqual([o.get("nombre") for o in out], [None, None])
+        self.assertEqual([(o["es_usuario"], o["recordar"], o["consentimiento"], o["creado"]) for o in out],
+                         [(True, False, False, "c1"), (True, True, True, "c1")])
 
     def test_es_o_fusionar(self):
         out = self.run_js("""const a = {path: 'r.wav'};
 J(spkPickBody(a, 'h2', {persona: 'pu', usuario: true}, 'pa'));
 J(spkPickBody(a, 'h2', {persona: null, usuario: true}, 'pa'));
 J(spkPickBody(a, 'h3', {persona: null}, 'pa'));
-J(spkPickBody(a, 'h1', {persona: 'pa', usuario: false}, 'pb'));""")
-        self.assertEqual([o[0] for o in out], ["/api/voces/reasignar"] * 3 + ["/api/voces/fusionar"])
+J(spkPickBody(a, 'h1', {persona: 'pa', usuario: false}, 'pb'));
+J(spkPickBody(a, 'h3', {persona: null}, 'pa', 'c1'));""")
+        self.assertEqual([o[0] for o in out], ["/api/voces/reasignar"] * 3 + ["/api/voces/fusionar",
+                                                                              "/api/voces/reasignar"])
         self.assertEqual(out[0][1], {"path": "r.wav", "h": "h2", "persona": "pa"})  # «Tú» → es Ana: se reasigna
         self.assertEqual(out[3][1], {"id_a": "pb", "id_b": "pa"})
+        self.assertEqual(out[4][1]["creado"], "c1")
 
     def test_textos(self):
         js = read("voces.js")
         for s in ("No soy yo", "Es la misma persona: solo corrijo el nombre", "spkNameBody(a, h, cur, nombre",
-                  "spkMeBody(a, h, s, cur", "spkPickBody(a, h, i, target)", "'Es…'"):
+                  "spkMeBody(a, h, s, remember())", "spkPickBody(a, h, i, target, s.creado)", "'Es…'",
+                  "!(merge && p.es_usuario)", "persona: null, creado: s.creado", "x.usuario && !x.provisional"):
             self.assertIn(s, js, s)
         self.assertNotIn("cur && !i.provisional ? cur.id", js)  # la decision que renombraba al usuario
 
@@ -499,6 +683,12 @@ S.spk = {{path: 'r.wav', exists: true, who: ['h3', 'h3'], hablantes: {{h3: {{lab
         out = self.run_js("S.tx = {path: 'r.wav', kind: 'txt', segs: [{start: null, end: null, text: 'a'}]};"
                           "S.spk = {path: 'r.wav', exists: true, who: ['h1'], hablantes: {h1: {label: 'Ana'}}};")
         self.assertEqual(json.loads(out), "a")  # .txt: sin hablantes
+
+    def test_segmento_vacio_sin_dobles_espacios(self):
+        out = self.run_js("""S.tx = {path: 'r.wav', kind: 'srt', segs: [{start: 0, end: 1, text: ''},
+  {start: 1, end: 2, text: 'Hola.'}]};
+S.spk = {path: 'r.wav', exists: true, who: ['h1', 'h1'], hablantes: {h1: {label: 'Ana'}}};""")
+        self.assertEqual(json.loads(out), "Ana: Hola.")
 
     def test_el_boton_usa_transcript_text(self):
         app = read("app.js")
