@@ -118,7 +118,10 @@ def esperar(s):
 def driver(w):
     res = {}
     try:
-        w.events.loaded.wait(60)
+        fin = time.time() + 60  # loaded.is_set() (no wait(): que no dependa de la version de pywebview)
+        while time.time() < fin and not w.events.loaded.is_set():
+            time.sleep(0.2)
+        res["cargada"] = w.events.loaded.is_set()
         time.sleep(2)
         res["pagina"] = w.evaluate_js("JSON.stringify({seguro: window.isSecureContext, item: !!window.ClipboardItem,"
                                       " write: !!(navigator.clipboard && navigator.clipboard.write),"
