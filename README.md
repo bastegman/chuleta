@@ -120,7 +120,8 @@ El manual completo está en `LEEME.txt`.
   cliente, si lo hay.
 - La reunión en curso se lee en el propio PC: el título de la ventana de Teams siempre, y la cita de Outlook clásico
   (por COM) solo si lo activas en Ajustes → Reuniones, donde una frase dice si funciona y, si no, por qué. Los
-  asistentes solo se leen si Outlook lo deja sin preguntar; si pregunta, solo al pulsar «Probar con mi calendario». Los asistentes sugeridos se escriben en la cabecera del `.md`
+  asistentes, la app sola solo los lee si «Probar con mi calendario» ha visto que Outlook los da sin preguntar; si
+  pregunta, solo al pulsar «Probar». Los asistentes sugeridos se escriben en la cabecera del `.md`
   de esa grabación como sugeridos, con una nota detrás de los nombres
   (`participantes: Ana, Luis (sugeridos por Outlook, sin confirmar)`), y no van al resumen con IA ni a los destinos de
   salida hasta que los confirmas o editas en la página de la reunión (puedes borrarlos ahí). Las grabaciones de antes

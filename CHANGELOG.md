@@ -24,9 +24,10 @@ Lo que vio: «La conexión al calendario no está funcionando» (msg 1196), con 
   con un aviso abierto.
 - **Asistentes y aviso de seguridad de Outlook.** El organizador, los asistentes y el cuerpo de una cita están
   protegidos: según el antivirus y la directiva de la empresa, Outlook pregunta («Un programa está intentando obtener
-  acceso…») o lo deniega. Ahora se leen solo de la cita elegida y después del asunto y la hora. Si Outlook pregunta,
-  el nombre y la hora llegan igual y la app no vuelve a preguntar sola en mitad de una llamada: los asistentes se leen
-  al pulsar «Probar». Si la empresa lo deniega, se dice.
+  acceso…») o lo deniega. Ahora se leen solo de la cita elegida y después del asunto y la hora, así que el nombre y la
+  hora llegan aunque Outlook pregunte. La app sola (en mitad de una llamada) solo los lee cuando «Probar» o «Activar»
+  ya han visto que Outlook no pregunta; si pregunta, se leen al pulsar «Probar». La frase solo dice que es la empresa
+  si lo dice su directiva.
 - COM: `CoUninitialize` también cuando falla la conexión, IDispatch sin la caché `gen_py` de pywin32 y un reintento si
   Outlook se acaba de abrir. El filtro de fechas: si Outlook no entiende el formato regional (da error o devuelve citas
   de otro día), se prueba con el ISO y con el de EE. UU.
