@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -30,13 +31,22 @@ class GrabadoraConEcoTests(unittest.TestCase):
         p = subprocess.Popen([sys.executable, "-u", os.path.join(APP, "recorder.py"), cls.wav, "--mic", "default",
                               "--sys", "all"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              env=env, cwd=APP)
+        # se lee mientras graba, como RecorderProcess: en Windows la tuberia tiene poco bufer y, sin leer, la
+        # grabadora se queda parada al escribir su estado (medido en la CI del 07/11/2026: 0,4-1,8 s «perdidos»)
+        out, err = [], []
+        readers = [threading.Thread(target=lambda f=f, b=b: b.extend(f), daemon=True)
+                   for f, b in ((p.stdout, out), (p.stderr, err))]
+        for t in readers:
+            t.start()
         time.sleep(13)
         p.stdin.write(b"stop\n")
         p.stdin.flush()
-        out, err = p.communicate(timeout=60)
+        p.wait(timeout=60)
+        for t in readers:
+            t.join(timeout=10)
         cls.rc = p.returncode
-        cls.log = err.decode("utf-8", "replace")
-        lines = [json.loads(l) for l in out.decode("utf-8", "replace").splitlines() if l.strip()]
+        cls.log = b"".join(err).decode("utf-8", "replace")
+        lines = [json.loads(l) for l in b"".join(out).decode("utf-8", "replace").splitlines() if l.strip()]
         cls.last = [l for l in lines if "mic" in l][-1]
 
     @classmethod
