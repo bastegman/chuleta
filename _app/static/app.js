@@ -193,6 +193,12 @@ function indexTree(tree) {
 }
 const allAudios = () => [...S.audios.values()];
 const audiosUnder = f => { const out = []; (function w(n) { out.push(...n.audios); n.folders.forEach(w); })(f); return out; };
+/* la carpeta de una reunión (una carpeta por reunión: server.scan la marca con por_reunion) se ve como la reunión */
+const subFolders = f => f.folders.filter(x => !x.por_reunion);
+function ownAudios(f) {
+  return [...f.audios, ...f.folders.filter(x => x.por_reunion).flatMap(x => x.audios)]
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.name.localeCompare(b.name));
+}
 const isActive = j => j.status === 'queued' || j.status === 'running';
 const jobFor = path => S.jobs.find(j => j.path === path && isActive(j) && j.kind !== 'summary');  // los resúmenes van aparte
 const lastJobFor = path => { for (let i = S.jobs.length - 1; i >= 0; i--) if (S.jobs[i].path === path) return S.jobs[i]; };
@@ -643,12 +649,12 @@ function renderTree() {
     html.push(`<div class="tsec live"><i class="recdot"></i> En directo</div>`);
     html.push(lives.map(a => audioRow(a, 0)).join(''));
   }
-  const loose = root.audios.filter(a => matchA(a, q) && !isLive(a));
+  const loose = ownAudios(root).filter(a => matchA(a, q) && !isLive(a));
   if (loose.length || !q) {
     html.push(`<div class="tsec" data-drop="">Sin clasificar ${loose.length ? `· ${loose.length}` : ''}</div>`);
     html.push(loose.length ? loose.map(a => audioRow(a, 0)).join('') : '<div class="trow muted" data-drop="" style="padding-left:16px;cursor:default">Nada suelto</div>');
   }
-  const folders = root.folders.map(f => folderNode(f, 0, q)).join('');
+  const folders = subFolders(root).map(f => folderNode(f, 0, q)).join('');
   if (folders) html.push('<div class="tsec">Carpetas</div>' + folders);
   root.docs.filter(d => matchD(d, q)).forEach(d => html.push(docRow(d, 0)));
   if (!html.length) html.push('<div class="empty">Sin resultados</div>');
@@ -663,8 +669,8 @@ function folderNode(f, depth, q) {
   const self = !q || fold(f.name).includes(q);
   const cq = self ? '' : q;
   const kids = [
-    ...f.folders.map(c => folderNode(c, depth + 1, cq)),
-    ...f.audios.filter(a => matchA(a, cq)).map(a => audioRow(a, depth + 1)),
+    ...subFolders(f).map(c => folderNode(c, depth + 1, cq)),
+    ...ownAudios(f).filter(a => matchA(a, cq)).map(a => audioRow(a, depth + 1)),
     ...f.docs.filter(d => matchD(d, cq)).map(d => docRow(d, depth + 1)),
   ].filter(Boolean);
   if (q && !self && !kids.length) return '';
@@ -746,7 +752,8 @@ document.addEventListener('drop', e => {
 
 async function moveItem(path, folder, name) {
   const item = S.audios.get(path) || S.docs.get(path);
-  if (!name && item && item.parent && item.parent.path === folder) return;
+  const home = item?.parent?.por_reunion ? item.parent.parent?.path : item?.parent?.path;  // su carpeta: ya es ella
+  if (!name && item && item.parent && (item.parent.path === folder || home === folder)) return;
   const wasPlaying = S.playing === path, t = audio.currentTime, playingNow = !audio.paused;
   if (wasPlaying) { audio.pause(); audio.removeAttribute('src'); audio.load(); }  // suelta el archivo para poder moverlo
   try {
@@ -766,6 +773,7 @@ async function moveItem(path, folder, name) {
 /* ---------------------------------------------------------------- componentes */
 function crumbs(path, last) {
   const parts = path ? path.split('/') : [];
+  if (S.folders.get(path)?.por_reunion) parts.pop();  // la carpeta de la reunión: ya es la reunión
   const out = [`<a href="#/">${esc(APP_NAME)}</a>`];
   parts.forEach((p, i) => out.push(`<span class="sep">›</span><a href="${href('f', parts.slice(0, i + 1).join('/'))}">${esc(nodeName(parts.slice(0, i + 1).join('/')))}</a>`));
   if (last) out.push(`<span class="sep">›</span><span>${esc(last)}</span>`);
@@ -929,7 +937,7 @@ function viewHome() {
   const secs = sum(all, estDuration);
   const recent = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.mtime - a.mtime).slice(0, 8);
   const pct = all.length ? Math.round(100 * done / all.length) : 0;
-  const lives = liveAudios(), loose = t.audios.filter(a => !isLive(a));
+  const lives = liveAudios(), loose = ownAudios(t).filter(a => !isLive(a));
   main.innerHTML = `<div class="page">
     ${lives.map(liveBanner).join('')}
     ${typeof avisoProbarHtml === 'function' ? avisoProbarHtml() : ''}
@@ -946,9 +954,9 @@ function viewHome() {
     </div>
     ${loose.length ? `<h2>Sin clasificar <span class="count">${loose.length}</span><span class="muted" style="font-weight:400;font-size:12.5px">· arrástralos a una carpeta de la izquierda</span></h2>${alist(loose)}` : ''}
     ${pending.length ? `<h2>Pendientes de transcribir <span class="count">${pending.length}</span></h2>${txBox(pending, 'Transcribir todos los pendientes', { resume: true })}<div style="height:12px"></div>${alist(pending, { folder: true })}` : ''}
-    <h2>Carpetas <span class="count">${t.folders.length}</span>
+    <h2>Carpetas <span class="count">${subFolders(t).length}</span>
       <button class="btn sm" data-act="new-folder" data-path="" style="margin-left:auto">${I.plus}Nueva carpeta</button></h2>
-    <div class="fgrid">${t.folders.map(fcard).join('')}</div>
+    <div class="fgrid">${subFolders(t).map(fcard).join('')}</div>
     <h2>Recientes</h2>${alist(recent, { folder: true })}
   </div>`;
 }
@@ -969,8 +977,8 @@ function viewFolder(f) {
     </div>
     ${f.linked ? `<div class="help">${I.link}Carpeta vinculada: <code>${esc(f.linked)}</code>${f.missing ? ' · <span class="warn-txt">ahora no se encuentra (¿disco o OneDrive desconectado?)</span>' : ''}. «Renombrar» solo cambia cómo se llama en ${esc(APP_NAME)}.</div>` : ''}
     ${pending.length ? `<h2>Pendientes <span class="count">${pending.length}</span></h2>${txBox(pending, pending.length === 1 ? 'Transcribir el pendiente' : `Transcribir los ${pending.length} pendientes`, { resume: true })}` : ''}
-    ${f.folders.length ? `<h2>Carpetas <span class="count">${f.folders.length}</span></h2><div class="fgrid">${f.folders.map(fcard).join('')}</div>` : ''}
-    ${f.audios.length || !f.folders.length ? `<h2>Grabaciones <span class="count">${f.audios.length}</span></h2>${alist(f.audios)}` : ''}
+    ${subFolders(f).length ? `<h2>Carpetas <span class="count">${subFolders(f).length}</span></h2><div class="fgrid">${subFolders(f).map(fcard).join('')}</div>` : ''}
+    ${ownAudios(f).length || !subFolders(f).length ? `<h2>Grabaciones <span class="count">${ownAudios(f).length}</span></h2>${alist(ownAudios(f))}` : ''}
     ${f.docs.length ? `<h2>Documentos <span class="count">${f.docs.length}</span></h2><div class="related">${f.docs.map(d => `<a href="${href('d', d.path)}">${I.doc}${esc(nfc(d.name))}</a>`).join('')}</div>` : ''}
   </div>`;
 }
@@ -1905,7 +1913,7 @@ function ask(title, html, ok = 'Aceptar') {
 function flatFolders() {
   const out = [];
   if (!S.tree) return out;  // aún sin árbol (p. ej. «Reuniones» pulsado al arrancar): nada, no un TypeError
-  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); n.folders.forEach(f => w(f, d + 1)); })(S.tree, 0);
+  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); subFolders(n).forEach(f => w(f, d + 1)); })(S.tree, 0);
   return out;
 }
 /* vincular una carpeta de fuera de Audios (p. ej. la del proyecto): selector de carpetas de Windows */
@@ -1940,7 +1948,7 @@ function openMove(path) {
   if (!item) return;
   const isAudio = S.audios.has(path);
   const stem = nfc(isAudio ? item.stem : item.name.replace(/\.[^.]+$/, ''));
-  let dest = item.parent ? item.parent.path : '';
+  let dest = item.parent ? (item.parent.por_reunion ? item.parent.parent?.path ?? '' : item.parent.path) : '';
   const list = () => flatFolders().map(f => `<div data-f="${esc(f.path)}" class="${f.path === dest ? 'on' : ''}" style="padding-left:${10 + f.depth * 16}px">${f.depth ? I.folder : I.home}${esc(f.name)}</div>`).join('');
   openModal(`<h3>Mover / renombrar</h3>
     <label>Nombre</label><input class="input" id="mvName" value="${esc(stem)}" autofocus>

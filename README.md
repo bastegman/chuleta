@@ -21,6 +21,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
 - **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas (y se pueden importar las listas
   de otra carpeta).
+- **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin
+  asignar, la del proyecto: la que tiene su `Vocabulario`). Lo grabado antes se queda donde está.
 - **Perfil de reunión**: carpeta de destino, idioma (también mezclas español + inglés / portugués), tema de
   vocabulario y un contexto de una o dos frases con los que empieza cada grabación, también con `Ctrl+Alt+R`; se
   ajustan por reunión al grabar y sobre la marcha en su página (el directo los usa desde el siguiente trozo).

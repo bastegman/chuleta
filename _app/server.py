@@ -114,6 +114,25 @@ VERSION = read_version()
 # de archivo de Windows, asi que nunca choca con una carpeta de verdad).
 LINK = ":"
 LINKS = {}  # id -> {"name", "path"} (se cargan de los ajustes al arrancar)
+# Reuniones movidas en esta sesion (ruta interna vieja -> nueva): una peticion que llegue con la vieja (la pagina que
+# la tenia abierta, unas notas que se guardan justo al moverla) va a la nueva (alias_of, en Handler)
+ALIASES, ALIASES_LOCK = {}, threading.Lock()
+
+
+def alias_of(rel):
+    """La ruta nueva de una reunion movida en esta sesion si `rel` ya no existe; si no, `rel` tal cual."""
+    if not isinstance(rel, str) or not rel:
+        return rel
+    with ALIASES_LOCK:
+        new = ALIASES.get(rel.replace("\\", "/").strip("/"))
+    if not new:
+        return rel
+    try:
+        if os.path.exists(safe(rel)):  # en la ruta vieja vuelve a haber algo: manda lo que hay
+            return rel
+    except ApiError:
+        pass
+    return new
 
 
 def link_id(path):
@@ -407,8 +426,14 @@ DEFAULT_SETTINGS = {
     "rec_sys": "all",
     "rec_vocab": "",          # ultimo workstream elegido al grabar (<proyecto>/Vocabulario/<workstream>.txt)
     "links": [],              # carpetas vinculadas: [{"name", "path"}] (fuera de Audios, p. ej. la del proyecto)
-    "rec_folder": "",         # ultima carpeta donde se grabo (sin workstream)
-    "project_folders": {},    # proyecto -> carpeta donde se graban sus reuniones (la ultima elegida)
+    "rec_folder": "",         # ultima carpeta donde se grabo (para las reuniones sin tema)
+    # carpeta principal asignada (rec_folder_origin): proyecto -> carpeta y, para un workstream que quiera la suya, id
+    # de su lista -> carpeta. Sin asignar, la del proyecto en el arbol (la que tiene su Vocabulario). Hasta el
+    # 07/11/2026 project_folders era «la ultima elegida» para ese proyecto: lo que habia se queda como asignacion
+    "project_folders": {},
+    "workstream_folders": {},
+    # una carpeta por reunion, «AAAA-MM-DD Nombre», dentro de la principal (msg 1158): el audio y sus textos van dentro
+    "carpeta_por_reunion": True,
     "favorites": [],          # [{"kind": "a"|"f", "path": ...}] (estilo Notion)
     "folder_icons": {},       # carpeta -> emoji
     "meeting_detect": True,   # avisar si Teams/Zoom/… usa el micro y no se esta grabando
@@ -609,6 +634,10 @@ def scan(dirs=None):
         node["folders"].sort(key=lambda n: natural_key(n["name"]))
         node["audios"].sort(key=lambda a: (a["date"] or "", natural_key(a["name"])))
         node["docs"].sort(key=lambda d: natural_key(d["name"]))
+        # la carpeta de una reunion (carpeta por reunion) con solo ella dentro: la interfaz la pinta como la reunion
+        if rel and not is_link_root(rel) and not node["folders"] and not node["docs"] and len(node["audios"]) == 1 \
+                and meeting_dir_matches(node["name"], node["audios"][0]["stem"]):
+            node["por_reunion"] = True
         return node
 
     tree = walk(ROOT, "")
@@ -1016,7 +1045,8 @@ def is_partial(a):
 
 
 def strip_private(node):
-    extra = {k: node[k] for k in ("linked", "missing") if k in node}  # carpetas vinculadas (fuera de Audios)
+    # carpetas vinculadas (fuera de Audios) y la carpeta de una reunion (por_reunion, scan)
+    extra = {k: node[k] for k in ("linked", "missing", "por_reunion") if k in node}
     return {"name": node["name"], "path": node["path"], **extra,
             "folders": [strip_private(f) for f in node["folders"]],
             "audios": [{k: v for k, v in a.items() if not k.startswith("_")} for a in node["audios"]],
@@ -1476,8 +1506,11 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     pick("vocab", ("elegido", elegido.get("vocab")), ("perfil", perfil_vocab_fijo(st)),
          ("reunion", sug.get("vocab") or None),
          ("ultimo", st.get("rec_vocab") or ""))
-    pick("folder", ("elegido", elegido.get("folder")), ("perfil", perfil_folder(st)),
-         ("ultimo", auto_folder(out["vocab"]) or ""))
+    auto = auto_folder(out["vocab"])
+    if isinstance(auto, tuple):  # (carpeta, origen) de rec_folder_origin: la regla entera (proyecto antes que perfil)
+        pick("folder", ("elegido", elegido.get("folder")), (auto[1], auto[0]))
+    else:
+        pick("folder", ("elegido", elegido.get("folder")), ("perfil", perfil_folder(st)), ("ultimo", auto or ""))
     pick("language", ("elegido", elegido.get("language")), ("perfil", p["language"]))
     pick("context", ("elegido", elegido.get("context")), ("perfil", p["context"]))
     pick("name", ("elegido", elegido.get("name") or None), ("reunion", sug.get("name") or None), ("ultimo", ""))
@@ -1530,6 +1563,210 @@ def update_perfil(d, cambios):
         d["language"] = cambios["language"]
 
 
+# ----------------------------------------------------------------------------- carpeta principal y carpeta por reunion
+# Donde se graba (msgs 1148 y 1158): una carpeta por reunion, «AAAA-MM-DD Nombre», dentro de la carpeta principal de su
+# workstream o de su proyecto. La principal se asigna (workstream_folders / project_folders); sin asignar, es la carpeta
+# del proyecto en el arbol (la que tiene su carpeta Vocabulario). Sin tema: la fija del perfil y, si no, la ultima
+# usada. Lo grabado antes se queda donde esta: solo lo nuevo va en su carpeta.
+MEETING_DIR_MAX = 60  # caracteres del nombre de la reunion en el de su carpeta
+MEETING_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (.+?)(?: \((\d{1,3})\))?$")
+WIN_PATH_MAX = 250  # rutas de Windows sin «rutas largas»: 260 con el terminador; se deja margen
+
+
+def project_home(v):
+    """Ruta interna de la carpeta del proyecto de una lista (la que contiene su carpeta Vocabulario), si esta en el
+    arbol de la app (su raiz o una vinculada); None si no (p. ej. una lista de una carpeta de vocabulario conectada)."""
+    if not v or not v.get("_abs"):
+        return None
+    d = _project_dir(v)
+    if in_app_dir(d) or not (_inside(d, ROOT) or any(_inside(d, l["path"]) for l in LINKS.values())):
+        return None
+    return rel_of(d)
+
+
+def _usable_dir(rel):
+    """`rel` es una carpeta que existe en el arbol y donde se puede grabar."""
+    if not isinstance(rel, str):
+        return False
+    try:
+        return not in_app_dir(safe(rel, "dir"))
+    except ApiError:
+        return False
+
+
+def rec_folder_origin(v, st):
+    """(carpeta principal, origen) de una grabacion nueva con el tema `v` (una lista de list_vocab, o None): la asignada
+    a su workstream («workstream»), la asignada a su proyecto («proyecto») o la carpeta del proyecto en el arbol
+    («carpeta_proyecto»); sin tema (o si ninguna existe ya), la fija del perfil («perfil»), la ultima usada («ultimo») o
+    la raiz («raiz»). Es la unica regla: la usan Ctrl+Alt+R, el aviso de Teams, el dialogo y /api/perfil."""
+    if v:
+        for origin, rel in (("workstream", (st.get("workstream_folders") or {}).get(v.get("id"))),
+                            ("proyecto", (st.get("project_folders") or {}).get(v.get("project"))),
+                            ("carpeta_proyecto", project_home(v))):
+            if rel is not None and _usable_dir(rel):
+                return rel, origin
+    fija = perfil_folder(st)
+    if fija is not None:
+        return fija, "perfil"
+    rel = st.get("rec_folder")
+    if rel and _usable_dir(rel):
+        return rel, "ultimo"
+    return "", "raiz"
+
+
+def project_folders_resolved(st):
+    """proyecto -> carpeta principal de cada proyecto con listas (la asignada o la suya en el arbol), para la
+    interfaz."""
+    out = {}
+    for v in list_vocab():
+        if v["project"] not in out:
+            rel, origin = rec_folder_origin(dict(v, id=None), st)  # sin id: la del proyecto, no la de un workstream
+            if origin in ("proyecto", "carpeta_proyecto"):
+                out[v["project"]] = rel
+    for name, rel in (st.get("project_folders") or {}).items():  # asignadas a un proyecto sin listas
+        if name not in out and _usable_dir(rel):
+            out[name] = rel
+    return out
+
+
+def por_reunion(st):
+    """El interruptor general de la carpeta por reunion (encendido por defecto)."""
+    return st.get("carpeta_por_reunion", True) is not False
+
+
+def meeting_dir_name(label="", when=None, limit=MEETING_DIR_MAX):
+    """Nombre de la carpeta de una reunion: «AAAA-MM-DD Nombre» o, sin nombre (o si no cabe), «AAAA-MM-DD HH-MM».
+    `when`: segundos o un struct_time (por defecto, ahora)."""
+    lt = time.localtime(when) if isinstance(when, (int, float)) else (when or time.localtime())
+    name = calendario.nombre_archivo(label, limit=limit) if label and limit >= 12 else ""
+    return time.strftime("%Y-%m-%d", lt) + " " + (name or time.strftime("%H-%M", lt))
+
+
+def meeting_dir_matches(dirname, stem):
+    """La carpeta `dirname` tiene el nombre que le da la app a la de la reunion `stem` («AAAA-MM-DD HH-MM-SS -
+    Nombre»): misma fecha y su nombre (entero o recortado por una palabra) o su hora, con « (n)» si se repitio."""
+    m = DATE_RE.match(stem or "")
+    d = MEETING_DIR_RE.match(unicodedata.normalize("NFC", dirname or ""))
+    if not m or not d or d.group(1) != f"{m.group(1)}-{m.group(2)}-{m.group(3)}":
+        return False
+    rest = d.group(2)
+    if rest == f"{m.group(4)}-{m.group(5)}":
+        return True
+    label = " ".join(fold(stem[m.end():].strip(" -_·")).split())
+    rest = " ".join(fold(rest).split())
+    if not label or not label.startswith(rest):
+        return False
+    return rest == label or (len(rest) >= 12 and label[len(rest)] in " .-–—")
+
+
+def own_meeting_dir(abs_audio):
+    """La carpeta de la reunion si es «suya» (la crea rec_start con la carpeta por reunion): se llama como ella
+    (meeting_dir_matches) y no hay otra grabacion dentro. Sin eso (lo grabado antes, o una carpeta tuya), None."""
+    d = os.path.dirname(abs_audio)
+    if not meeting_dir_matches(os.path.basename(d), os.path.splitext(os.path.basename(abs_audio))[0]):
+        return None
+    if in_app_dir(d) or _norm_dir(d) in {_norm_dir(ROOT)} | {_norm_dir(l["path"]) for l in LINKS.values()}:
+        return None
+    try:
+        audios = [n for n in os.listdir(d) if os.path.splitext(n)[1].lower() in AUDIO_EXT]
+    except OSError:
+        return None
+    return d if len(audios) == 1 else None
+
+
+def free_dir(parent, name, mine=None):
+    """Ruta para la carpeta `name` dentro de `parent`: esa si no existe, esta vacia o es `mine` (la propia); si no,
+    «name (2)», «name (3)»…"""
+    for n in range(1, 500):
+        p = os.path.join(parent, name if n == 1 else f"{name} ({n})")
+        if mine and _norm_dir(p) == _norm_dir(mine):
+            return p
+        try:
+            if not os.path.exists(p) or (os.path.isdir(p) and not os.listdir(p)):
+                return p
+        except OSError:
+            continue
+    raise ApiError("Hay demasiadas carpetas con ese nombre: " + name)
+
+
+def fit_meeting_dir(parent, label, when, stem):
+    """El nombre de la carpeta de la reunion que cabe en una ruta de Windows con su archivo mas largo dentro (el
+    .hablantes.json): se recorta el nombre de la reunion y, si ni asi, «AAAA-MM-DD HH-MM»."""
+    longest = len(stem) + len(voices.SIDECAR_EXT) + 6  # «\», « (n)» y margen
+    limit = MEETING_DIR_MAX
+    while True:
+        name = meeting_dir_name(label, when, limit)
+        if not WINDOWS or len(os.path.join(parent, name)) + longest <= WIN_PATH_MAX or limit < 12:
+            return name
+        limit -= 8
+
+
+def meeting_dir_preview(folder_rel, label="", st=None, when=None):
+    """Ruta interna de la carpeta que tendria ahora una reunion grabada en `folder_rel` (sin crearla), o la propia
+    carpeta si la carpeta por reunion esta apagada. Para ensenar «Se guarda en …» antes de grabar."""
+    if st is not None and not por_reunion(st):
+        return folder_rel
+    parent = safe(folder_rel, "dir")
+    lt = time.localtime(when) if isinstance(when, (int, float)) else (when or time.localtime())
+    stem = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
+    return rel_of(free_dir(parent, fit_meeting_dir(parent, label, lt, stem)))
+
+
+def rec_destino(v, st, name="", when=None):
+    """Lo que se usara para guardar una grabacion nueva: {"carpeta": la principal, "origen": de donde sale (ver
+    rec_folder_origin), "reunion": la carpeta que se creara para ella (o la principal sin carpeta por reunion),
+    "por_reunion"}. Para la tarjeta de grabar, Ctrl+Alt+R y Ajustes (la misma regla que rec_start)."""
+    rel, origin = rec_folder_origin(v, st)
+    label = ""
+    if name:
+        try:
+            label = clean_name(name)
+        except ApiError:
+            label = calendario.nombre_archivo(name)
+    try:
+        reunion = meeting_dir_preview(rel, label, st, when)
+    except ApiError:
+        reunion = rel
+    return {"carpeta": rel, "origen": origin, "reunion": reunion, "por_reunion": por_reunion(st)}
+
+
+def display_rel(rel):
+    """Una ruta interna como la ve el usuario: «\\Proyecto Alfa\\2026-11-07 Comité\\» (una vinculada, con su nombre)."""
+    parts = [p for p in (rel or "").split("/") if p]
+    if parts and parts[0].startswith(LINK):
+        parts[0] = (LINKS.get(parts[0][len(LINK):]) or {}).get("name") or parts[0]
+    return "\\" + "".join(p + "\\" for p in parts)
+
+
+def move_files(moves):
+    """Mueve cada (origen, destino) en orden, con reintentos si el archivo esta en uso un instante (el reproductor,
+    OneDrive, el antivirus). Si uno no se puede, deshace los ya movidos y lanza ApiError: o se mueve todo o nada."""
+    done = []
+    try:
+        for f, t in moves:
+            if f == t:
+                continue
+            for attempt in range(12):
+                try:
+                    shutil.move(f, t)
+                    break
+                except PermissionError:
+                    if attempt == 11:
+                        raise
+                    time.sleep(0.25)
+            done.append((f, t))
+    except OSError as e:
+        for f, t in reversed(done):
+            try:
+                shutil.move(t, f)
+            except OSError:
+                log_exc()
+        if isinstance(e, PermissionError):
+            raise ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). "
+                           "Prueba otra vez en unos segundos.")
+        raise ApiError(f"No se ha podido mover ({e.__class__.__name__}).")
+
+
 def moved_rel(p, old, new, folder=False):
     """La ruta interna `p` despues de que `old` pase a ser `new` (con folder, tambien lo que hay dentro); None si no le
     afecta."""
@@ -1564,6 +1801,12 @@ def settings_moved(d, old, new, folder=False, project=None):
     if project and project[0] in pf and project[1] not in pf:
         pf[project[1]] = pf.pop(project[0])
     d["project_folders"] = pf
+    if d.get("workstream_folders"):  # id de la lista -> carpeta: los dos son rutas internas
+        wf = {}
+        for vid, rel in d["workstream_folders"].items():
+            k, m = moved_rel(vid, old, new, folder), moved_rel(rel, old, new, folder)
+            wf[vid if k is None else k] = rel if m is None else m
+        d["workstream_folders"] = wf
 
 
 def theme_moved(props, vid, new, lists, project, ambiguous=False, inside=False):
@@ -1955,6 +2198,26 @@ class Jobs:
         with self.lock:
             return next((j for j in self.list if j.path == path and j.kind in kinds
                          and j.status in ("queued", "running")), None)
+
+    def busy_for(self, rel):
+        """Por que la app va a escribir aun en los archivos de esa reunion (una frase), o None: un trabajo suyo en cola,
+        en marcha o terminando (lo que encadena al acabar, voces y resumen, ya esta en cola cuando se suelta: hold),
+        o su repaso final pendiente de un cierre de la app (se retoma al arrancar)."""
+        kinds = {"summary": "Se está resumiendo esta reunión",
+                 "voces": "Se están identificando las voces de esta reunión"}
+        with self.lock:
+            held = (getattr(self, "held", None) or {}).get(rel)
+            j = next((j for j in self.list if j.path == rel and j.status in ("queued", "running")), None)
+        if j:
+            return kinds.get(j.kind, "Se está transcribiendo esta reunión")
+        if held:
+            return "Se está procesando esta reunión"
+        try:
+            if rel in self._pending().data:
+                return "Falta el repaso final de esta reunión"
+        except Exception:
+            log_exc()
+        return None
 
     # --- en directo
     def _watch_recordings(self):
@@ -3071,6 +3334,8 @@ DIAG_LINES = (
     "🗑 {t} → papelera ({n} archivos⟦ y {n} documentos de los destinos⟧)",
     "   tema de {n} reuniones: siguen a la carpeta renombrada {t}",
     "↪ {t}  →  {t}",
+    "   no se pudo quitar la carpeta vacía {t}",
+    "   carpeta principal de {t}⟦ (workstream)⟧: {t}",
     "↺ {t}: transcripción original restaurada",
     "🔗 carpeta vinculada: {t}",
     "🔗 carpeta desvinculada (no se ha tocado nada): {t}",
@@ -3376,6 +3641,7 @@ class App:
                                     or ", ".join(sug.get("participants") or []),
                                     "sugerido": b.get("sugerido") or sug.get("source") or ""})
                 notify(f"● Grabando en {APP_NAME}", (f"{r['workstream']} · " if r.get("workstream") else "")
+                       + (f"→ {display_rel(r['carpeta'])} · " if r.get("carpeta") is not None else "")
                        + "Pulsa Ctrl+Alt+R otra vez para parar" + (f" · {r['aviso']}" if r.get("aviso") else ""))
                 return dict(r, recording=True)
             except ApiError as e:
@@ -3450,13 +3716,21 @@ class App:
                 b = dict(b, name=sug.get("name") or "", vocab=sug.get("vocab") or "",
                          participantes=b.get("participantes") or ", ".join(sug.get("participants") or []),
                          sugerido=b.get("sugerido") or sug.get("source") or "")
-            folder = safe(b.get("folder", ""), "dir")
+            folder = safe(b.get("folder", ""), "dir")  # la carpeta principal (rec_folder_for)
             if in_app_dir(folder):
                 raise ApiError("No se puede grabar ahí")
-            name = time.strftime("%Y-%m-%d %H-%M-%S") + (f" - {clean_name(b['name'])}" if b.get("name") else "")
-            path = os.path.join(folder, name + ".wav")
+            lt = time.localtime()
+            label = clean_name(b["name"]) if b.get("name") else ""
+            name = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
+            # una carpeta por reunion, «AAAA-MM-DD Nombre», dentro de la principal (msg 1158); se crea al grabar
+            mdir = free_dir(folder, fit_meeting_dir(folder, label, lt, name)) if por_reunion(self.settings.get()) \
+                else None
+            path = os.path.join(mdir or folder, name + ".wav")
             if os.path.exists(path):
                 raise ApiError("Ya existe un archivo con ese nombre.")
+            made = mdir is not None and not os.path.isdir(mdir)
+            if mdir:
+                os.makedirs(mdir, exist_ok=True)
             if self.monitor:
                 self.monitor.stop(timeout=2)
                 self.monitor = None
@@ -3508,10 +3782,9 @@ class App:
                 def upd(d):
                     if "vocab" in b:
                         d["rec_vocab"] = v["id"] if v else ""
-                    # la proxima vez (y con Ctrl+Alt+R) se graba en la misma carpeta
+                    # la ultima carpeta principal usada: la de las reuniones sin tema (rec_folder_origin). La de un
+                    # proyecto ya no se apunta al grabar: se asigna (/api/proyecto/carpeta) y, sin asignar, es la suya
                     d["rec_folder"] = rel_of(folder)
-                    if v:
-                        d["project_folders"] = dict(d.get("project_folders") or {}, **{v["project"]: rel_of(folder)})
                     # "solo grabar" y "sin micro" son para una grabacion concreta: no se quedan como
                     # predeterminado (la siguiente, y Ctrl+Alt+R, vuelven a transcribir y a grabar el micro)
                     if mic != "none":
@@ -3534,11 +3807,17 @@ class App:
             finally:
                 if not started:
                     self.jobs.claimed.discard(rel)
+                    if made:  # la carpeta de la reunion recien creada, si la grabadora no llego a escribir nada
+                        try:
+                            os.rmdir(mdir)
+                        except OSError:
+                            pass
         log(f"● Grabando: {rel}" + (f" [{v['project']} · {v['name']}]" if v else "")
             + ("" if b.get("live") else " (solo grabar, sin transcribir)")
             + (f" · aviso: {'; '.join(avisos)}" if avisos else ""))
         return {"path": rel, "workstream": f"{v['project']} · {v['name']}" if v else None,
-                "participantes": props.get("participantes"), "aviso": "; ".join(avisos) or None}
+                "participantes": props.get("participantes"), "aviso": "; ".join(avisos) or None,
+                "carpeta": rel_of(os.path.dirname(path)), "carpeta_principal": rel_of(folder)}
 
     def rec_mic(self, b):
         """Silenciar / reactivar mi micro a mitad de grabacion (se graba silencio en su lugar)."""
@@ -3744,7 +4023,12 @@ class App:
                 "hotkey": {"ok": self.hotkey.ok, "error": self.hotkey.error, "keys": "Ctrl+Alt+R"},
                 "favorites": st.get("favorites") or [], "folder_icons": st.get("folder_icons") or {},
                 "links": [{"rel": LINK + k, "name": l["name"], "path": l["path"]} for k, l in LINKS.items()],
-                "rec_folder": st.get("rec_folder") or "", "project_folders": st.get("project_folders") or {},
+                # carpeta principal de cada proyecto, la asignada o la suya en el arbol (rec_folder_origin); las
+                # asignadas tal cual, aparte
+                "rec_folder": st.get("rec_folder") or "", "project_folders": project_folders_resolved(st),
+                "project_folders_asignadas": dict(st.get("project_folders") or {}),
+                "workstream_folders": dict(st.get("workstream_folders") or {}),
+                "carpeta_por_reunion": por_reunion(st),
                 "meeting_detect": bool(st.get("meeting_detect", True)),
                 "outlook_on": bool(st.get("outlook_on")), "rec_aviso": bool(st.get("rec_aviso", True)),
                 "summary": {"auto": bool(st.get("summary_auto", True)), "local": bool(st.get("summary_auto_local")),
@@ -3922,25 +4206,48 @@ class App:
             favorites=[f for f in d.get("favorites", []) if not f["path"].startswith(LINK + lid)],
             rec_folder="" if (d.get("rec_folder") or "").startswith(LINK + lid) else d.get("rec_folder", ""),
             project_folders={k: v for k, v in (d.get("project_folders") or {}).items()
-                             if not v.startswith(LINK + lid)}))
+                             if not v.startswith(LINK + lid)},
+            workstream_folders={k: v for k, v in (d.get("workstream_folders") or {}).items()
+                                if not v.startswith(LINK + lid) and not k.startswith(LINK + lid)}))
         log(f"🔗 carpeta desvinculada (no se ha tocado nada): {l['path']}")
         return {"ok": True}
 
     def rec_folder_for(self, v, st):
-        """Donde se graba: la carpeta fija del perfil si la hay; si no, la ultima usada para ese proyecto o, si no
-        hay, la ultima usada."""
-        fija = perfil_folder(st)
-        if fija is not None:
-            return fija
-        for rel in ((st.get("project_folders") or {}).get(v["project"]) if v else None, st.get("rec_folder")):
+        """La carpeta principal donde se graba una reunion con el tema `v` (la regla, en rec_folder_origin). Dentro,
+        rec_start crea la carpeta de la reunion (carpeta por reunion); para saber cual sera, rec_destino."""
+        return rec_folder_origin(v, st)[0]
+
+    def carpeta_principal(self, b):
+        """POST /api/proyecto/carpeta {project, vocab?, folder}: asigna la carpeta principal de un proyecto (o, con
+        `vocab`, la de ese workstream: el id de su lista). folder None = sin asignar (vuelve a la del proyecto en el
+        arbol). Devuelve las carpetas principales de cada proyecto (como /api/config)."""
+        project, vid, rel = str(b.get("project") or "").strip(), str(b.get("vocab") or "").strip(), b.get("folder")
+        if vid:
+            v = find_vocab(None, None, vid)
+            if not v:
+                raise ApiError("Ese tema de vocabulario ya no existe.")
+            project = v["project"]
+        if not project:
+            raise ApiError("Falta el proyecto.")
+        if rel is not None:
+            rel = str(rel).replace("\\", "/").strip("/")
+            if in_app_dir(safe(rel, "dir")):
+                raise ApiError("No se puede grabar ahí")
+        key, name = ("workstream_folders", vid) if vid else ("project_folders", project)
+
+        def upd(d):
+            m = dict(d.get(key) or {})
             if rel is None:
-                continue
-            try:
-                safe(rel, "dir")
-                return rel
-            except ApiError:
-                continue
-        return ""
+                m.pop(name, None)
+            else:
+                m[name] = rel
+            d[key] = m
+        self.settings.update(upd)
+        log(f"   carpeta principal de {project}{' (workstream)' if vid else ''}: "
+            + (rel if rel is not None else "la suya"))
+        st = self.settings.get()
+        return {"project_folders": project_folders_resolved(st),
+                "workstream_folders": dict(st.get("workstream_folders") or {})}
 
     # --- vocabulario por workstream
     def vocab(self, q):
@@ -3994,7 +4301,7 @@ class App:
         en curso, si la hay), y los avisos de los destinos de salida (documentos que no se han podido escribir)."""
         st = self.settings.get()
         sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
-        auto = lambda vid: self.rec_folder_for(find_vocab(None, None, vid) if vid else None, st)  # noqa: E731
+        auto = lambda vid: rec_folder_origin(find_vocab(None, None, vid) if vid else None, st)  # noqa: E731
         avisos = getattr(getattr(self, "jobs", None), "outputs_warnings", None)  # sin cola (tests): ninguno
         return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto),
                 "avisos": avisos() if avisos else []}
@@ -4021,6 +4328,8 @@ class App:
             d["rec_vocab"] = "" if d.get("rec_vocab") == v["id"] else d.get("rec_vocab", "")
             if (d.get("perfil") or {}).get("vocab") == v["id"]:
                 d["perfil"] = dict(d["perfil"], vocab=None)
+            if v["id"] in (d.get("workstream_folders") or {}):  # su carpeta principal deja de estar asignada
+                d["workstream_folders"] = {k: x for k, x in d["workstream_folders"].items() if k != v["id"]}
         self.settings.update(upd)
         self.library.at = 0
         log(f"🗑 vocabulario a la papelera: {v['project']} · {v['name']}")
@@ -4080,8 +4389,10 @@ class App:
             raise ApiError("Se está resumiendo esta reunión; espera a que termine (o cancela el resumen en la cola).")
         group = [p]
         stem, ext = os.path.splitext(p)
+        own = None
         if ext.lower() in AUDIO_EXT:
             group += [stem + e for e in SIDE_EXTS if os.path.isfile(stem + e)]
+            own = own_meeting_dir(p)
         for attempt in range(8):  # el reproductor puede tener el audio abierto un instante
             try:
                 to_recycle_bin(group)
@@ -4090,6 +4401,11 @@ class App:
                 if attempt == 7:
                     raise
                 time.sleep(0.3)
+        if own:  # su carpeta (carpeta por reunion), si se ha quedado vacia
+            try:
+                os.rmdir(own)
+            except OSError:
+                pass
         COMPLETE.set(rel, False)
         self.jobs._cloud_text().set(rel, False)  # otra reunion que acabe con este nombre no hereda su origen
         shutil.rmtree(backup_dir(rel), ignore_errors=True)
@@ -4369,61 +4685,135 @@ class App:
         self.jobs.clear()
         return {"ok": True}
 
+    def _move_lock(self):
+        """Un solo movimiento de reuniones a la vez (el de la interfaz y los pendientes al terminar)."""
+        lock = self.__dict__.get("move_lock")
+        if lock is None:
+            lock = self.__dict__.setdefault("move_lock", threading.RLock())
+        return lock
+
+    def _ocupada(self, rel):
+        """Por que no se pueden mover ahora los archivos de esa reunion (una frase), o None: se esta grabando,
+        transcribiendo (directo y repaso final incluidos), identificando sus voces o resumiendo, o tiene el repaso
+        final pendiente de un cierre de la app. Con None, nada de la app va a escribir en sus archivos."""
+        r = getattr(self, "rec", None)
+        if r and r.alive() and os.path.normcase(rel_of(r.path)) == os.path.normcase(rel):
+            return "Se está grabando esta reunión"
+        find = getattr(getattr(self, "library", None), "find", None)
+        a = find(rel) if find else None
+        if a and a.get("recording"):
+            return "Se está grabando esta reunión"
+        return self.jobs.busy_for(rel)
+
     def move(self, b):
         src = safe(b.get("path"), "file")
         dest_dir = safe(b.get("folder", ""), "dir")
         if in_app_dir(dest_dir):
             raise ApiError("No se puede mover ahí")
-        a = self.library.find(b.get("path"))
-        if a and a.get("recording"):
-            raise ApiError("OBS sigue grabando ese audio; muévelo cuando pare la grabación.")
-        if self.jobs.active_for(b.get("path")):
-            raise ApiError("Ese audio se está transcribiendo; espera a que termine.")
-        if self.jobs.active_for(b.get("path"), kinds=("summary",)):  # el .resumen.md se escribiria en la ruta vieja
-            raise ApiError("Se está resumiendo esta reunión; muévela cuando termine (o cancela el resumen en la cola).")
         stem, ext = os.path.splitext(os.path.basename(src))
         new_stem = clean_name(b["name"]) if b.get("name") else stem
-        group = [src]
         if ext.lower() in AUDIO_EXT:
-            for e in SIDE_EXTS:
-                sib = os.path.join(os.path.dirname(src), stem + e)
-                if os.path.isfile(sib):
-                    group.append(sib)
-        moves = []
-        for f in group:
-            # lo que va detras del nombre (.txt, .srt, .md, .resumen.md): asi .resumen.md no acaba en .md
-            target = os.path.join(dest_dir, new_stem + os.path.basename(f)[len(stem):])
-            if os.path.normcase(target) != os.path.normcase(f) and os.path.exists(target):
-                raise ApiError("Ya existe un archivo con ese nombre en el destino: " + os.path.basename(target))
-            moves.append((f, target))
-        for f, target in moves:
-            if f == target:
-                continue
-            for attempt in range(12):  # el reproductor u OneDrive pueden tenerlo abierto un instante
+            why = self._ocupada(rel_of(src))
+            if why:
+                raise ApiError(f"{why}: muévela cuando termine.")
+        with self._move_lock():
+            return {"path": self._move_now(src, dest_dir, new_stem)}
+
+    def _move_now(self, src, dest_dir, new_stem=None, target=None):
+        """Mueve (o renombra) una reunion con todo lo suyo a `dest_dir` y devuelve la ruta interna nueva del audio.
+        Si vive en su carpeta (carpeta por reunion, own_meeting_dir) se mueve la carpeta entera, con lo que tenga
+        dentro: queda dentro de `dest_dir` con su nombre (el de la reunion renombrada, o « (2)» si ya hay otra asi) y,
+        si `dest_dir` es su propia carpeta, solo se renombra. Si no, el audio y sus archivos hermanos, como siempre.
+        O todo o nada (move_files). `target`: la carpeta de la reunion ya elegida (un movimiento que se reintenta)."""
+        stem, ext = os.path.splitext(os.path.basename(src))
+        new_stem = new_stem or stem
+        audio = ext.lower() in AUDIO_EXT
+        own = own_meeting_dir(src) if audio else None
+        if own and _norm_dir(dest_dir) == _norm_dir(own):
+            dest_dir = os.path.dirname(own)  # su propia carpeta: se renombra en su sitio
+        if own and _inside(dest_dir, own):
+            raise ApiError("No se puede mover una reunión dentro de su propia carpeta.")
+
+        def renamed(f):  # lo que va detras del nombre (.txt, .srt, .md, .resumen.md): asi .resumen.md no acaba en .md
+            return new_stem + os.path.basename(f)[len(stem):]
+        base = os.path.dirname(src)
+        sibs = [os.path.join(base, stem + e) for e in SIDE_EXTS
+                if audio and os.path.isfile(os.path.join(base, stem + e))]
+        if own:
+            if target:
+                new_dir = target
+            else:
+                m = DATE_RE.match(new_stem)
+                name = os.path.basename(own)
+                if new_stem != stem and m:  # renombrada: su carpeta, con el nombre nuevo
+                    name = fit_meeting_dir(dest_dir, new_stem[m.end():].strip(" -_·"),
+                                           time.strptime(m.group(0)[:10] + " " + m.group(0)[11:], "%Y-%m-%d %H-%M-%S"),
+                                           new_stem)
+                new_dir = free_dir(dest_dir, name, mine=own)
+            mine = {os.path.normcase(f) for f in [src] + sibs}
+            moves = [(os.path.join(own, n), os.path.join(new_dir, n)) for n in sorted(os.listdir(own))
+                     if os.path.normcase(os.path.join(own, n)) not in mine]
+        else:
+            new_dir, moves = dest_dir, []
+        # el audio el ultimo: si algo falla a medias, la reunion sigue en su ruta (move_files deshace lo movido)
+        moves += [(f, os.path.join(new_dir, renamed(f))) for f in sibs] + [(src, os.path.join(new_dir, renamed(src)))]
+        for f, t in moves:
+            if os.path.normcase(t) != os.path.normcase(f) and os.path.exists(t):
+                raise ApiError("Ya existe un archivo con ese nombre en el destino: " + os.path.basename(t))
+        made = own is not None and not os.path.isdir(new_dir)
+        if made:
+            os.makedirs(new_dir)
+        try:
+            move_files(moves)
+        except ApiError:
+            if made:
                 try:
-                    shutil.move(f, target)
-                    break
-                except PermissionError:
-                    if attempt == 11:
-                        raise ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). "
-                                       "Prueba otra vez en unos segundos.")
-                    time.sleep(0.25)
+                    os.rmdir(new_dir)
+                except OSError:
+                    pass
+            raise
+        old, new = rel_of(src), rel_of(moves[-1][1])
+        if own and _norm_dir(new_dir) != _norm_dir(own):  # la carpeta de la reunion se ha quedado vacia
+            try:
+                os.rmdir(own)
+            except OSError:
+                log(f"   no se pudo quitar la carpeta vacía {rel_of(own)}")
+            old_dir, new_dir_rel = rel_of(own), rel_of(new_dir)
+            self._rename_refs(old_dir, new_dir_rel, folder=True)  # favoritos e icono de la carpeta
+            if getattr(self, "settings", None) is not None:
+                self.settings.update(lambda d: settings_moved(d, old_dir, new_dir_rel, folder=True))
+        self._moved_refs(old, new)
+        log(f"↪ {old}  →  {new}")
+        return new
+
+    def _moved_refs(self, old, new):
+        """Lo que la app guarda por ruta interna sigue a la reunion movida o renombrada: «completa», el origen de su
+        texto, sus huellas de voz en memoria, su tema, favoritos e iconos, sus documentos de los destinos de salida y la
+        copia del original. Las peticiones que lleguen con la ruta vieja van a la nueva (ALIASES)."""
+        if old == new:
+            return
         self.library.at = 0
-        COMPLETE.moved(rel_of(src), rel_of(moves[0][1]))
-        self.jobs._cloud_text().moved(rel_of(src), rel_of(moves[0][1]))  # el origen de su texto va con ella
-        if rel_of(src) in self.jobs.voice_vectors:
-            self.jobs.voice_vectors[rel_of(moves[0][1])] = self.jobs.voice_vectors.pop(rel_of(src))
+        COMPLETE.moved(old, new)
+        self.jobs._cloud_text().moved(old, new)  # el origen de su texto va con ella
+        vv = getattr(self.jobs, "voice_vectors", None)
+        if vv is not None and old in vv:
+            vv[new] = vv.pop(old)
         try:  # su tema la sigue
-            temas().moved(rel_of(src), rel_of(moves[0][1]))
+            temas().moved(old, new)
         except OSError:
             log_exc()
-        self._rename_refs(rel_of(src), rel_of(moves[0][1]))
-        self.jobs.outputs_moved(rel_of(src), rel_of(moves[0][1]))  # sus documentos de los destinos siguen siendo suyos
-        old_b, new_b = backup_dir(rel_of(src)), backup_dir(rel_of(moves[0][1]))
+        self._rename_refs(old, new)
+        self.jobs.outputs_moved(old, new)  # sus documentos de los destinos siguen siendo suyos
+        old_b, new_b = backup_dir(old), backup_dir(new)
         if os.path.isdir(old_b) and not os.path.exists(new_b):  # la copia del original viaja con el audio
             os.replace(old_b, new_b)
-        log(f"↪ {rel_of(src)}  →  {rel_of(moves[0][1])}")
-        return {"path": rel_of(moves[0][1])}
+        with ALIASES_LOCK:
+            ALIASES[old] = new
+            for k in [k for k, v in ALIASES.items() if v == old]:  # A -> B -> C: A va directo a C
+                ALIASES[k] = new
+            ALIASES.pop(new, None)
+        if getattr(self.jobs, "settings", None) is not None:  # el documento de los destinos dice de donde sale
+            self.jobs.schedule_outputs(new)
 
     def mkdir(self, b):
         parent = safe(b.get("parent", ""), "dir")
@@ -4610,6 +5000,8 @@ class App:
                     d[k] = bool(b[k])
             if "live_auto" in b:
                 d["live_auto"] = bool(b["live_auto"])
+            if "carpeta_por_reunion" in b:  # una carpeta por reunion (encendida por defecto)
+                d["carpeta_por_reunion"] = b["carpeta_por_reunion"] is not False
             if "live_final_pass" in b:
                 d["live_final_pass"] = bool(b["live_final_pass"])
             if b.get("live_preset") in LIVE_PRESETS:
@@ -5425,6 +5817,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, b"forbidden", "text/plain")
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if "path" in q:  # una reunion que la app ha movido en esta sesion: a su ruta nueva
+            q["path"] = alias_of(q["path"])
         if u.path in ("", "/") and "t" in q:
             return self._session_start(q["t"])
         if (u.path.startswith("/api/") or u.path == "/media") and not self._token_ok():
@@ -5485,6 +5879,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
                   "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check,
                   "/api/vocab/import": a.vocab_import, "/api/perfil": a.perfil_save,
+                  "/api/proyecto/carpeta": a.carpeta_principal,
                   "/api/voces/activar": a.voices_toggle, "/api/voces/identificar": a.voices_identify,
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
@@ -5508,6 +5903,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw or b"{}")
             if not isinstance(body, dict):
                 raise ApiError("Cuerpo no válido: se esperaba un objeto JSON")
+            if isinstance(body.get("path"), str):  # una reunion movida en esta sesion (unas notas que se guardan justo
+                body["path"] = alias_of(body["path"])  # al moverla): a su ruta nueva
             route = routes.get(u.path)
             if not route:
                 raise ApiError("No encontrado", 404)

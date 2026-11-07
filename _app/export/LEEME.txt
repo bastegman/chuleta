@@ -110,6 +110,9 @@ USO DIARIO
     (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
   - Si grabas con OBS, configúralo para que guarde en la carpeta Chuleta: la app lo detecta y
     transcribe en directo mientras graba.
+  - Cada grabación va en su propia carpeta, "AAAA-MM-DD Nombre", dentro de la carpeta principal
+    de su proyecto (sin asignar, la del proyecto: la que tiene su carpeta Vocabulario). Lo
+    grabado antes se queda donde está. Mover o renombrar la reunión mueve su carpeta entera.
   - Perfil de reunión (⚙ Ajustes > Perfil de reunión): la carpeta donde se guarda, el idioma
     (por defecto se detecta solo; "Español + inglés", "Español + portugués" e "Inglés + portugués"
     son para reuniones que mezclan dos), el tema de vocabulario y un contexto de una o dos frases
