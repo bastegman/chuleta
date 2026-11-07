@@ -159,6 +159,7 @@ MAX_CITAS_DIA = 200  # la agenda de hoy (estado y «Probar»)
 MAX_DESTINATARIOS = 200  # una convocatoria enorme no se recorre entera
 PROGID = "Outlook.Application"
 LENTO = 2.0  # s: leer los asistentes tarda más que esto cuando Outlook ha preguntado (aviso de seguridad)
+ESPERA_OTRA = 1.5  # s que se espera a que acabe otra consulta en marcha
 _TEAMS_LOC = re.compile(r"microsoft teams|teams\.microsoft\.com|teams\.live\.com", re.I)
 _TEAMS_URL = re.compile(r"https://(?:teams\.microsoft\.com|teams\.live\.com|[\w.-]*teams\.cloud\.microsoft)/", re.I)
 
@@ -384,16 +385,16 @@ def entorno_outlook():
     """Lo que se puede saber de Outlook en este PC sin hablar con él. Fuera de Windows, {"windows": False}."""
     if not WINDOWS:
         return {"windows": False}
+    import importlib.util
     import struct
     import winreg
     e = {"windows": True, "python_bits": struct.calcsize("P") * 8}
+    # sin importarlo: importar pythoncom inicializa COM en el hilo que lo importa (aquí, el de la petición HTTP). Si
+    # está pero no carga (una DLL), lo dice la consulta, en su hilo: ImportError → «sin_pywin32»
     try:
-        import pythoncom  # noqa: F401
-        import pywintypes  # noqa: F401
-        import win32com.client  # noqa: F401
-        e["pywin32"], e["pywin32_error"] = True, ""
-    except Exception as ex:  # ImportError, o una DLL de pywin32 que no carga
-        e["pywin32"], e["pywin32_error"] = False, f"{ex.__class__.__name__}: {ex}"[:200]
+        e["pywin32"] = all(importlib.util.find_spec(m) is not None for m in ("pythoncom", "pywintypes", "win32com"))
+    except (ImportError, ValueError):
+        e["pywin32"] = False
     try:
         e["instalado"] = bool(_reg(winreg.HKEY_CLASSES_ROOT, PROGID + r"\CLSID"))
         procs = _procesos()
@@ -485,7 +486,9 @@ def _en_com(trabajo, timeout, session=None, espera_protegidas=None):
 
     `espera_protegidas`: cuánto se espera a lo protegido (asistentes) una vez leído lo demás; si Outlook pregunta, la
     llamada se queda esperando a que el usuario conteste y se devuelve lo que ya hay (el hilo sigue y lo apunta)."""
-    if not _COM_LOCK.acquire(blocking=False):
+    # otra consulta en marcha (el vigilante y Ajustes a la vez) suele acabar en menos de un segundo: se la espera un
+    # poco antes de decir que Outlook no contesta; colgada (un aviso sin contestar), no se amontona otro hilo
+    if not _COM_LOCK.acquire(timeout=min(ESPERA_OTRA, timeout)):
         return None
     caja, fase1, listo = {"fase": "conectar", "fin": False}, threading.Event(), threading.Event()
     caja["_fase1"] = fase1

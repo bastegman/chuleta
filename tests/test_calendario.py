@@ -253,6 +253,22 @@ class ComHiloTests(Base):
         self.assertIn("está cerrado", reason)
         self.assertEqual(len([c for c in st["calls"] if c[0] == "GetActiveObject"]), 1)  # cerrado: sin reintento
 
+    def test_dos_consultas_a_la_vez_no_se_dan_por_colgadas(self):
+        """El vigilante de llamadas y Ajustes pueden preguntar a la vez: la segunda espera a la primera (rápida)."""
+        it = FakeItem("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30))
+
+        def lenta():
+            time.sleep(0.4)
+            return FakeApp([it], [])
+        primera = threading.Thread(target=calendario.outlook_candidates, kwargs={"now": NOW, "session": lenta,
+                                                                                 "fmt": DIA})
+        primera.start()
+        time.sleep(0.05)
+        cands, reason = calendario.outlook_candidates(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
+        primera.join()
+        self.assertIsNone(reason)
+        self.assertEqual(cands[0]["subject"], "Comité")
+
     def test_la_excepcion_no_guarda_objetos_com(self):
         """La traza de la excepción del hilo COM guarda sus marcos (y con ellos objetos de Outlook): se suelta."""
         def session():
