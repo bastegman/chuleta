@@ -2102,13 +2102,19 @@ function openSettings() {
       if (v) toast(`No se ha aplicado ${procNombre[v]}: sigue ${procNombre[S.config.procesado] || 'la opción de antes'}. Para cambiarlo, ⚙ Ajustes → «Aplicar ahora».`, 'err');
     };
     $('#agCheck', d).onclick = async () => {  // no guarda el formulario: solo comprueba con el modelo elegido
-      const res = $('#agRes', d);
-      res.textContent = 'Comprobando… (la primera vez puede tardar medio minuto)';
+      // con los segundos a la vista (07/11/2026: en su PC tardó minutos con un «Comprobando…» quieto)
+      const res = $('#agRes', d), btn = $('#agCheck', d), t0 = Date.now();
+      const seg = () => Math.round((Date.now() - t0) / 1000);
+      const tic = () => { res.textContent = `Comprobando… ${seg()} s` + (seg() >= 20 ? ' · la primera vez, Claude Code puede tardar uno o dos minutos en arrancar' : ''); };
+      btn.disabled = true;
+      tic();
+      const timer = setInterval(tic, 1000);
       try {
         const r = await api('/api/agente/comprobar', { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value });
         res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)</span>`;
         $('#agEstado', d).textContent = `${S.config.agente?.label || 'Claude Code'} ${r.version} · comprobado ahora`;
-      } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
+      } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span> <span class="muted">(tras ${seg()} s)</span>`; }
+      finally { clearInterval(timer); btn.disabled = false; }
     };
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
