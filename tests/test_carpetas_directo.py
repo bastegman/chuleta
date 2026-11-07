@@ -224,6 +224,57 @@ class PendienteTests(TempTree):
         self.assertEqual(self.a.movimientos_publicos()["hechos"][-1]["a"], new)
 
 
+class TemaEnDirectoTests(TempTree):
+    """Cambiar el proyecto (el tema) en pleno directo hace lo mismo que «Cambiar» la carpeta (mock 01b, nota 3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("Alfa/Vocabulario/General.txt", "API\n")
+        self.write("Beta/Vocabulario/Legal.txt", "Contrato\n")
+        os.makedirs(os.path.join(self.root, "Otra"))
+        self.a = make_app(self)
+
+    def tearDown(self):
+        server.ALIASES.clear()
+        super().tearDown()
+
+    def tema(self, rel, vid):
+        with quiet():
+            return self.a.notes_save({"path": rel, "props": {"vocabulario": vid}})
+
+    def test_al_proyecto_nuevo_y_de_vuelta(self):
+        r = rec(self.a, self, folder="Alfa", vocab="Alfa/Vocabulario/General.txt")
+        self.assertIsNone(self.a._movs().get(r["path"]))  # grabar con su tema no apunta nada
+        p = self.tema(r["path"], "Beta/Vocabulario/Legal.txt")["pendiente"]
+        self.assertEqual((p["folder"], p["destino"], p["por"]), ("Beta", f"Beta/{TODAY} Comité", "tema"))
+        self.assertIsNone(self.tema(r["path"], "Alfa/Vocabulario/General.txt")["pendiente"])  # de vuelta: nada
+        self.assertIsNone(self.a._movs().get(r["path"]))
+        self.tema(r["path"], "Beta/Vocabulario/Legal.txt")
+        self.a.rec = None
+        with quiet():
+            self.assertEqual(self.a._aplicar_movimientos(), 1)
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "Beta", f"{TODAY} Comité",
+                                                    os.path.basename(r["path"]))))
+
+    def test_en_una_carpeta_elegida_a_mano_el_tema_no_la_mueve(self):
+        r = rec(self.a, self, folder="Otra", vocab="Alfa/Vocabulario/General.txt")
+        self.assertIsNone(self.tema(r["path"], "Beta/Vocabulario/Legal.txt")["pendiente"])
+        self.assertIsNone(self.a._movs().get(r["path"]))
+
+    def test_una_carpeta_elegida_con_cambiar_manda(self):
+        r = rec(self.a, self, folder="Alfa", vocab="Alfa/Vocabulario/General.txt")
+        with quiet():
+            self.a.destino({"path": r["path"], "folder": "Otra"})
+        self.tema(r["path"], "Beta/Vocabulario/Legal.txt")
+        self.assertEqual(self.a._movs().get(r["path"])["to"], "Otra")
+
+    def test_fuera_del_directo_el_tema_no_mueve(self):
+        r = rec(self.a, self, folder="Alfa", vocab="Alfa/Vocabulario/General.txt")
+        self.a.rec = None
+        self.assertIsNone(self.tema(r["path"], "Beta/Vocabulario/Legal.txt")["pendiente"])
+        self.assertIsNone(self.a._movs().get(r["path"]))
+
+
 class SoloGrabarTests(TempTree):
     def test_al_parar_se_mueve_ya(self):
         for d in ("Alfa", "Beta"):

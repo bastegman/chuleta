@@ -4013,7 +4013,7 @@ class App:
                     props["contexto"] = ctx
                 if props:  # antes de arrancar el directo, para que ya use ese vocabulario
                     try:
-                        self.notes_save({"path": rel, "props": props})
+                        self.notes_save({"path": rel, "props": props, "_al_grabar": True})
                     except Exception as e:
                         log_exc()
                         avisos.append(f"sin cabecera de notas ({e.msg if isinstance(e, ApiError) else e})")
@@ -4330,8 +4330,10 @@ class App:
         """Guarda las notas y/o propiedades (solo lo que venga en la peticion)."""
         abs_path = safe(b.get("path"), "file")
         md = os.path.splitext(abs_path)[0] + ".md"
+        tema = bool({"proyecto", "workstream", "vocabulario"} & set(b.get("props") or {})) and not b.get("_al_grabar")
         with self.notes_lock:
             props, body = parse_notes(read_text(md)) if os.path.isfile(md) else ({}, "")
+            antes = self._tema_de(props, abs_path) if tema else None
             for k, v in (b.get("props") or {}).items():
                 if k in NOTE_KEYS:
                     if k == "etiquetas":
@@ -4365,8 +4367,54 @@ class App:
             self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
         self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento con las notas nuevas
         self.library.at = 0
-        return {"props": with_theme_id(props, rel_of(abs_path)),
-                "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
+        out = {"props": with_theme_id(props, rel_of(abs_path)),
+               "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
+        if tema:
+            try:
+                out["pendiente"] = self._tema_movido(abs_path, antes, props)
+            except Exception:  # las notas ya estan guardadas: si esto falla, se anota y no se devuelve error
+                log_exc()
+        return out
+
+    @staticmethod
+    def _tema_de(props, abs_path):
+        """La lista del tema que dice la cabecera de una reunion (o None)."""
+        if not props.get("workstream"):
+            return None
+        try:
+            return find_vocab(props.get("proyecto"), props["workstream"], temas().get(rel_of(abs_path)), near=abs_path)
+        except OSError:
+            return None
+
+    def _tema_movido(self, abs_path, antes, props):
+        """Cambiar el proyecto (el tema) en pleno directo hace lo mismo que «Cambiar» la carpeta (mock 01b, nota 3): si
+        la reunion estaba en la carpeta principal que le tocaba por su tema (no en una elegida a mano), queda apuntada
+        para moverse a la del tema nuevo cuando acabe todo. Fuera del directo, el tema no mueve nada. Lo apuntado asi
+        sigue al tema mientras no se haya movido; una carpeta elegida con «Cambiar» manda. Devuelve lo pendiente."""
+        rel = rel_of(abs_path)
+        movs = self._movs()
+        e = movs.get(rel)
+        auto = bool(e and e.get("por") == "tema")
+        if (e and not auto) or (not auto and not self._grabando(rel)):
+            return None
+        st = self.settings.get()
+        cur = _norm_dir(self._donde_esta(abs_path))
+        try:
+            old_main = safe(rec_folder_origin(antes, st)[0], "dir")
+            new_main = safe(rec_folder_origin(self._tema_de(props, abs_path), st)[0], "dir")
+        except ApiError:
+            return None
+        if not auto and _norm_dir(old_main) != cur:
+            return None  # estaba en una carpeta elegida a mano: el tema no la cambia
+        if _norm_dir(new_main) == cur:
+            if auto:
+                movs.pop(rel)
+                log(f"📁 {rel}: ya no se mueve (deshecho)")
+            return None
+        e = {"to": rel_of(new_main), "at": time.time(), "por": "tema"}
+        movs.set(rel, e)
+        log(f"📁 {rel}: se moverá a {e['to']} al terminar")
+        return self._pendiente_publico(rel, e)
 
     def tags(self, q):
         self.library.refresh(max_age=5)
@@ -4937,16 +4985,20 @@ class App:
             lock = self.__dict__.setdefault("move_lock", threading.RLock())
         return lock
 
+    def _grabando(self, rel):
+        """Esa reunion se esta grabando (con la grabadora de la app o con OBS)."""
+        r = getattr(self, "rec", None)
+        if r and r.alive() and os.path.normcase(rel_of(r.path)) == os.path.normcase(rel):
+            return True
+        find = getattr(getattr(self, "library", None), "find", None)
+        a = find(rel) if find else None
+        return bool(a and a.get("recording"))
+
     def _ocupada(self, rel):
         """Por que no se pueden mover ahora los archivos de esa reunion (una frase), o None: se esta grabando,
         transcribiendo (directo y repaso final incluidos), identificando sus voces o resumiendo, o tiene el repaso
         final pendiente de un cierre de la app. Con None, nada de la app va a escribir en sus archivos."""
-        r = getattr(self, "rec", None)
-        if r and r.alive() and os.path.normcase(rel_of(r.path)) == os.path.normcase(rel):
-            return "Se está grabando esta reunión"
-        find = getattr(getattr(self, "library", None), "find", None)
-        a = find(rel) if find else None
-        if a and a.get("recording"):
+        if self._grabando(rel):
             return "Se está grabando esta reunión"
         return self.jobs.busy_for(rel)
 
@@ -5122,7 +5174,7 @@ class App:
             abs_audio = None
         dest = self._destino_final(abs_audio, e["to"], e.get("target")) if abs_audio else e["to"]
         return {"folder": e["to"], "destino": dest, "display": display_rel(dest), "error": e.get("error"),
-                "intentos": e.get("intentos", 0)}
+                "intentos": e.get("intentos", 0), "por": e.get("por") or "carpeta"}
 
     def destino(self, b):
         """POST /api/reunion/destino {path, folder | folder_abs | null}: la carpeta principal a la que mover esta

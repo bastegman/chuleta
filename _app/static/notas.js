@@ -227,6 +227,7 @@ async function saveProps(a, patch) {
   try {
     const r = await api('/api/notes', { path: a.path, props: patch });
     a.props = r.props; a.notes_mtime = r.mtime;
+    if ('pendiente' in r) pollJobs(true);  // otro proyecto en pleno directo: «Se moverá a … al terminar» (directo.js)
     renderTree();
     const t = $('#pTitleTxt');
     if (S.playing === a.path) $('#pTitle').textContent = fullTitle(a);

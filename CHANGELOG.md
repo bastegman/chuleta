@@ -24,6 +24,8 @@ Lo que pidió: «Quiero poder cambiar la carpeta durante la reunión. Es posible
   la ruta nueva.
 - Arrastrar en el árbol una reunión que se está grabando o procesando ya no da el aviso de OBS: se moverá al terminar.
   Renombrarla, cuando termine.
+- Cambiar el tema (el proyecto) en pleno directo hace lo mismo: si la reunión estaba en la carpeta de su proyecto, se
+  moverá a la del proyecto nuevo al terminar (si la elegiste a mano, o elegiste otra con «Cambiar», se queda esa).
 
 ### Una carpeta por reunión, dentro de la de su proyecto (07/11/2026)
 Lo que pidió: «Que se cree una carpeta por reu. Esto que sea automático dentro de la main folder asignada por el
@@ -32,11 +34,15 @@ proyecto o workstream» (msg 1158).
   igual, `… (2)`), con el audio y sus textos dentro con el nombre de siempre. Lo grabado antes **se queda donde está**.
 - La carpeta de la reunión va dentro de la **carpeta principal** de su workstream o de su proyecto. Sin asignar, es la
   carpeta del proyecto (la que tiene su carpeta `Vocabulario`); la que ya recordaba la app para cada proyecto se queda
-  como asignada. Grabar en otra carpeta una vez ya no cambia la del proyecto. Sin tema: la fija del perfil o la última.
-  Ctrl+Alt+R, el aviso de Teams y el diálogo usan la misma regla, y el aviso de Ctrl+Alt+R dice dónde se guarda.
+  como asignada (si era la carpeta de una reunión, «AAAA-MM-DD …», pasa a su carpeta padre, para no meter las nuevas
+  dentro). Grabar en otra carpeta una vez ya no cambia la del proyecto. Con tema, la del proyecto va antes que la fija
+  del perfil; sin tema, la fija del perfil o la última. Ctrl+Alt+R, el aviso de Teams y el diálogo usan la misma regla,
+  y el aviso de Ctrl+Alt+R dice dónde se guarda.
 - En el árbol, la carpeta de una reunión se ve como la reunión (no se repite cada entrada) y no sale entre las carpetas
-  de destino. Mover o renombrar la reunión mueve o renombra su carpeta con todo lo que tenga dentro; si un archivo está
-  en uso, no se mueve nada (antes podía quedarse a medias). Borrarla quita su carpeta si se queda vacía.
+  de destino. Mover o renombrar la reunión mueve o renombra su carpeta con todo lo que tenga dentro, solo si la creó la
+  app y no hay otra grabación dentro: una carpeta tuya que se llame igual se queda como está. Nunca se pisa un archivo
+  y, si uno está en uso, no se mueve nada (antes podía quedarse a medias). Borrarla quita su carpeta si se queda vacía;
+  llevarla a la carpeta que contiene la suya la saca de ella.
 - Se puede apagar en `settings.json` (`"carpeta_por_reunion": false`); el interruptor en Ajustes llega con su rediseño.
 
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
