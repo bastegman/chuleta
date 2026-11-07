@@ -691,6 +691,54 @@ class VentanaRealTests(unittest.TestCase):
                 os.makedirs(ART, exist_ok=True)
                 shutil.copyfile(src, os.path.join(ART, f"{self.id().rsplit('.', 1)[-1]}.consola2.txt"))
 
+    def http(self, path, data=None):
+        import urllib.request
+        with open(os.path.join(self.data, "sesion.token"), encoding="utf-8") as f:
+            headers = {"X-Chuleta-Token": f.read().strip()}
+        if data is not None:
+            headers.update({"X-Audios": "1", "Content-Type": "application/json"})
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data,
+                                     method="POST" if data is not None else "GET", headers=headers)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=10) as r:
+            return json.load(r)
+
+    def esperar(self, cond, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end and not cond():
+            time.sleep(0.2)
+        return cond()
+
+    def test_bandeja_la_x_oculta_y_el_icono_la_vuelve_a_abrir(self):
+        """Ítem 2 (msg 1143): con la ventana propia, la app tiene icono en la bandeja. La X la oculta sin el aviso de
+        la página (la primera vez, un globo en el icono) y la app sigue; un clic en el icono la vuelve a enseñar; al
+        apagar, el icono se quita antes de terminar (si no, queda un icono fantasma)."""
+        self.start()
+        hwnd = int(self.wait_log(r"ventana abierta \(WebView2; hwnd (\d+)\)").group(1))
+        tray = int(self.wait_log(r"icono en la bandeja \(hwnd (\d+)\)").group(1))
+        u = ctypes.WinDLL("user32")
+        u.IsWindowVisible.argtypes = [ctypes.c_void_p]
+        time.sleep(3)  # que la página termine de cargar
+        ok, _ = self.send(hwnd, 0x0112, 0xF060, 0)  # WM_SYSCOMMAND + SC_CLOSE: la X
+        self.assertTrue(ok)
+        self.wait_log(r"primer cierre con la X: aviso en el icono de la bandeja")
+        self.assertTrue(self.esperar(lambda: not u.IsWindowVisible(hwnd)), self.read_log()[-3000:])
+        self.assertIsNone(self.p.poll())  # oculta, no cerrada
+        self.assertEqual(self.http("/api/ping").get("app"), "audios")
+        # clic izquierdo en el icono: el mensaje con que Windows avisa al NotifyIcon (WM_USER + 1024)
+        for boton in (0x0201, 0x0202):  # WM_LBUTTONDOWN, WM_LBUTTONUP
+            self.send(tray, 0x0800, 0, boton)
+        self.assertTrue(self.esperar(lambda: u.IsWindowVisible(hwnd)), self.read_log()[-3000:])
+        self.assertEqual(self.http("/api/apagar", b"{}").get("ok"), True)  # = «Salir» del icono (App.apagar)
+        try:
+            rc = self.p.wait(30)
+        except subprocess.TimeoutExpired:
+            self.fail("la app no ha terminado tras apagar:\n" + self.read_log()[-3000:])
+        log = self.read_log()
+        self.assertEqual(rc, 0, log[-3000:])
+        self.assertLess(log.index("icono de la bandeja retirado"), log.rindex(" apagado"))
+        self.assertNotIn("sin icono en la bandeja", log)
+
     def test_doble_apertura_antes_de_crear_la_ventana(self):
         self.doble_apertura("initialize", CHULETA_LENTO_INIT="8", CHULETA_LENTO_START="2")
 

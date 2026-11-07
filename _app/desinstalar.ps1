@@ -326,11 +326,13 @@ function Wait-AppGone {
     return "procesos"
 }
 function Remove-Shortcuts {
-    # Chuleta.lnk (y Notas.lnk, el nombre anterior) en el escritorio y en Inicio, solo si apuntan a esta instalacion:
-    # otra copia de Chuleta en otra carpeta conserva el suyo
+    # Chuleta.lnk (y Notas.lnk, el nombre anterior) en el escritorio, en Inicio y en la carpeta Inicio de Windows (la
+    # copia que pone "Arrancar con Windows" del icono de la bandeja), solo si apuntan a esta instalacion: otra copia
+    # de Chuleta en otra carpeta conserva el suyo
     $n = 0
     $ws = New-Object -ComObject WScript.Shell
-    foreach ($dir in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))) {
+    foreach ($dir in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"),
+                       [Environment]::GetFolderPath("Startup"))) {
         foreach ($name in @("$AppName.lnk", "$LegacyName.lnk")) {
             $lnk = Join-Path $dir $name
             if (-not (Test-Path -LiteralPath $lnk)) { continue }

@@ -46,6 +46,7 @@ from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WIND
                     parse_srt, protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
 from common import TOKEN_FILE, TOKEN_HEADER, local_opener, read_token  # sesion local (P1-02) y loopback sin proxy
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
+from bandeja import Bandeja
 from window import Window, set_app_id
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -3102,6 +3103,21 @@ DIAG_LINES = (
     "   reunión detectada ({a}): aviso enviado",
     "   Outlook: GetDateFormatEx/GetTimeFormatEx han fallado (error {n}): el filtro va con el formato de EE. UU.",
     "apagar pedido desde la interfaz ({n} trabajos en cola o en marcha)",
+    "apagar pedido desde la bandeja ({n} trabajos en cola o en marcha)",
+    # icono en la bandeja (bandeja.py) y arrancar con Windows
+    "icono en la bandeja (hwnd {n})",
+    "icono en la bandeja (hwnd None)",
+    "   sin icono en la bandeja ({c}): cerrar la ventana la deja en segundo plano como antes",
+    "icono de la bandeja retirado",
+    "   icono de la bandeja: el hilo de la ventana no contesta; se quita desde aquí",
+    "   primer cierre con la X: aviso en el icono de la bandeja",
+    "   salir desde la bandeja: está grabando, no se sale",
+    "   salir desde la bandeja: cancelado (trabajos en marcha)",
+    "arrancar con Windows: activado",
+    "arrancar con Windows: desactivado",
+    "arrancar con Windows: acceso directo actualizado",
+    "   arrancar con Windows: {e}",
+    "ventana oculta: la app sigue en segundo plano (el acceso directo la vuelve a abrir)",
     "apagando ({t})",
     "apagado",
     "la app ya estaba abierta: se ensena su ventana",
@@ -3565,14 +3581,17 @@ class App:
         self.jobs.shutdown()
 
     def apagar(self, b):
-        """Ajustes > Apagar: la unica salida explicita cuando no hay consola. Con una grabacion en curso se niega;
-        si no, responde y el proceso termina al cabo de 0,5 s (schedule_shutdown)."""
+        """Ajustes > Apagar y «Salir» del icono de la bandeja (tray_salir, con b["origen"] == "bandeja"): las unicas
+        salidas explicitas cuando no hay consola, y la misma. Con una grabacion en curso se niega; si no, responde y el
+        proceso termina al cabo de 0,5 s (schedule_shutdown)."""
         if self.rec and self.rec.alive():
             raise ApiError(f"Hay una grabación en curso. Para la grabación antes de apagar {APP_NAME}.", 409)
         with self.jobs.lock:
             activos = sum(1 for j in self.jobs.list if j.status in ("queued", "running"))
-        log(f"apagar pedido desde la interfaz ({activos} trabajos en cola o en marcha)")
-        schedule_shutdown("Ajustes > Apagar")
+        bandeja = b.get("origen") == "bandeja"
+        log(f"apagar pedido desde {'la bandeja' if bandeja else 'la interfaz'} ({activos} trabajos en cola o en "
+            "marcha)")
+        schedule_shutdown("bandeja > Salir" if bandeja else "Ajustes > Apagar")
         return {"ok": True, "activos": activos}
 
     def ocultar(self, b):
@@ -5145,7 +5164,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
                   "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get,
-                  "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state}
+                  "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state,
+                  "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()}}
         try:
             if u.path in routes:
                 t0 = time.time()
@@ -5194,7 +5214,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
-                  "/api/acerca/abrir": a.acerca_abrir}
+                  "/api/acerca/abrir": a.acerca_abrir,
+                  "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(bool(b.get("activado")))}}
         try:
             u = urlparse(self.path)
             if self.headers.get("Transfer-Encoding"):  # sin Content-Length no se sabe donde acaba el cuerpo (P0-1)
@@ -5687,6 +5708,137 @@ def start_session(data_dir):
     return token
 
 
+# ----------------------------------------------------------------------------- icono en la bandeja (bandeja.py)
+
+def tray_estado():
+    """Lo que dice el icono: segundos de la grabacion en curso (o None) y trabajos en cola o en marcha."""
+    a = Handler.app
+    if a is None:
+        return {"grabando": None, "trabajos": 0}
+    rec = a.rec
+    with a.jobs.lock:
+        n = sum(1 for j in a.jobs.list if j.status in ("queued", "running"))
+    return {"grabando": time.time() - rec.started if rec and rec.alive() else None, "trabajos": n}
+
+
+def tray_balloon(titulo, texto):
+    w = WINDOW
+    return bool(w is not None and w.tray is not None and w.tray.alive and w.tray.balloon(titulo, texto))
+
+
+def tray_abrir():
+    """Clic en el icono (o «Abrir»): la ventana propia, delante."""
+    w = WINDOW
+    if w is not None and w.request_show() is None:
+        open_ui()
+
+
+def tray_grabar():
+    """«Grabar» / «Parar la grabación» del menu: lo mismo que Ctrl+Alt+R (los avisos los da rec_toggle)."""
+    if Handler.app is not None:
+        try:
+            Handler.app.rec_toggle({"source": "bandeja"})
+        except ApiError:
+            pass  # rec_toggle ya lo ha dicho (toast) y anotado
+
+
+def ask_yes_no(titulo, texto):
+    """Pregunta Si/No de Windows (MessageBox delante de todo), desde un hilo cualquiera. Fuera de Windows, si."""
+    if not WINDOWS:
+        return True
+    try:
+        import ctypes
+        # MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST; IDYES = 6
+        return ctypes.windll.user32.MessageBoxW(None, texto, titulo, 0x4 | 0x20 | 0x100 | 0x10000 | 0x40000) == 6
+    except Exception:
+        log_exc()
+        return False
+
+
+def tray_salir():
+    """«Salir» del icono de la bandeja: el mismo apagado que Ajustes > Apagar (App.apagar). Grabando, no (un globo lo
+    dice); con trabajos en marcha, la misma pregunta que la pagina antes de apagar."""
+    a = Handler.app
+    if a is None:
+        return
+    if a.rec and a.rec.alive():
+        tray_balloon(f"{APP_NAME} está grabando", "Para la grabación antes de salir (Ctrl+Alt+R o su botón Parar).")
+        log("   salir desde la bandeja: está grabando, no se sale")
+        return
+    n = tray_estado()["trabajos"]
+    if n and not ask_yes_no(f"Salir de {APP_NAME}",
+                            f"Hay {n} trabajo{'s' if n != 1 else ''} en marcha (transcripciones o resúmenes): se "
+                            "cancelan (lo ya escrito se conserva) y podrás relanzarlos al volver.\n\n"
+                            f"¿Salir de {APP_NAME}?"):
+        log("   salir desde la bandeja: cancelado (trabajos en marcha)")
+        return
+    try:
+        a.apagar({"origen": "bandeja"})
+    except ApiError as e:  # ha empezado a grabar entretanto
+        tray_balloon(APP_NAME, e.msg)
+
+
+def _startup_lnks():
+    """(acceso directo del menu Inicio que pone INSTALAR.bat, el de la carpeta Inicio de Windows) o (None, None)."""
+    appdata = os.environ.get("APPDATA") if WINDOWS else None
+    if not appdata:
+        return None, None
+    progs = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs")
+    return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(progs, "Startup", f"{APP_NAME}.lnk")
+
+
+def inicio_windows_leer():
+    """«Arrancar con Windows»: True o False; None si no se puede (fuera de Windows, o sin el acceso directo del menu
+    Inicio, que es el que se copia: una copia descomprimida sin instalar)."""
+    origen, destino = _startup_lnks()
+    if not origen:
+        return None
+    if os.path.isfile(destino):
+        return True
+    return False if os.path.isfile(origen) else None
+
+
+def inicio_windows_poner(activado):
+    """Copia (o quita) el acceso directo del menu Inicio en la carpeta Inicio de Windows (shell:startup): mismo destino,
+    iconos y AppUserModelID, sin registro ni permisos de administrador. Devuelve el estado que queda."""
+    origen, destino = _startup_lnks()
+    if not origen:
+        return None
+    try:
+        if activado and os.path.isfile(origen):
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            shutil.copy2(origen, destino)
+            log("arrancar con Windows: activado")
+        elif not activado and os.path.isfile(destino):
+            os.remove(destino)
+            log("arrancar con Windows: desactivado")
+    except OSError as e:
+        log(f"   arrancar con Windows: {e}")
+    return inicio_windows_leer()
+
+
+def inicio_windows_al_dia():
+    """Al arrancar: si esta activado y el acceso directo del menu Inicio ha cambiado (lo rehace INSTALAR.bat al
+    actualizar), la copia de la carpeta Inicio se pone igual."""
+    origen, destino = _startup_lnks()
+    try:
+        if origen and os.path.isfile(destino) and os.path.isfile(origen):
+            with open(origen, "rb") as a, open(destino, "rb") as b:
+                if a.read() != b.read():
+                    shutil.copy2(origen, destino)
+                    log("arrancar con Windows: acceso directo actualizado")
+    except OSError as e:
+        log(f"   arrancar con Windows: {e}")
+
+
+def make_tray(ico_path):
+    """El icono de la bandeja (solo Windows, con la ventana propia): bandeja.Bandeja, aun sin poner."""
+    if not WINDOWS:
+        return None
+    return Bandeja(ico_path, {"abrir": tray_abrir, "grabar": tray_grabar, "salir": tray_salir,
+                              "inicio": (inicio_windows_leer, inicio_windows_poner)}, tray_estado)
+
+
 def shutdown(reason, exit_fn=os._exit):
     """Apagado ordenado (Ajustes > Apagar): medidor/grabadora, trabajos y procesos de Whisper, servidor HTTP, ventana
     y fin del proceso. recorder.py, worker.py y voices.py mueren solos al quedarse sin padre. No llamarlo desde el
@@ -5698,6 +5850,11 @@ def shutdown(reason, exit_fn=os._exit):
     except Exception:
         log_exc()
     remove_token(DATA_DIR, Handler.token)  # os._exit no pasa por atexit
+    try:  # el icono de la bandeja, antes de cerrar el log (window.destroy() lo repetiria sin efecto)
+        if WINDOW is not None and getattr(WINDOW, "tray", None) is not None:
+            WINDOW.tray.close()
+    except Exception:
+        log_exc()
     log("apagado")
     logging.shutdown()  # antes de parar el servidor: en cuanto serve_forever vuelve, el hilo principal sale solo
     try:
@@ -5818,7 +5975,9 @@ def main():
         f"{os.getpid()}")  # el pid: con dos copias a la vez, las dos escriben en el mismo server.log
     if no_browser:  # para abrirla a mano (desarrollo): el token no va al log, que sale entero en el diagnostico
         log(f"  Interfaz: {URL}?t=<el contenido de {os.path.join(DATA_DIR, TOKEN_FILE)}>")
-    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
+    ico = os.path.join(STATIC_DIR, "chuleta.ico")
+    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, ico, tray=make_tray(ico))
+    inicio_windows_al_dia()
     if WINDOW is not None and WINDOW.available:
         # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar
         threading.Thread(target=srv.serve_forever, daemon=True, name="http").start()

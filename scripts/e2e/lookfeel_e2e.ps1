@@ -450,6 +450,8 @@ Check "e.icon_big_256" ($w.icons -and $w.icons.ICON_BIG.px -eq "256x256") "$($w.
 $slog = Tail-Log "server.log" 200
 Check "e.log_aumid" ($slog -match "AppUserModelID Bernardo\.Chuleta: fijado") ""
 Check "e.log_ventana" ($slog -match "ventana abierta \(WebView2") (($slog -split "`n" | Select-String "ventana abierta") -join "")
+# icono en la bandeja (item 2, msg 1143): se pone con la ventana propia y se quita al apagar (sin icono fantasma)
+Check "e.log_bandeja" ($slog -match "icono en la bandeja \(hwnd \d+\)") (($slog -split "`n" | Select-String "bandeja") -join " | ")
 # la ventana abre /?t=<token>: el servidor le da la cookie de sesion y la interfaz habla con la API sin ningun 403
 Check "e.log_cookie_interfaz" ($slog -match "cookie entregada a la interfaz") (($slog -split "`n" | Select-String "sesi.n:") -join " | ")
 Check "e.interfaz_sin_403" (-not ($slog -match "403 sin token de sesi.n \(navegador\)")) (($slog -split "`n" | Select-String "403 sin token") -join " | ")
@@ -481,6 +483,7 @@ Check "e.apagar_borra_token" (-not (Test-Path -LiteralPath $tokenFile)) $tokenFi
 Start-Sleep -Seconds 1
 $slog = Tail-Log "server.log" 60
 Check "e.log_apagado" ($slog -match "(?m)^.*\bapagado$") (($slog -split "`n" | Select-String "apag") -join " | ")
+Check "e.log_bandeja_retirada" ($slog -match "icono de la bandeja retirado") (($slog -split "`n" | Select-String "bandeja") -join " | ")
 Copy-Logs "e"
 
 # ---- r) una reunion falsa en la carpeta propia: audio + transcripcion + notas + resumen y una lista de vocabulario.

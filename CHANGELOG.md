@@ -119,6 +119,32 @@ Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta
   café (`/api/acerca/abrir` con `que: "donar"` lo abre en el navegador del sistema). Sin ventanas emergentes ni
   recordatorios.
 
+### Icono en la bandeja del sistema (07/11/2026)
+Lo que pidió Bernardo el 02/11/2026: «que Chuleta quedase abierta como una app aquí corriendo aunque le ponga salir,
+solo se pueda cerrar si la cierro desde ahí al salir».
+- **Chuleta tiene su icono en la bandeja** (la zona de notificación, junto al reloj) mientras está abierta, con la
+  ventana a la vista u oculta. Un clic la abre. El clic derecho abre un menú con «Abrir Chuleta», «Grabar» (o
+  «Parar la grabación», según toque; lo mismo que Ctrl+Alt+R), «Arrancar con Windows» y «Salir». El texto del icono
+  dice si está grabando (y cuánto lleva) y cuántos trabajos hay en marcha.
+- **Cerrar la ventana (la X, Alt+F4) la deja en la bandeja.** Ya no sale el aviso de «sigue en segundo plano» de la
+  página: la primera vez, un globo en el icono dice que sigue ahí y cómo salir.
+- **Salir** es el mismo apagado que ⚙ Ajustes › «Apagar Chuleta», que se mantiene (decisión por defecto del backlog).
+  Si está grabando no sale, y un globo lo dice; con trabajos en marcha, pregunta antes como Ajustes. El icono se quita
+  al apagar, también cuando Windows cierra la sesión, para que no quede un icono fantasma.
+- **Arrancar con Windows** (en el menú del icono; apagado por defecto) copia el acceso directo del menú Inicio en la
+  carpeta Inicio de Windows: sin registro ni permisos de administrador, con el mismo icono y AppUserModelID. Si
+  INSTALAR.bat rehace el acceso directo, la copia se pone al día al arrancar; el desinstalador la quita.
+  `/api/inicio-windows` (GET y POST `{"activado": true|false}`) queda para la casilla de Ajustes.
+- Windows pone los iconos nuevos en los iconos ocultos (la flecha ^): no se puede cambiar por programa; se arrastra
+  una vez junto al reloj (README y LEEME lo dicen).
+- Sin dependencias nuevas: `System.Windows.Forms.NotifyIcon` por pythonnet, que ya carga pywebview (`_app/bandeja.py`).
+  Si el icono no se puede poner, la app sigue como antes (con el aviso de la página al cerrar) y el log lo dice. Sin
+  ventana propia (sin WebView2, en Edge) no hay icono: se apaga desde Ajustes.
+- Tests: `tests/test_bandeja.py` (el menú, el clic, el texto, el globo, el Dispose, la caída limpia, cerrar sin el
+  aviso de la página, Salir y Arrancar con Windows) y, en windows-real, con WinForms y WebView2 de verdad: la X oculta
+  la ventana, el clic en el icono (el mensaje que Windows le manda) la vuelve a enseñar y al apagar el icono se quita
+  antes de terminar. lookfeel-e2e comprueba en el log que el icono se pone y se quita.
+
 ### Doble apertura al arrancar (07/11/2026)
 Lo que se veía como «se me abrían como 2 veces la app»: al pulsar el acceso directo otra vez mientras la app
 arrancaba (en el portátil de la prueba del 02/11/2026, 31 s entre el arranque y la ventana), salían la ventana de
