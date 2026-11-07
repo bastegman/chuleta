@@ -269,6 +269,54 @@ class ComHiloTests(Base):
         self.assertIsNone(reason)
         self.assertEqual(cands[0]["subject"], "Comité")
 
+    def test_la_primera_importacion_de_pythoncom_no_inicializa_dos_veces(self):
+        """Importar pythoncom ya llama a CoInitializeEx en el hilo que importa (PythonCOM.cpp de pywin32 312): ese
+        hilo no repite CoInitialize, o le sobraría uno que nadie cierra."""
+        it = FakeItem("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30))
+        mods, st = fake_pywin32(FakeApp([it], []))
+        pc = mods.pop("pythoncom")
+
+        class Cargador:  # como el import de verdad: CoInitializeEx en el hilo que lo importa
+            def find_spec(self, name, path=None, target=None):
+                if name != "pythoncom":
+                    return None
+                import importlib.util
+                return importlib.util.spec_from_loader(name, self)
+
+            def create_module(self, spec):
+                return pc
+
+            def exec_module(self, module):
+                pc.CoInitialize()
+
+        with mock.patch.dict(sys.modules, mods), mock.patch.object(sys, "meta_path", [Cargador()] + sys.meta_path), \
+                mock.patch.object(calendario, "WINDOWS", True), mock.patch.object(calendario, "_outlook_abierto",
+                                                                                  lambda: False):
+            sys.modules.pop("pythoncom", None)
+            cands, reason = calendario.outlook_candidates(now=NOW, fmt=DIA)
+            self.assertIsNone(reason)
+            self.assertEqual([c[0] for c in st["calls"]].count("CoInitialize"), 1)
+            self.assertEqual(sum(st["init"].values()), 0)
+            # el segundo hilo ya no importa: lo inicializa él
+            cands, reason = calendario.outlook_candidates(now=NOW, fmt=DIA)
+            self.assertEqual([c[0] for c in st["calls"]].count("CoInitialize"), 2)
+            self.assertEqual(sum(st["init"].values()), 0)
+
+    def test_si_no_arranca_el_hilo_el_candado_se_suelta(self):
+        with mock.patch.object(calendario.threading.Thread, "start", side_effect=RuntimeError("can't start")), \
+                mock.patch.object(calendario, "log_exc"):
+            self.assertIsNone(calendario._en_com(lambda app, caja: None, 1, lambda: None))
+        self.assertFalse(calendario._COM_LOCK.locked())
+
+    def test_el_texto_de_los_errores_sin_lo_entrecomillado(self):
+        e = FakeComError(calendario.DISP_E_EXCEPTION, "Exception occurred.",
+                         (4096, "Microsoft Outlook", "No se puede abrir el elemento «Comité Omega» ni 'Ana'.", None, 0,
+                          -2147221233), None)
+        texto = calendario._texto(e)
+        self.assertNotIn("Omega", texto)
+        self.assertNotIn("Ana", texto)
+        self.assertIn("No se puede abrir el elemento", texto)
+
     def test_la_excepcion_no_guarda_objetos_com(self):
         """La traza de la excepción del hilo COM guarda sus marcos (y con ellos objetos de Outlook): se suelta."""
         def session():
@@ -461,6 +509,10 @@ class Vigilado(FakeItem):
 
 
 class ProtegidasTests(Base):
+    def setUp(self):
+        super().setUp()
+        calendario.ASISTENTES["estado"] = "si"  # lo normal tras «Probar» o «Activar» con un antivirus aceptado
+
     def test_solo_se_lee_lo_protegido_de_la_elegida(self):
         a = Vigilado("En curso", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30), required=("Luis Pérez",))
         b = Vigilado("Luego", NOW + timedelta(minutes=8), NOW + timedelta(minutes=40), required=("Eva",))
@@ -470,31 +522,57 @@ class ProtegidasTests(Base):
         self.assertEqual(b._accesos, [])
         self.assertEqual(calendario.ASISTENTES["estado"], "si")
 
+    def test_sin_comprobar_la_app_sola_no_lo_toca(self):
+        """Sin «Probar» ni «Activar», el vigilante (en mitad de una llamada) no lee lo protegido: si Outlook preguntara,
+        el aviso saldría sin que nadie lo espere y lo normal es contestar «No»."""
+        calendario.ASISTENTES["estado"] = None
+        it = Vigilado("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30), required=("Luis Pérez",))
+        m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
+        self.assertEqual((m["subject"], m["attendees"], it._accesos), ("Comité", [], []))
+        self.assertIsNone(calendario.ASISTENTES["estado"])
+        with mock.patch.object(calendario, "politica_asistentes", lambda: "aprueba"):  # la empresa lo aprueba: sí
+            m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
+        self.assertEqual(m["attendees"], ["Luis Pérez"])
+
     def test_si_outlook_pregunta_llega_lo_basico_y_no_se_vuelve_a_preguntar_solo(self):
         aviso = threading.Event()
+        self.addCleanup(aviso.set)
         it = Vigilado("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30), aviso=aviso)
-        t0 = time.monotonic()
         with mock.patch.object(calendario, "LENTO", 0.3):
+            t0 = time.monotonic()
             m, reason = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
-        self.assertLess(time.monotonic() - t0, 2)  # no espera los 8 s: el nombre y la hora ya estaban
-        self.assertIsNone(reason)
-        self.assertEqual((m["subject"], m["attendees"]), ("Comité", []))
-        self.assertIn("asistentes", m["blocked"])
-        self.assertEqual(calendario.ASISTENTES["estado"], "pregunta")
-        # mientras el aviso sigue abierto, la consulta siguiente lo dice
-        m2, reason2 = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
-        self.assertIsNone(m2)
-        self.assertIn("te está preguntando", reason2)
-        aviso.set()  # el usuario contesta «Permitir»
-        for _ in range(100):
-            if not calendario._COM_LOCK.locked():
-                break
-            time.sleep(0.02)
+            self.assertLess(time.monotonic() - t0, 2)  # no espera los 8 s: el nombre y la hora ya estaban
+            self.assertIsNone(reason)
+            self.assertEqual((m["subject"], m["attendees"]), ("Comité", []))
+            self.assertIn("asistentes", m["blocked"])
+            self.assertEqual(calendario.ASISTENTES["estado"], "pregunta")
+            # mientras el aviso sigue abierto, la consulta siguiente lo dice
+            m2, reason2 = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
+            self.assertIsNone(m2)
+            self.assertIn("te está preguntando", reason2)
+            aviso.set()  # el usuario contesta «Permitir» (tarde: la lectura ha tardado más que LENTO)
+            esperar_hilo_com()
+            self.assertEqual(calendario.ASISTENTES["estado"], "pregunta")
         it._accesos.clear()
         m3, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA)
         self.assertEqual(m3["subject"], "Comité")
         self.assertEqual(it._accesos, [])  # solo (sin «Probar») ya no se le pregunta
-        self.assertEqual(calendario.ASISTENTES["estado"], "pregunta")
+
+    def test_outlook_lento_no_es_un_aviso(self):
+        """Lo que decide es lo que tarda leer los asistentes, no lo demás: con lo básico lento (8 s de tope casi
+        agotados) y los asistentes rápidos, no se apunta «pregunta»."""
+        it = Vigilado("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30), required=("Luis Pérez",))
+
+        class Lenta(FakeApp):
+            def GetNamespace(s, name):
+                time.sleep(0.6)
+                return super().GetNamespace(name)
+
+        with mock.patch.object(calendario, "LENTO", 0.3):
+            m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: Lenta([it], []), fmt=DIA, timeout=0.7)
+            esperar_hilo_com()
+        self.assertEqual(m["subject"], "Comité")
+        self.assertEqual(calendario.ASISTENTES["estado"], "si")
 
     def test_si_deniega_se_apunta_y_no_se_insiste(self):
         it = Vigilado("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30), deniega=True)
@@ -509,7 +587,8 @@ class ProtegidasTests(Base):
     def test_probar_lo_fuerza_y_la_directiva_manda(self):
         calendario.ASISTENTES["estado"] = "pregunta"
         it = Vigilado("Comité", NOW - timedelta(minutes=30), NOW + timedelta(minutes=30), required=("Luis Pérez",))
-        m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA, protegidas=True)
+        m, _ = calendario.outlook_current_meeting(now=NOW, session=lambda: FakeApp([it], []), fmt=DIA,
+                                                  protegidas=True)
         self.assertEqual(m["attendees"], ["Luis Pérez"])
         self.assertEqual(calendario.ASISTENTES["estado"], "si")  # ya no pregunta: vuelve a leerlos solo
         it._accesos.clear()
@@ -564,12 +643,24 @@ class EstadoTests(Base):
         self.assertEqual(json.loads(json.dumps(r)), r)  # JSON tal cual
 
     def test_conectado_con_la_proxima(self):
+        calendario.ASISTENTES["estado"] = "si"
         r = self.estado(items=agenda((8, 9), (11, 12)))
         self.assertEqual((r["nivel"], r["estado"], r["accion"]), (2, "conectado", None))
         self.assertEqual(r["frase"], "Outlook clásico: conectado · próxima reunión 11:00")
         self.assertEqual(r["proxima"], {"hora": "11:00", "fin": "12:00", "ahora": False})
+        r = self.estado(items=agenda((9.1, 9.5), (9.75, 10.25)), now=datetime(2026, 11, 7, 9, 0))
+        self.assertEqual(r["proxima"], {"hora": "9:06", "fin": "9:30", "ahora": False})  # sin cero delante
+
+    def test_conectado_sin_comprobar_los_asistentes_ofrece_probar(self):
+        r = self.estado(items=agenda((11, 12)))
+        self.assertEqual((r["estado"], r["accion"]), ("conectado", {"id": "probar", "texto": "Probar"}))
+        self.assertEqual(r["frase"], "Outlook clásico: conectado · próxima reunión 11:00 · pulsa «Probar» para que "
+                                     "lea también los asistentes")
+        r = self.estado(items=agenda((11, 12)), env={"politica": "aprueba"})  # la empresa los aprueba: no hace falta
+        self.assertEqual((r["accion"], r["asistentes"]), (None, "si"))
 
     def test_conectado_en_curso_y_sin_mas(self):
+        calendario.ASISTENTES["estado"] = "si"
         r = self.estado(items=agenda((10, 11), (11.5, 12)))
         self.assertEqual(r["frase"], "Outlook clásico: conectado · reunión en curso hasta las 11:00")
         self.assertTrue(r["proxima"]["ahora"])
@@ -646,18 +737,26 @@ class EstadoTests(Base):
         items = [Vigilado("Comité", datetime(2026, 11, 7, 11), datetime(2026, 11, 7, 12), deniega=True)]
         r = self.estado(probar=True, items=items)
         self.assertEqual(r["asistentes"], "deniega")
-        self.assertIn("sin asistentes: tu empresa no deja", r["frase"])
+        # sin directiva no se sabe si fue la empresa o un «No» al aviso: no se culpa a nadie y se ofrece «Probar»
+        self.assertIn("sin asistentes: Outlook no ha dejado leerlos", r["frase"])
+        self.assertNotIn("empresa", r["frase"])
+        self.assertEqual(r["accion"]["id"], "probar")
         r = self.estado(items=agenda((11, 12)))  # sin «Probar» no los lee: se queda lo sabido
         self.assertIn("sin asistentes", r["frase"])
+        r = self.estado(probar=True, items=items, env={"politica": "deniega"})
+        self.assertIn("sin asistentes: tu empresa no deja", r["frase"])  # ahora sí lo dice el registro
+        self.assertIsNone(r["accion"])
 
     def test_probar_con_aviso_de_outlook(self):
         aviso = threading.Event()
         self.addCleanup(aviso.set)
         items = [Vigilado("Comité", datetime(2026, 11, 7, 11), datetime(2026, 11, 7, 12), aviso=aviso)]
-        r = self.estado(probar=True, items=items, timeout=0.5)
-        self.assertEqual((r["estado"], r["asistentes"]), ("conectado", "pregunta"))
-        self.assertIn("Outlook pide permiso", r["frase"])
-        aviso.set()
+        with mock.patch.object(calendario, "LENTO", 0.2):
+            r = self.estado(probar=True, items=items, timeout=0.5)
+            self.assertEqual((r["estado"], r["asistentes"]), ("conectado", "pregunta"))
+            self.assertIn("Outlook pide permiso", r["frase"])
+            aviso.set()
+            esperar_hilo_com()
 
     def test_sin_probar_no_toca_lo_protegido_ni_repite_en_un_minuto(self):
         items = [Vigilado("Comité", datetime(2026, 11, 7, 11), datetime(2026, 11, 7, 12))]
@@ -791,7 +890,7 @@ class FrontendTests(unittest.TestCase):
     def test_probar_usa_el_estado_y_activar_guarda(self):
         js = self.js()
         for s in ("/api/calendario/estado?probar=1", "'/api/calendario/activar', { activar: true }", 'id="rnEstado"',
-                  "api('/api/calendario/estado')", "data-rn-accion"):
+                  "pedir('/api/calendario/estado')", "data-rn-accion", "return n === ultima ? r : null"):
             self.assertIn(s, js, s)
 
     @unittest.skipUnless(shutil.which("node"), "node no instalado")

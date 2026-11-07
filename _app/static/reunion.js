@@ -50,7 +50,10 @@ function reunionFieldsetHtml() {
 function bindReunionSettings(d) {
   const b = $('#rnProbar', d), res = $('#rnProbarRes', d), est = $('#rnEstado', d);
   if (!b || !res || !est) return;
-  const pintar = r => { if (document.body.contains(est)) est.innerHTML = reunionEstadoHtml(r); };
+  // cada petición lleva su número: si una lenta llega después de otra más nueva, no la pisa (ni borra sus pasos)
+  let ultima = 0;
+  const pedir = async (...a) => { const n = ++ultima; const r = await api(...a); return n === ultima ? r : null; };
+  const pintar = r => { if (r && document.body.contains(est)) est.innerHTML = reunionEstadoHtml(r); };
   const fallo = err => `<span style="color:var(--err)">${esc(err.message)}</span>`;
   // «Probar» prueba la conexión (la agenda de hoy), no solo si hay una reunión ahora: fuera de una reunión, conectado
   // es verde. Si hay una en curso, además, lo que se sugeriría al grabar
@@ -58,9 +61,9 @@ function bindReunionSettings(d) {
     res.textContent = 'Consultando… Si Outlook pregunta si permites el acceso, pulsa «Permitir».';
     b.disabled = true;
     try {
-      const r = await api('/api/calendario/estado?probar=1');
+      const r = await pedir('/api/calendario/estado?probar=1');
       pintar(r);
-      res.innerHTML = r.proxima?.ahora ? reunionLinea(await api('/api/reunion/actual?outlook=1')) : '';
+      if (r) res.innerHTML = r.proxima?.ahora ? reunionLinea(await api('/api/reunion/actual?outlook=1')) : '';
     } catch (err) { res.innerHTML = fallo(err); }
     b.disabled = false;
   };
@@ -73,7 +76,7 @@ function bindReunionSettings(d) {
     x.disabled = true;
     res.textContent = 'Activando… Si Outlook pregunta si permites el acceso, pulsa «Permitir».';
     try {
-      const r = await api('/api/calendario/activar', { activar: true });  // se guarda ya (como «Probar conexión»)
+      const r = await pedir('/api/calendario/activar', { activar: true });  // se guarda ya (como «Probar conexión»)
       const cb = $('#rnOutlook', d);
       if (cb) cb.checked = true;
       if (S.config) S.config.outlook_on = true;
@@ -81,7 +84,7 @@ function bindReunionSettings(d) {
       res.textContent = '';
     } catch (err) { res.innerHTML = fallo(err); x.disabled = false; }
   });
-  api('/api/calendario/estado').then(pintar).catch(err => { est.innerHTML = fallo(err); });
+  pedir('/api/calendario/estado').then(pintar).catch(err => { est.innerHTML = fallo(err); });
 }
 
 function reunionCollect(d) {

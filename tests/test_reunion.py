@@ -191,6 +191,7 @@ def consulta(items, now=NOW, **kw):
 class OutlookTests(unittest.TestCase):
     def setUp(self):
         reset_calendario()
+        calendario.ASISTENTES["estado"] = "si"  # Outlook deja leer los asistentes (antivirus aceptado, sin directiva)
 
     def test_orden_de_llamadas_y_filtro_sin_segundos(self):
         (cands, reason), log = consulta([FakeItem("Semanal", NOW - timedelta(minutes=20), NOW + timedelta(minutes=40))])

@@ -194,8 +194,8 @@ FRASES = {
                      "de la reunión de la ventana de Teams.",
     "sin_outlook": "Este PC no tiene el Outlook clásico: Chuleta saca el nombre de la reunión de la ventana de Teams.",
     "sin_pywin32": "Falta pywin32, la librería con la que Chuleta lee Outlook: vuelve a ejecutar INSTALAR.bat.",
-    "sin_permiso": "Outlook está abierto pero no deja conectarse a Chuleta (pasa si uno de los dos se abrió como "
-                   "administrador): cierra Outlook, ábrelo normal y vuelve a probar.",
+    "sin_permiso": "Outlook está abierto pero no deja conectarse a Chuleta: espera unos segundos y vuelve a probar; si "
+                   "sigue igual, cierra Outlook y ábrelo normal (no como administrador).",
     "esperando_permiso": "Outlook te está preguntando si dejas que Chuleta lea tu calendario: contesta en su ventana "
                          "(«Permitir») y vuelve a probar.",
     "ocupado": "Outlook no responde (¿tiene una ventana o un aviso abiertos?): ciérralos y vuelve a probar.",
@@ -427,12 +427,17 @@ def _codigo(e):
     return hr
 
 
+_ENTRE_COMILLAS = re.compile(r"\"[^\"]*\"|'[^']*'|«[^»]*»|“[^”]*”")
+
+
 def _texto(e):
+    """El texto de un error de Outlook, sin lo que va entre comillas (ahí iría un asunto o un nombre) y corto."""
     exc = getattr(e, "excepinfo", None)
     if exc is None and len(getattr(e, "args", ())) > 2:
         exc = e.args[2]
     desc = exc[2] if isinstance(exc, (tuple, list)) and len(exc) > 2 and exc[2] else None
-    return " ".join(str(desc or getattr(e, "strerror", None) or e).split())[:160]
+    texto = _ENTRE_COMILLAS.sub("«…»", str(desc or getattr(e, "strerror", None) or e))
+    return " ".join(texto.split())[:160]
 
 
 def clasificar(e, abierto=None):
@@ -479,7 +484,7 @@ def _sin_traza(e):
     return e
 
 
-def _en_com(trabajo, timeout, session=None, espera_protegidas=None):
+def _en_com(trabajo, timeout, session=None, espera_protegidas=None, espera_otra=ESPERA_OTRA):
     """trabajo(app, caja) en un hilo propio con COM inicializado (STA) y tope de tiempo → la caja con lo que haya dado
     tiempo a leer: "cands" (lo no protegido, ya listo), "fin" (ha terminado), "err" (la excepción), "fase"
     ("conectar", "leer", "protegidas"). Si la consulta anterior sigue colgada, None. Nunca lanza.
@@ -488,7 +493,7 @@ def _en_com(trabajo, timeout, session=None, espera_protegidas=None):
     llamada se queda esperando a que el usuario conteste y se devuelve lo que ya hay (el hilo sigue y lo apunta)."""
     # otra consulta en marcha (el vigilante y Ajustes a la vez) suele acabar en menos de un segundo: se la espera un
     # poco antes de decir que Outlook no contesta; colgada (un aviso sin contestar), no se amontona otro hilo
-    if not _COM_LOCK.acquire(timeout=min(ESPERA_OTRA, timeout)):
+    if not _COM_LOCK.acquire(timeout=min(espera_otra, timeout)):
         return None
     caja, fase1, listo = {"fase": "conectar", "fin": False}, threading.Event(), threading.Event()
     caja["_fase1"] = fase1
@@ -498,8 +503,12 @@ def _en_com(trabajo, timeout, session=None, espera_protegidas=None):
         com = False
         try:
             if session is None:
+                # cada hilo que habla con COM lo inicializa una vez y lo cierra al final. Importar pythoncom por primera
+                # vez ya llama a CoInitializeEx en el hilo que importa (PythonCOM.cpp de pywin32 312): ese no repite
+                ya = "pythoncom" in sys.modules
                 import pythoncom
-                pythoncom.CoInitialize()  # cada hilo que habla con COM lo inicializa (el import solo lo hace en el 1.º)
+                if ya:
+                    pythoncom.CoInitialize()
                 com = True
             app = (session or _conectar)()
             try:
@@ -522,7 +531,13 @@ def _en_com(trabajo, timeout, session=None, espera_protegidas=None):
             fase1.set()
             listo.set()
 
-    threading.Thread(target=run, daemon=True, name="outlook-com").start()
+    try:
+        threading.Thread(target=run, daemon=True, name="outlook-com").start()
+    except RuntimeError:  # «can't start new thread»: el candado no se queda cogido para siempre
+        log_exc()
+        _COM_FASE.update(fase=None, desde=0.0)
+        _COM_LOCK.release()
+        return None
     t0 = time.monotonic()
     fase1.wait(timeout)
     if not listo.is_set() and caja.get("fase") == "protegidas":
@@ -655,7 +670,7 @@ def _candidatas(app, now, lo, hi, fmts, max_citas):
         try:
             sel = items.Restrict(_filtro(lo, hi, fmt))
         except Exception as e:  # Outlook no entiende la fecha (o falla): se prueba el siguiente formato
-            primero = primero or e
+            primero = primero or _sin_traza(e)
             if len(fmts) > 1:
                 log(f"   calendario: el formato de fecha {nombre} no le vale a Outlook ({_texto(e)} "
                     f"{_codigo(e) or ''})")
@@ -692,23 +707,27 @@ def _protegidas(caja, cands, objs, i):
     """Lee lo protegido de cands[i] y apunta si Outlook deja leerlo sin preguntar (ASISTENTES)."""
     caja["elegida"] = i
     caja["fase"] = _COM_FASE["fase"] = "protegidas"
+    caja["fase_desde"] = t = time.monotonic()
     caja["_fase1"].set()
-    t = time.monotonic()
     fallos = _leer_protegidas(objs[i], cands[i])
     dt = time.monotonic() - t
-    # si quien esperaba ya se fue con lo básico (sin_esperar), es que Outlook ha tardado en dar los asistentes
-    caja["asistentes"] = "deniega" if fallos else ("pregunta" if dt >= LENTO or caja.get("sin_esperar") else "si")
+    # lo decide lo que ha tardado SU lectura (un aviso espera al usuario), no lo que tardó lo demás
+    caja["asistentes"] = "deniega" if fallos else ("pregunta" if dt >= LENTO else "si")
     caja["asistentes_ms"] = int(dt * 1000)
     caja["cands"] = _copias(cands)
     _marcar_asistentes(caja["asistentes"])
 
 
 def _leer_protegidas_ahora(protegidas):
-    """¿Se lee lo protegido? True/False lo fuerzan («Probar» / nunca); None: solo si no se sabe que Outlook pregunte
-    o deniegue (por lo ya visto o por la directiva de la empresa)."""
+    """¿Se lee lo protegido? True/False lo fuerzan («Probar» / nunca). None (lo que hace la app sola, p. ej. en mitad
+    de una llamada): solo si ya se sabe que Outlook no pregunta («Probar» o «Activar» lo vieron, o la directiva de la
+    empresa lo aprueba). Sin comprobar, no: el aviso de Outlook saldría sin que nadie lo espere."""
     if protegidas is not None:
         return bool(protegidas)
-    return ASISTENTES["estado"] in (None, "si") and politica_asistentes() not in ("pregunta", "deniega")
+    politica = politica_asistentes()
+    if politica in ("pregunta", "deniega"):
+        return False
+    return ASISTENTES["estado"] == "si" or (ASISTENTES["estado"] is None and politica == "aprueba")
 
 
 def _sin_respuesta(timeout):
@@ -728,9 +747,9 @@ def _leer_caja(caja, timeout):
     cands = caja.get("cands")
     if cands is None:  # sin lo básico: colgado conectando o leyendo
         return None, _sin_respuesta(timeout)
-    if not caja["fin"] and caja.get("fase") == "protegidas":  # los asistentes no llegan: Outlook está preguntando
-        caja["sin_esperar"] = True
-        _marcar_asistentes("pregunta")
+    if not caja["fin"] and caja.get("fase") == "protegidas":  # los asistentes no llegan
+        if time.monotonic() - caja.get("fase_desde", 0.0) >= LENTO:  # tanto, solo con el aviso de Outlook delante
+            _marcar_asistentes("pregunta")
         i = caja.get("elegida")
         cands = [dict(m, blocked=sorted(set(m["blocked"]) | {"asistentes"})) if j == i else m
                  for j, m in enumerate(cands)]
@@ -819,7 +838,8 @@ def agenda_hoy(now=None, timeout=4.0, session=None, fmt=None, protegidas=False, 
             i = cands.index(min(prox, key=lambda m: m["_start"])) if prox else 0
             _protegidas(caja, cands, objs, i)
 
-    caja = _en_com(trabajo, timeout, session, espera_protegidas=None)
+    caja = _en_com(trabajo, timeout, session, espera_protegidas=None,
+                   espera_otra=10.0 if protegidas else ESPERA_OTRA)
     cands, fallo = _leer_caja(caja, timeout)
     if fallo:
         return None, fallo
@@ -830,7 +850,8 @@ def agenda_hoy(now=None, timeout=4.0, session=None, fmt=None, protegidas=False, 
              "ahora": resumen(min(en_curso, key=lambda m: m["_end"]) if en_curso else None),
              "proxima": resumen(min(siguientes, key=lambda m: m["_start"]) if siguientes else None),
              "formato": caja.get("formato"), "horas": caja.get("horas"),
-             "asistentes": caja.get("asistentes") if caja.get("fin") else ("pregunta" if protegidas else None),
+             "asistentes": (caja.get("asistentes") if caja.get("fin")
+                            else (ASISTENTES["estado"] if protegidas else None)),
              "asistentes_ms": caja.get("asistentes_ms")}
     return datos, None
 
@@ -843,10 +864,17 @@ def _frase_agenda(d):
     return "hoy no tienes más reuniones"
 
 
-def _sufijo_asistentes(v):
-    return {"deniega": " · sin asistentes: tu empresa no deja que otras aplicaciones los lean",
-            "pregunta": " · sin asistentes: Outlook pide permiso cada vez para leerlos (se leen al pulsar «Probar»)",
-            }.get(v, "")
+def _sufijo_asistentes(v, politica=None):
+    """(texto, acción) de los asistentes tras «conectado»: la empresa solo se nombra si lo dice su directiva."""
+    if v == "deniega" and politica == "deniega":
+        return " · sin asistentes: tu empresa no deja que otras aplicaciones los lean", None
+    if v == "deniega":
+        return " · sin asistentes: Outlook no ha dejado leerlos (pulsa «Probar» y, si pregunta, «Permitir»)", "probar"
+    if v == "pregunta":
+        return " · sin asistentes: Outlook pide permiso para leerlos (se leen al pulsar «Probar»)", "probar"
+    if v is None:
+        return " · pulsa «Probar» para que lea también los asistentes", "probar"
+    return "", None
 
 
 def estado(activado, probar=False, now=None, entorno=None, session=None, fmt=None, timeout=None):
@@ -964,8 +992,10 @@ def _estado(activado, probar, now, env, session, fmt, timeout):
         paso("horas", h["cuadran"], "Las horas de Outlook cuadran con las de Windows" if h["cuadran"] else
              f"Las horas no cuadran: Outlook va a {h['outlook']:+d} min de UTC y Windows a {h['windows']:+d}")
     asist = datos.get("asistentes") or ASISTENTES["estado"]
-    if asist == "si" and politica in ("pregunta", "deniega"):
+    if asist == "si" and politica in ("pregunta", "deniega"):  # la app sola no los leerá: la frase lo dice
         asist = politica
+    elif asist is None and politica == "aprueba":  # la empresa los deja leer: la app los leerá sola
+        asist = "si"
     if probar:
         textos = {"si": "Outlook deja leer los asistentes", "pregunta": "Outlook pregunta antes de dar los asistentes",
                   "deniega": "Outlook no deja leer los asistentes"}
@@ -980,7 +1010,8 @@ def _estado(activado, probar, now, env, session, fmt, timeout):
     if not activado:
         return fin("apagado", f"Outlook clásico responde ({agenda}), pero el calendario está apagado: actívalo para "
                               "que Chuleta lo use al grabar.", "activar")
-    return fin("conectado", f"Outlook clásico: conectado · {agenda}{_sufijo_asistentes(asist)}", nivel=2)
+    sufijo, accion = _sufijo_asistentes(asist, politica)
+    return fin("conectado", f"Outlook clásico: conectado · {agenda}{sufijo}", accion, nivel=2)
 
 
 # ----------------------------------------------------------------------------- sugerencia (nombre, tema, participantes)
