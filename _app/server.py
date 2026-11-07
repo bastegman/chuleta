@@ -413,6 +413,9 @@ DEFAULT_SETTINGS = {
     "folder_icons": {},       # carpeta -> emoji
     "meeting_detect": True,   # avisar si Teams/Zoom/… usa el micro y no se esta grabando
     "outlook_on": False,      # leer la cita en curso de Outlook clasico (COM, pywin32): nombre, tema y asistentes
+    # si Outlook deja leer los asistentes sin preguntar ("si"), pregunta ("pregunta": solos no se leen, solo con
+    # «Probar») o no deja ("deniega"); "" = sin comprobar. Lo apunta calendario.py (Object Model Guard)
+    "outlook_asistentes": "",
     "rec_aviso": True,        # aviso flotante «Grabar / ✕» al detectar una llamada (calendario.py + aviso.py)
     "summary_auto": True,     # resumen con IA al terminar de transcribir una reunion reciente
     # ...tambien si se transcribio en local (consentimiento: el resumen manda el texto al proveedor de la nube). Sin
@@ -3107,6 +3110,16 @@ DIAG_LINES = (
     "   reunión detectada ({a}): aviso flotante abierto",
     "   reunión detectada ({a}): aviso enviado",
     "   Outlook: GetDateFormatEx/GetTimeFormatEx han fallado (error {n}): el filtro va con el formato de EE. UU.",
+    # calendario (fix-calendario): estados, pasos de «Probar» y entorno, sin asuntos ni nombres (la genérica, la
+    # última de las suyas: si no, se come las de «probar»)
+    "   calendario: probar · {s} · {s} ({n} ms)",
+    "   calendario: entorno · Python {n} bits · Office {s} · directiva {s} · fecha {s} · horas {s} · asistentes {s}",
+    "   calendario: asistentes {s}",
+    "   calendario: activado desde Ajustes",
+    "   calendario: apagado desde Ajustes",
+    "   calendario: el formato de fecha {s} no le vale a Outlook ({e})",
+    "   calendario: con el formato de fecha {s}, Outlook da {n} citas fuera de la hora pedida",
+    "   calendario: {s} ({n} ms)",
     "apagar pedido desde la interfaz ({n} trabajos en cola o en marcha)",
     "apagar pedido desde la bandeja ({n} trabajos en cola o en marcha)",
     # icono en la bandeja (bandeja.py) y arrancar con Windows
@@ -3261,6 +3274,7 @@ DIAG_CHECKS = {
     "m": lambda v: v in DIAG_MODELS,
     "c": lambda v: v in diag_exceptions(),
     "k": lambda v: all(re.fullmatch(r"[a-z_.]{2,40}", x) for x in v.split(", ")),
+    "s": lambda v: all(re.fullmatch(r"[a-z][a-z0-9_]{1,40}", x) for x in v.split(", ")),  # códigos (calendario.py)
     "l": lambda v: bool(re.fullmatch(r"auto|detectar|[a-z]{2}(?:-[a-z]{2})?", v)),
     "a": _diag_meeting_app,
     "u": lambda v: bool(re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}/", v)),
@@ -3342,6 +3356,9 @@ class App:
         self.notes_lock, self.meeting, self.meeting_prev = threading.Lock(), None, None
         self.voices_dl = None  # descarga de los modelos de voces en curso (progreso para la interfaz)
         self.vigia = calendario.Vigia()  # reunión en curso (Teams/Outlook): sugerencias y aviso flotante
+        # lo que ya se sabe de los asistentes de Outlook (si pregunta, no se le vuelve a preguntar solo al arrancar)
+        calendario.ASISTENTES["estado"] = self.settings.get().get("outlook_asistentes") or None
+        calendario.al_cambiar = lambda v: self.settings.update(lambda d: d.update(outlook_asistentes=v))
         threading.Thread(target=self._meeting_watch, daemon=True, name="meeting-watch").start()
         threading.Thread(target=self._monitor_watchdog, daemon=True).start()
         self.hotkey = GlobalHotkey(lambda: self.rec_toggle({"source": "hotkey"}))
@@ -4186,6 +4203,19 @@ class App:
         y la sugerencia de nombre, tema y participantes. Lo usan el botón «Probar» y el diálogo Grabar."""
         return self.vigia.recordar(calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
                                                              outlook=True if q.get("outlook") else None))
+
+    def calendario_estado(self, q):
+        """GET /api/calendario/estado[?probar=1]: el calendario en una frase, {nivel, estado, frase, accion} (contrato
+        en calendario.estado). Sin probar no pide permisos ni abre avisos de Outlook; con probar, lo comprueba todo."""
+        return calendario.estado(self.settings.get().get("outlook_on"), probar=q.get("probar") in ("1", "true", "si"))
+
+    def calendario_activar(self, b):
+        """POST /api/calendario/activar {"activar": true|false}: enciende o apaga la lectura del calendario y devuelve
+        el estado (al encender, el de «Probar»: si Outlook pregunta, el usuario está delante para contestar)."""
+        on = b.get("activar") is True
+        self.settings.update(lambda d: d.update(outlook_on=on))
+        log(f"   calendario: {'activado' if on else 'apagado'} desde Ajustes")
+        return calendario.estado(on, probar=on)
 
     # --- edicion de transcripciones
     _tx_save_lock = threading.Lock()
@@ -5436,7 +5466,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
-                  "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get,
+                  "/api/reunion/actual": a.reunion_actual, "/api/calendario/estado": a.calendario_estado,
+                  "/api/perfil": a.perfil_get,
                   "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
                   "/api/agente/estado": a.agente_estado,
                   "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()}}
@@ -5490,7 +5521,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
-                  "/api/acerca/abrir": a.acerca_abrir,
+                  "/api/acerca/abrir": a.acerca_abrir, "/api/calendario/activar": a.calendario_activar,
                   "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)}}
         try:
             u = urlparse(self.path)

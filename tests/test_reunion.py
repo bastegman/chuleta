@@ -174,6 +174,13 @@ NOW = datetime(2026, 10, 31, 10, 0)
 FMT = "%d/%m/%Y %H:%M"
 
 
+def reset_calendario():
+    """Lo que calendario recuerda entre consultas (si Outlook deja leer los asistentes, la directiva, el estado)."""
+    calendario.ASISTENTES["estado"] = None
+    calendario._ESTADO_CACHE.clear()
+    calendario._POLITICA[:] = []
+
+
 def consulta(items, now=NOW, **kw):
     log = []
     fake = FakeApp(items, log)
@@ -182,6 +189,9 @@ def consulta(items, now=NOW, **kw):
 
 
 class OutlookTests(unittest.TestCase):
+    def setUp(self):
+        reset_calendario()
+
     def test_orden_de_llamadas_y_filtro_sin_segundos(self):
         (cands, reason), log = consulta([FakeItem("Semanal", NOW - timedelta(minutes=20), NOW + timedelta(minutes=40))])
         self.assertIsNone(reason)
@@ -218,11 +228,14 @@ class OutlookTests(unittest.TestCase):
             now=NOW, session=lambda: FakeApp([it], []), fmt=lambda d: d.strftime(FMT))[0]))
 
     def test_teams_por_el_cuerpo_y_sin_teams(self):
+        # el cuerpo está protegido (Object Model Guard): solo se lee de la cita elegida, y solo si el lugar no lo dice
         a = FakeItem("A", NOW, NOW + timedelta(minutes=30), location="Sala 4",
                      body="Únete: https://teams.microsoft.com/l/meetup-join/19%3ameeting_x")
         b = FakeItem("B", NOW, NOW + timedelta(minutes=30), location="Sala 4", body="sin enlace")
         (cands, _), _ = consulta([a, b])
         self.assertEqual([m["is_teams"] for m in cands], [True, False])
+        (cands, _), _ = consulta([b, a])  # la elegida es B (la primera en empate): A no se mira
+        self.assertEqual([m["is_teams"] for m in cands], [False, False])
 
     def test_fuera_quedan_todo_el_dia_canceladas_y_fuera_de_hora(self):
         items = [FakeItem("Todo el día", NOW.replace(hour=0), NOW.replace(hour=23, minute=59), all_day=True),
@@ -240,7 +253,10 @@ class OutlookTests(unittest.TestCase):
         (cands, reason), _ = consulta([it])
         self.assertIsNone(reason)
         self.assertEqual(cands[0]["attendees"], [])
-        self.assertEqual(cands[0]["blocked"], ["Body", "asistentes"])
+        self.assertEqual(cands[0]["organizer"], "Ana Organizadora")
+        # al primer fallo se para (cada intento podría ser otro aviso de Outlook): el cuerpo ni se toca
+        self.assertEqual(cands[0]["blocked"], ["asistentes"])
+        self.assertEqual(calendario.ASISTENTES["estado"], "deniega")
 
     def test_sin_pywin32(self):
         def session():
@@ -250,9 +266,10 @@ class OutlookTests(unittest.TestCase):
         self.assertIn("pywin32", reason)
 
     def test_motivos_com(self):
-        for hr, frag in ((-2147221021, "no está abierto"), (-2147221005, "no está instalado"), (-2147418111, "ocupado"),
-                         (-2147024891, "permiso"),
-                         (-2147467260, "aviso de seguridad"), (-2147352567, "0x80020009")):
+        for hr, frag in ((-2147221021, "está cerrado"), (-2147221005, "no tiene el Outlook clásico"),
+                         (-2147418111, "no responde"), (-2147417846, "no responde"),
+                         (-2147024891, "no deja conectarse"), (-2147467260, "no deja conectarse"),
+                         (-2147352567, "0x80020009"), (-2147319779, "repara Office")):
             def session(hr=hr):
                 raise ComError(hr, "texto de Outlook")
             cands, reason = calendario.outlook_candidates(now=NOW, session=session, fmt=str)
@@ -293,6 +310,9 @@ class OutlookTests(unittest.TestCase):
 
 
 class ElegirCitaTests(unittest.TestCase):
+    def setUp(self):
+        reset_calendario()
+
     def cands(self, now=NOW):
         items = [FakeItem("Termina ya", now - timedelta(minutes=55), now + timedelta(minutes=3)),
                  FakeItem("Empieza luego", now + timedelta(minutes=8), now + timedelta(minutes=60)),

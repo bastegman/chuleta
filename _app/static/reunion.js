@@ -21,26 +21,67 @@ function reunionLinea(r) {
   return r.reason ? `<span style="color:var(--warn)">${esc(r.reason)}</span> · ${teams}` : teams.replace(/^s/, 'S');
 }
 
+/* Estado del calendario (GET /api/calendario/estado, contrato en calendario.estado): la frase con su color, el botón
+   de su acción («Activar» o «Probar») y, tras «Probar», los pasos. Verde si está conectado; lo que no es un error
+   (apagado, cerrado, Outlook nuevo, sin Outlook: el nombre sigue saliendo de Teams), sin color; lo demás, en aviso. */
+const RN_AVISO = ['sin_pywin32', 'sin_permiso', 'esperando_permiso', 'ocupado', 'error'];
+function reunionEstadoHtml(r) {
+  if (!r || !r.frase) return '';
+  const color = r.estado === 'conectado' ? 'var(--ok)' : RN_AVISO.includes(r.estado) ? 'var(--warn)' : '';
+  let h = `<span${color ? ` style="color:${color}"` : ''}>${esc(r.frase)}</span>`;
+  if (r.accion) h += ` <button class="btn sm" type="button" data-rn-accion="${esc(r.accion.id)}">${esc(r.accion.texto)}</button>`;
+  if (r.pasos?.length) {
+    h += `<ul style="margin:6px 0 0;padding-left:18px">${r.pasos.map(p => `<li>${p.ok === true ? '✓' : p.ok === false ? '✖' : '·'} ${esc(p.texto)}</li>`).join('')}</ul>`;
+  }
+  return h;
+}
+
 function reunionFieldsetHtml() {
   const c = S.config || {};
   return `<fieldset><legend>${I.calendar}Reuniones</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="rnOutlook" ${c.outlook_on ? 'checked' : ''}> Leer mi calendario de Outlook para sugerir el nombre, el tema y los participantes al grabar</label>
-      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="rnProbar">Probar</button><span id="rnProbarRes" class="muted" style="font-size:12.5px"></span></div>
+      <div id="rnEstado" class="help" style="margin-top:6px" aria-live="polite">Comprobando el calendario…</div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="rnProbar">Probar con mi calendario</button><span id="rnProbarRes" class="muted" style="font-size:12.5px"></span></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:12px"><input type="checkbox" id="rnAviso" ${c.rec_aviso !== false ? 'checked' : ''}> Aviso flotante con «Grabar» al detectar una llamada</label>
       <div class="help">El título de la ventana de reunión de Teams se lee siempre y no activa nada. Con Outlook, la app mira qué cita hay a esta hora en tu calendario: necesita el Outlook clásico de escritorio abierto y la librería pywin32 (la instala INSTALAR.bat). Si Outlook pregunta si permites el acceso, acepta «Permitir». La cita se lee en este PC. El nombre que se sugiere al grabar (el asunto de la cita o el título de la reunión de Teams), si lo aceptas, es el nombre de la grabación: va como título al resumen con IA y a los destinos de salida. Los asistentes se guardan en la cabecera del .md de la grabación como participantes <b>sugeridos</b>: no van al resumen con IA ni a los destinos de salida hasta que los confirmes o los edites en la página de la reunión. Una vez confirmados, el resumen con IA (si lo usas) los envía a ${esc(typeof provName === 'function' ? provName() : 'la nube')} y los destinos de salida (si tienes) los copian a sus carpetas.</div>
     </fieldset>`;
 }
 
 function bindReunionSettings(d) {
-  const b = $('#rnProbar', d), res = $('#rnProbarRes', d);
-  if (!b || !res) return;
-  b.onclick = async () => {
-    res.textContent = 'Consultando…';
+  const b = $('#rnProbar', d), res = $('#rnProbarRes', d), est = $('#rnEstado', d);
+  if (!b || !res || !est) return;
+  const pintar = r => { if (document.body.contains(est)) est.innerHTML = reunionEstadoHtml(r); };
+  const fallo = err => `<span style="color:var(--err)">${esc(err.message)}</span>`;
+  // «Probar» prueba la conexión (la agenda de hoy), no solo si hay una reunión ahora: fuera de una reunión, conectado
+  // es verde. Si hay una en curso, además, lo que se sugeriría al grabar
+  const probar = async () => {
+    res.textContent = 'Consultando… Si Outlook pregunta si permites el acceso, pulsa «Permitir».';
     b.disabled = true;
-    try { res.innerHTML = reunionLinea(await api('/api/reunion/actual?outlook=1')); }
-    catch (err) { res.innerHTML = `<span style="color:var(--err)">${esc(err.message)}</span>`; }
+    try {
+      const r = await api('/api/calendario/estado?probar=1');
+      pintar(r);
+      res.innerHTML = r.proxima?.ahora ? reunionLinea(await api('/api/reunion/actual?outlook=1')) : '';
+    } catch (err) { res.innerHTML = fallo(err); }
     b.disabled = false;
   };
+  b.onclick = probar;
+  est.addEventListener('click', async e => {
+    const x = e.target.closest('[data-rn-accion]');
+    if (!x) return;
+    if (x.dataset.rnAccion === 'probar') return probar();
+    if (x.dataset.rnAccion !== 'activar') return;
+    x.disabled = true;
+    res.textContent = 'Activando… Si Outlook pregunta si permites el acceso, pulsa «Permitir».';
+    try {
+      const r = await api('/api/calendario/activar', { activar: true });  // se guarda ya (como «Probar conexión»)
+      const cb = $('#rnOutlook', d);
+      if (cb) cb.checked = true;
+      if (S.config) S.config.outlook_on = true;
+      pintar(r);
+      res.textContent = '';
+    } catch (err) { res.innerHTML = fallo(err); x.disabled = false; }
+  });
+  api('/api/calendario/estado').then(pintar).catch(err => { est.innerHTML = fallo(err); });
 }
 
 function reunionCollect(d) {

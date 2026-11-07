@@ -10,6 +10,31 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Calendario de Outlook: funciona con el clásico y, si no puede, dice por qué (07/11/2026)
+Lo que vio: «La conexión al calendario no está funcionando» (msg 1196), con el Outlook clásico (msg 1210).
+- **Las citas se leían con una hora de más (dos en verano)**, así que la reunión en curso quedaba fuera de la hora
+  buscada y la app decía «Outlook no tiene ninguna reunión a esta hora» con Outlook conectado. pywin32 entrega las
+  fechas de COM con la zona UTC pegada pero sin convertirlas (`PyTime.cpp` de pywin32 312), y la app las convertía a
+  la hora local. Ahora se toma la hora tal cual. «Probar» la compara con la UTC de la cita y con la de Windows.
+- **«Probar con mi calendario» prueba la conexión**, no solo si hay una reunión ahora: lee la agenda de hoy y dice
+  «Outlook clásico: conectado · próxima reunión 10:00» (en verde aunque no haya reunión), con los pasos debajo.
+- **El estado, siempre a la vista** debajo de la casilla (`GET /api/calendario/estado`), en una frase: conectado, o la
+  causa y qué hacer. Con la casilla apagada y el Outlook clásico instalado ofrece «Activar». Las otras causas: el
+  clásico cerrado, el Outlook nuevo, sin Outlook clásico, falta pywin32, Outlook abierto como administrador u Outlook
+  con un aviso abierto.
+- **Asistentes y aviso de seguridad de Outlook.** El organizador, los asistentes y el cuerpo de una cita están
+  protegidos: según el antivirus y la directiva de la empresa, Outlook pregunta («Un programa está intentando obtener
+  acceso…») o lo deniega. Ahora se leen solo de la cita elegida y después del asunto y la hora. Si Outlook pregunta,
+  el nombre y la hora llegan igual y la app no vuelve a preguntar sola en mitad de una llamada: los asistentes se leen
+  al pulsar «Probar». Si la empresa lo deniega, se dice.
+- COM: `CoUninitialize` también cuando falla la conexión, IDispatch sin la caché `gen_py` de pywin32 y un reintento si
+  Outlook se acaba de abrir. El filtro de fechas: si Outlook no entiende el formato regional (da error o devuelve citas
+  de otro día), se prueba con el ISO y con el de EE. UU.
+- `server.log`: cada cambio de estado y el detalle de «Probar», sin asuntos ni nombres; «Copiar diagnóstico» lo enseña.
+- Desarrollo y CI: tests con un COM falso que imita los errores reales, el `CoInitialize` por hilo, las periódicas y el
+  aviso de seguridad. En Windows, con pywin32 real: las fechas de COM con la zona de Madrid (`windows-real`), los
+  procesos y el registro. `lookfeel-e2e` comprueba que el pywin32 que instala INSTALAR.bat se importa y llega a COM.
+
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
 - La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja

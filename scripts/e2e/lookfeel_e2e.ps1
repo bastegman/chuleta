@@ -410,6 +410,12 @@ try {
 } catch { Note "d.captura_configuracion_error" $_.Exception.Message }
 $imp = & $pyApp -c "import webview, faster_whisper, soundcard, requests, truststore; from importlib.metadata import version; print('pywebview', version('pywebview'), 'faster-whisper', faster_whisper.__version__)" 2>&1
 Check "d.import_librerias" ($LASTEXITCODE -eq 0) ($imp -join " ")
+# calendario de Outlook (fix-calendario): pywin32, que instala INSTALAR.bat como opcional, se importa con el Python de la
+# app y calendario.estado habla COM de verdad (el runner no tiene Office: "sin_outlook", nivel 1, en pocos segundos)
+$appDir = Join-Path $inst "_app"
+$env:NOTAS_E2E_APPDIR = $appDir
+$impW = & $pyApp -c "import os, sys, time; import pythoncom, pywintypes, win32com.client; sys.path.insert(0, os.environ['NOTAS_E2E_APPDIR']); import calendario; t = time.monotonic(); r = calendario.estado(True, probar=True); print('pywin32', r['estado'], r['nivel'], round(time.monotonic() - t, 1), 's')" 2>&1
+Check "d.import_pywin32_y_calendario" ($LASTEXITCODE -eq 0 -and (($impW -join " ") -match "pywin32 sin_outlook 1 ")) ($impW -join " ")
 $zombis = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*instalar.ps1*" -or $_.CommandLine -like "*INSTALAR.bat*" })
 Check "d.sin_zombis" ($zombis.Count -eq 0) (($zombis | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ", ")
 
