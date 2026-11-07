@@ -234,8 +234,8 @@ def main():
             msg = json.dumps(out, ensure_ascii=False)
             if code == 200 and out.get("ok"):
                 paso(f"comprobar_{i}_ok_sin_sesion_inesperado", nota="respondió OK sin sesión iniciada")
-            elif "sin sesión iniciada" not in msg:
-                fallos.append(f"«Comprobar» {i} no llega a «sin sesión iniciada»: {msg[:300]}")
+            elif "sesión iniciada" not in msg:  # «sin sesión iniciada» (engines) o «no tiene la sesión iniciada» (explicar)
+                fallos.append(f"«Comprobar» {i} no llega a «sesión iniciada»: {msg[:300]}")
         app.post("/api/settings", {"procesado": "agente"})
         code, out, _ = app.post("/api/summarize", {"path": rel})
         paso("resumir_pedido", http=code, respuesta=out)
@@ -248,7 +248,9 @@ def main():
             time.sleep(1)
         paso("resumen", segundos=round(time.time() - t0, 1), estado=job and job["status"],
              error=job and job.get("error"))
-        if not job or job["status"] != "error" or "sin sesión iniciada" not in (job.get("error") or ""):
+        texto = (job or {}).get("error") or ""
+        texto += " " + (((job or {}).get("aviso") or {}).get("frase") or "")
+        if not job or job["status"] != "error" or "sesión iniciada" not in texto:
             fallos.append(f"el resumen no acaba en «sin sesión iniciada»: {job and job.get('error')}")
     finally:
         app.cerrar()
