@@ -17,10 +17,13 @@ import explicar
 
 FRASE = "Hola, esto es una prueba"
 SEGUNDOS = 3
+# con Claude, la cuenta va primero: si no hay sesión, se sabe antes de bajar 2 GB (revisión del 07/11/2026)
 PASOS = {"local": ("modelos", "micro", "transcribir"),
-         "agente": ("modelos", "micro", "transcribir", "resumir"),
+         "agente": ("cuenta", "modelos", "micro", "transcribir", "resumir"),
          "api": ("micro", "transcribir", "resumir")}
 TEXTO_MUESTRA = "Hola, esto es una prueba de Chuleta."  # lo que se resume si no hay voz que resumir
+OJO_MICRO = (" Ojo: no se ha oído tu voz. Revisa el micro en ● Grabar: la barra «Nivel» tiene que moverse al "
+             "hablar.")
 AVISO_SIN_TEXTO = ("La transcripción funciona, pero no ha entendido la frase de prueba: revisa el idioma en "
                    "Ajustes → Grabar.")
 
@@ -40,8 +43,10 @@ class Prueba(threading.Thread):
     report(texto) cambia el detalle del paso en curso. candidata: True si es una configuración aún sin guardar.
     al_terminar(prueba): lo llama el hilo al acabar (el servidor guarda la última prueba si no es candidata)."""
 
-    def __init__(self, modo, hacer, nombres, candidata=False, al_terminar=None):
+    def __init__(self, modo, hacer, nombres, candidata=False, al_terminar=None, espera=None):
+        """espera: la prueba anterior, ya cancelada: esta no empieza hasta que acaba (comparten micro y Whisper)."""
         super().__init__(daemon=True, name="probar")
+        self.espera = espera
         self.id = uuid.uuid4().hex[:10]
         self.modo = modo if modo in PASOS else "local"
         self.hacer, self.nombres, self.candidata, self.al_terminar = hacer, nombres or {}, candidata, al_terminar
@@ -50,10 +55,12 @@ class Prueba(threading.Thread):
                       for p in PASOS[self.modo]]
         self.fallo, self.listo, self.terminada, self.cancelar = None, False, False, False
         self.resultado, self.empezada, self.acabada, self._t0 = "", time.time(), None, {}
+        self.nota_micro, self.firma = None, None  # el error crudo del micro (al log) y la configuración probada
 
     def _titulo(self, p):
         n = self.nombres
-        return {"modelos": "Modelos de transcripción en este PC",
+        return {"cuenta": "Claude Code con tu cuenta",
+                "modelos": "Modelos de transcripción en este PC",
                 "micro": f"Grabar {SEGUNDOS} s del micro",
                 "transcribir": f"Transcribir {n.get('transcribe') or 'en este PC'}",
                 "resumir": f"Resumir con {n.get('resume') or 'IA'}"}[p]
@@ -83,6 +90,8 @@ class Prueba(threading.Thread):
     # --- la prueba
     def run(self):
         wav, voz, texto = None, False, ""
+        if self.espera is not None:
+            self.espera.join(20)
         try:
             for pid in PASOS[self.modo]:
                 if self.cancelar:
@@ -93,7 +102,10 @@ class Prueba(threading.Thread):
                     if t:
                         self._set(pid, detalle=str(t))
                 try:
-                    if pid == "modelos":
+                    if pid == "cuenta":
+                        self.hacer["cuenta"](report, self.cancelled)
+                        self._set(pid, estado="ok", detalle="Claude Code responde con tu cuenta")
+                    elif pid == "modelos":
                         self.hacer["modelos"](report, self.cancelled)
                         self._set(pid, estado="ok", detalle="Descargados")
                     elif pid == "micro":
@@ -101,8 +113,10 @@ class Prueba(threading.Thread):
                         if voz:
                             self._set(pid, estado="ok", detalle="Se ha oído tu voz")
                         else:
-                            why = (f"No he podido usar el micro ({nota})" if nota else "No se ha oído voz")
-                            self._set(pid, estado="aviso", detalle=f"{why}: pruebo la cadena con 1 s de silencio.")
+                            why = "No he podido usar el micro" if nota else "No se ha oído voz"
+                            self._set(pid, estado="aviso", detalle=f"{why}: sigo la prueba sin voz (1 s de silencio).")
+                            with self.lock:
+                                self.nota_micro = nota
                             wav = self.hacer["silencio"]()
                     elif pid == "transcribir":
                         texto = (self.hacer["transcribir"](wav, report, self.cancelled) or "").strip()
@@ -132,10 +146,12 @@ class Prueba(threading.Thread):
                 self.listo = self.fallo is None
                 if self.listo:
                     prov = self.nombres.get("proveedor") or "la API"
+                    micro = next((p for p in self.pasos if p["id"] == "micro"), {})
+                    ojo = "" if micro.get("estado") != "aviso" else OJO_MICRO
                     self.resultado = {
                         "local": "Listo. Tus reuniones se transcriben en este PC. No se resumen con IA.",
                         "agente": "Listo. Tus reuniones se transcriben en este PC y las resume Claude con tu cuenta.",
-                        "api": f"Listo. Tus reuniones se transcriben y se resumen con {prov}."}[self.modo]
+                        "api": f"Listo. Tus reuniones se transcriben y se resumen con {prov}."}[self.modo] + ojo
         except Cancelada:
             with self.lock:
                 for p in self.pasos:

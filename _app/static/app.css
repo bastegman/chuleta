@@ -801,3 +801,5 @@ ol.pasos code { user-select: all; }
 .cfg-estado .st.err { color: var(--err); }
 .cfg-acts { display: flex; flex-direction: column; gap: 6px; flex: none; }
 .dialog.aj { height: 84vh; }
+.jitem .s.err .cfg-accion { margin-left: 8px; color: var(--ink-2); }
+.jobline .cfg-accion { margin-right: 8px; }

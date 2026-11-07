@@ -857,7 +857,9 @@ function jobSub(j) {
   if (j.kind === 'voces') return `${I.voice}Quién habla (en este PC)${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
   if (j.kind === 'summary') return `${I.spark}Resumen con IA (${provName()})${j.status === 'running' ? ` · ${Math.round(j.progress * 100)} %` : ''}${j.elapsed && j.status === 'done' ? ` · hecho en ${fmtLeft(j.elapsed)}` : ''}`;
   const p = S.presetsById[j.preset] || { icon: '', label: j.preset };
-  const parts = [`${presetIcon(p)}${esc(j.live ? (p.live_label || p.label) : p.label)}`];
+  // un solo nombre por modelo (configurar.js: Rápido, Normal, Preciso, Máxima); la nube, con el suyo
+  const lab = p.engine === 'local' && p.model && typeof modeloNombre === 'function' ? modeloNombre(p.model) : (j.live ? (p.live_label || p.label) : p.label);
+  const parts = [`${presetIcon(p)}${esc(lab)}`];
   if (j.live) {
     parts.push(`transcrito hasta ${fmtClock(j.transcribed)} de ${fmtClock(j.recorded)}${j.recording ? ' grabados' : ''}`);
     const lag = j.recorded - j.transcribed;
@@ -888,6 +890,7 @@ function jobStage(j) {
   if (j.status === 'cancelled') return j.live ? 'Directo detenido' : 'Cancelado';
   if (j.live && j.status === 'running') return `● En directo · ${typeof prepEstado === 'function' && prepEstado(j) ? 'preparando la transcripción' : j.stage}`;
   if (j.status === 'error') return 'No se pudo transcribir';
+  if (typeof prepCola === 'function' && prepCola(j)) return prepCola(j);  // con el nombre del modelo, como en todas partes
   return j.stage;
 }
 
@@ -1044,7 +1047,7 @@ function renderAudioJob(a) {
   if (el.dataset.id === j.id + j.status) return updateJobLine(el, j);
   el.dataset.id = j.id + j.status;
   if (j.status === 'error') {
-    el.innerHTML = `<div class="card jobline error"><div><div class="st">No se pudo transcribir</div><div class="sub">${esc(j.aviso?.frase || j.error)}</div></div><button class="btn sm" data-act="tx-toggle">Reintentar</button></div>`;
+    el.innerHTML = `<div class="card jobline error"><div><div class="st">No se pudo transcribir</div><div class="sub">${esc(j.aviso?.frase || j.error)}</div></div>${typeof cfgAccionHtml === 'function' ? cfgAccionHtml(j) : ''}<button class="btn sm" data-act="tx-toggle">Reintentar</button></div>`;
     return;
   }
   el.innerHTML = `<div class="card jobline${j.live ? ' live' : ''}"><div><div class="st" data-st></div><div class="sub" data-sub></div></div>`
@@ -1858,7 +1861,7 @@ function renderJobsPanel() {
       const a = S.audios.get(j.path), title = a ? fullTitle(a) : j.name;
       const pct = j.status === 'done' ? 100 : Math.round(j.progress * 100);
       const bar = isActive(j) ? `<div class="pbar${j.status === 'running' && j.progress < 0.004 ? ' indet' : ''}" style="grid-column:1/-1"><i style="width:${pct}%"></i></div>` : '';
-      const sub = j.status === 'error' ? `<div class="s err" title="${esc(j.error)}">${esc(j.aviso?.frase || j.error)}</div>` : `<div class="s">${esc(jobStage(j))} · ${jobSub(j)}</div>`;
+      const sub = j.status === 'error' ? `<div class="s err" title="${esc(j.error)}">${esc(j.aviso?.frase || j.error)}${typeof cfgAccionHtml === 'function' ? cfgAccionHtml(j) : ''}</div>` : `<div class="s">${esc(jobStage(j))} · ${jobSub(j)}</div>`;
       const btn = isActive(j) ? `<button class="btn ghost sm danger" data-jact="cancel" data-id="${j.id}">${j.live ? 'Detener' : 'Cancelar'}</button>`
         : `<span class="pill ${j.status === 'done' ? 'ok' : j.status === 'error' ? 'err' : ''}">${{ done: 'Hecho', error: 'Error', cancelled: 'Cancelado' }[j.status]}</span>`;
       return `<div class="jitem"><span class="n" data-jgo="${esc(j.path)}">${esc(title)}</span>${btn}${bar}${sub}</div>`;
@@ -2045,7 +2048,7 @@ function openSettings(opts) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
   const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec) || S.ajSec || 'procesado';
   S.ajSec = sec;
-  const api = S.config.procesado === 'api';
+  const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
@@ -2079,9 +2082,9 @@ function openSettings(opts) {
     <section data-secc="grabar"${sec === 'grabar' ? '' : ' hidden'}>
     <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
-      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${api ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
+      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${enApi ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
-      <div class="help">El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. ${api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.' : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.'}</div>
+      <div class="help">El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. ${enApi ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.' : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.'}</div>
     </fieldset>
     ${window.reunionFieldsetHtml?.() || ''}
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
@@ -2110,7 +2113,7 @@ function openSettings(opts) {
       <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
     </fieldset>
-    <div id="procApiAv"${api ? '' : ' hidden'}>
+    <div id="procApiAv"${enApi ? '' : ' hidden'}>
     <fieldset><legend>${I.nube}La nube, en detalle</legend>
       ${typeof directoSettingsHtml === 'function' ? directoSettingsHtml(c) : ''}
       <div class="grid2">

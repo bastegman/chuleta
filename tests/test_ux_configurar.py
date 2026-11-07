@@ -109,6 +109,17 @@ class ExplicarTests(unittest.TestCase):
         self.assertEqual(j.public()["error"], "No module named 'av'")
 
 
+class AppJsTests(unittest.TestCase):
+    def test_nada_tapa_la_funcion_api(self):
+        """El 07/11/2026 un «const api = …» en openSettings() tapó la función api() en todo Ajustes («Aplicar ahora»,
+        «Probar conexión», «Comprobar»… decían «api is not a function»)."""
+        for f in ("app.js", "configurar.js"):  # (modelos.js tiene uno en modelosHtml(), que no llama a api())
+            with open(os.path.join(APP, "static", f), encoding="utf-8") as fh:
+                src = fh.read()
+            self.assertNotRegex(src, r"\b(const|let|var)\s+api\b", f)
+            self.assertNotRegex(src, r"\(\s*api\s*[,)=]", f)  # ni como parámetro
+
+
 @unittest.skipUnless(NODE, "node no está instalado")
 class ConfigurarJsTests(unittest.TestCase):
     """Las funciones puras de configurar.js con node (sin navegador)."""
@@ -168,6 +179,9 @@ class ProbarTests(unittest.TestCase):
     def correr(self, modo, prov=None, **over):
         llamadas = []
 
+        def cuenta(report, cancelled):
+            llamadas.append("cuenta")
+
         def modelos(report, cancelled):
             llamadas.append("modelos")
             report("Descargando · 50 %")
@@ -187,8 +201,8 @@ class ProbarTests(unittest.TestCase):
         def resumir(texto, report, cancelled):
             llamadas.append(("resumir", texto))
             return "Un saludo de prueba."
-        hacer = {"modelos": modelos, "grabar": grabar, "silencio": silencio, "transcribir": transcribir,
-                 "resumir": resumir}
+        hacer = {"cuenta": cuenta, "modelos": modelos, "grabar": grabar, "silencio": silencio,
+                 "transcribir": transcribir, "resumir": resumir}
         hacer.update(over)
         nombres = {"transcribe": f"con {prov}" if prov else "en este PC",
                    "resume": prov or "Claude (tu cuenta)", "proveedor": prov}
@@ -201,17 +215,19 @@ class ProbarTests(unittest.TestCase):
 
     def test_con_claude_todo_bien(self):
         r, ll = self.correr("agente")
-        self.assertEqual([x["id"] for x in r["pasos"]], ["modelos", "micro", "transcribir", "resumir"])
-        self.assertEqual([x["estado"] for x in r["pasos"]], ["ok"] * 4)
+        # con Claude, la cuenta primero: sin sesión se sabe antes de bajar 2 GB
+        self.assertEqual([x["id"] for x in r["pasos"]], ["cuenta", "modelos", "micro", "transcribir", "resumir"])
+        self.assertEqual(ll[0], "cuenta")
+        self.assertEqual([x["estado"] for x in r["pasos"]], ["ok"] * 5)
         self.assertEqual([x["texto"] for x in r["pasos"]], [
-            "Modelos de transcripción en este PC", "Grabar 3 s del micro", "Transcribir en este PC",
-            "Resumir con Claude (tu cuenta)"])
+            "Claude Code con tu cuenta", "Modelos de transcripción en este PC", "Grabar 3 s del micro",
+            "Transcribir en este PC", "Resumir con Claude (tu cuenta)"])
         self.assertTrue(r["listo"] and r["terminada"])
         self.assertIsNone(r["fallo"])
         self.assertEqual(r["resultado"], "Listo. Tus reuniones se transcriben en este PC y las resume Claude con tu "
                                          "cuenta.")
-        self.assertEqual(r["pasos"][2]["detalle"], "«hola esto es una prueba»")
-        self.assertEqual(r["pasos"][3]["detalle"], "Claude ha contestado: «Un saludo de prueba.»")
+        self.assertEqual(r["pasos"][3]["detalle"], "«hola esto es una prueba»")
+        self.assertEqual(r["pasos"][4]["detalle"], "Claude ha contestado: «Un saludo de prueba.»")
         self.assertIn(("resumir", "hola esto es una prueba"), ll)  # resume lo que se ha dicho
         self.assertNotIn("silencio", ll)
 
@@ -220,24 +236,27 @@ class ProbarTests(unittest.TestCase):
                             transcribir=lambda w, rep, c: "")
         self.assertEqual([x["id"] for x in r["pasos"]], ["modelos", "micro", "transcribir"])
         self.assertEqual(r["pasos"][1]["estado"], "aviso")
-        self.assertEqual(r["pasos"][1]["detalle"], "No se ha oído voz: pruebo la cadena con 1 s de silencio.")
+        self.assertEqual(r["pasos"][1]["detalle"], "No se ha oído voz: sigo la prueba sin voz (1 s de silencio).")
         self.assertEqual(r["pasos"][2]["detalle"], "Funciona (con silencio no sale texto)")
         self.assertIn("silencio", ll)
         self.assertTrue(r["listo"])
-        self.assertEqual(r["resultado"], "Listo. Tus reuniones se transcriben en este PC. No se resumen con IA.")
+        # «Listo», pero diciendo que no se oyó la voz (revisión: un «Listo» a secas con el micro roto engaña)
+        self.assertEqual(r["resultado"], "Listo. Tus reuniones se transcriben en este PC. No se resumen con IA."
+                                         + probar.OJO_MICRO)
 
     def test_micro_que_no_arranca(self):
         vistos = []
         r, ll = self.correr("api", prov="Groq", grabar=lambda s, rep, c: (None, False, "sin micrófono"),
                             transcribir=lambda w, rep, c: vistos.append(w) or "")
         self.assertEqual([x["id"] for x in r["pasos"]], ["micro", "transcribir", "resumir"])
-        self.assertEqual(r["pasos"][1 - 1]["detalle"], "No he podido usar el micro (sin micrófono): pruebo la cadena "
-                                                       "con 1 s de silencio.")
+        self.assertEqual(r["pasos"][0]["detalle"], "No he podido usar el micro: sigo la prueba sin voz (1 s de "
+                                                   "silencio).")  # el error crudo, solo al log
         self.assertEqual(vistos, ["sil.wav"])
         self.assertIn(("resumir", probar.TEXTO_MUESTRA), ll)  # sin voz, se resume la frase de muestra
         self.assertEqual(r["pasos"][2]["texto"], "Resumir con Groq")
         self.assertEqual(r["pasos"][2]["detalle"], "Groq ha contestado: «Un saludo de prueba.»")
-        self.assertEqual(r["resultado"], "Listo. Tus reuniones se transcriben y se resumen con Groq.")
+        self.assertEqual(r["resultado"],
+                         "Listo. Tus reuniones se transcriben y se resumen con Groq." + probar.OJO_MICRO)
 
     def test_voz_sin_texto_avisa_del_idioma(self):
         r, _ = self.correr("local", transcribir=lambda w, rep, c: "  ")
@@ -248,7 +267,7 @@ class ProbarTests(unittest.TestCase):
         def roto(w, rep, c):
             raise engines.EngineError("No module named 'av'")
         r, ll = self.correr("agente", transcribir=roto)
-        self.assertEqual([x["estado"] for x in r["pasos"]], ["ok", "ok", "error", "espera"])
+        self.assertEqual([x["estado"] for x in r["pasos"]], ["ok", "ok", "ok", "error", "espera"])
         self.assertFalse(r["listo"])
         self.assertEqual(r["fallo"]["paso"], "transcribir")
         self.assertIn("vuelve a ejecutar INSTALAR.bat", r["fallo"]["frase"])
@@ -259,7 +278,7 @@ class ProbarTests(unittest.TestCase):
             raise engines.EngineError(engines.ClaudeCode()._why(1, "Not logged in · Please run /login"))
         r, _ = self.correr("agente", resumir=sin_sesion)
         self.assertEqual(r["fallo"]["accion"]["tipo"], "abrir_powershell")
-        self.assertEqual(r["pasos"][3]["detalle"], r["fallo"]["frase"])
+        self.assertEqual(r["pasos"][4]["detalle"], r["fallo"]["frase"])
 
     def test_cancelar(self):
         empezado = threading.Event()
@@ -294,7 +313,7 @@ class ProbarServidorTests(unittest.TestCase):
         a.settings = settings_store(tempfile.mkdtemp(dir=self.tmp), **st)
         a.jobs = bare_jobs([])
         a.jobs.settings = a.settings
-        a.jobs.cloud = types.SimpleNamespace(keys=None)
+        a.jobs.cloud = types.SimpleNamespace(keys=types.SimpleNamespace(public=lambda *x, **k: None))
         a.hotkey = types.SimpleNamespace(ok=True, error=None)
         a.rec = a.monitor = None
         a.rec_lock = threading.Lock()
@@ -323,7 +342,8 @@ class ProbarServidorTests(unittest.TestCase):
 
     def test_empezar_estado_y_ultima_prueba(self):
         a = self.app(procesado="local")
-        hecho = {"modelos": lambda rep, c: None, "grabar": lambda s, rep, c: (None, False, "sin micro"),
+        hecho = {"cuenta": lambda rep, c: None, "modelos": lambda rep, c: None,
+                 "grabar": lambda s, rep, c: (None, False, "sin micro"),
                  "silencio": lambda: "s.wav", "transcribir": lambda w, rep, c: "", "resumir": lambda t, rep, c: "ok"}
         with mock.patch.object(server.App, "_prueba_hacer", return_value=(hecho, {"proveedor": None})), \
                 mock.patch.object(server, "log"):
@@ -350,6 +370,31 @@ class ProbarServidorTests(unittest.TestCase):
             self.assertIsNone(c["ultima_prueba"])  # es de otro modo: no se enseña
         with self.assertRaises(server.ApiError):
             a.probar_estado({"id": "nada"})
+
+    def test_la_prueba_solo_vale_para_lo_que_se_probo_y_una_nueva_cancela_la_anterior(self):
+        a = self.app(procesado="api", cloud=dict(server.DEFAULT_SETTINGS["cloud"], api_key="gsk_vieja"))
+        sigue = threading.Event()
+
+        def lento(s, rep, c):
+            while not c() and not sigue.is_set():
+                time.sleep(0.02)
+            return None, False, None
+        hecho = {"grabar": lento, "silencio": lambda: "s.wav", "transcribir": lambda w, rep, c: "",
+                 "resumir": lambda t, rep, c: "ok"}
+        with mock.patch.object(server.App, "_prueba_hacer", return_value=(hecho, {"proveedor": "Groq"})), \
+                mock.patch.object(server, "log"):
+            p1 = a.probar_empezar({"candidata": {"procesado": "api", "cloud": {"api_key": "gsk_nueva"}}})["id"]
+            p2 = a.probar_empezar({"candidata": {"procesado": "api", "cloud": {"api_key": "gsk_nueva"}}})["id"]
+            self.assertNotEqual(p1, p2)
+            sigue.set()  # la segunda ya puede grabar (la primera, cancelada, ha soltado el micro)
+            a.pruebas[p2].join(5)
+            self.assertEqual(a.probar_estado({"id": p1})["fallo"]["frase"], "Prueba cancelada.")
+            self.assertTrue(a.probar_estado({"id": p2})["listo"])
+            # se guarda con OTRA clave: la prueba no vale para eso
+            c = a.save_settings({"procesado": "api", "cloud": {"api_key": "gsk_otra"}, "prueba": p2})
+            self.assertIsNone(c["ultima_prueba"])
+            c = a.save_settings({"procesado": "api", "cloud": {"api_key": "gsk_nueva"}, "prueba": p2})
+            self.assertTrue(c["ultima_prueba"]["ok"])
 
     def test_grabando_no_se_prueba(self):
         a = self.app()

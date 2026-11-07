@@ -204,8 +204,21 @@ function abrirConfigurar(opts = {}) {
   Object.assign(W, { paso: opts.paso || 1, modo: opts.modo || S.config.procesado || 'local', prueba: null, volver: opts.volver || null,
     cloud: { provider: c.provider || 'groq', api_key: '', base_url: c.base_url || '', azure_endpoint: c.azure_endpoint || '',
       azure_deployment: c.azure_deployment || '', azure_api_version: c.azure_api_version || '' } });
+  W.guardado = false;
   openModal('<div class="wz-raiz"></div>', d => { W.d = d; wzPintar(); }, 'wz');
-  S.modalCleanup = () => { wzParar(); W.d = null; };
+  S.modalCleanup = () => {
+    wzParar();
+    wzCancelarPrueba();
+    W.d = null;
+    if (!W.guardado && W.volver) setTimeout(W.volver, 0);  // abierto desde Ajustes: Esc o «Ahora no» vuelven allí
+  };
+}
+/* una prueba en marcha que ya no vale (se cierra el asistente o cambia lo elegido): se cancela en el servidor */
+function wzCancelarPrueba() {
+  const r = W.prueba;
+  if (r && r.id && !r.terminada) api('/api/probar/cancelar', { id: r.id }).catch(() => { });
+  W.prueba = null;
+  W.pieSig = W.anuncio = '';
 }
 function wzParar() {
   clearTimeout(W.timer); clearTimeout(W.agTimer);
@@ -236,13 +249,17 @@ function wzDescargaHtml(strip) {
   const cls = t?.listo ? ' ok' : t?.error && !t.bajando ? ' err' : '';
   const bar = t && !t.listo && !(t.error && !t.bajando) ? `<div class="prep-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${t.pct}"><i style="width:${t.pct}%"></i></div>` : '';
   const re = t?.error && !t.bajando ? ' <button class="btn sm" type="button" data-wz="bajar">Reintentar</button>' : '';
-  const intro = strip ? `<b>Mientras tanto, descargando el modelo de transcripción</b> (${t ? cfgFmtGb(t.total) + ', ' : ''}solo la primera vez). Con Claude, la transcripción se hace en tu PC y Claude solo resume.` : '';
+  const n = cfgModelosNecesarios().length, los = n > 1 ? 'los modelos' : 'el modelo';
+  const intro = strip && t && !t.listo && !(t.error && !t.bajando)
+    ? `<b>Mientras tanto, descargando ${los} de transcripción</b> (${cfgFmtGb(t.total)}, solo la primera vez). Con Claude, la transcripción se hace en tu PC y Claude solo resume.`
+    : strip ? 'Con Claude, la transcripción se hace en tu PC y Claude solo resume. ' : '';
   return `<div class="wz-descarga${cls}" data-wz-descarga aria-live="polite">${intro}${bar}<div>${esc(cfgDescargaTexto(t))}${re}</div></div>`;
 }
 function wzPaso2() {
   if (W.modo === 'local') {
-    return `<h2 tabindex="-1">Descarga el modelo de transcripción</h2>
-      <p class="wz-lead">${esc(APP_NAME)} transcribe con un modelo que se queda en tu PC. Se descarga una sola vez.</p>
+    const dos = cfgModelosNecesarios().length > 1;
+    return `<h2 tabindex="-1">${dos ? 'Descarga los modelos de transcripción' : 'Descarga el modelo de transcripción'}</h2>
+      <p class="wz-lead">${esc(APP_NAME)} transcribe con ${dos ? 'dos modelos que se quedan' : 'un modelo que se queda'} en tu PC: ${dos ? 'uno para el directo y otro para transcribir después' : 'se descarga una sola vez'}. ${dos ? 'Se descargan una sola vez.' : ''}</p>
       ${wzDescargaHtml(false)}
       <p class="help">Puedes pasar al paso siguiente mientras se descarga.</p>
       ${typeof modelosHtml === 'function' ? `<details class="wz-mas"><summary>Ver los modelos de este PC</summary>${modelosHtml()}</details>` : ''}`;
@@ -275,11 +292,12 @@ function wzPaso2() {
        <div><label>Versión de la API</label><input class="input" id="wzAzVer" value="${esc(W.cloud.azure_api_version)}"></div></div>`
     : W.cloud.provider === 'custom'
       ? `<label>Dirección de la API (te la da tu empresa)</label><input class="input" id="wzBase" placeholder="https://…/v1" value="${esc(W.cloud.base_url)}">` : '';
-  return `<h2 tabindex="-1">Pega tu clave de ${esc(p.label || 'la API')}</h2>
+  const deQue = W.cloud.provider === 'custom' ? 'de tu API' : `de ${p.label || 'la API'}`;
+  return `<h2 tabindex="-1">Pega la clave ${esc(deQue)}</h2>
     <p class="wz-lead">${keys ? `Consíguela en <a href="#" data-wz="claves">${esc(keys)}</a>. ` : ''}Se guarda solo en este PC, fuera de OneDrive.</p>
     <div data-wz-prov${misma && W.cloud.provider === 'groq' && !W.provAbierto ? ' hidden' : ''}><label>Proveedor</label><select id="wzProv">${Object.entries(P).map(([k, v]) => `<option value="${esc(k)}"${k === W.cloud.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></div>
     ${campos}
-    <label>Clave de ${esc(p.label || 'la API')}</label><input class="input" type="password" id="wzKey" autocomplete="off" spellcheck="false" placeholder="${esc(ph)}" value="${esc(W.cloud.api_key)}">
+    <label>Clave ${esc(deQue)}</label><input class="input" type="password" id="wzKey" autocomplete="off" spellcheck="false" placeholder="${esc(ph)}" value="${esc(W.cloud.api_key)}">
     <div class="wz-err" data-wz-err></div>
     ${misma && W.cloud.provider === 'groq' && !W.provAbierto ? '<div class="help">¿Usas OpenAI, Azure o la API de tu empresa? <a href="#" data-wz="prov">Cambiar de proveedor</a></div>' : ''}
     <div class="notice">${AVISO_NUBE}</div>`;
@@ -291,8 +309,9 @@ function wzPaso3() {
   return `<h2 tabindex="-1">Prueba que todo funciona</h2>
     <p class="wz-lead">${lead}</p>
     <div class="wz-di">Cuando te lo pida, di en voz alta: <b>«Hola, esto es una prueba»</b>.</div>
-    <div class="wz-probar"><button class="btn primary" type="button" data-wz="probar">Probar</button><span class="muted" data-wz-probando></span></div>
-    <div class="wz-check" data-wz-pasos role="status" aria-live="polite">${wzPasosHtml(W.prueba)}</div>
+    <div class="wz-probar"><button class="btn primary" type="button" data-wz="probar">Probar</button><span class="muted" data-wz-probando></span><button class="btn ghost sm" type="button" data-wz="cancelar-prueba" hidden>Cancelar la prueba</button></div>
+    <div class="wz-check" data-wz-pasos>${wzPasosHtml(W.prueba)}</div>
+    <div class="sr-only" aria-live="polite" data-wz-anuncio></div>
     <div data-wz-res>${wzResHtml(W.prueba)}</div>`;
 }
 function wzPasosHtml(r) {
@@ -306,9 +325,9 @@ function wzPasosHtml(r) {
 }
 function wzResHtml(r) {
   if (!r || !r.terminada) return '';
-  if (r.listo) return `<div class="wz-res ok"><b>Listo</b>${esc(r.resultado.replace(/^Listo\.\s*/, ''))}</div>`;
+  if (r.listo) return `<div class="wz-res ok" role="alert" tabindex="-1"><b>Listo</b>${esc(r.resultado.replace(/^Listo\.\s*/, ''))}</div>`;
   const a = r.fallo?.accion;
-  return `<div class="wz-res err">${esc(r.fallo?.frase || 'La prueba ha fallado.')}
+  return `<div class="wz-res err" role="alert" tabindex="-1">${esc(r.fallo?.frase || 'La prueba ha fallado.')}
     ${a ? `<div class="acts"><button class="btn sm" type="button" data-wz-accion="${esc(a.tipo)}"${a.url ? ` data-url="${esc(a.url)}"` : ''}>${esc(a.etiqueta)}</button></div>` : ''}</div>`;
 }
 function wzPie() {
@@ -317,7 +336,7 @@ function wzPie() {
   if (W.paso === 2) return `<button class="btn ghost" type="button" data-wz="atras">Atrás</button><span class="sp"></span>${W.modo === 'agente' ? `<button class="btn" type="button" data-wz="powershell">Abrir PowerShell</button>` : ''}<button class="btn primary" type="button" data-wz="sig">Siguiente</button>`;
   const fallo = r && r.terminada && !r.listo, bien = r && r.terminada && r.listo;
   return `<button class="btn ghost" type="button" data-wz="atras">Atrás</button><span class="sp"></span>
-    ${fallo || !r ? `<button class="btn ghost" type="button" data-wz="guardar">${fallo ? 'Guardar sin probar' : 'Guardar sin probar'}</button>` : ''}
+    ${fallo || !r ? '<button class="btn ghost" type="button" data-wz="guardar">Guardar sin probar</button>' : ''}
     <button class="btn${bien ? '' : ' primary'}" type="button" data-wz="terminar"${bien ? '' : ' disabled'}>Terminar</button>
     ${bien ? `<button class="btn primary" type="button" data-wz="grabar">Grabar mi primera reunión</button>` : ''}`;
 }
@@ -325,6 +344,7 @@ function wzPintar() {
   const d = W.d;
   if (!d) return;
   wzParar();
+  W.pieSig = '';
   d.innerHTML = `${wzCabecera()}<div class="wz-body">${[wzPaso1, wzPaso2, wzPaso3][W.paso - 1]()}</div><div class="wz-foot">${wzPie()}</div>`;
   $('.wz-body h2', d)?.focus();
   if (W.paso === 2 && W.modo !== 'api') {
@@ -335,7 +355,11 @@ function wzPintar() {
   if (W.paso === 2 && W.modo === 'agente') wzMirarClaude();
   if (W.paso === 3 && W.prueba && !W.prueba.terminada) wzSeguir(W.prueba.id);
 }
-function wzRefrescarPie() { const f = $('.wz-foot', W.d); if (f) f.innerHTML = wzPie(); }
+function wzRefrescarPie() {  // solo si cambia (repintarlo cada 400 ms le quitaba el foco a quien estuviera en él)
+  const f = $('.wz-foot', W.d), r = W.prueba;
+  const sig = `${W.paso}|${r ? (r.terminada ? (r.listo ? 'ok' : 'mal') : 'va') : 'no'}`;
+  if (f && sig !== W.pieSig) { f.innerHTML = wzPie(); W.pieSig = sig; }
+}
 /* paso 2 con Claude: ¿ya está instalado? (cada 3 s mientras se ve este paso) */
 async function wzMirarClaude() {
   clearTimeout(W.agTimer);
@@ -365,6 +389,11 @@ function wzCandidata() {
   return out;
 }
 function wzLeerCampos() {
+  const antes = JSON.stringify(W.cloud);
+  wzLeerCampos2();
+  if (JSON.stringify(W.cloud) !== antes) wzCancelarPrueba();  // otra clave u otra dirección: la prueba ya no vale
+}
+function wzLeerCampos2() {
   const d = W.d, v = id => $(id, d)?.value?.trim();
   if (v('#wzKey') != null) W.cloud.api_key = v('#wzKey') || '';
   if (v('#wzBase') != null) W.cloud.base_url = v('#wzBase') || '';
@@ -392,10 +421,15 @@ async function wzProbar() {
 }
 async function wzSeguir(id) {
   clearTimeout(W.timer);
-  if (!W.d || W.paso !== 3) return;
-  try { W.prueba = await api('/api/probar?id=' + encodeURIComponent(id)); } catch (err) { W.prueba = { terminada: true, listo: false, pasos: W.prueba?.pasos || [], fallo: { frase: err.message } }; }
+  if (!W.d || W.paso !== 3 || !W.prueba || W.prueba.id !== id) return;
+  let r;
+  try { r = await api('/api/probar?id=' + encodeURIComponent(id)); } catch (err) { r = { id, terminada: true, listo: false, pasos: W.prueba?.pasos || [], fallo: { frase: err.message } }; }
+  if (!W.prueba || W.prueba.id !== id || (r.modo && r.modo !== W.modo)) return;  // de otra prueba o de otro modo: fuera
+  const acaba = r.terminada && !W.prueba.terminada;
+  W.prueba = r;
   wzPintarPrueba();
-  if (!W.prueba.terminada) W.timer = setTimeout(() => wzSeguir(id), 400);
+  if (acaba) $('.wz-res', W.d)?.focus();
+  if (!r.terminada) W.timer = setTimeout(() => wzSeguir(id), 400);
 }
 function wzPintarPrueba() {
   const d = W.d;
@@ -406,6 +440,14 @@ function wzPintarPrueba() {
   if (b) { b.disabled = !!(r && !r.terminada); b.textContent = r && !r.terminada ? 'Probando…' : r ? 'Probar otra vez' : 'Probar'; }
   const t = $('[data-wz-probando]', d);
   if (t) t.textContent = r && !r.terminada ? `${Math.round((Date.now() / 1000) - (r.empezada || Date.now() / 1000))} s` : '';
+  const c = $('[data-wz="cancelar-prueba"]', d);
+  if (c) c.hidden = !(r && !r.terminada);
+  // lo que oye un lector de pantalla: el paso en curso y cómo acaba (no cada segundo ni cada %)
+  const cur = r && (r.pasos || []).find(x => x.estado === 'en_curso');
+  const anuncio = !r ? '' : r.terminada ? (r.listo ? 'Prueba terminada: todo bien.' : 'La prueba ha fallado.')
+    : cur ? `${cur.texto}${/^Habla ahora/.test(cur.detalle || '') ? ': habla ahora.' : '…'}` : '';
+  const an = $('[data-wz-anuncio]', d);
+  if (an && anuncio !== W.anuncio) { an.textContent = anuncio; W.anuncio = anuncio; }
   wzRefrescarPie();
 }
 async function wzGuardar(despues) {
@@ -413,12 +455,21 @@ async function wzGuardar(despues) {
   const enNube = S.config.procesado === 'api' && W.modo !== 'api'
     && S.jobs.some(j => isActive(j) && j.kind !== 'summary' && (j.engine === 'cloud' || j.preset === 'nube'));
   const n = S.jobs.filter(j => isActive(j) && j.kind !== 'summary' && (j.engine === 'cloud' || j.preset === 'nube')).length;
-  if (enNube && !await ask('¿Cambiar de opción?', `<p>Hay ${n} ${n === 1 ? 'transcripción esperando' : 'transcripciones esperando'} en ${esc(provName())}. Si cambias ahora, se cancelan y las podrás relanzar en este PC.</p>`, 'Cambiar')) return abrirConfigurar({ paso: 3, modo: W.modo });
+  if (enNube) {
+    const volver = W.volver;
+    wzParar();
+    S.modalCleanup = null;  // la confirmación ocupa el hueco: cerrarla no es cerrar el asistente
+    W.d = null;
+    if (!await ask('¿Cambiar de opción?', `<p>Hay ${n} ${n === 1 ? 'transcripción esperando' : 'transcripciones esperando'} en ${esc(provName())}. Si cambias ahora, se cancelan y las podrás relanzar en este PC.</p>`, 'Cambiar')) {
+      return abrirConfigurar({ paso: 3, modo: W.modo, volver });
+    }
+  }
   try {
     const c = await api('/api/settings', Object.assign(wzCandidata(), W.prueba?.id && W.prueba.terminada ? { prueba: W.prueba.id } : {}));
     setConfig(c);
     localStorage.setItem('procElegido', '1');
     const volver = W.volver;
+    W.guardado = true;
     closeModal(true);
     toast(`Guardado: ${esc(modoNombre(c.procesado))}. ${esc(modoLinea(c.live_preset || 'medium'))}.`);
     if (c.descarga) modelosRefrescar(4000);
@@ -438,8 +489,8 @@ async function wzAccion(tipo, b) {
 }
 document.addEventListener('change', e => {
   if (!W.d || !W.d.contains(e.target)) return;
-  if (e.target.name === 'wzModo') { W.modo = e.target.value; W.prueba = null; wzPintar(); $(`input[name="wzModo"][value="${W.modo}"]`, W.d)?.focus(); }
-  if (e.target.id === 'wzProv') { wzLeerCampos(); W.cloud.provider = e.target.value; W.cloud.api_key = ''; W.provAbierto = true; W.prueba = null; wzPintar(); }
+  if (e.target.name === 'wzModo') { W.modo = e.target.value; wzCancelarPrueba(); wzPintar(); $(`input[name="wzModo"][value="${W.modo}"]`, W.d)?.focus(); }
+  if (e.target.id === 'wzProv') { wzLeerCampos(); W.cloud.provider = e.target.value; W.cloud.api_key = ''; W.provAbierto = true; wzCancelarPrueba(); wzPintar(); }
 });
 document.addEventListener('click', async e => {
   if (!W.d || !W.d.contains(e.target)) return;
@@ -471,11 +522,12 @@ document.addEventListener('click', async e => {
   if (q === 'powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
   if (q === 'bajar') return wzBajar();
   if (q === 'probar') return wzProbar();
+  if (q === 'cancelar-prueba') { wzCancelarPrueba(); return wzPintar(); }
   if (q === 'guardar' || q === 'terminar') return wzGuardar();
   if (q === 'grabar') return wzGuardar('grabar');
 });
 document.addEventListener('keydown', e => {
-  if (!W.d || !document.body.contains(W.d) || e.key !== 'Enter' || e.target.closest('textarea, select, a, button')) return;
+  if (!W.d || !document.body.contains(W.d) || e.key !== 'Enter' || e.target.closest('textarea, select, a, button, summary, details')) return;
   const s = $('.wz-foot [data-wz="sig"]', W.d);
   if (s) { e.preventDefault(); s.click(); }
 });
@@ -486,7 +538,10 @@ document.addEventListener('modelos', () => {
 
 /* Inicio: tras actualizar, una vez, si la configuración nunca se ha probado (decisión de Claudia, 07/11/2026) */
 function avisoProbarHtml() {
-  if (!S.config || S.config.ultima_prueba || localStorage.getItem('avisoProbar') || !localStorage.getItem('procElegido')) return '';
+  if (!S.config || S.config.ultima_prueba?.ok || localStorage.getItem('avisoProbar')) return '';
+  // tras actualizar, no en una instalación nueva (ahí está la tarjeta de bienvenida): ya se eligió o ya hay reuniones
+  const nueva = S.config.procesado === 'local' && !localStorage.getItem('procElegido');
+  if (nueva || !(typeof allAudios === 'function' && allAudios().length || S.config.procesado !== 'local' || localStorage.getItem('procElegido'))) return '';
   return `<div class="notice info aviso-probar" id="avisoProbar" style="margin:0 0 14px">${I.info}<span>${esc(APP_NAME)} puede probar ahora tu configuración de punta a punta: graba 3 s de tu voz, los transcribe y, si toca, los resume.</span>
     <button class="btn sm primary" type="button" data-act="cfg-probar">Probar ahora</button><button class="btn sm ghost" type="button" data-act="cfg-aviso-no">Ahora no</button></div>`;
 }
@@ -514,3 +569,26 @@ function cfgEstadoHtml() {
     <div class="r">Transcribe: ${transcribe}</div><div class="r">Resume: ${resume}</div>${st}</div>
     <div class="cfg-acts"><button class="btn sm" type="button" data-cfg="probar">Probar</button><button class="btn sm" type="button" data-cfg="cambiar">Cambiar…</button></div></div>`;
 }
+
+/* El botón de un error fuera del asistente (la Cola y la reunión): el mismo que en «Probar» (explicar.py) */
+function cfgAccionHtml(j) {
+  const a = j?.aviso?.accion;
+  if (!a || a.tipo === 'reintentar') return '';  // reintentar ya lo tienen («Reintentar», «Rehacer»…)
+  const model = S.presetsById?.[j.preset]?.model || '';
+  return ` <button class="btn sm cfg-accion" type="button" data-cfg-accion="${esc(a.tipo)}"${a.url ? ` data-url="${esc(a.url)}"` : ''}${model ? ` data-model="${esc(model)}"` : ''}>${esc(a.etiqueta)}</button>`;
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-cfg-accion]');
+  if (!b) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const t = b.dataset.cfgAccion;
+  if (t === 'abrir_powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
+  if (t === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: S.config?.cloud?.provider }).catch(() => window.open(b.dataset.url, '_blank'));
+  if (t === 'asistente') return abrirConfigurar({ paso: 2, modo: S.config?.procesado });
+  if (t === 'avanzado') return openSettings({ sec: 'avanzado' });
+  if (t === 'reintentar_descarga' && b.dataset.model) return modeloBajar(b.dataset.model);
+  if (t === 'diagnostico') {
+    try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); }
+  }
+});

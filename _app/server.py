@@ -4632,7 +4632,7 @@ class App:
                 d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
         p = (getattr(self, "pruebas", None) or {}).get(b.get("prueba")) if b.get("prueba") else None
-        if p is not None and p.terminada and p.modo == procesado_de(self.settings.get()):
+        if p is not None and p.terminada and p.firma == self._firma(self.settings.get()):
             res = p.resumen()  # la del asistente: es de lo que se acaba de guardar
             self.settings.update(lambda d: d.update(ultima_prueba=res))
         ahora = procesado_de(self.settings.get())
@@ -4727,17 +4727,19 @@ class App:
                 sts = [engines.MODELS.state(m) for m in names]
                 if all(x["ready"] for x in sts):
                     return
-                errs = [x["error"] for x in sts if x["error"] and not x["downloading"] and not x["ready"]]
+                errs = [x["error"] for x in sts if x["error"] and not x["downloading"] and not x["ready"]
+                        and "cancelada" not in x["error"].lower()]
                 if errs:
                     raise engines.EngineError(errs[0])
                 for m, x in zip(names, sts):
                     if not x["ready"] and not x["downloading"]:
-                        engines.MODELS.start(m)  # cancelada en Ajustes: la prueba la necesita
+                        engines.MODELS.start(m)  # sin empezar o cancelada en Ajustes: la prueba la necesita
                 total = sum(x["total_mb"] or x["size_mb"] or 0 for x in sts)
                 done = sum((x["total_mb"] or x["size_mb"] or 0) if x["ready"] else (x["done_mb"] or 0) for x in sts)
                 eta = max((x["eta_s"] or 0) for x in sts)
-                report(f"Descargando · {int(100 * done / total) if total else 0} % · {engines.fmt_mb(done * 1e6)} de "
-                       f"{engines.fmt_mb(total * 1e6)} MB" + (f" · quedan ~{engines.fmt_left(eta)}" if eta else ""))
+                gb = lambda mb: f"{mb / 1000:.1f}".replace(".", ",")  # noqa: E731
+                report(f"Descargando · {int(100 * done / total) if total else 0} % · {gb(done)} de {gb(total)} GB"
+                       + (f" · quedan unos {engines.fmt_left(eta)}" if eta else ""))
                 if cancelled():
                     raise probar.Cancelada()
                 time.sleep(0.5)
@@ -4756,7 +4758,9 @@ class App:
                 pass
             report("Prepárate: en un momento empieza a grabar…")
             try:
-                r = RecorderProcess(path, st.get("rec_mic") or "default", "none", APP_DIR, DATA_DIR)
+                # con «Sin micrófono» guardado, la prueba usa el predeterminado de Windows
+                mic = st.get("rec_mic") if st.get("rec_mic") not in (None, "", "none") else "default"
+                r = RecorderProcess(path, mic, "none", APP_DIR, DATA_DIR)
             except Exception as e:  # sin Python para lanzarlo o sin permisos: la cadena con silencio
                 return None, False, e.__class__.__name__
             fin = time.time() + 10
@@ -4768,9 +4772,10 @@ class App:
             if r.status.get("t") is None:
                 r.stop(timeout=2)
                 mic = r.status.get("mic") if isinstance(r.status.get("mic"), dict) else {}
+                log(f"   probar: el micro no ha arrancado ({mic.get('error') or 'sin estado'})")
                 return None, False, mic.get("error") or "el micro no ha arrancado"
-            t0 = r.status.get("t") or 0
-            while r.alive() and (r.status.get("t") or 0) - t0 < segundos:
+            t0, fin = r.status.get("t") or 0, time.time() + segundos + 8  # un grabador colgado no para la prueba
+            while r.alive() and (r.status.get("t") or 0) - t0 < segundos and time.time() < fin:
                 if cancelled():
                     r.stop(timeout=2)
                     raise probar.Cancelada()
@@ -4783,6 +4788,15 @@ class App:
             log(f"   probar: micro {len(mics)} lecturas, máx {max(mics) if mics else '-'} dB, "
                 f"voz: {'sí' if voz else 'no'}")
             return (path if os.path.isfile(path) else None), voz, None
+
+        def cuenta(report, cancelled):
+            cls, a = agente_de(st)
+            ruta = cls.find()
+            if not ruta:
+                raise engines.EngineError(f"No encuentro {cls.label} en este PC. Sigue el paso a paso y vuelve a "
+                                          "probar.")
+            report(f"Comprobando {cls.label} con tu cuenta…")
+            cls(settings_dir=DATA_DIR).check(ruta, model=a["modelo"], cancelled=cancelled)
 
         def silencio():
             import wave
@@ -4828,8 +4842,18 @@ class App:
         nombres = {"transcribe": f"con {prov}" if modo == "api" else "en este PC",
                    "resume": "Claude (tu cuenta)" if modo == "agente" else prov,
                    "proveedor": prov if modo == "api" else None}
-        return {"modelos": modelos, "grabar": grabar, "silencio": silencio, "transcribir": transcribir,
-                "resumir": resumir}, nombres
+        return {"cuenta": cuenta, "modelos": modelos, "grabar": grabar, "silencio": silencio,
+                "transcribir": transcribir, "resumir": resumir}, nombres
+
+    @staticmethod
+    def _firma(st):
+        """Lo que hace distinta una configuración para «Probar» (la clave, como huella): una prueba solo vale para la
+        configuración que se probó (revisión del 07/11/2026: un «Listo» viejo sobrevivía a cambiar la clave)."""
+        c = st.get("cloud") or {}
+        key = (c.get("api_key") or "").strip()
+        return (procesado_de(st), (st.get("agente") or {}).get("modelo"), c.get("provider"), c.get("model"),
+                c.get("base_url"), c.get("azure_endpoint"), c.get("azure_deployment"),
+                hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else "")
 
     def probar_empezar(self, b):
         """POST /api/probar {candidata?}: empieza una prueba (una a la vez) y devuelve su id."""
@@ -4837,11 +4861,13 @@ class App:
             raise ApiError("Estás grabando: prueba cuando termines la grabación.")
         with self.rec_lock:
             cur = getattr(self, "prueba", None)
-            if cur is not None and cur.is_alive():
-                return {"id": cur.id}
+            if cur is not None and cur.is_alive():  # otra configuración (o la misma otra vez): la de antes se cancela
+                cur.cancelar = True
             st, candidata = self._candidata(b)
             hacer, nombres = self._prueba_hacer(st)
-            p = probar.Prueba(procesado_de(st), hacer, nombres, candidata=candidata, al_terminar=self._prueba_fin)
+            p = probar.Prueba(procesado_de(st), hacer, nombres, candidata=candidata, al_terminar=self._prueba_fin,
+                              espera=cur if cur is not None and cur.is_alive() else None)
+            p.firma = self._firma(st)
             if not hasattr(self, "pruebas"):
                 self.pruebas = {}
             self.pruebas = {k: v for k, v in self.pruebas.items() if v.is_alive() or time.time() - v.empezada < 3600}
@@ -4855,6 +4881,8 @@ class App:
         log(f"   probar: {'bien' if r['listo'] else 'falla'} · " + " · ".join(
             f"{x['id']} {x['estado']} ({x['segundos']} s)" for x in r["pasos"])
             + (f" · {r['fallo']['tecnico'] or r['fallo']['frase']}" if r["fallo"] else ""))
+        if p.nota_micro:
+            log(f"   probar: micro: {p.nota_micro}")
         if not p.candidata:  # la de lo guardado (Ajustes › Probar): queda como última prueba
             res = p.resumen()
             self.settings.update(lambda d: d.update(ultima_prueba=res))

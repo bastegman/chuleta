@@ -177,7 +177,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("[data-wz='atras']")
         pg.check("input[name='wzModo'][value='local']")
         pg.click("[data-wz='sig']")
-        pg.wait_for_selector(".dialog.wz h2:has-text('Descarga el modelo de transcripción')", timeout=5000)
+        pg.wait_for_selector(".dialog.wz h2:has-text('de transcripción')", timeout=5000)  # el modelo o los modelos
         pg.click("[data-wz='sig']")
         pg.wait_for_selector(".dialog.wz h2:has-text('Prueba que todo funciona')", timeout=5000)
         pg.click(".wz-probar [data-wz='probar']")
@@ -189,6 +189,27 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("api('/api/config')")["procesado"], antes)  # una prueba no guarda nada
         pg.keyboard.press("Escape")
         pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        # Ajustes por secciones: «Aplicar ahora» sigue aplicando (el 07/11/2026 una variable «api» tapó la función
+        # api() en todo Ajustes y solo lo vio la e2e de Windows) y la sección elegida se recuerda
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal:not(.hidden) .aj-nav", timeout=5000)
+        otro = "agente" if antes != "agente" else "local"
+        pg.check(f"#modal input[name='proc'][value='{otro}']")
+        pg.click("#procAplicar")
+        pg.wait_for_function("document.querySelector('#procGuardado').innerText.includes('Aplicado')", timeout=10000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["procesado"], otro)
+        pg.check(f"#modal input[name='proc'][value='{antes}']")
+        pg.click("#procAplicar")
+        pg.wait_for_function("document.querySelector('#procGuardado').innerText.includes('Aplicado')", timeout=10000)
+        pg.click(".aj-nav [data-sec='avanzado']")
+        pg.fill("#sThreads", "2")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        pg.click("#modal [data-m='ok']")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["threads"], 2)  # guardado desde una sección oculta al abrir
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal:not(.hidden) .aj-nav [data-sec='avanzado'].on", timeout=5000)  # la última vista
+        pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [])
         self.assertEqual(red, [])
