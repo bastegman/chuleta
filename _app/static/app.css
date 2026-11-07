@@ -778,3 +778,26 @@ ol.pasos code { user-select: all; }
 .wz-foot .sp { flex: 1; }
 .notice.aviso-probar { display: flex; align-items: center; gap: 10px; }
 .notice.aviso-probar > span { flex: 1; }
+
+/* ---------------------------------------------------------------- Ajustes por secciones (07/11/2026) */
+.dialog.aj { width: 860px; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.dialog.aj > h3 { margin: 0; position: static; border-radius: var(--radius-lg) var(--radius-lg) 0 0; flex: none; }
+.aj-grid { display: grid; grid-template-columns: 168px minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+.aj-nav { border-right: 1px solid var(--line); padding: 10px 8px; background: var(--panel-2); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.aj-nav button { text-align: left; border: 0; background: transparent; padding: 7px 10px; border-radius: 6px; color: var(--ink-2); font-weight: 500; cursor: pointer; }
+.aj-nav button:hover { background: var(--hover); color: var(--ink); }
+.aj-nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.aj-main { overflow-y: auto; padding: 6px 22px 18px; min-height: 0; }
+.aj-main > section > fieldset:first-child, .aj-main > section > .cfg-estado:first-child { margin-top: 12px; }
+.dialog.aj .btns.aj-pie { margin: 0; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel); align-items: center; flex: none; }
+.aj-pend { margin-right: auto; font-size: 12.5px; color: var(--warn); }
+.cfg-estado { display: flex; gap: 14px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-top: 12px; background: var(--panel); }
+.cfg-txt { flex: 1; min-width: 0; }
+.cfg-estado .m { font-weight: 650; font-size: 15px; }
+.cfg-estado .r { font-size: 13px; color: var(--ink-2); }
+.cfg-estado .r b { color: var(--ink); font-weight: 600; }
+.cfg-estado .st { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.cfg-estado .st.ok { color: var(--ok); font-weight: 600; }
+.cfg-estado .st.err { color: var(--err); }
+.cfg-acts { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.dialog.aj { height: 84vh; }

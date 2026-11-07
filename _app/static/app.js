@@ -832,7 +832,7 @@ function txBox(list, title, opts = {}) {
 
 async function submitTx(paths, preset, language, resume = false) {
   const p = S.presetsById[preset];
-  if (p.engine === 'cloud' && !S.config.cloud.has_key) return openSettings();
+  if (p.engine === 'cloud' && !S.config.cloud.has_key) return openSettings({ sec: 'procesado' });
   // continuar una a medias no sobrescribe nada: solo anade lo que falta
   const existing = paths.filter(x => { const a = S.audios.get(x); return a && (a.txt || a.srt) && !(resume && a.partial); });
   if (existing.length && !await ask('¿Sobrescribir la transcripción?',
@@ -914,7 +914,7 @@ function avisoResumenLocalVisto(irAlAjuste) {
   $('#avisoSumLocal')?.remove();
   api('/api/settings', { summary: { aviso_visto: true } }).catch(err => toast(esc(err.message), 'err'));
   if (!irAlAjuste) return;
-  openSettings();
+  openSettings({ sec: 'procesado' });
   const c = $('#sAutoLocal');
   if (c) { c.scrollIntoView({ block: 'center' }); c.focus(); }
 }
@@ -1626,7 +1626,7 @@ main.addEventListener('click', async e => {
     else if (a === 'modelo-bajar') { e.preventDefault(); act.disabled = true; if (typeof modeloBajar === 'function') modeloBajar(act.dataset.model); }
     else if (a === 'live-model') {
       const preset = act.dataset.preset, pr = S.presetsById[preset];
-      if (pr.engine === 'cloud' && !S.config.cloud.has_key) return openSettings();
+      if (pr.engine === 'cloud' && !S.config.cloud.has_key) return openSettings({ sec: 'procesado' });
       if (act.dataset.id) {
         try {
           await api('/api/live/model', { id: act.dataset.id, preset });
@@ -1690,7 +1690,7 @@ main.addEventListener('click', async e => {
   const pr = t.closest('.preset');
   if (pr) {
     const p = S.presetsById[pr.dataset.preset];
-    if (p.engine === 'cloud' && !S.config.cloud.has_key) return openSettings();
+    if (p.engine === 'cloud' && !S.config.cloud.has_key) return openSettings({ sec: 'procesado' });
     S.selPreset = p.id;
     $$(`.preset[data-box="${pr.dataset.box}"]`).forEach(b => b.classList.toggle('on', b === pr));
     const h = $(`[data-hint="${pr.dataset.box}"]`);
@@ -2008,8 +2008,8 @@ function procesadoFieldsetHtml() {
   const cuando = ag.comprobado ? new Date(ag.comprobado * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : '';
   const estado = !ag.encontrado ? `${agLabel} no está instalado en este PC (o no está en el PATH)`
     : cuando ? `${agLabel} ${esc(ag.version || '')} · comprobado el ${cuando}` : `${agLabel} encontrado · sin comprobar todavía`;
-  return `<fieldset><legend>${I.monitor}Dónde se procesan tus reuniones</legend>
-    ${typeof abrirConfigurar === 'function' ? `<div class="help" style="margin-top:0"><a href="#" id="procAsistente">Configurar paso a paso</a>: elige, prepáralo y pruébalo de punta a punta, con tu voz.</div>` : ''}
+  return `<fieldset><legend>${I.monitor}${typeof cfgEstadoHtml === 'function' ? 'Cambiar de opción aquí' : 'Dónde se procesan tus reuniones'}</legend>
+    ${typeof cfgEstadoHtml === 'function' ? '<div class="help" style="margin-top:0">Se aplica con «Aplicar ahora». Con «Cambiar…», arriba, el asistente te guía y lo prueba al final.</div>' : ''}
     <div class="procs">
       ${opt('local', 'Solo en este PC', 'Whisper transcribe en tu ordenador. Nada sale de él. Sin resumen con IA.')}
       ${opt('agente', `Con tu cuenta de Claude (${agLabel})`, `Transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de ${agLabel}: ${esc(APP_NAME)} no ve ni guarda tus credenciales.`,
@@ -2036,25 +2036,34 @@ function procesadoFieldsetHtml() {
   </fieldset>`;
 }
 
-function openSettings() {
+/* Ajustes por secciones (07/11/2026, configurar.js): antes, un diálogo de 6 a 7,5 pantallas con «Guardar» al final.
+   Todas las secciones están en el DOM (collect() lee de todas); solo se ve la elegida. opts.sec: la que se abre (si
+   no, la última vista). Se llama también como manejador de clic: un Event no trae .sec. */
+const AJ_SECS = [['procesado', 'Procesado'], ['grabar', 'Grabar'], ['vocabulario', 'Vocabulario'], ['voces', 'Voces'],
+  ['carpetas', 'Carpetas'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
+function openSettings(opts) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
+  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec) || S.ajSec || 'procesado';
+  S.ajSec = sec;
+  const api = S.config.procesado === 'api';
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
+    <div class="aj-grid">
+    <nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}">${l}</button>`).join('')}</nav>
+    <div class="aj-main">
     ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
+    <section data-secc="procesado"${sec === 'procesado' ? '' : ' hidden'}>
+    ${typeof cfgEstadoHtml === 'function' ? cfgEstadoHtml() : ''}
     ${procesadoFieldsetHtml()}
     <div id="procApi"${S.config.procesado === 'api' ? '' : ' hidden'}>
     <fieldset><legend>${I.nube}Transcripción en la nube</legend>
       <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
       <div id="cFields"></div>
-      ${typeof directoSettingsHtml === 'function' ? directoSettingsHtml(c) : ''}
-      <div class="grid2">
-        <div><label>Minutos por trozo</label><input class="input" id="cChunk" type="number" min="2" max="20" value="${c.chunk_minutes}"></div>
-        <div><label>Trozos en paralelo</label><input class="input" id="cPar" type="number" min="1" max="8" value="${c.parallel}"></div>
-      </div>
       <div class="row" style="margin-top:14px"><button class="btn sm" id="cTest">Probar conexión</button><span id="cTestRes" class="muted" style="font-size:12.5px"></span></div>
+      <div class="help">El modelo del directo, otras claves, los trozos y el paralelismo están en <a href="#" data-sec-ir="avanzado">Avanzado</a>.</div>
     </fieldset>
     <fieldset><legend>${I.spark}Resumen con IA</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="sAuto" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir en la nube (reuniones de los últimos 3 días)</label>
@@ -2066,23 +2075,18 @@ function openSettings() {
       <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     </div>
+    </section>
+    <section data-secc="grabar"${sec === 'grabar' ? '' : ' hidden'}>
     <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
+      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${api ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
-      <div class="help">El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.</div>
+      <div class="help">El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. ${api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.' : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.'}</div>
     </fieldset>
     ${window.reunionFieldsetHtml?.() || ''}
-    <fieldset><legend>${I.monitor}Transcripción local</legend>
-      <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
-      <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
-    </fieldset>
     ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
-    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
-      <div id="sLinks"></div>
-      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
-      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
-    </fieldset>
+    </section>
+    <section data-secc="vocabulario"${sec === 'vocabulario' ? '' : ' hidden'}>
     <fieldset><legend>${I.book}Vocabulario</legend>
       <label>Por tema <span class="muted" style="font-weight:400">· se elige al grabar o en cada reunión</span></label>
       <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
@@ -2090,7 +2094,33 @@ function openSettings() {
       <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
       <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
     </fieldset>
+    </section>
+    <section data-secc="voces"${sec === 'voces' ? '' : ' hidden'}>
     ${vocesFieldsetHtml()}
+    </section>
+    <section data-secc="carpetas"${sec === 'carpetas' ? '' : ' hidden'}>
+    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
+      <div id="sLinks"></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
+      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
+    </fieldset>
+    </section>
+    <section data-secc="avanzado"${sec === 'avanzado' ? '' : ' hidden'}>
+    <fieldset><legend>${I.monitor}Transcripción local</legend>
+      <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
+      <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
+    </fieldset>
+    <div id="procApiAv"${api ? '' : ' hidden'}>
+    <fieldset><legend>${I.nube}La nube, en detalle</legend>
+      ${typeof directoSettingsHtml === 'function' ? directoSettingsHtml(c) : ''}
+      <div class="grid2">
+        <div><label>Minutos por trozo</label><input class="input" id="cChunk" type="number" min="2" max="20" value="${c.chunk_minutes}"></div>
+        <div><label>Trozos en paralelo</label><input class="input" id="cPar" type="number" min="1" max="8" value="${c.parallel}"></div>
+      </div>
+    </fieldset>
+    </div>
+    </section>
+    <section data-secc="ayuda"${sec === 'ayuda' ? '' : ' hidden'}>
     <fieldset><legend>${I.package}Compartir ${esc(APP_NAME)}</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario por tema <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="xExport" type="button">Crear instalador para otra persona</button><span id="xRes" class="muted" style="font-size:12.5px"></span></div>
@@ -2108,9 +2138,36 @@ function openSettings() {
     </fieldset>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
-    <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
+    </section>
+    </div>
+    </div>
+    <div class="btns aj-pie"><span class="aj-pend" aria-live="polite"></span><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
+    // secciones: se cambia sin perder lo escrito (todas siguen en el DOM)
+    const irSec = id => {
+      S.ajSec = id;
+      $$('.aj-nav [data-sec]', d).forEach(x => { const on = x.dataset.sec === id; x.classList.toggle('on', on); x.setAttribute('aria-current', on ? 'true' : 'false'); });
+      $$('[data-secc]', d).forEach(x => { x.hidden = x.dataset.secc !== id; });
+      $('.aj-main', d).scrollTop = 0;
+    };
+    d.irSec = irSec;
+    d.addEventListener('click', e => {
+      const x = e.target.closest('.aj-nav [data-sec], [data-sec-ir]');
+      if (!x) return;
+      e.preventDefault();
+      irSec(x.dataset.sec || x.dataset.secIr);
+    });
+    // «Hay cambios sin guardar»: cualquier cambio de un campo (no el de «Dónde se procesan», que dice lo suyo)
+    const pendiente = e => { if (e.target.closest('.aj-main') && e.target.name !== 'proc') $('.aj-pend', d).textContent = 'Hay cambios sin guardar'; };
+    d.addEventListener('input', pendiente);
+    d.addEventListener('change', pendiente);
+    d.addEventListener('click', e => {  // la tarjeta de estado (configurar.js): «Probar» y «Cambiar…» abren el asistente
+      const x = e.target.closest('[data-cfg]');
+      if (!x || typeof abrirConfigurar !== 'function') return;
+      e.preventDefault();
+      const volver = () => openSettings({ sec: 'procesado' });
+      abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver } : { volver });
+    });
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
-    $('#procAsistente', d)?.addEventListener('click', e => { e.preventDefault(); abrirConfigurar({ volver: openSettings }); });
     // «Dónde se procesan» (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior sin
     // decirlo (al grabar seguía usando Groq). Ahora el cambio pendiente se dice junto a las opciones, con «Aplicar ahora»
     // (y su aviso si hay trabajo en la nube, que pasaría a este PC), y al cerrar sin aplicarlo se avisa. Un clic de
@@ -2133,6 +2190,8 @@ function openSettings() {
       $('#procApi', d).hidden = v !== 'api';
       $('#procAgente', d).hidden = v !== 'agente';
       if ($('#procModelos', d)) $('#procModelos', d).hidden = v === 'api';
+      if ($('#procApiAv', d)) $('#procApiAv', d).hidden = v !== 'api';
+      if ($('#lNube', d)) $('#lNube', d).hidden = v !== 'api';
       procPintar();
     }));
     $('#procGuardado', d).addEventListener('click', async e => {
@@ -2284,7 +2343,7 @@ function openSettings() {
       }
       catch (err) { toast(esc(err.message), 'err'); }
     });
-  });
+  }, 'aj');
 }
 $('#btnSettings').onclick = openSettings;
 

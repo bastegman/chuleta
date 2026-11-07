@@ -30,6 +30,14 @@ Bernardo, 06/11/2026: «Lo de config es un desastre. El UX es muy difícil y mal
   frase y su botón. No guarda nada hasta «Terminar» (como «Aplicar ahora»). Se abre desde la tarjeta de bienvenida,
   desde Ajustes («Configurar paso a paso») y, tras actualizar, desde un aviso único en Inicio si la configuración
   nunca se ha probado. `/api/probar` corre en su hilo y la última prueba queda en Ajustes.
+- **Ajustes por secciones, con «Guardar» siempre a la vista.** Antes, un solo diálogo de 6 a 7,5 pantallas con
+  «Guardar» al final; ahora siete secciones a la izquierda (Procesado, Grabar, Vocabulario, Voces, Carpetas, Avanzado,
+  Ayuda) y un pie fijo con «Cancelar · Guardar» que avisa de «Hay cambios sin guardar». Arriba de Procesado, una
+  tarjeta dice lo que hay ahora (dónde se transcribe, quién resume y cuándo se probó por última vez) con «Probar» y
+  «Cambiar…» (el asistente). Debajo sigue el cambio rápido con «Aplicar ahora». Lo técnico de la nube (modelo del
+  directo, otras claves, trozos, paralelismo) pasa a Avanzado y solo sale con la API; «repasar la grabación entera» y
+  el cupo de Groq, en Grabar, también solo con la API. Voces queda tal cual. Ajustes se abre en la última sección vista
+  (o en la que toca: falta la clave → Procesado).
 - **Errores en una frase con qué hacer** (`explicar.py`): Claude Code sin sesión, sin instalar, sin respuesta o con el
   plan en su límite de uso; una pieza de la instalación que falta («No module named…»); un proxy que contesta en lugar
   de la API. Los de la nube y la descarga de modelos ya venían en una frase (`connection_error`, `cloud_http_error`): se

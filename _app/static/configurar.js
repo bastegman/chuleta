@@ -433,7 +433,7 @@ async function wzAccion(tipo, b) {
   if (tipo === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(b.dataset.url, '_blank'));
   if (tipo === 'asistente') { W.paso = 2; return wzPintar(); }
   if (tipo === 'reintentar_descarga') { await wzBajar(); return wzProbar(); }
-  if (tipo === 'avanzado') { closeModal(false); return openSettings(); }
+  if (tipo === 'avanzado') { closeModal(false); return openSettings({ sec: 'avanzado' }); }
   if (tipo === 'diagnostico') { try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); } }
 }
 document.addEventListener('change', e => {
@@ -489,4 +489,28 @@ function avisoProbarHtml() {
   if (!S.config || S.config.ultima_prueba || localStorage.getItem('avisoProbar') || !localStorage.getItem('procElegido')) return '';
   return `<div class="notice info aviso-probar" id="avisoProbar" style="margin:0 0 14px">${I.info}<span>${esc(APP_NAME)} puede probar ahora tu configuración de punta a punta: graba 3 s de tu voz, los transcribe y, si toca, los resume.</span>
     <button class="btn sm primary" type="button" data-act="cfg-probar">Probar ahora</button><button class="btn sm ghost" type="button" data-act="cfg-aviso-no">Ahora no</button></div>`;
+}
+
+/* Ajustes › Procesado: la tarjeta con lo que hay ahora, la última prueba, «Probar» y «Cambiar…» (abren el asistente) */
+function cfgCuando(t) {
+  if (!t) return '';
+  const d = new Date(t * 1000), hoy = new Date();
+  const hora = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === hoy.toDateString()) return `hoy a las ${hora}`;
+  return `el ${d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }).replace('.', '')} a las ${hora}`;
+}
+function cfgEstadoHtml() {
+  const c = S.config || {}, modo = c.procesado || 'local', u = c.ultima_prueba;
+  const live = S.presetsById?.[c.live_preset] || {};
+  const transcribe = live.engine === 'cloud' ? `<b>${esc(cfgProv(c))}</b>` : `<b>este PC</b>, modelo ${esc(modeloNombre(live.model || 'medium'))}`;
+  const agM = (c.agente?.modelos || []).find(m => m[0] === c.agente?.modelo);
+  const resume = modo === 'local' ? 'no se resume con IA'
+    : modo === 'agente' ? `<b>Claude${agM ? ` (${esc(String(agM[1]).split(' ·')[0])})` : ''}</b>, con tu cuenta`
+      : `<b>${esc(cfgProv(c))}</b>${c.summary?.model ? ` (${esc(c.summary.model)})` : ''}`;
+  const st = !u ? '<div class="st">Sin probar todavía</div>'
+    : u.ok ? `<div class="st ok">Probado ${esc(cfgCuando(u.cuando))}</div>`
+      : `<div class="st err">La última prueba falló (${esc(cfgCuando(u.cuando))}): ${esc(u.frase || '')}</div>`;
+  return `<div class="cfg-estado"><div class="cfg-txt"><div class="m">${esc(modoNombre(modo))}</div>
+    <div class="r">Transcribe: ${transcribe}</div><div class="r">Resume: ${resume}</div>${st}</div>
+    <div class="cfg-acts"><button class="btn sm" type="button" data-cfg="probar">Probar</button><button class="btn sm" type="button" data-cfg="cambiar">Cambiar…</button></div></div>`;
 }
