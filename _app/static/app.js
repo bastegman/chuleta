@@ -527,7 +527,8 @@ async function openRec() {
       // la misma regla que Ctrl+Alt+R (server.rec_folder_origin): con tema, la carpeta principal de su workstream o de
       // su proyecto (asignada o la del proyecto); sin tema, la fija del perfil o la última
       const fija = pf.folder != null && S.folders.has(pf.folder) ? pf.folder : null;
-      const want = v ? (S.config.workstream_folders?.[v.id] ?? S.config.project_folders?.[v.project])
+      const ws = S.config.workstream_folders?.[v?.id];  // la de su workstream, si sigue existiendo (como el servidor)
+      const want = v ? (ws != null && S.folders.has(ws) ? ws : S.config.project_folders?.[v.project])
         : (initial ? fija ?? (S.config.rec_folder || '') : undefined);
       if (want != null && [...fsel.options].some(o => o.value === want)) fsel.value = fsel.dataset.prev = want;
     };

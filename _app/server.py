@@ -11,6 +11,7 @@ Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _ap
 para ver los mensajes). La interfaz se abre en una ventana propia (window.py, WebView2) o, si no se puede, en Edge.
 """
 import atexit
+import contextlib
 import copy
 import errno
 import hashlib
@@ -639,9 +640,10 @@ def scan(dirs=None):
         node["audios"].sort(key=lambda a: (a["date"] or "", natural_key(a["name"])))
         node["docs"].sort(key=lambda d: natural_key(d["name"]))
         # la carpeta de una reunion (la creo la app) con solo ella dentro: la interfaz la pinta como la reunion
-        if rel and os.path.normcase(rel) in mias and not is_link_root(rel) and not node["folders"] \
-                and not node["docs"] and len(node["audios"]) == 1:
-            node["por_reunion"] = True
+        if rel and os.path.normcase(rel) in mias and not is_link_root(rel):
+            node["mia"] = True  # la creo la app para una reunion (la interfaz: «Se guarda en», donde esta)
+            if not node["folders"] and not node["docs"] and len(node["audios"]) == 1:
+                node["por_reunion"] = True
         return node
 
     tree = walk(ROOT, "")
@@ -1181,7 +1183,7 @@ def is_partial(a):
 
 def strip_private(node):
     # carpetas vinculadas (fuera de Audios) y la carpeta de una reunion (por_reunion, scan)
-    extra = {k: node[k] for k in ("linked", "missing", "por_reunion") if k in node}
+    extra = {k: node[k] for k in ("linked", "missing", "por_reunion", "mia") if k in node}
     return {"name": node["name"], "path": node["path"], **extra,
             "folders": [strip_private(f) for f in node["folders"]],
             "audios": [{k: v for k, v in a.items() if not k.startswith("_")} for a in node["audios"]],
@@ -1881,12 +1883,14 @@ def move_one(f, t):
     shutil.copy2(f, t)
     try:
         os.remove(f)
-    except OSError:
+    except OSError as e:
         try:
             os.remove(t)
         except OSError:
             pass
-        raise
+        # sin reintentar aqui: cada reintento copiaria otra vez el audio entero a la otra unidad
+        raise ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). Prueba otra vez "
+                       f"en unos segundos ({e.__class__.__name__}).")
 
 
 def move_files(moves):
@@ -1908,17 +1912,27 @@ def move_files(moves):
                     time.sleep(0.25)
             done.append((f, t))
     except (OSError, ApiError) as e:
-        for f, t in reversed(done):
-            try:
-                move_one(t, f)
-            except (OSError, ApiError):
-                log_exc()
+        incompleto = False
+        for f, t in reversed(done):  # deshacer, tambien con reintentos (OneDrive coge lo recien llegado)
+            for attempt in range(12):
+                try:
+                    move_one(t, f)
+                    break
+                except (OSError, ApiError):
+                    if attempt == 11:
+                        log_exc()
+                        incompleto = True
+                    else:
+                        time.sleep(0.25)
         if isinstance(e, ApiError):
-            raise
-        if isinstance(e, PermissionError):
-            raise ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). "
+            err = e
+        elif isinstance(e, PermissionError):
+            err = ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). "
                            "Prueba otra vez en unos segundos.")
-        raise ApiError(f"No se ha podido mover ({e.__class__.__name__}).")
+        else:
+            err = ApiError(f"No se ha podido mover ({e.__class__.__name__}).")
+        err.incompleto = incompleto  # algo se quedo en el destino: el siguiente intento termina alli
+        raise err
 
 
 def moved_rel(p, old, new, folder=False):
@@ -1936,6 +1950,17 @@ def moved_rel(p, old, new, folder=False):
 MEETING_LIKE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ _-]")
 
 
+def _una_reunion_de_ese_dia(rel):
+    """La carpeta `rel` («AAAA-MM-DD …») es la de una sola reunion de ese dia: dentro hay un solo audio y su nombre
+    empieza por esa fecha. Una carpeta de proyecto que empieza por una fecha («2025-09-01 Proyecto X») tiene otras."""
+    try:
+        names = os.listdir(safe(rel, "dir"))
+    except (ApiError, OSError):
+        return False
+    audios = [n for n in names if os.path.splitext(n)[1].lower() in AUDIO_EXT]
+    return len(audios) == 1 and audios[0][:10] == rel.rpartition("/")[2][:10]
+
+
 def migrate_main_folders(d):
     """Una vez (carpetas_v), al llegar la carpeta por reunion: la carpeta de cada proyecto que apuntaba la app era
     «la ultima usada», y la de quien ya se hacia una carpeta por reunion a mano es la de una reunion
@@ -1944,8 +1969,8 @@ def migrate_main_folders(d):
     out = []
 
     def fix(rel, who):
-        if isinstance(rel, str) and MEETING_LIKE_RE.match(rel.rpartition("/")[2]) \
-                and not is_link_root(rel):
+        if isinstance(rel, str) and MEETING_LIKE_RE.match(rel.rpartition("/")[2]) and not is_link_root(rel) \
+                and _una_reunion_de_ese_dia(rel):
             new = rel.rpartition("/")[0]
             out.append((who, rel, new))
             return new
@@ -2525,13 +2550,17 @@ class Jobs:
     def _final_pass_over(self, rel, keep_live_text=False):
         """El repaso final de esa reunion ya no esta pendiente. keep_live_text: no se hizo (cancelado a mano o ya no se
         puede hacer): se queda el texto del directo y con el se hacen los destinos y el resumen."""
+        self._hold(rel)  # hasta encadenar voces y resumen (lo llama tambien un hilo suelto: cancelar, arrancar)
         try:
-            self._pending().set(rel, False)
-        except OSError:
-            log_exc()
-        if keep_live_text:
-            log("   se mantiene el texto del directo")
-            self._after_transcribe(rel)
+            try:
+                self._pending().set(rel, False)
+            except OSError:
+                log_exc()
+            if keep_live_text:
+                log("   se mantiene el texto del directo")
+                self._after_transcribe(rel)
+        finally:
+            self._release(rel)
 
     def _resume_final_passes(self, delay=3.0):
         """Al arrancar: los repasos finales que quedaron en cola o a medias al apagar se vuelven a poner en cola, y al
@@ -3821,19 +3850,19 @@ class App:
         self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
         if self.settings.get().get("procesado") not in PROCESADOS:  # ajustes de antes: se decide una vez y se guarda
             self.settings.update(lambda d: d.update(procesado=procesado_de(d)))
+        self._aviso_resumen_local()
+        self._load_links()
         if not self.settings.get().get("carpetas_v"):  # la carpeta por reunion (07/11/2026): una vez
             cambios = []
             self.settings.update(lambda d: cambios.extend(migrate_main_folders(d)))
             for k, old, new in cambios:
                 log(f"   carpeta principal de {k}: era la de una reunión ({old}); pasa a {new or 'la raíz'}")
-        self._aviso_resumen_local()
-        self._load_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
         self.transcripts = Transcripts()
         self.jobs = Jobs(self.settings, self.library)
         # cambiar la carpeta en pleno directo (msg 1198): se mueve cuando la reunion queda libre (al acabar su ultimo
         # trabajo o en la vuelta de 3 s, que tambien hace los que quedaron de antes de un cierre)
-        self.jobs.on_idle, self.jobs.on_tick = self._al_quedar_libre, self._aplicar_movimientos
+        self.jobs.on_idle, self.jobs.on_tick = self._al_quedar_libre, self._tick_movimientos
         # grabadora propia: una grabacion y, mientras la ventana de "Grabar" esta abierta, un medidor
         self.rec, self.monitor, self.monitor_seen = None, None, 0.0
         self.rec_lock, self.devices_cache = threading.Lock(), (0.0, None)
@@ -3953,6 +3982,11 @@ class App:
             folder = safe(b.get("folder", ""), "dir")  # la carpeta principal (rec_folder_for)
             if in_app_dir(folder):
                 raise ApiError("No se puede grabar ahí")
+            try:  # la que da la regla con su tema: si es esta, la carpeta no se eligio a mano (_tema_movido)
+                vb = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
+                por_regla = _norm_dir(safe(rec_folder_origin(vb, self.settings.get())[0], "dir")) == _norm_dir(folder)
+            except (ApiError, OSError):
+                por_regla = False
             lt = time.localtime()
             label = clean_name(b["name"]) if b.get("name") else ""
             name = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
@@ -3970,6 +4004,8 @@ class App:
                     raise ApiError(f"No se puede crear la carpeta de la reunión en {display_rel(rel_of(folder))} "
                                    f"({e.__class__.__name__}).")
                 carpetas_reunion().add(rel_of(mdir))
+            if por_regla:
+                self.__dict__.setdefault("_por_regla", set()).add(rel_of(path))
             if self.monitor:
                 self.monitor.stop(timeout=2)
                 self.monitor = None
@@ -4315,7 +4351,8 @@ class App:
         return {"exists": True, "text": text, "meta": meta, "ready": self.jobs.summary_ready()}
 
     def summarize(self, b):
-        return {"id": self.jobs.submit_summary(b.get("path"))}
+        with self._move_lock():
+            return {"id": self.jobs.submit_summary(alias_of(b.get("path")))}
 
     # --- notas y propiedades (estilo Notion)
     def notes_get(self, q):
@@ -4328,10 +4365,11 @@ class App:
 
     def notes_save(self, b):
         """Guarda las notas y/o propiedades (solo lo que venga en la peticion)."""
-        abs_path = safe(b.get("path"), "file")
-        md = os.path.splitext(abs_path)[0] + ".md"
         tema = bool({"proyecto", "workstream", "vocabulario"} & set(b.get("props") or {})) and not b.get("_al_grabar")
         with self.notes_lock:
+            # dentro del candado: si la reunion se acaba de mover (se mueve con el cogido), su ruta nueva
+            abs_path = safe(alias_of(b.get("path")), "file")
+            md = os.path.splitext(abs_path)[0] + ".md"
             props, body = parse_notes(read_text(md)) if os.path.isfile(md) else ({}, "")
             antes = self._tema_de(props, abs_path) if tema else None
             for k, v in (b.get("props") or {}).items():
@@ -4391,6 +4429,10 @@ class App:
         la reunion estaba en la carpeta principal que le tocaba por su tema (no en una elegida a mano), queda apuntada
         para moverse a la del tema nuevo cuando acabe todo. Fuera del directo, el tema no mueve nada. Lo apuntado asi
         sigue al tema mientras no se haya movido; una carpeta elegida con «Cambiar» manda. Devuelve lo pendiente."""
+        with self._move_lock():
+            return self._tema_movido_locked(abs_path, antes, props)
+
+    def _tema_movido_locked(self, abs_path, antes, props):
         rel = rel_of(abs_path)
         movs = self._movs()
         e = movs.get(rel)
@@ -4404,8 +4446,8 @@ class App:
             new_main = safe(rec_folder_origin(self._tema_de(props, abs_path), st)[0], "dir")
         except ApiError:
             return None
-        if not auto and _norm_dir(old_main) != cur:
-            return None  # estaba en una carpeta elegida a mano: el tema no la cambia
+        if not auto and (_norm_dir(old_main) != cur or rel not in self.__dict__.get("_por_regla", ())):
+            return None  # estaba en una carpeta elegida a mano (o no salio de la regla al grabar): no la cambia
         if _norm_dir(new_main) == cur:
             if auto:
                 movs.pop(rel)
@@ -4482,6 +4524,10 @@ class App:
         return {"rel": LINK + lid, "name": LINKS[lid]["name"]}
 
     def link_remove(self, b):
+        with self._move_lock():
+            return self._link_remove(b)
+
+    def _link_remove(self, b):
         """Deja de mostrarla en la app. No borra ni mueve nada de la carpeta."""
         rel = b.get("path") or ""
         lid = rel[len(LINK):].split("/")[0] if rel.startswith(LINK) else ""
@@ -4670,6 +4716,10 @@ class App:
 
     # --- eliminar (a la papelera) e importar
     def delete(self, b):
+        with self._move_lock():  # no a la vez que se mueve (dejaria archivos sueltos); despues, su ruta nueva
+            return self._delete(dict(b, path=alias_of(b.get("path"))))
+
+    def _delete(self, b):
         p = safe(b.get("path"), "file")
         rel = rel_of(p)
         a = self.library.find(rel)
@@ -4803,8 +4853,8 @@ class App:
         """Guarda lo corregido a mano. La primera vez copia lo que escribio Whisper (para poder volver). De uno en uno:
         al cerrar la pagina el mismo texto llega dos veces a la vez (keepalive y el fetch normal), y el segundo podia
         escribir lo corregido antes de que el primero copiara el original."""
-        with self._tx_save_lock:
-            return self._save_transcript(b)
+        with self._tx_save_lock:  # dentro: si la reunion se acaba de mover, su ruta nueva (_move_now lo coge)
+            return self._save_transcript(dict(b, path=alias_of(b.get("path"))))
 
     def _save_transcript(self, b):
         abs_path = safe(b.get("path"), "file")
@@ -4943,7 +4993,11 @@ class App:
 
     # --- POST
     def transcribe(self, b):
-        paths = b.get("paths") or ([b["path"]] if b.get("path") else [])
+        with self._move_lock():  # una reunion que se esta moviendo: se espera y se encola con su ruta nueva
+            return self._transcribe(b)
+
+    def _transcribe(self, b):
+        paths = [alias_of(p) for p in (b.get("paths") or ([b["path"]] if b.get("path") else []))]
         preset = b.get("preset") or self.settings.get()["preset"]
         ids = self.jobs.submit(paths, preset, b.get("language"), resume=bool(b.get("resume")))
         # el idioma elegido es de estas reuniones: el del perfil (Ajustes) no cambia, como al grabar
@@ -5078,15 +5132,28 @@ class App:
                 os.makedirs(new_dir)
             except OSError as e:
                 raise ApiError(f"No se puede crear la carpeta {display_rel(rel_of(new_dir))} ({e.__class__.__name__}).")
-        try:
-            move_files(moves)
-        except ApiError:
-            if made:
-                try:
-                    os.rmdir(new_dir)
-                except OSError:
-                    pass
-            raise
+        with self._write_locks():  # unas notas o una correccion que llegan ahora esperan y van a la ruta nueva
+            try:
+                move_files(moves)
+            except ApiError:
+                if made:
+                    try:
+                        os.rmdir(new_dir)
+                    except OSError:
+                        pass
+                raise
+            return self._after_move(src, moves, own, new_dir, fuera, dest_dir)
+
+    def _write_locks(self):
+        """Los candados de quien escribe en los archivos de una reunion desde la interfaz (notas_save,
+        save_transcript): mientras se mueve, esperan; al soltarlos, su ruta ya lleva a la nueva (ALIASES)."""
+        stack = contextlib.ExitStack()
+        if getattr(self, "notes_lock", None) is not None:
+            stack.enter_context(self.notes_lock)
+        stack.enter_context(self._tx_save_lock)
+        return stack
+
+    def _after_move(self, src, moves, own, new_dir, fuera, dest_dir):
         old, new = rel_of(src), rel_of(moves[-1][1])
         reg = carpetas_reunion()
         if own and _norm_dir(new_dir) != _norm_dir(own):  # la carpeta de la reunion se ha quedado vacia
@@ -5141,6 +5208,7 @@ class App:
 
     # --- cambiar la carpeta en pleno directo (B1c, msg 1198): se mueve al terminar todo
     MOV_ESPERAS = (3, 10, 30, 60, 120)  # segundos entre reintentos si un archivo esta en uso (OneDrive, antivirus)
+    MOV_INTENTOS = 12  # ~20 min: despues se deja donde esta y se dice
 
     def _movs(self):
         """Los movimientos pendientes (Movimientos) del DATA_DIR vigente."""
@@ -5181,41 +5249,48 @@ class App:
         reunion. Si se esta grabando o procesando, se apunta y se mueve sola en cuanto no quede nada en marcha (directo,
         repaso, voces y resumen); si no, ahora. folder null (o la carpeta donde ya esta) = Deshacer. folder_abs: una
         carpeta del PC (el selector de Windows); si esta fuera de la app, se vincula como «Conectar carpeta»."""
-        src = safe(b.get("path"), "file")
-        if os.path.splitext(src)[1].lower() not in AUDIO_EXT:
-            raise ApiError("Solo se puede cambiar la carpeta de una reunión.")
-        rel = rel_of(src)
         folder = b.get("folder")
         if b.get("folder_abs"):
             p = os.path.normpath(os.path.expandvars(str(b["folder_abs"]).strip().strip('"')))
             inside = _inside(p, ROOT) or any(_inside(p, l["path"]) for l in LINKS.values())
             folder = rel_of(p) if inside and os.path.isdir(p) else self.link_add({"path": p})["rel"]
-        if folder is None:
-            if self._movs().pop(rel) is not None:
-                log(f"📁 {rel}: ya no se mueve (deshecho)")
-            return {"path": rel, "pendiente": None}
-        return self._destino_pendiente(rel, str(folder).replace("\\", "/").strip("/"))
+        with self._move_lock():  # con un movimiento en marcha se espera: despues, la ruta nueva (y ya no hay nada)
+            src = safe(alias_of(b.get("path")), "file")
+            if os.path.splitext(src)[1].lower() not in AUDIO_EXT:
+                raise ApiError("Solo se puede cambiar la carpeta de una reunión.")
+            rel = rel_of(src)
+            if folder is None:
+                if self._movs().pop(rel) is not None:
+                    log(f"📁 {rel}: ya no se mueve (deshecho)")
+                return {"path": rel, "pendiente": None}
+            return self._destino_pendiente(rel, str(folder).replace("\\", "/").strip("/"))
 
     def _destino_pendiente(self, rel, folder_rel):
-        src = safe(rel, "file")
+        with self._move_lock():
+            return self._destino_pendiente_locked(rel, folder_rel)
+
+    def _destino_pendiente_locked(self, rel, folder_rel):
+        src = safe(alias_of(rel), "file")
+        rel = rel_of(src)
         dest = safe(folder_rel, "dir")
         if in_app_dir(dest):
             raise ApiError("No se puede mover ahí")
+        own = own_meeting_dir(src)
+        if own and _norm_dir(dest) == _norm_dir(own):  # su propia carpeta (se ve como carpeta si tiene algo mas)
+            dest = os.path.dirname(own)
         if _norm_dir(dest) == _norm_dir(self._donde_esta(src)):  # la carpeta donde ya esta: nada que mover
             if self._movs().pop(rel) is not None:
                 log(f"📁 {rel}: ya no se mueve (deshecho)")
             return {"path": rel, "pendiente": None}
-        own = own_meeting_dir(src)
         if own and _inside(dest, own):
             raise ApiError("No se puede mover una reunión dentro de su propia carpeta.")
-        with self._move_lock():
-            if not self._ocupada(rel):  # ya no se escribe en ella: se mueve ahora
-                self._movs().pop(rel)
-                new = self._move_now(src, dest)
-                self._nota_movida(rel, new)
-                return {"path": new, "pendiente": None, "movida": True}
-            e = {"to": rel_of(dest), "at": time.time()}
-            self._movs().set(rel, e)
+        if not self._ocupada(rel):  # ya no se escribe en ella: se mueve ahora
+            self._movs().pop(rel)
+            new = self._move_now(src, dest)
+            self._nota_movida(rel, new)
+            return {"path": new, "pendiente": None, "movida": True}
+        e = {"to": rel_of(dest), "at": time.time()}
+        self._movs().set(rel, e)
         log(f"📁 {rel}: se moverá a {e['to']} al terminar")
         return {"path": rel, "pendiente": self._pendiente_publico(rel, e)}
 
@@ -5224,6 +5299,18 @@ class App:
         hilo (no se para la cola mientras se mueve un audio grande)."""
         if self._movs().get(rel):
             threading.Thread(target=self._aplicar_movimientos, args=(rel,), daemon=True, name="mover").start()
+
+    def _tick_movimientos(self):
+        """Jobs.on_tick (cada 3 s): si hay algo apuntado que ya toca, se mueve en otro hilo; el vigilante de OBS no
+        espera a un movimiento lento (una copia entre unidades)."""
+        now = time.time()
+        if not any(e.get("next", 0) <= now for _, e in self._movs().items()):
+            return
+        t = self.__dict__.get("_mover_hilo")
+        if t is None or not t.is_alive():
+            t = threading.Thread(target=self._aplicar_movimientos, daemon=True, name="mover")
+            self.__dict__["_mover_hilo"] = t
+            t.start()
 
     def _aplicar_movimientos(self, only=None):
         """Mueve las reuniones con un movimiento pendiente que ya han quedado libres (o solo `only`). Lo llaman el final
@@ -5238,8 +5325,9 @@ class App:
             return 0  # otro hilo esta moviendo: la vuelta siguiente (3 s) lo vuelve a mirar
         n = 0
         try:
-            for rel, e in pend:
-                if e.get("next", 0) > time.time() or self._ocupada(rel):
+            for rel, _ in pend:
+                e = movs.get(rel)  # con el candado: un «Deshacer» o un cambio de justo antes manda
+                if not e or e.get("next", 0) > time.time() or self._ocupada(rel):
                     continue
                 n += self._mover_pendiente(rel, e)
         finally:
@@ -5253,17 +5341,25 @@ class App:
         except ApiError:
             src = None
         target = e.get("target")
-        if src is None and target:  # la app se cerro a medio mover: el audio ya esta en la suya y falta lo demas
+        if src is None and e.get("nuevo"):  # la app se cerro a medio mover: el audio (el ultimo) ya esta alli
             try:
-                moved = os.path.join(safe(target, "dir"), os.path.basename(rel))
+                moved = safe(e["nuevo"], "file")
             except ApiError:
                 moved = None
-            if moved and os.path.isfile(moved):
+            if moved:
                 movs.pop(rel)
-                carpetas_reunion().discard(rel.rpartition("/")[0])
-                carpetas_reunion().add(target)
-                self._moved_refs(rel, rel_of(moved))
-                self._nota_movida(rel, rel_of(moved))
+                if target:  # su carpeta: la vieja, si se ha quedado vacia, fuera; el registro y sus referencias
+                    old_dir = rel.rpartition("/")[0]
+                    try:
+                        os.rmdir(safe(old_dir, "dir"))
+                    except (ApiError, OSError):
+                        pass
+                    carpetas_reunion().discard(old_dir)
+                    carpetas_reunion().add(target)
+                    self._rename_refs(old_dir, target, folder=True)
+                    self.settings.update(lambda d: settings_moved(d, old_dir, target, folder=True))
+                self._moved_refs(rel, e["nuevo"])
+                self._nota_movida(rel, e["nuevo"])
                 return 1
         if src is None:
             movs.pop(rel)
@@ -5281,18 +5377,27 @@ class App:
             notify("No se ha movido la reunión", msg)
             return 0
         own = own_meeting_dir(src)
+        # a donde va (la carpeta de la reunion y su audio), apuntado mientras se mueve: si la app se cierra a medias,
+        # el siguiente intento termina ahi. Un intento que falla lo deshace todo (move_files) y lo olvida
         if own:
-            # la carpeta de la reunion en el destino, apuntada mientras se mueve: si la app se cierra a medias, el
-            # siguiente intento termina en la misma. Un intento que falla lo deshace todo (move_files) y la olvida
             target = target or rel_of(free_dir(dest, os.path.basename(own), mine=own))
-            if _norm_dir(safe(target)) != _norm_dir(own):
-                e["target"] = target
-                movs.set(rel, e)
+            e["target"] = target if _norm_dir(safe(target)) != _norm_dir(own) else None
+        e["nuevo"] = rel_of(os.path.join(safe(target) if own else dest, os.path.basename(src)))
+        movs.set(rel, e)
         try:
             new = self._move_now(src, dest, target=safe(target) if own else None)
         except ApiError as err:
-            e.pop("target", None)
+            if not getattr(err, "incompleto", False):
+                e.pop("target", None)
+            e.pop("nuevo", None)
             n = int(e.get("intentos") or 0) + 1
+            if n > self.MOV_INTENTOS:  # un error que no cambia (otra unidad, ruta larga, sin permiso): se deja
+                movs.pop(rel)
+                msg = f"No se ha podido mover la reunión a {display_rel(e['to'])}: {err.msg} Se queda donde está."
+                log(f"   movimiento pendiente de {rel}: {err.msg} Se deja tras {n - 1} intentos")
+                self._nota_movida(rel, None, msg)
+                notify("No se ha movido la reunión", msg)
+                return 0
             wait = self.MOV_ESPERAS[min(n, len(self.MOV_ESPERAS)) - 1]
             e.update(intentos=n, error=err.msg, next=time.time() + wait)
             movs.set(rel, e)
@@ -5330,6 +5435,10 @@ class App:
         return {"path": rel_of(p)}
 
     def rename_folder(self, b):
+        with self._move_lock():  # no a la vez que se mueve una reunion (la carpeta podria ser su destino)
+            return self._rename_folder(b)
+
+    def _rename_folder(self, b):
         if is_link_root(b.get("path")):  # carpeta vinculada: solo cambia el nombre que se ve en la app
             lid = b["path"].strip("/")[len(LINK):]
             if lid not in LINKS:

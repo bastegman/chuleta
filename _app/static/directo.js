@@ -377,8 +377,8 @@ function destinoRel(rel) {
 }
 /* la carpeta principal donde está ahora: la que contiene su carpeta (una carpeta por reunión) o la suya */
 function destinoActual(a) {
-  const f = S.folders.get(a.folder);
-  return f && f.por_reunion ? (f.parent ? f.parent.path : '') : a.folder;
+  const f = S.folders.get(a.folder);  // la de la reunión (la creó la app, aunque tenga más cosas): la que la contiene
+  return f && (f.mia || f.por_reunion) ? (f.parent ? f.parent.path : '') : a.folder;
 }
 /* lo que obliga a repintar la cabecera del directo (liveHeroSig) */
 function destinoSig(a) {
@@ -439,10 +439,8 @@ async function destinoElegir(path, body) {
   try {
     const r = await api('/api/reunion/destino', { path, ...body });
     if (r.pendiente) S.movs.pendientes[path] = r.pendiente; else delete S.movs.pendientes[path];
-    if (r.movida) {  // no quedaba nada en marcha: movida ya
-      await destinoSeguir(path, r.path);
-      toast(`Movida a <b>${esc(destinoRel(r.path.split('/').slice(0, -1).join('/')))}</b>`);
-    } else if (r.pendiente) toast(`Se moverá a <b>${esc(r.pendiente.display)}</b> cuando termine todo`);
+    if (r.movida || r.path !== path) await destinoSeguir(path, r.path);  // movida ya (el aviso llega con /api/jobs)
+    else if (r.pendiente) toast(`Se moverá a <b>${esc(r.pendiente.display)}</b> cuando termine todo`);
     else if (body.folder === null) toast('Se queda donde está');
     refreshView();
     pollJobs(true);

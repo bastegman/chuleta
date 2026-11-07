@@ -363,32 +363,42 @@ class ReconocerSuCarpetaTests(TempTree):
         self.assertTrue(r["path"].startswith(f":{lid}/a/b/c/Principal/{TODAY} Comité/"))
 
 
-class MigracionTests(unittest.TestCase):
+class MigracionTests(TempTree):
     def test_la_ultima_carpeta_de_un_proyecto_que_era_la_de_una_reunion(self):
+        self.wav("Alfa/2026-11-03 Comité/2026-11-03 10-00-00 - Comité.wav")  # la carpeta de una reunion, a mano
+        self.wav("Gamma/2026-10-01 Kick-off/2026-10-01 09-00-00 - Kick-off.wav")
+        os.makedirs(os.path.join(self.root, "Beta", "Reuniones"))
+        for n in ("2025-09-01 10-00-00 - A.wav", "2025-10-02 10-00-00 - B.wav"):  # un proyecto que empieza por fecha
+            self.wav(f"Clientes/2025-09-01 Proyecto Iberdrola/{n}")
+        os.makedirs(os.path.join(self.root, "Clientes", "2026-10-30 Kickoff", "Grabaciones"))  # sin audio dentro
         d = {"project_folders": {"Alfa": "Alfa/2026-11-03 Comité", "Beta": "Beta/Reuniones",
-                                 "Gamma": "2026-10-01 Kick-off", "Delta": ":ab12cd"},
+                                 "Gamma": "Gamma/2026-10-01 Kick-off", "Delta": ":ab12cd",
+                                 "Iberdrola": "Clientes/2025-09-01 Proyecto Iberdrola",
+                                 "Eta": "Clientes/2026-10-30 Kickoff"},
              "rec_folder": "Alfa/2026-11-03 Comité"}
         cambios = server.migrate_main_folders(d)
-        self.assertEqual(d["project_folders"],
-                         {"Alfa": "Alfa", "Beta": "Beta/Reuniones", "Gamma": "", "Delta": ":ab12cd"})
+        self.assertEqual(d["project_folders"], {"Alfa": "Alfa", "Beta": "Beta/Reuniones", "Gamma": "Gamma",
+                                                "Delta": ":ab12cd",
+                                                "Iberdrola": "Clientes/2025-09-01 Proyecto Iberdrola",
+                                                "Eta": "Clientes/2026-10-30 Kickoff"})
         self.assertEqual(d["rec_folder"], "Alfa")
         self.assertEqual(d["carpetas_v"], 1)
         self.assertEqual([c[0] for c in cambios], ["Alfa", "Gamma", "la última"])
 
     def test_al_arrancar_una_vez(self):
-        tmp = tempfile.mkdtemp(prefix="chuleta-migra-")
-        try:
-            with open(os.path.join(tmp, "settings.json"), "w", encoding="utf-8") as f:
-                json.dump({"project_folders": {"Alfa": "Alfa/2026-11-03 Comité"}}, f)
-            st = server.Store(os.path.join(tmp, "settings.json"), server.DEFAULT_SETTINGS)
-            self.assertNotIn("carpetas_v", st.get())
-            st.update(server.migrate_main_folders)
-            self.assertEqual(server.Store(os.path.join(tmp, "settings.json"), server.DEFAULT_SETTINGS).get()
-                             ["project_folders"], {"Alfa": "Alfa"})
-            with open(server.__file__, encoding="utf-8") as f:
-                self.assertIn('if not self.settings.get().get("carpetas_v"):', f.read())  # App.__init__, una vez
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        self.wav("Alfa/2026-11-03 Comité/2026-11-03 10-00-00 - Comité.wav")
+        with open(os.path.join(self.data_dir, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"project_folders": {"Alfa": "Alfa/2026-11-03 Comité"}}, f)
+        st = server.Store(os.path.join(self.data_dir, "settings.json"), server.DEFAULT_SETTINGS)
+        self.assertNotIn("carpetas_v", st.get())
+        st.update(server.migrate_main_folders)
+        self.assertEqual(server.Store(os.path.join(self.data_dir, "settings.json"), server.DEFAULT_SETTINGS).get()
+                         ["project_folders"], {"Alfa": "Alfa"})
+        with open(server.__file__, encoding="utf-8") as f:
+            src = f.read()
+        # en App.__init__, una vez y despues de cargar las vinculadas (sus rutas internas)
+        donde = src.index('        self._load_links()\n        if not self.settings.get().get("carpetas_v"):')
+        self.assertLess(donde, src.index("    def rec_toggle(self, b):"))
 
 
 # ----------------------------------------------------------------------------- mover y renombrar con su carpeta
