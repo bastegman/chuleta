@@ -146,9 +146,11 @@ class ErroresDeClaudeTests(unittest.TestCase):
         self.assertIn("necesita Git para Windows (Git Bash)", m)
 
     def test_sin_sesion_sigue_igual(self):
-        for t in ("Invalid API key · Please run /login", "Not logged in · Please run /login",
-                  "OAuth token has expired. Please obtain a new token or refresh your existing token."):
+        for t in ("Invalid API key · Please run /login", "Not logged in · Please run /login"):
             self.assertIn("sin sesión iniciada", self.msg(t, json_result=True), t)
+        # caducada: desde claude-empresa (07/11/2026) tiene su frase (tests/test_claude_empresa.py)
+        m = self.msg("OAuth token has expired. Please obtain a new token or refresh your existing token.", True)
+        self.assertTrue(m.startswith("La sesión de Claude Code ha caducado"), m)
 
     def test_lo_demas_tal_cual(self):
         self.assertEqual(self.msg("algo raro"), "Claude Code ha fallado (código 1): algo raro")

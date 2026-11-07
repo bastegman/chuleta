@@ -4701,7 +4701,8 @@ class App:
         if not ruta:
             raise ApiError(f"No encuentro {cls.label} en este PC. Haz los pasos 1 y 2 y vuelve a pulsar «Comprobar».")
         # lo que tarda cada paso, al log (07/11/2026: en el PC de Bernardo «Comprobar» tardó minutos sin decir en que)
-        log(f"   agente: comprobando {cls.label} ({modelo})…")
+        origen = cls.origen(ruta)  # «Claude Code de VS Code» si es la copia de la extension (07/11/2026)
+        log(f"   agente: comprobando {origen} ({modelo})…" + (f" · {ruta}" if origen != cls.label else ""))
         ag, t0 = cls(settings_dir=DATA_DIR), time.time()
         try:
             version, secs = ag.check(ruta, model=modelo)
@@ -4712,8 +4713,12 @@ class App:
         if isinstance(t, dict) and t:
             log(f"   agente: {self._agente_tiempos(ag, secs)}")
         self.settings.update(lambda d: d.update(agente_version=version, agente_comprobado=time.time()))
+        aviso = getattr(ag, "aviso", None)
+        if aviso:
+            log(f"   agente: {aviso}")
         log(f"   agente: {cls.label} {version} comprobado ({secs:.1f} s)")
-        return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta}
+        return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta, "origen": origen,
+                "modelo_usado": getattr(ag, "modelo_usado", None), "aviso": aviso}
 
     @staticmethod
     def _agente_tiempos(ag, total):
@@ -4962,7 +4967,8 @@ class App:
     def agente_estado(self, q):
         """Para el paso 2 del asistente: si Claude Code ya está en este PC (se mira cada pocos segundos)."""
         cls, _ = agente_de(self.settings.get())
-        return {"encontrado": bool(cls.find()), "label": cls.label}
+        ruta = cls.find()
+        return {"encontrado": bool(ruta), "label": cls.label, "origen": cls.origen(ruta) if ruta else None}
 
     def abrir_powershell(self, b):
         """«Abrir PowerShell» del asistente: una ventana vacía, sin ejecutar nada."""
