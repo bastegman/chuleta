@@ -1,0 +1,313 @@
+# -*- coding: utf-8 -*-
+"""Plan de grabación (plan.py y /api/grabar/plan, rediseño B1, 07/11/2026): un solo cálculo para la tarjeta de Grabar,
+Ctrl+Alt+R y el aviso flotante. Capas (esta reunión › workstream › proyecto › Ajustes), el origen de cada valor, el
+proyecto por la misma reunión grabada antes (D2), «Usarlo en» (D1) y la prueba de paridad: Ctrl+Alt+R graba con
+exactamente lo que enseña la tarjeta para la misma reunión."""
+import os
+import threading
+import types
+import unittest
+from unittest import mock
+
+from support import TempTree, bare_jobs, server  # noqa: F401  (support prepara sys.path)
+import plan  # noqa: E402
+from test_perfil import FakeRec, settings_store  # noqa: E402
+
+LISTAS = [{"id": "Alfa/Vocabulario/General.txt", "project": "Alfa", "name": "General", "n": 41},
+          {"id": "Alfa/Vocabulario/Infra.txt", "project": "Alfa", "name": "Infra", "n": 28},
+          {"id": "Beta/Vocabulario/General.txt", "project": "Beta", "name": "General", "n": 12}]
+A, AI, B = (x["id"] for x in LISTAS)
+HIST = [{"titulo": "Comité de seguimiento", "fecha": "2026-10-30T10:00:00", "vocab": AI, "proyecto": "Alfa",
+         "workstream": "Infra"},
+        {"titulo": "Daily", "fecha": "2026-10-29T09:00:00", "vocab": "", "proyecto": "", "workstream": ""},
+        {"titulo": "Comité de seguimiento", "fecha": "2026-10-23T10:00:00", "vocab": B, "proyecto": "Beta",
+         "workstream": "General"}]
+PRESETS = {"medium": {"id": "medium", "engine": "local", "label": "Clásico", "live_label": "Normal · medium"},
+           "rapido": {"id": "rapido", "engine": "local", "label": "Rápido", "live_label": "Rápido · small"}}
+MOTORES = {"presets": PRESETS, "procesado": "agente", "agente": "Claude", "proveedor": "Groq", "resumen_auto": True}
+
+
+def resolver(st=None, sug=None, hist=HIST, pedido=None, carpeta="Alfa/Reuniones", **kw):
+    return plan.resolver(st or {}, LISTAS, sug, hist, pedido, carpeta_de=lambda v: carpeta,
+                         motores=MOTORES, **kw)
+
+
+def lineas(p):
+    return {l["clave"]: l for l in p["lineas"]}
+
+
+class CapasTests(unittest.TestCase):
+    def test_idioma_reunion_workstream_proyecto_ajustes(self):
+        st = {"language": "es-en", "project_langs": {"Alfa": "es-pt"}, "workstream_langs": {AI: "en"}}
+        cases = [({"vocab": A}, "es-pt", "proyecto", "de Alfa"),
+                 ({"vocab": AI}, "en", "workstream", "del workstream"),
+                 ({"vocab": B}, "es-en", "ajustes", "Ajustes › Al grabar"),
+                 ({"vocab": AI, "cambios": {"idioma": "pt"}}, "pt", "reunion", "cambiado para esta reunión")]
+        for pedido, code, origen, txt in cases:
+            l = lineas(resolver(st, pedido=pedido))["idioma"]
+            self.assertEqual((l["code"], l["origen"], l["origen_txt"]), (code, origen, txt), pedido)
+        self.assertEqual(lineas(resolver({"language": "es-pt"}, pedido={"vocab": A}))["idioma"]["valor"],
+                         "Español + portugués")
+
+    def test_vocabulario_del_workstream_o_el_general(self):
+        l = lineas(resolver(pedido={"vocab": A}))["vocab"]
+        self.assertEqual((l["valor"], l["origen"]), ("General de Alfa · 41 términos", "workstream"))
+        l = lineas(resolver({"prompt": "uno, dos; tres"}, pedido={"vocab": ""}))["vocab"]
+        self.assertEqual((l["valor"], l["origen"], l["origen_txt"]),
+                         ("El general · 3 términos", "ajustes", "Ajustes › Proyectos"))
+        self.assertEqual(lineas(resolver(pedido={"vocab": ""}))["vocab"]["valor"], "Ninguno")
+
+    def test_carpeta_la_decide_rec_folder_for_y_la_reunion_la_cambia(self):
+        vistos = []
+        p = plan.resolver({}, LISTAS, {}, [], {"vocab": AI}, carpeta_de=lambda v: vistos.append(v) or "Alfa/R",
+                          carpeta_origen=lambda v, rel: ("proyecto", "carpeta de " + v["project"]),
+                          links={"abc": "OneDrive Alfa"})
+        self.assertEqual(vistos[0]["id"], AI)  # la lista elegida, entera
+        l = lineas(p)["carpeta"]
+        self.assertEqual((l["rel"], l["valor"], l["origen_txt"]), ("Alfa/R", "Chuleta\\Alfa\\R\\", "carpeta de Alfa"))
+        p = resolver(pedido={"vocab": AI, "cambios": {"carpeta": ":abc/Actas"}}, links={"abc": "OneDrive Alfa"})
+        l = lineas(p)["carpeta"]
+        self.assertEqual((l["rel"], l["valor"], l["origen"]), (":abc/Actas", "OneDrive Alfa\\Actas\\", "reunion"))
+        self.assertEqual(p["rec"]["folder"], ":abc/Actas")
+
+    def test_carpeta_de_la_reunion_si_la_rama_de_carpetas_la_da(self):
+        p = resolver(pedido={"nombre": "Comité", "vocab": A},
+                     carpeta_reunion=lambda base, nombre: f"{base}/2026-11-07 {nombre}")
+        l = lineas(p)["carpeta"]
+        self.assertEqual(l["valor"], "Chuleta\\Alfa\\Reuniones\\2026-11-07 Comité\\")
+        self.assertEqual(p["rec"]["folder"], "Alfa/Reuniones")  # rec_start crea la de la reunión en la base
+
+    def test_transcribe_resume_y_audio(self):
+        st = {"live_preset": "medium", "preset": "rapido", "rec_mic": "none", "rec_sys": "all"}
+        b = lineas(resolver(st, pedido={"vocab": A}))
+        self.assertEqual(b["transcribe"]["valor"], "Este PC, en directo · Normal")
+        self.assertEqual(b["resume"]["valor"], "Claude con tu cuenta, al terminar")
+        self.assertEqual((b["audio"]["valor"], b["audio"]["origen"]),
+                         ("Sin micrófono · todo lo que suena en el PC", "ajustes"))
+        b = lineas(resolver(st, pedido={"vocab": A, "cambios": {"live": False, "mic": "default"}}))
+        self.assertEqual(b["transcribe"]["valor"], "Este PC, al terminar · Rápido")  # el motor de la cola
+        self.assertEqual((b["transcribe"]["origen"], b["audio"]["origen"]), ("reunion", "reunion"))
+        local = dict(MOTORES, procesado="local")
+        b = lineas(plan.resolver({}, LISTAS, {}, [], {}, motores=local))
+        self.assertEqual(b["resume"]["valor"], "No se resume: todo se queda en este PC")
+        api = dict(MOTORES, procesado="api", resumen_local=False)
+        b = lineas(plan.resolver({}, LISTAS, {}, [], {}, motores=api))
+        self.assertEqual(b["resume"]["valor"], "Groq, cuando lo pidas")  # transcrito en el PC: sin consentimiento
+
+    def test_un_motor_que_no_se_ofrece_no_se_promete(self):
+        p = resolver({"live_preset": "nube"}, pedido={})
+        self.assertEqual(p["rec"]["preset"], "medium")
+
+
+class ProyectoTests(unittest.TestCase):
+    """D2: elegido › fijo en Ajustes › la misma reunión grabada antes › el título › la última grabación."""
+
+    def test_la_misma_reunion_grabada_antes_gana_al_titulo(self):
+        p = resolver(sug={"name": "Comité de seguimiento", "vocab": B, "source": "teams"})
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), (AI, "historial"))
+        self.assertEqual(p["proyecto"]["motivo"], "como la última «Comité de seguimiento» (vie 30 oct)")
+        self.assertEqual(p["proyecto"]["texto"], "Alfa › Infra")
+        self.assertEqual((p["nombre"]["valor"], p["nombre"]["origen"], p["nombre"]["texto"]),
+                         ("Comité de seguimiento", "teams", "de Teams"))
+
+    def test_el_titulo_si_no_hay_historial(self):
+        p = resolver(sug={"name": "Kick-off Beta", "vocab": B, "source": "outlook"})
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"], p["proyecto"]["motivo"]),
+                         (B, "titulo", "por la cita de Outlook"))
+        vistos = []
+        p = resolver(pedido={"nombre": "Revisión Beta"},
+                     sugerir_titulo=lambda n: vistos.append(n) or {"vocab": B})
+        self.assertEqual((vistos, p["proyecto"]["origen"], p["nombre"]["origen"]),
+                         (["Revisión Beta"], "titulo", "elegido"))
+
+    def test_la_ultima_grabacion_y_si_no_nada(self):
+        p = resolver({"rec_vocab": B})
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), (B, "ultima"))
+        self.assertEqual(p["proyecto"]["motivo"], "como la última grabación (vie 23 oct)")
+        p = resolver({"rec_vocab": "Borrada/Vocabulario/X.txt"})
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"], p["proyecto"]["texto"]),
+                         ("", "ninguno", "Sin proyecto"))
+
+    def test_lo_elegido_y_el_fijo_de_ajustes(self):
+        sug = {"name": "Comité de seguimiento", "source": "teams"}
+        p = resolver({"perfil": {"vocab": B}}, sug=sug)
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), (B, "ajustes"))
+        p = resolver({"perfil": {"vocab": B}}, sug=sug, pedido={"vocab": ""})
+        self.assertEqual((p["proyecto"]["vocab"], p["proyecto"]["origen"]), ("", "elegido"))
+        p = resolver(sug=sug, pedido={"vocab": "No/Existe.txt"})  # una lista que ya no está: como si no se eligiera
+        self.assertEqual(p["proyecto"]["origen"], "historial")
+
+    def test_nombre_escrito_de_tus_reuniones(self):
+        p = resolver(pedido={"nombre": "  comite   de SEGUIMIENTO "})
+        self.assertEqual((p["nombre"]["valor"], p["nombre"]["origen"], p["proyecto"]["vocab"]),
+                         ("comite de SEGUIMIENTO", "historial", AI))
+        p = resolver(sug={"name": "Comité de seguimiento", "source": "teams"},
+                     pedido={"nombre": "Comité de seguimiento"})  # el de Teams, sin tocar
+        self.assertEqual(p["nombre"]["origen"], "teams")
+
+
+class RecTests(unittest.TestCase):
+    def test_el_cuerpo_de_rec_start_es_lo_que_se_ve(self):
+        sug = {"name": "Comité de seguimiento", "vocab": B, "source": "outlook", "participants": ["Ana", "Luis"]}
+        st = {"language": "es", "project_langs": {"Alfa": "en-pt"}, "rec_mic": "m1", "rec_sys": "default",
+              "live_preset": "rapido", "perfil": {"context": "Seguimiento semanal"}}
+        p = resolver(st, sug=sug)
+        b = lineas(p)
+        self.assertEqual(p["rec"], {"name": "Comité de seguimiento", "vocab": AI, "folder": "Alfa/Reuniones",
+                                    "language": "en-pt", "contexto": "Seguimiento semanal", "mic": "m1",
+                                    "sys": "default", "live": True, "preset": "rapido",
+                                    "participantes": "Ana, Luis", "sugerido": "outlook", "plan": True})
+        self.assertEqual((b["idioma"]["code"], b["carpeta"]["rel"], b["audio"]["mic"], b["transcribe"]["preset"]),
+                         (p["rec"]["language"], p["rec"]["folder"], p["rec"]["mic"], p["rec"]["preset"]))
+        self.assertEqual(p["resumen"], "Comité de seguimiento → Alfa › Infra · Inglés + portugués")
+        p = resolver(st, sug=sug, pedido={"participantes": ""})  # «Quitar» los asistentes sugeridos
+        self.assertEqual((p["rec"]["participantes"], p["rec"]["sugerido"]), ("", ""))
+        p = resolver(st, sug=sug, pedido={"nombre": "Otra cosa"})  # otra reunión: sus asistentes no
+        self.assertEqual(p["rec"]["participantes"], "")
+
+
+class HistorialTests(unittest.TestCase):
+    def test_historial_y_recientes(self):
+        flat = [{"label": "Comité", "date": "2026-10-30T10:00:00", "props": {"vocabulario": A, "proyecto": "Alfa"}},
+                {"label": "Sin título no", "date": "2026-10-31T10:00:00", "props": {"titulo": "Daily"}},
+                {"label": "", "date": "2026-11-01T10:00:00", "props": {}},
+                {"label": "comité", "date": "2026-11-02T10:00:00", "props": {}}]
+        h = plan.historial_de(flat)
+        self.assertEqual([x["titulo"] for x in h], ["comité", "Daily", "Comité"])
+        r = plan.recientes(h, {v["id"]: v for v in LISTAS})
+        self.assertEqual([(x["titulo"], x["n"], x["vocab"], x["proyecto_txt"]) for x in r],
+                         [("comité", 2, A, "Alfa › General"), ("Daily", 1, "", "")])
+
+    def test_textos(self):
+        self.assertEqual(plan.fecha_corta("2026-11-07T22:00:00"), "sáb 7 nov")
+        self.assertEqual(plan.fecha_corta("nada"), "")
+        self.assertEqual(plan.ruta_txt(""), "Chuleta\\")
+        self.assertEqual(plan.ruta_txt(":x"), "Carpeta vinculada\\")
+        self.assertEqual(plan.idioma_txt("auto"), "Detectar el idioma")
+
+
+# ----------------------------------------------------------------------------- el servidor
+
+class ServidorPlanTests(TempTree):
+    def setUp(self):
+        super().setUp()
+        self.write("Alfa/Vocabulario/General.txt", "API, SLA, Kubernetes\n")
+        self.write("Beta/Vocabulario/Legal.txt", "contrato, cláusula\n")
+        os.makedirs(os.path.join(self.root, "Alfa", "Reuniones"))
+        self.sug = {"name": "Comité de seguimiento", "vocab": "", "source": "teams", "participants": []}
+
+    def app(self, **st):
+        a = server.App.__new__(server.App)
+        a.settings = settings_store(self.tmp, **st)
+        a.rec_lock, a.notes_lock, a.toggle_lock, a.rec, a.monitor = (threading.Lock(), threading.Lock(),
+                                                                     threading.Lock(), None, None)
+        a.library = types.SimpleNamespace(at=1, flat=[])
+        a.jobs = bare_jobs([])
+        a.jobs.settings, a.jobs.started = a.settings, []
+        a.jobs.start_live = lambda rel, preset: a.jobs.started.append((rel, preset))
+        a.jobs.refresh_prompt = lambda rel: None
+        a.jobs.schedule_outputs = lambda rel: None
+        a._vocab_terms = lambda: []
+        sug = self.sug
+        a.vigia = types.SimpleNamespace(sugerencia=lambda leer: dict(sug))
+        return a
+
+    def test_paridad_ctrl_alt_r_y_tarjeta(self):
+        """Para la misma reunión, Ctrl+Alt+R graba con el cuerpo exacto que la tarjeta enseña (y manda) sin tocar."""
+        a = self.app(project_folders={"Alfa": "Alfa/Reuniones"}, project_langs={"Alfa": "es-pt"},
+                     rec_mic="m1", live_preset="rapido")
+        a.library.flat = [{"label": "Comité de seguimiento", "date": "2026-10-30T10:00:00",
+                           "props": {"vocabulario": "Alfa/Vocabulario/General.txt", "proyecto": "Alfa"}}]
+        tarjeta = a.grabar_plan_api({})
+        vistos = []
+        a.rec_start = lambda b: vistos.append(b) or {"path": "Alfa/Reuniones/x.wav", "workstream": None}
+        with mock.patch.object(server, "cue"), mock.patch.object(server, "notify") as nt:
+            r = a.rec_toggle({"source": "hotkey"})
+        self.assertEqual({k: x for k, x in vistos[0].items() if k != "resumen"}, tarjeta["rec"])
+        self.assertEqual(vistos[0]["resumen"], tarjeta["resumen"])
+        self.assertEqual(tarjeta["rec"]["folder"], "Alfa/Reuniones")
+        self.assertEqual(tarjeta["rec"]["language"], "es-pt")
+        self.assertEqual(tarjeta["proyecto"]["origen"], "historial")
+        self.assertIn("Comité de seguimiento → Alfa › General · Español + portugués", nt.call_args[0][1])
+        self.assertTrue(r["recording"])
+        # el aviso flotante manda nombre y tema de la reunión que vio: el mismo plan
+        vistos.clear()
+        with mock.patch.object(server, "cue"), mock.patch.object(server, "notify"):
+            a.rec_toggle({"source": "aviso", "start_only": True, "name": "Comité de seguimiento",
+                          "vocab": "Beta/Vocabulario/Legal.txt"})
+        self.assertEqual(vistos[0]["vocab"], "Alfa/Vocabulario/General.txt")  # la misma reunión grabada antes manda
+
+    def test_rec_start_desde_el_plan_no_aprende_ni_pisa_lo_predeterminado(self):
+        a = self.app(rec_mic="default", live_preset="medium", project_folders={})
+        p = a.grabar_plan_api({"vocab": "Alfa/Vocabulario/General.txt",
+                               "cambios": {"carpeta": "Alfa/Reuniones", "mic": "none", "preset": "rapido"}})
+        with mock.patch.object(server, "RecorderProcess", FakeRec), mock.patch.object(server, "log"):
+            r = a.rec_start(dict(p["rec"], resumen=p["resumen"]))
+        st = a.settings.get()
+        self.assertEqual((st["rec_mic"], st["live_preset"], st["project_folders"]), ("default", "medium", {}))
+        self.assertEqual((st["rec_folder"], st["rec_vocab"]), ("Alfa/Reuniones", "Alfa/Vocabulario/General.txt"))
+        self.assertTrue(r["path"].startswith("Alfa/Reuniones/"))
+        self.assertEqual(a.jobs.started[0][1], "rapido")
+        self.assertEqual(a.rec_resumen, p["resumen"])
+        md = os.path.splitext(server.safe(r["path"]))[0] + ".md"
+        props = server.parse_notes(server.read_text(md))[0]
+        self.assertEqual((props["proyecto"], props["workstream"]), ("Alfa", "General"))
+
+    def test_usarlo_en_el_proyecto_o_en_ajustes(self):
+        a = self.app(language="es-en")
+        A = "Alfa/Vocabulario/General.txt"
+        pedido = {"vocab": A}
+        a.grabar_recordar({"clave": "idioma", "valor": "pt", "alcance": "proyecto", "vocab": A})
+        l = lineas(a.grabar_plan_api(pedido))["idioma"]
+        self.assertEqual((l["code"], l["origen_txt"]), ("pt", "de Alfa"))
+        a.grabar_recordar({"clave": "idioma", "valor": "en", "alcance": "workstream", "vocab": A})
+        self.assertEqual(lineas(a.grabar_plan_api(pedido))["idioma"]["origen"], "workstream")
+        a.grabar_recordar({"clave": "idioma", "valor": None, "alcance": "workstream", "vocab": A})  # quitar
+        a.grabar_recordar({"clave": "idioma", "valor": None, "alcance": "proyecto", "vocab": A})
+        l = lineas(a.grabar_plan_api(pedido))["idioma"]
+        self.assertEqual((l["code"], l["origen"]), ("es-en", "ajustes"))
+        a.grabar_recordar({"clave": "idioma", "valor": "de", "alcance": "ajustes"})
+        self.assertEqual(a.settings.get()["language"], "de")
+        a.grabar_recordar({"clave": "carpeta", "valor": "Alfa/Reuniones", "alcance": "proyecto", "vocab": A})
+        l = lineas(a.grabar_plan_api(pedido))["carpeta"]
+        self.assertEqual((l["rel"], l["origen"], l["origen_txt"]), ("Alfa/Reuniones", "proyecto", "carpeta de Alfa"))
+        for clave, valor, key, esperado in (("mic", "m2", "rec_mic", "m2"), ("sys", "", "rec_sys", "all"),
+                                            ("live", 0, "rec_directo", False),
+                                            ("preset", "rapido", "live_preset", "rapido")):
+            a.grabar_recordar({"clave": clave, "valor": valor, "alcance": "ajustes"})
+            self.assertEqual(a.settings.get()[key], esperado, clave)
+        for mal in ({"clave": "idioma", "valor": "xx-yy-zz", "alcance": "ajustes"},
+                    {"clave": "idioma", "valor": "pt", "alcance": "proyecto"},
+                    {"clave": "mic", "valor": "x", "alcance": "proyecto", "vocab": A},
+                    {"clave": "carpeta", "valor": "No/Existe", "alcance": "ajustes"},
+                    {"clave": "preset", "valor": "inventado", "alcance": "ajustes"},
+                    {"clave": "idioma", "valor": "pt", "alcance": "reunion"}):
+            with self.assertRaises(server.ApiError, msg=mal):
+                a.grabar_recordar(mal)
+
+    def test_renombrar_un_tema_o_un_proyecto_conserva_su_idioma(self):
+        d = {"workstream_langs": {"Alfa/Vocabulario/General.txt": "pt"}, "project_langs": {"Alfa": "en"}}
+        server.settings_moved(d, "Alfa", "Alfa2", folder=True, project=("Alfa", "Alfa2"))
+        self.assertEqual(d["workstream_langs"], {"Alfa2/Vocabulario/General.txt": "pt"})
+        self.assertEqual(d["project_langs"], {"Alfa2": "en"})
+
+    def test_lineas_y_recientes(self):
+        a = self.app()
+        self.assertEqual(server.DEFAULT_SETTINGS["rec_directo"], True)
+        p = a.grabar_plan_api({"recientes": True})
+        self.assertEqual(p["recientes"], [])
+        self.assertEqual([l["clave"] for l in p["lineas"]],
+                         ["carpeta", "idioma", "vocab", "contexto", "transcribe", "resume", "audio"])
+
+
+class RutasPlanTests(unittest.TestCase):
+    def test_rutas_en_el_servidor(self):
+        with open(server.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"/api/grabar/plan": a.grabar_plan_api', src)
+        self.assertIn('"/api/grabar/recordar": a.grabar_recordar', src)
+        self.assertEqual(src.count("self.plan_grabar("), 2)  # la tarjeta (grabar_plan_api) y Ctrl+Alt+R
+
+
+if __name__ == "__main__":
+    unittest.main()
