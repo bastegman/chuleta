@@ -295,10 +295,17 @@ class TresModosE2E(unittest.TestCase):
         self.pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=10000)
 
     def elegir(self, modo):
-        """Elige el modo en «Dónde se procesan tus reuniones» y espera a que se aplique (sin pulsar Guardar)."""
+        """Elige el modo en «Dónde se procesan tus reuniones»: elegirlo solo no cambia nada (se dice que falta
+        aplicarlo) y «Aplicar ahora» lo aplica sin bajar hasta «Guardar»."""
+        antes = self.api("/api/config")["procesado"]
         self.pg.check(f"#modal input[name='proc'][value='{modo}']")
-        self.pg.wait_for_function("document.querySelector('#procGuardado').innerText.includes('Aplicado')",
-                                  timeout=20000)
+        if antes != modo:
+            self.pg.wait_for_selector("#procAplicar", timeout=10000)
+            self.assertIn("aún no está aplicado", self.pg.inner_text("#procGuardado"))
+            self.assertEqual(self.api("/api/config")["procesado"], antes)  # un clic de prueba no cambia nada
+            self.pg.click("#procAplicar")
+            self.pg.wait_for_function("document.querySelector('#procGuardado').innerText.includes('Aplicado')",
+                                      timeout=20000)
         self.assertEqual(self.api("/api/config")["procesado"], modo)
 
     def abrir(self, rel):

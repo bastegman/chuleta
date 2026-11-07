@@ -82,13 +82,14 @@ def main():
         proto.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def model_for(req):
-        """El modelo cargado. path: la carpeta local que manda el servidor (desde el 07/11/2026 las descargas, con su
-        progreso, las hace el; este proceso no toca la red: HF_HUB_OFFLINE). Sin path, por nombre, como antes."""
+        """El modelo cargado. model_path: la carpeta local que manda el servidor (desde el 07/11/2026 las descargas,
+        con su progreso, las hace el; este proceso no toca la red: HF_HUB_OFFLINE). Sin ella, por nombre, como antes.
+        Ojo: en «file», path es el audio, no el modelo."""
         key = (req["model"], int(req["threads"]))
         if state["key"] != key:
             state["model"] = state["key"] = None  # libera la RAM del anterior
             from faster_whisper import WhisperModel
-            state["model"] = WhisperModel(req.get("path") or key[0], device="cpu", compute_type="int8",
+            state["model"] = WhisperModel(req.get("model_path") or key[0], device="cpu", compute_type="int8",
                                           cpu_threads=key[1])
             state["key"] = key
         return state["model"]

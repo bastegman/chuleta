@@ -1954,7 +1954,7 @@ function procesadoFieldsetHtml() {
       ${opt('api', 'API externa (Groq, OpenAI, Azure…)', 'Transcripción rápida en la nube y resumen con el proveedor que elijas, con su API key.',
     'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.')}
     </div>
-    <div class="help" id="procGuardado" aria-live="polite">Se aplica en cuanto la eliges.</div>
+    <div class="help" id="procGuardado" aria-live="polite"></div>
     ${typeof modelosHtml === 'function' ? modelosHtml() : ''}
     <div id="procAgente"${mode === 'agente' ? '' : ' hidden'}>
       <ol class="pasos">
@@ -2047,26 +2047,50 @@ function openSettings() {
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
-    $$('input[name="proc"]', d).forEach(r => r.addEventListener('change', async () => {
-      const v = $('input[name="proc"]:checked', d)?.value;
+    // «Dónde se procesan» (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior sin
+    // decirlo (al grabar seguía usando Groq). Ahora el cambio pendiente se dice junto a las opciones, con «Aplicar ahora»
+    // (y su aviso si hay trabajo en la nube, que pasaría a este PC), y al cerrar sin aplicarlo se avisa. Un clic de
+    // prueba no cambia nada por sí solo.
+    const procNombre = { local: '«Solo en este PC»', agente: `«Con tu cuenta de Claude»`, api: '«API externa»' };
+    const procElegido = () => $('input[name="proc"]:checked', d)?.value;
+    const procPendiente = () => { const v = procElegido(); return v && v !== S.config.procesado ? v : null; };
+    const procPintar = () => {
+      const v = procPendiente(), res = $('#procGuardado', d);
+      if (!v) { if (!res.querySelector('.ok-aplicado')) res.innerHTML = ''; return; }
+      const enNube = S.config.procesado === 'api' && v !== 'api'
+        && S.jobs.some(j => isActive(j) && j.kind !== 'summary' && (j.engine === 'cloud' || j.preset === 'nube'));
+      res.innerHTML = `<span class="motor-err">Has elegido ${procNombre[v]}, pero aún no está aplicado: sigue ${procNombre[S.config.procesado] || ''}.</span>`
+        + (enNube ? ' <b>Hay transcripciones en la nube en marcha:</b> al aplicar, el directo sigue en este PC con Whisper y lo que espera en la nube se cancela.' : '')
+        + ` <button class="btn sm primary" type="button" id="procAplicar">Aplicar ahora</button>`;
+    };
+    $$('input[name="proc"]', d).forEach(r => r.addEventListener('change', () => {
+      const v = procElegido();
       $$('.proc', d).forEach(l => l.classList.toggle('on', l.querySelector('input').value === v));
       $('#procApi', d).hidden = v !== 'api';
       $('#procAgente', d).hidden = v !== 'agente';
       if ($('#procModelos', d)) $('#procModelos', d).hidden = v === 'api';
-      // se aplica en el acto (07/11/2026): elegirla y cerrar sin «Guardar», abajo del todo, dejaba el modo anterior
-      // sin decirlo, y al grabar seguía usando Groq
-      const res = $('#procGuardado', d);
+      procPintar();
+    }));
+    $('#procGuardado', d).addEventListener('click', async e => {
+      if (!e.target.closest('#procAplicar')) return;
+      const v = procPendiente(), res = $('#procGuardado', d);
+      if (!v) return procPintar();
       res.textContent = 'Aplicando…';
       try {
         const c = await api('/api/settings', { procesado: v });
         setConfig(c);
         localStorage.setItem('procElegido', '1');
-        res.innerHTML = `<span style="color:var(--ok)">✓ Aplicado: ${esc({ local: 'transcribe Whisper en este PC; sin resumen con IA', agente: `transcribe Whisper en este PC y resume ${S.config.agente?.label || 'Claude Code'} con tu cuenta`, api: `transcribe y resume ${provName()} con tu API key` }[v] || v)}.</span>`;
+        res.innerHTML = `<span class="ok-aplicado" style="color:var(--ok)">✓ Aplicado: ${esc({ local: 'transcribe Whisper en este PC; sin resumen con IA', agente: `transcribe Whisper en este PC y resume ${S.config.agente?.label || 'Claude Code'} con tu cuenta`, api: `transcribe y resume ${provName()} con tu API key` }[v] || v)}.</span>`;
         if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
         d.modelosPoll?.();
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ No se ha podido aplicar: ${esc(err.message)}</span>`; }
-    }));
+    });
+    S.modalCleanup = () => {  // al cerrar Ajustes (Cancelar, Esc, fuera) con el cambio sin aplicar: que se sepa
+      if (!document.body.contains(d)) return;  // otro diálogo ocupó el hueco
+      const v = procPendiente();
+      if (v) toast(`No se ha aplicado ${procNombre[v]}: sigue ${procNombre[S.config.procesado] || 'la opción de antes'}. Para cambiarlo, ⚙ Ajustes → «Aplicar ahora».`, 'err');
+    };
     $('#agCheck', d).onclick = async () => {  // no guarda el formulario: solo comprueba con el modelo elegido
       const res = $('#agRes', d);
       res.textContent = 'Comprobando… (la primera vez puede tardar medio minuto)';
@@ -2140,6 +2164,7 @@ function openSettings() {
       try {
         setConfig(await api('/api/settings', collect()));
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
+        procPintar();  // «Probar conexión» guarda: el modo elegido ya está aplicado
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }

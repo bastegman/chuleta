@@ -21,23 +21,28 @@ Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta
   Hugging Face), da por parada una conexión sin datos en 60 s y lo reintenta, mira el espacio libre antes y, si falla,
   lo dice en una frase con qué hacer. Lo que ya descargaron versiones anteriores se sigue usando sin bajar nada. El
   proceso de Whisper solo carga carpetas locales (`HF_HUB_OFFLINE`).
-- **Ajustes › Dónde se procesan tus reuniones** se aplica en cuanto se elige (antes había que bajar hasta «Guardar»:
-  elegir la cuenta de Claude, pulsar «Comprobar» y cerrar dejaba la API externa y el directo seguía en Groq). Con «Solo
-  en este PC» y «Con tu cuenta de Claude» enseña los modelos de Whisper del PC con su estado y «Descargar»,
-  «Cancelar» o «Reintentar», deja claro que Claude no transcribe (solo resume) y empieza a bajar el modelo del directo
-  en ese momento, no en mitad de la primera reunión.
+- **Ajustes › Dónde se procesan tus reuniones** dice si lo elegido está aplicado o no, con un botón «Aplicar ahora»
+  junto a las opciones, y al cerrar Ajustes sin aplicarlo avisa de que sigue la opción de antes (antes había que bajar
+  hasta «Guardar»: elegir la cuenta de Claude, pulsar «Comprobar» y cerrar dejaba la API externa sin decirlo, y el
+  directo seguía en Groq). Un clic de prueba no cambia nada; si hay transcripciones en la nube en marcha, lo dice antes
+  de aplicar. Con «Solo en este PC» y «Con tu cuenta de Claude» enseña los modelos de Whisper del PC con su estado y
+  «Descargar», «Cancelar» o «Reintentar», deja claro que Claude no transcribe (solo resume) y, al aplicar, empieza a
+  bajar el modelo del directo, no en mitad de la primera reunión (salvo que se haya cancelado en Ajustes).
 - **Transcribir desde la cola en este PC volvía a funcionar solo con un PyAV antiguo.** faster-whisper 1.2.1 (su
   última versión) abre el audio con `av.open(…, metadata_errors="ignore")`, y PyAV 19 (29/09/2026, lo que instala hoy
   `pip`) ya no admite ese argumento: en una instalación nueva, cualquier transcripción local desde la cola acababa en
   «TypeError: open() got an unexpected keyword argument 'metadata_errors'». El directo no lo usaba y seguía bien. Ahora
   el proceso de Whisper lee el audio con el decodificador de la app (mismo remuestreo a 16 kHz mono).
-- **Elegir «API externa» con la clave ya puesta pasa los motores a la nube**, igual que la primera clave (y que, al
-  revés, salir de la API los devuelve al PC). Y «Guardar» ya no manda los selectores de motor del perfil si no se han
+- **Elegir «API externa» con la clave ya puesta vuelve a los motores que se usaban con la API** (la nube, si no hay
+  otros), igual que la primera clave; salir de la API los devuelve al PC, como antes. Y «Guardar» ya no manda los selectores de motor del perfil si no se han
   tocado: pintados con el modo de antes, después de «Probar conexión» devolvían el directo a Whisper en el PC. Esos
   selectores se repintan al cambiar de modo.
 - **«Modelo» dice dónde se transcribe**: junto al directo y en el diálogo de grabar sale «en este PC · Whisper
   medium» o «en la nube · Groq» y, con la cuenta de Claude, que Claude solo hace el resumen. Si el último directo de
   una grabación falló, la cabecera dice por qué en lugar de «está parada».
+- Descargas: una respuesta vacía o un proxy que no reanuda y corta ya no reintentan sin fin (los reintentos cuentan
+  desde lo más lejos que se ha llegado); «Descargar» justo después de «Cancelar» sigue con la misma descarga. El audio
+  con un fotograma dañado se salta ese fotograma en vez de cortar ahí la transcripción.
 - **Errores de la nube en una frase con qué hacer**: certificado (proxy de empresa), proxy, sin DNS, tiempo agotado,
   clave no válida (con dónde copiarla), 403, modelo inexistente, trozo demasiado grande, servicio caído, y una página
   web de un proxy o un portal en lugar de la API. Antes: «sin conexión con el servicio (SSLError)» o «HTTP 401: …».

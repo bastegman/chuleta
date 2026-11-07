@@ -4549,16 +4549,19 @@ class App:
                 prev = procesado_de(d)
                 d["procesado"] = b["procesado"]
                 if d["procesado"] != "api":  # sin nube: los motores de la cola y del directo vuelven a ser locales
+                    if prev == "api":  # los que se usaban con la API: si se vuelve a ella, vuelven (ida y vuelta)
+                        d["motores_api"] = {k: d.get(k) for k in ("preset", "live_preset")}
                     for k, local in (("preset", "rapido"), ("live_preset", "medium")):
                         if (engines.PRESETS_BY_ID.get(d.get(k)) or {}).get("engine") == "cloud":
                             d[k] = local
                 elif prev != "api" and (d["cloud"].get("api_key") or "").strip():
-                    # y al reves (07/11/2026): a «API externa» con la clave ya puesta, los motores pasan a la nube, como
-                    # con la primera clave; si no, se elegia la API y se seguia transcribiendo con Whisper en el PC.
-                    # Lo que se elija a la vez en esta misma peticion manda
-                    for k in ("preset", "live_preset"):
-                        if k not in b and (engines.PRESETS_BY_ID.get(d.get(k)) or {}).get("engine") != "cloud":
-                            d[k] = "nube"
+                    # y al reves (07/11/2026): a «API externa» con la clave ya puesta, los motores de cuando se uso la
+                    # API (o la nube, como con la primera clave); si no, se elegia la API y se seguia transcribiendo con
+                    # Whisper en el PC. Lo que se elija a la vez en esta misma peticion manda
+                    antes_api = d.get("motores_api") if isinstance(d.get("motores_api"), dict) else {}
+                    for k, validos in (("preset", engines.PRESETS_BY_ID), ("live_preset", LIVE_PRESETS)):
+                        if k not in b:
+                            d[k] = antes_api.get(k) if antes_api.get(k) in validos else "nube"
             ag = b.get("agente") if isinstance(b.get("agente"), dict) else None
             if ag:
                 cur = d.get("agente") if isinstance(d.get("agente"), dict) else {}
@@ -4602,8 +4605,9 @@ class App:
             log(f"   dónde se procesan las reuniones: {antes} → {ahora}")
         if antes == "api" and ahora != "api":
             self.jobs.nube_apagada()  # lo que estuviera en la nube no sigue
-        # elegido (o guardado) un modo que transcribe en este PC: el modelo del directo, ya, con su progreso en Ajustes
-        descarga = self._descargar_modelo_del_directo() if b.get("procesado") in ("local", "agente") else None
+        # recien elegido un modo que transcribe en este PC: el modelo del directo, ya, con su progreso en Ajustes (solo
+        # al cambiar de modo: «Guardar» con el mismo no vuelve a empezar una descarga que se cancelo)
+        descarga = self._descargar_modelo_del_directo() if ahora != antes and ahora in ("local", "agente") else None
         return dict(self.config({}), descarga=descarga)
 
     def agente_comprobar(self, b):
@@ -4681,8 +4685,8 @@ class App:
         p = engines.PRESETS_BY_ID.get(st.get("live_preset") or "medium")
         if engines.MODELS is None or not p or p["engine"] != "local" or p["model"] not in engines.WHISPER_MODELS:
             return None
-        if engines.MODELS.path(p["model"]) is not None:
-            return None
+        if engines.MODELS.path(p["model"]) is not None or engines.MODELS.cancelled_by_user(p["model"]):
+            return None  # ya esta, o el usuario cancelo su descarga en Ajustes (la retoma con «Descargar»)
         engines.MODELS.start(p["model"])
         log(f"   modelo {p['model']}: descarga empezada al elegir dónde se procesan las reuniones")
         return p["model"]

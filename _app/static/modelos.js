@@ -117,6 +117,7 @@ function bindModelos(d) {
     b.disabled = true;
     try { draw(await api(b.dataset.md === 'cancelar' ? '/api/modelos/cancelar' : '/api/modelos/descargar', { model })); }
     catch (err) { toast(esc(err.message), 'err'); }
+    clearTimeout(timer);
     timer = setTimeout(poll, 400);
   });
   d.modelosPoll = poll;  // al cambiar «Dónde se procesan» (la descarga del modelo del directo puede haber empezado)
@@ -131,12 +132,13 @@ function motoresRefrescar(d) {
   const prov = c.providers?.[c.cloud?.provider]?.label || 'nube';
   const opt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
   const l = $('#lPreset', d), p = $('#pfPreset', d);
-  if (l) {
-    l.innerHTML = presets.map(pr => opt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join('');
-    l.dataset.ini = l.value;
-  }
-  if (p) {
-    p.innerHTML = presets.map(pr => opt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('');
-    p.dataset.ini = p.value;
-  }
+  // lo que el usuario ya hubiera cambiado se queda (si sigue siendo una opción) y «Guardar» lo mandará
+  const rehacer = (el, html) => {
+    const tocado = el.value !== el.dataset.ini ? el.value : null;
+    el.innerHTML = html;
+    el.dataset.ini = el.value;
+    if (tocado && [...el.options].some(o => o.value === tocado)) el.value = tocado;
+  };
+  if (l) rehacer(l, presets.map(pr => opt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join(''));
+  if (p) rehacer(p, presets.map(pr => opt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join(''));
 }

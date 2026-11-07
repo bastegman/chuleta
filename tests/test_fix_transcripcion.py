@@ -76,6 +76,12 @@ class Servidor:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if b == "vacio":  # 200 sin cuerpo (un proxy que no deja pasar y no dice nada)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if b == "html":
                     body = b"<html><body>Portal de acceso</body></html>"
                     self.send_response(200)
@@ -91,6 +97,8 @@ class Servidor:
                     self.end_headers()
                     return
                 start = 0
+                if b and b.startswith("rcorta:"):  # ignora Range (200 entero) y corta en N: un proxy que no reanuda
+                    rng, b = None, "corta:" + b.split(":")[1]
                 if rng and b != "sin_range":
                     start = int(rng.split("=")[1].split("-")[0])
                 body = data[start:]
@@ -319,6 +327,36 @@ class DescargaTests(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertEqual(len([n for n, _ in self.srv.peticiones if n == "model.bin"]), 1)
 
+    def test_respuesta_vacia_no_es_un_bucle_infinito(self):
+        """Revisión del 07/11: un 200 sin cuerpo se repetía sin esperar y sin fin (31.694 peticiones en 1,5 s)."""
+        m = self.gestor({"model.bin": ["vacio"] * 50})
+        with self.assertRaises(engines.EngineError) as c:
+            m.ensure("fake")
+        self.assertIn("sin enviar datos nuevos", str(c.exception))
+        n = len([1 for f, _ in self.srv.peticiones if f == "model.bin"])
+        self.assertEqual(n, engines.DOWNLOAD_RETRIES + 1)
+
+    def test_proxy_que_no_reanuda_y_corta_no_es_un_bucle_infinito(self):
+        m = self.gestor({"model.bin": ["rcorta:800000"] * 50})
+        with self.assertRaises(engines.EngineError) as c:
+            m.ensure("fake")
+        self.assertIn("No se ha podido descargar el modelo fake", str(c.exception))
+        n = len([1 for f, _ in self.srv.peticiones if f == "model.bin"])
+        self.assertLessEqual(n, engines.DOWNLOAD_RETRIES + 2)
+
+    def test_descargar_justo_despues_de_cancelar(self):
+        m = self.gestor({"model.bin": ["para:200000"]}, para_s=1.0)
+        with mock.patch.object(engines, "DOWNLOAD_STALL_S", 0.5):
+            j = m.start("fake")
+            time.sleep(0.2)
+            self.assertTrue(m.cancel("fake"))
+            self.assertTrue(m.cancelled_by_user("fake"))
+            self.assertIs(m.start("fake"), j)  # la misma descarga, que sigue
+            self.assertFalse(m.cancelled_by_user("fake"))
+            self.esperar(m, j)
+        st = m.state("fake")
+        self.assertEqual((st["ready"], st["error"]), (True, None))
+
     def test_modelo_sin_catalogo(self):
         m = self.gestor()
         self.assertIsNone(m.ensure("otro"))  # sin datos para bajarlo: como antes (que lo intente faster-whisper)
@@ -421,7 +459,8 @@ class WorkerClientTests(unittest.TestCase):
         w.request = lambda req, **kw: pedidas.append((req, kw)) or {}
         with mock.patch.object(engines, "MODELS", fake):
             self.assertTrue(w.ensure("x", 4, on_progress=etapas.append))
-        self.assertEqual(pedidas[0][0], {"op": "load", "model": "x", "threads": 4, "path": "/datos/models/whisper/x"})
+        self.assertEqual(pedidas[0][0], {"op": "load", "model": "x", "threads": 4,
+                                         "model_path": "/datos/models/whisper/x"})
         self.assertEqual(pedidas[0][1]["timeout"], engines.LOAD_TIMEOUT_S)  # ya no 1 h: descargar va aparte
         self.assertEqual([e["stage"] for e in etapas], ["Descargando el modelo x: 1 de 2 MB", "Cargando el modelo x…"])
 
@@ -467,7 +506,15 @@ class WorkerClientTests(unittest.TestCase):
         w.q.put({"type": "result", "segments": []})
         with mock.patch.object(engines, "MODELS", fake):
             w.request({"op": "window", "model": "small", "threads": 2})
-        self.assertEqual(json.loads(enviado["msg"].decode())["path"], "/datos/models/whisper/small")
+        self.assertEqual(json.loads(enviado["msg"].decode())["model_path"], "/datos/models/whisper/small")
+        # en «file», path es el audio y la carpeta del modelo va aparte (si el proceso se relanzara sin modelo, no
+        # intentaría cargar la reunión como si fuera un modelo)
+        enviado.clear()
+        w.q.put({"type": "result", "segments": []})
+        with mock.patch.object(engines, "MODELS", fake):
+            w.request({"op": "file", "model": "small", "threads": 2, "path": "/reuniones/a.wav"})
+        msg = json.loads(enviado["msg"].decode())
+        self.assertEqual((msg["path"], msg["model_path"]), ("/reuniones/a.wav", "/datos/models/whisper/small"))
         # el proceso de Whisper, con HF_HUB_OFFLINE: si faltara un modelo, error claro y no una descarga a ciegas
         with mock.patch.object(engines, "MODELS", fake), mock.patch.object(engines.subprocess, "Popen") as popen:
             popen.return_value.stdout = []
@@ -480,7 +527,7 @@ class WorkerClientTests(unittest.TestCase):
 
     def test_worker_py_carga_la_carpeta_que_le_mandan(self):
         src = read_app("worker.py")
-        self.assertIn('WhisperModel(req.get("path") or key[0]', src)
+        self.assertIn('WhisperModel(req.get("model_path") or key[0]', src)
         self.assertNotIn("Descargando modelo", src)  # descargar ya no es cosa suya
 
     def test_worker_py_no_usa_decode_audio_de_faster_whisper(self):
@@ -492,6 +539,34 @@ class WorkerClientTests(unittest.TestCase):
         self.assertNotIn("decode_audio", codigo)
         self.assertIn('engines.decode_16k(req["path"], offset)', codigo)
         self.assertNotIn("metadata_errors", read_app("engines.py"))
+
+
+class AudioYUrlTests(unittest.TestCase):
+    def test_fotograma_danado_se_salta(self):
+        """decode_16k no corta el audio en el primer fotograma dañado (faster-whisper los saltaba)."""
+        class InvalidDataError(Exception):
+            pass
+        av = types.SimpleNamespace(error=types.SimpleNamespace(InvalidDataError=InvalidDataError))
+
+        class Gen:  # un iterador que, como el de PyAV, sigue después de un fotograma dañado
+            def __init__(self):
+                self.seq = iter([1, InvalidDataError("x"), 2, InvalidDataError("y"), 3])
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                v = next(self.seq)
+                if isinstance(v, Exception):
+                    raise v
+                return v
+        self.assertEqual(list(engines._valid_frames(Gen(), av)), [1, 2, 3])
+
+    def test_host_sin_credenciales(self):
+        self.assertEqual(engines.url_host("https://token123@pasarela.empresa/v1/audio"), "pasarela.empresa")
+        self.assertEqual(engines.url_host("https://u:clave@x.y:8443/v1"), "x.y")
+        self.assertEqual(engines.url_host("https://api.groq.com/openai/v1/audio/transcriptions"), "api.groq.com")
+        self.assertEqual(engines.url_host(""), "el servicio")
 
 
 # ----------------------------------------------------------------------------- servidor
@@ -511,6 +586,9 @@ class FakeModels:
     def cancel(self, name):
         self.cancelled.append(name)
         return True
+
+    def cancelled_by_user(self, name):
+        return name in self.cancelled
 
     def state(self, name):
         return {"model": name, "ready": name in self.ready, "size_mb": 1531, "downloading": name in self.started,
@@ -559,6 +637,17 @@ class ServidorModelosTests(TempTree):
         self.assertEqual(fake.started, ["medium"])  # el directo pasa a medium y su modelo empieza a bajar
         self.assertEqual(c["descarga"], "medium")
         self.assertEqual(c["procesado"], "agente")
+        # «Guardar» con el mismo modo no la vuelve a empezar (revisión del 07/11: relanzaba una descarga cancelada)
+        with mock.patch.object(engines, "MODELS", fake), mock.patch.object(server, "log"):
+            c = a.save_settings({"procesado": "agente"})
+        self.assertEqual((fake.started, c["descarga"]), (["medium"], None))
+        # cancelada en Ajustes: cambiar de modo tampoco la empieza sola
+        fake3 = FakeModels()
+        fake3.cancelled.append("medium")
+        b = self.app(procesado="api", preset="nube", live_preset="nube")
+        with mock.patch.object(engines, "MODELS", fake3), mock.patch.object(server, "log"):
+            c = b.save_settings({"procesado": "local"})
+        self.assertEqual((fake3.started, c["descarga"]), ([], None))
         # ya descargado, o con API externa: nada
         fake2 = FakeModels(ready={"medium"})
         with mock.patch.object(engines, "MODELS", fake2), mock.patch.object(server, "log"):
@@ -582,6 +671,15 @@ class ServidorModelosTests(TempTree):
             a.save_settings({"procesado": "api", "live_preset": "medium"})
             st = a.settings.get()
             self.assertEqual((st["preset"], st["live_preset"]), ("nube", "medium"))
+        # ida y vuelta (revisión del 07/11): con la API, la cola en «turbo» (local, a propósito) y el directo en la
+        # nube; a Claude y de vuelta a la API: vuelven los de antes, no la nube en todo
+        t = self.app(procesado="api", preset="turbo", live_preset="nube",
+                     cloud=dict(server.DEFAULT_SETTINGS["cloud"], api_key="gsk_" + "k" * 30))
+        with mock.patch.object(engines, "MODELS", FakeModels()), mock.patch.object(server, "log"):
+            t.save_settings({"procesado": "agente"})
+            self.assertEqual((t.settings.get()["preset"], t.settings.get()["live_preset"]), ("turbo", "medium"))
+            t.save_settings({"procesado": "api"})
+        self.assertEqual((t.settings.get()["preset"], t.settings.get()["live_preset"]), ("turbo", "nube"))
         # sin clave, a API externa: los motores siguen donde estaban (sin clave no hay nube que usar)
         b = self.app(procesado="local", preset="rapido", live_preset="medium")
         with mock.patch.object(engines, "MODELS", FakeModels()), mock.patch.object(server, "log"):
@@ -706,9 +804,13 @@ class InterfazModelosTests(unittest.TestCase):
         app = static("app.js")
         for fn in ("modelosHtml", "bindModelos", "motorHtml", "motorNotaHtml"):
             self.assertRegex(app, rf"typeof {fn} === 'function'", fn)
-        # «Dónde se procesan» se aplica al elegirlo, con su confirmación, y la descarga se anuncia
+        # «Dónde se procesan»: elegir no aplica (un clic de prueba no pasa un directo de la nube al PC); el cambio
+        # pendiente se dice, con «Aplicar ahora», y al cerrar Ajustes sin aplicarlo se avisa
         self.assertIn("api('/api/settings', { procesado: v })", app)
         self.assertIn('id="procGuardado"', app)
+        self.assertIn('id="procAplicar"', app)
+        self.assertIn("pero aún no está aplicado", app)
+        self.assertIn("No se ha aplicado ${procNombre[v]}", app)
         self.assertIn("if (c.descarga) toast(", app)
         # el directo dice dónde transcribe y, si falló, por qué
         self.assertIn("motorHtml(sel)", app)

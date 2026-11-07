@@ -369,6 +369,19 @@ def media_duration(path):
     return None
 
 
+def _valid_frames(frames, av):
+    """Los fotogramas que se pueden decodificar: uno danado a mitad se salta (como hace faster-whisper), en vez de
+    cortar ahi el audio sin decirlo."""
+    it = iter(frames)
+    while True:
+        try:
+            yield next(it)
+        except StopIteration:
+            return
+        except av.error.InvalidDataError:
+            continue
+
+
 def decode_16k(path, start=0.0, cancelled=lambda: False):
     """Cualquier audio/video a int16 16 kHz mono, frame a frame (la mitad de memoria que float32)."""
     import av
@@ -380,7 +393,7 @@ def decode_16k(path, start=0.0, cancelled=lambda: False):
             if s is None:
                 raise EngineError("El archivo no tiene pista de audio.")
             rs = av.AudioResampler(format="s16", layout="mono", rate=16000)
-            frames = c.decode(s)
+            frames = _valid_frames(c.decode(s), av)
             for fr in itertools.chain(frames, [None]):  # perezoso: no carga el archivo entero antes
                 if cancelled():
                     raise Cancelled()
@@ -597,6 +610,7 @@ class WhisperModels:
         self.models = models or WHISPER_MODELS
         self.lock = threading.Lock()
         self.jobs = {}  # modelo -> estado de su ultima descarga
+        self.user_cancelled = set()  # cancelados en Ajustes: no se vuelven a empezar solos
         self.sleep = time.sleep  # los tests la sustituyen
 
     # --- donde estan
@@ -630,12 +644,15 @@ class WhisperModels:
 
     # --- descarga
     def start(self, name):
-        """Empieza la descarga en segundo plano si no esta ya en el PC ni en marcha. Devuelve su estado (dict vivo)."""
+        """Empieza la descarga en segundo plano si no esta ya en el PC ni en marcha. Devuelve su estado (dict vivo).
+        Si se estaba cancelando (el hilo aun no lo ha visto), sigue: «Descargar» justo despues de «Cancelar» vale."""
         if name not in self.models:
             raise EngineError(f"No sé descargar el modelo «{name}».")
         with self.lock:
+            self.user_cancelled.discard(name)
             j = self.jobs.get(name)
             if j and j["running"]:
+                j["cancel"] = False
                 return j
             j = {"running": True, "done": 0, "total": self.size(name), "error": None, "cancel": False,
                  "samples": [], "finished": None}
@@ -644,12 +661,19 @@ class WhisperModels:
         return j
 
     def cancel(self, name):
+        """«Cancelar» en Ajustes. Queda apuntado: nada la vuelve a empezar por su cuenta (ni elegir el modo ni
+        «Guardar»); si una transcripcion necesita el modelo, o se pulsa «Descargar», si."""
         with self.lock:
             j = self.jobs.get(name)
             if j and j["running"]:
                 j["cancel"] = True
+                self.user_cancelled.add(name)
                 return True
         return False
+
+    def cancelled_by_user(self, name):
+        with self.lock:
+            return name in self.user_cancelled
 
     def ensure(self, name, report=None, cancelled=None):
         """Carpeta del modelo: si falta, lo descarga (o espera a la descarga en marcha) contando el progreso con
@@ -724,10 +748,18 @@ class WhisperModels:
                                   f"quedan {fmt_mb(free)} MB libres. Libera espacio y vuelve a probar.")
             self.log(f"modelo {name}: descargando {fmt_mb(need)} MB de {WHISPER_HOST}"
                      + (f" (ya había {fmt_mb(have)} MB)" if have else ""))
-            base = 0
-            for f, size, sha in files:
-                self._file(j, name, repo, rev, dest, f, size, sha, base)
-                base += size
+            while True:
+                try:
+                    base = 0
+                    for f, size, sha in files:
+                        self._file(j, name, repo, rev, dest, f, size, sha, base)
+                        base += size
+                    break
+                except Cancelled:
+                    with self.lock:
+                        if j["cancel"]:
+                            raise
+                    # se pulso «Descargar» mientras se cancelaba: sigue donde iba
             self.log(f"modelo {name} descargado en {time.time() - t0:.0f} s")
         except Cancelled:
             j["error"] = "Descarga cancelada. Cuando vuelvas a pulsar «Descargar», sigue donde se quedó."
@@ -778,7 +810,7 @@ class WhisperModels:
                 for block in iter(lambda: f.read(4 << 20), b""):
                     h.update(block)
         url = self.url.format(repo=repo, rev=rev, file=fname)
-        fails, why = 0, None
+        fails, why, best = 0, None, have  # best: lo mas lejos que se ha llegado (solo pasarlo cuenta como avanzar)
         while have < size:
             if j["cancel"]:
                 raise Cancelled()
@@ -793,6 +825,7 @@ class WhisperModels:
             except requests.RequestException as e:
                 fails, why = fails + 1, connection_error(e, WHISPER_HOST, "la descarga")
                 continue
+            antes = best
             try:
                 code = r.status_code
                 if code == 416 and have:  # lo pedido empieza al final: el .part ya esta entero
@@ -819,9 +852,13 @@ class WhisperModels:
                         if h:
                             h.update(chunk)
                         have += len(chunk)
-                        fails = 0  # avanza: los intentos cuentan desde aqui
+                        if have > best:  # avanza de verdad: los intentos cuentan desde aqui
+                            best, fails = have, 0
                         self._progress(j, base + have)
+                if have < size and best == antes:  # respuesta vacia o corta sin pasar de donde ya se estaba
+                    fails, why = fails + 1, f"{WHISPER_HOST} corta la descarga sin enviar datos nuevos."
             except requests.RequestException as e:  # cortada o parada DOWNLOAD_STALL_S: se sigue desde donde iba
+                # si avanzo, fails volvio a 0 dentro: este es el primer reintento desde ahi
                 fails, why = fails + 1, connection_error(e, WHISPER_HOST, "la descarga")
             finally:
                 r.close()
@@ -941,8 +978,8 @@ class WorkerClient:
         durante idle_timeout) o se cancela, mata el proceso."""
         import json
         import queue
-        if req.get("model") and not req.get("path") and MODELS is not None:  # la carpeta local: Whisper no baja nada
-            req = dict(req, path=MODELS.path(req["model"]))
+        if req.get("model") and not req.get("model_path") and MODELS is not None:  # la carpeta local: no baja nada
+            req = dict(req, model_path=MODELS.path(req["model"]))
         with self.lock:
             payload = audio.astype("<f4").tobytes() if audio is not None else b""
             msg = (json.dumps(dict(req, n=len(payload) // 4)) + "\n").encode("utf-8")
@@ -996,7 +1033,7 @@ class WorkerClient:
         path = MODELS.ensure(model, on_progress, cancelled) if MODELS is not None else None
         if on_progress:
             on_progress({"stage": f"Cargando el modelo {model}…"})
-        self.request({"op": "load", "model": model, "threads": threads, "path": path}, on_progress=on_progress,
+        self.request({"op": "load", "model": model, "threads": threads, "model_path": path}, on_progress=on_progress,
                      timeout=LOAD_TIMEOUT_S if MODELS is not None else 3600, cancelled=cancelled)
         return True
 
@@ -1575,8 +1612,12 @@ def api_error(r):
 
 
 def url_host(url):
-    m = re.match(r"https?://([^/:?#]+)", url or "")
-    return m.group(1) if m else "el servicio"
+    """El nombre del servidor, nunca el usuario o la clave que pudiera llevar la URL (https://token@pasarela/...)."""
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(url or "").hostname or "el servicio"
+    except ValueError:
+        return "el servicio"
 
 
 def cloud_http_error(r, cfg, model=None):
