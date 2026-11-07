@@ -3,6 +3,7 @@ name: ui-smoke
 # La interfaz en un navegador real (Playwright + Chromium): arranque con token, ⚙ Ajustes, Reuniones, Calendario,
 # Inicio y el dialogo de Grabar sin errores de JavaScript; el aviso de «version anterior abierta» y el de servidor
 # lento. Hasta el 02/11/2026 ningun test abria la interfaz y una pantalla con los botones muertos pasaba la suite.
+# test_ui_voces: poner nombre a un «Tú» equivocado, «No soy yo» y «Copiar texto» con hablantes (msg 1170, 07/11/2026).
 on:
   push:
     paths: ["_app/**", "tests/**", "requirements.txt", ".github/workflows/ui-smoke.yml"]
@@ -33,7 +34,7 @@ jobs:
         working-directory: tests
         shell: bash
         run: |
-          python -m unittest -v test_ui_smoke 2>&1 | tee salida.txt
+          python -m unittest -v test_ui_smoke test_ui_voces 2>&1 | tee salida.txt
           test ${PIPESTATUS[0]} -eq 0
-          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke se ha saltado"; exit 1; fi
+          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke o test_ui_voces se ha saltado"; exit 1; fi
           grep -q "^Ran [1-9][0-9]* tests\?" salida.txt

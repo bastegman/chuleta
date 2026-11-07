@@ -51,6 +51,40 @@ Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta
   Ajustes, descarga y carga Whisper medium de verdad con su progreso, transcribe en directo y desde la cola, y comprueba
   lo que enseña «Modelo»; Groq contra un falso local y Claude Code con uno falso en el PATH (nunca claves reales).
 
+### Quién habla: poner nombre ya no te convierte en «Tú» (07/11/2026)
+- Poner nombre a un hablante dice quién es ese hablante en esta reunión: una persona que ya se llama así (sin
+  distinguir mayúsculas ni tildes: elegir «Ana» de la lista ya no crea otra Ana) o una nueva. Antes, si ese hablante
+  salía como «Tú» (por el micro o por tu huella), «Guardar» le cambiaba el nombre a TU persona y, con «Recordar», le
+  guardaba la voz de la otra persona: desde ahí esa persona salía como tú en otras reuniones y sus frases iban al
+  resumen con tu nombre. Ahora tu persona solo cambia de nombre en Ajustes > Voces y solo recibe huellas de un
+  hablante que eres tú. Corregir una errata del nombre en todas sus reuniones es una casilla aparte («solo corrijo el
+  nombre»). Escribir tu propio nombre en otro hablante crea otra persona (un compañero puede llamarse igual): tú te
+  marcas con «Soy yo», que ya no usa el nombre del cuadro (tu persona se llama «Yo» hasta que la cambies en Ajustes).
+- La persona asignada manda sobre la heurística del micro: un hablante al que pones nombre deja de salir como «Tú»,
+  igual en pantalla que en el resumen. «No soy yo» quita un «Tú» mal puesto; «Soy yo» lo mueve al hablante bueno (y el
+  que lo era solo por el micro vuelve a «Persona N»). «Soy yo» ya no renombra tu persona con el nombre que hubiera en
+  el cuadro. «Fusionar con…» desde «Tú» ya no funde tu persona dentro de otra (esa persona pasaba a ser «Tú» con tus
+  huellas): en ese caso el desplegable es «Es…» y reasigna. Tu persona ya no se fusiona con ninguna otra, en ningún
+  sentido (al revés te quedabas con la voz de la otra); el servidor lo rechaza.
+- Lo que dejó el fallo en `voces.json`: si tu persona guarda huellas que no se parecen entre sí (la voz de otra
+  persona guardada como tuya), Ajustes > Voces lo marca con ⚠ y, mientras, tu voz no se reconoce sola por huella
+  (pregunta «¿Tú?»). Al decir que un hablante que salía como tú es otra persona (o «No soy yo»), se quitan de tu
+  persona las huellas casi iguales a esa voz (coseno ≥ 0,8). Remedio completo: «Olvidar» tu fila y volver a guardarte
+  con «Soy yo».
+- Mientras se identifican las voces de una reunión no se pueden corregir sus hablantes (lo dicho se perdería), y una
+  etiqueta abierta sobre una identificación anterior pide volver a abrirse antes de guardar nada (con otra
+  identificación, «Persona 2» puede ser otra voz y «Recordar» guardaría la huella de otro).
+- Si el micro y la huella no cuadran, pregunta en vez de decidir: «¿Ana?» si el micro dice «Tú» y la huella dice Ana;
+  «¿Tú?» si la huella dice que eres tú pero en esa grabación ese hablante casi nunca habla por tu micro.
+- La línea de tiempo del micro (de donde sale «Tú») iba unos 0,9 s adelantada respecto al audio (la grabadora estampa
+  cada nivel con lo ya escrito, y escribe 1 s por detrás) y con ~1 de cada 6 pasos vacíos: con turnos cortos «Tú» no
+  salía. Se corrige al leerla, también en las reuniones ya grabadas al «Volver a identificar».
+- «Volver a identificar» conserva lo que ya corregiste a mano (nombres, «Soy yo», «No soy yo»), casando hablantes
+  nuevos y antiguos por tiempo; si falla o se cancela, el sidecar queda como estaba. Las huellas en memoria de la
+  identificación anterior se descartan antes de rediarizar (con «Recordar» se podía guardar la voz de otro hablante).
+- «Copiar texto» copia también quién habla, como la pantalla: un párrafo por turno con «Nombre: » delante al cambiar de
+  hablante (sin voces, igual que antes).
+
 ### Dónde se procesan tus reuniones (02/11/2026)
 - Ajustes empieza por una elección: **Solo en este PC** (Whisper local, nada sale del ordenador, sin resumen con IA),
   **Con tu cuenta de Claude** (transcripción local y resumen con Claude usando la suscripción del usuario, personal o
