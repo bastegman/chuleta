@@ -311,7 +311,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertIn("Comité de seguimiento", r["html"])
         self.assertTrue(r["text"].startswith("Comité de seguimiento · "), r["text"])
         self.assertIn("• Luis: escalar los permisos", r["text"])
-        for marca in ("##", "[ ]", "**", "[1:12]", "Participantes", "IA"):
+        for marca in ("##", "[ ]", "**", "[1:12]", "IA"):
             self.assertNotIn(marca, r["text"], marca)
         self.assertEqual(errores, [])
 

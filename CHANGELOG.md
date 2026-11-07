@@ -19,8 +19,13 @@ así llegaba al correo (auditoría de UX del rediseño, A5; mock 08).
 - Al portapapeles van dos versiones a la vez: **HTML** (Outlook, Teams y Word lo pegan con formato, con letra Aptos o
   Calibri; sin letra, Outlook pegaba en Times) y **texto limpio** de reserva (Bloc de notas, chats sin formato). Si el
   navegador no deja escribir HTML, solo el texto, y el aviso lo dice («sin formato»).
-- Los participantes que sugirió Outlook o Teams sin confirmar no salen (como en el resumen). Con asistentes
-  confirmados, la sección «Participantes» del resumen no se repite.
+- Los participantes que sugirió Outlook o Teams sin confirmar no salen en la cabecera (como en el resumen). La sección
+  «Participantes» del resumen va tal cual, con sus roles.
+- Fiel a lo que se ve en la pantalla: tablas como tablas (en el texto, «a · b»), listas numeradas, tareas hechas con
+  «✓», líneas de continuación dentro de su punto, negritas dentro de una tarea, enlaces como «texto (url)». Solo se
+  quitan los minutos entre corchetes, también en grupo, en rango y de más de 100 minutos (`[1:12, 3:40]`,
+  `[12:34–13:10]`, `[105:20]`); «(10:30)» se queda, porque puede ser una hora. Un audio sin fecha lleva su nombre, una
+  fecha imposible en el nombre del fichero ya no rompe la copia, y con el resumen en inglés la fecha va en inglés.
 - Sin firma de IA: es tu correo y ya lo revisas (decisión D10). La página sigue diciendo que el resumen es de la IA.
 - Desarrollo y CI: `test_copiar_correo.py` (el acta, con node), un ui-smoke que lee el portapapeles en Chromium, y
   `test_portapapeles_webview2.py`, que en `windows-real` abre WebView2, pulsa el botón con el ratón de Windows y lee los

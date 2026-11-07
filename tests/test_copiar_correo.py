@@ -10,6 +10,9 @@ import unittest
 
 from test_frontend import js_defs, read
 
+ACTA_DEFS = ["ACTA_FONT", "ACTA_T", "ACTA_L", "ACTA_MIN", "actaPlano", "actaInline", "actaItem", "actaCorreo",
+             "actaInfo"]
+
 RESUMEN = """## Resumen
 La migración va **en plazo** salvo el entorno de pruebas, bloqueado por permisos de red [1:12].
 
@@ -34,8 +37,7 @@ La migración va **en plazo** salvo el entorno de pruebas, bloqueado por permiso
 class ActaTests(unittest.TestCase):
     def run_js(self, code):
         defs = js_defs(read("app.js"), ["esc", "nfc", "pad", "MES", "DIA", "aDate"])
-        defs += "\n" + js_defs(read("notas.js"), ["ACTA_GENTE", "ACTA_FONT", "actaInline", "actaItem", "actaCorreo",
-                                                  "actaInfo"])
+        defs += "\n" + js_defs(read("notas.js"), ACTA_DEFS)
         r = subprocess.run(["node", "-e", defs + "\n" + code], capture_output=True, text=True, encoding="utf-8",
                            timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -62,8 +64,12 @@ class ActaTests(unittest.TestCase):
             "",
             "Próximos pasos",
             "• Luis: escalar los permisos de red y avisar por correo — viernes",
-            "• Ana: pasar el inventario actualizado",
-        ]) + "\n")  # con asistentes confirmados, la sección «Participantes» del resumen sobra
+            "• ✓ Ana: pasar el inventario actualizado",  # [x]: hecha, como en la pantalla
+            "",
+            "Participantes",  # se queda siempre: lleva los roles (y lo que el modelo escriba debajo)
+            "• Ana (cliente)",
+            "• Luis (equipo)",
+        ]) + "\n")
 
     def test_html_con_formato_y_sin_marcas(self):
         r = self.acta({"title": "Comité", "when": "viernes 6 nov, 10:00", "people": "Ana, Luis"})
@@ -75,8 +81,9 @@ class ActaTests(unittest.TestCase):
         self.assertIn("la <i>ventana</i> del sábado", h)
         self.assertIn("<li><b>Luis</b>: escalar los permisos de red y avisar por correo — viernes</li>", h)
         self.assertIn("<li><b>Plazo</b>: tres semanas para el piloto</li>", h)
-        self.assertEqual(h.count("<ul"), 3)
-        for marca in ("##", "[ ]", "[x]", "**", "[1:12]", "[1:02:10]", "Participantes", "- "):
+        self.assertEqual(h.count("<ul"), 4)
+        self.assertIn("<li>✓ <b>Ana</b>: pasar el inventario actualizado</li>", h)
+        for marca in ("##", "[ ]", "[x]", "**", "[1:12]", "[1:02:10]", "- "):
             self.assertNotIn(marca, h, marca)
             self.assertNotIn(marca, r["text"], marca)
 
@@ -86,10 +93,52 @@ class ActaTests(unittest.TestCase):
             self.assertNotIn(firma, r["text"], firma)
             self.assertNotIn(firma, r["html"], firma)
 
-    def test_sin_asistentes_confirmados_se_queda_la_seccion_del_resumen(self):
+    def test_sin_asistentes_confirmados_la_cabecera_no_los_lleva(self):
         r = self.acta({"title": "Comité", "when": "", "people": ""})
         self.assertTrue(r["text"].startswith("Comité\n\nResumen\n"))
         self.assertIn("Participantes\n• Ana (cliente)\n• Luis (equipo)\n", r["text"])
+
+    def test_lo_que_encontro_la_revision(self):
+        """Revisión independiente de f95c970 (07-nov): la puntuación solo se toca junto al minuto quitado; otros
+        formatos de minuto; tablas; listas numeradas, líneas de continuación y negritas dentro de una tarea; enlaces;
+        vallas de código; títulos con # al final."""
+        src = "\n".join([
+            "```markdown",
+            "## Resumen ##",
+            "Migrar la API a .NET 8 y el fichero .env [1:12]. Convertir a .pdf ([1:02:10]) y revisar [1:12, 3:40].",
+            "Del [12:34–13:10] al [105:20]; la reunión del lunes (10:30) sigue. Ver [el acta](https://x.example/a).",
+            "",
+            "| Riesgo | Impacto |",
+            "|---|---|",
+            "| Red | **Alto** |",
+            "",
+            "1. Primero [0:10]",
+            "2. Segundo",
+            "   que sigue en otra línea",
+            "- [ ] Luis: revisar el **contrato** antes del *viernes* [2:05]",
+            "```"])
+        out = self.run_js(f"console.log(JSON.stringify(actaCorreo({json.dumps(src)}, {{}})));")
+        r = json.loads(out)
+        self.assertEqual(r["text"], "\n".join([
+            "Resumen",
+            # dos líneas seguidas: un párrafo, como en la pantalla
+            "Migrar la API a .NET 8 y el fichero .env. Convertir a .pdf y revisar. Del al; la reunión del lunes "
+            "(10:30) sigue. Ver el acta (https://x.example/a).",
+            "Riesgo · Impacto",
+            "Red · Alto",
+            "1. Primero",
+            "2. Segundo que sigue en otra línea",
+            "• Luis: revisar el contrato antes del viernes",
+        ]) + "\n")
+        h = r["html"]
+        self.assertIn("<table", h)
+        self.assertIn("<td style=\"border:1px solid #bbb;padding:2pt 6pt;vertical-align:top\"><b>Riesgo</b></td>", h)
+        self.assertIn("<b>Alto</b>", h)
+        self.assertIn("<ol style=\"margin:0 0 6pt;padding-left:18pt\"><li>Primero</li><li>Segundo que sigue en otra "
+                      "línea</li></ol>", h)
+        self.assertIn("<li><b>Luis</b>: revisar el <b>contrato</b> antes del <i>viernes</i></li>", h)
+        for marca in ("```", "|", "##", "[1:", "(https", "()"):
+            self.assertNotIn(marca, h.replace("(https://x.example/a)", ""), marca)
 
     def test_escapa_el_html_y_aguanta_lo_raro(self):
         out = self.run_js("""
@@ -118,7 +167,10 @@ console.log(JSON.stringify(actaInfo(a)));
 console.log(JSON.stringify(actaInfo({date: new Date(2025, 0, 2, 9, 0).getTime(), label: 'Kick-off',
   props: {participantes: 'Ana', participantes_origen: 'outlook'}})));
 console.log(JSON.stringify(actaInfo({props: {}})));
-console.log(JSON.stringify(actaInfo(undefined)));""")
+console.log(JSON.stringify(actaInfo(undefined)));
+console.log(JSON.stringify(actaInfo({stem: 'Llamada con Iberdrola', props: {}})));
+console.log(JSON.stringify(actaInfo({date: NaN, stem: '2026-13-01 10-00-00 - X', label: 'X', props: {}})));
+console.log(JSON.stringify(actaInfo({date: new Date(2026, 10, 6, 10, 5).getTime(), props: {}}, 'en')));""")
         lines = [json.loads(x) for x in out.splitlines()]
         self.assertEqual(lines[0], {"title": "Comité de seguimiento", "when": "viernes 6 nov, 10:05",
                                     "people": "Ana, Luis"})
@@ -126,6 +178,10 @@ console.log(JSON.stringify(actaInfo(undefined)));""")
         self.assertEqual(lines[1], {"title": "Kick-off", "when": "jueves 2 ene 2025, 09:00", "people": ""})
         self.assertEqual(lines[2], {"title": "Reunión", "when": "", "people": ""})
         self.assertEqual(lines[3], {"title": "Reunión", "when": "", "people": ""})
+        # un audio sin fecha lleva su nombre (como la página); una fecha imposible no rompe la copia; en inglés
+        self.assertEqual(lines[4], {"title": "Llamada con Iberdrola", "when": "", "people": ""})
+        self.assertEqual(lines[5], {"title": "X", "when": "", "people": ""})
+        self.assertEqual(lines[6]["when"], "Friday 6 Nov, 10:05")
 
 
 class GanchosTests(unittest.TestCase):
@@ -140,7 +196,7 @@ class GanchosTests(unittest.TestCase):
         self.assertIn("new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }),", fn)
         self.assertIn("'text/plain': new Blob([text], { type: 'text/plain' })", fn)
         self.assertIn("navigator.clipboard.writeText(text)", fn)  # de reserva: el texto limpio
-        self.assertNotRegex(notas[notas.index("const ACTA_GENTE"):notas.index("function actaInfo")],
+        self.assertNotRegex(notas[notas.index("const ACTA_FONT"):notas.index("function actaInfo")],
                             r"[\U0001F300-\U0001FAFF☀-⛿]")
 
 

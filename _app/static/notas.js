@@ -335,66 +335,91 @@ const stampSecs = t => t.split(':').reduce((acc, x) => acc * 60 + +x, 0);
 
 /* ---------------------------------------------------------------- «Copiar para correo» */
 /* El resumen como acta para un correo o un chat: en HTML (Outlook y Teams lo pegan con formato) y en texto limpio, de
-   reserva. Sin Markdown (##, **, - [ ]), sin los minutos [mm:ss] (en un correo no saltan al audio) y sin firma de IA:
-   es su correo y ya lo revisa (decisión D10). info: {title, when, people}; con asistentes confirmados, la sección de
-   participantes del resumen sobra (van en la cabecera). La letra va puesta: sin ella, Outlook pega en Times. */
-const ACTA_GENTE = /^(participantes|asistentes|participants|attendees|teilnehmer(innen)?|partecipanti)$/i;
+   reserva. Sin Markdown (##, **, - [ ], tablas con |), sin los minutos [mm:ss] (en un correo no saltan al audio) y sin
+   firma de IA: es su correo y ya lo revisa (decisión D10). Lo demás va tal cual, también la lista de participantes del
+   resumen (con sus roles). info: {title, when, people}. La letra va puesta: sin ella, Outlook pega en Times. */
 const ACTA_FONT = 'font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt';
-function actaInline(s, html) {  // un trozo del resumen: sin minutos y con negrita y cursiva (en HTML) o sin marcas
-  s = String(s).replace(/\s*\[(?:\d+:)?\d{1,2}:\d{2}\]/g, '').replace(/\s+([,.;:)])/g, '$1').trim();
+const ACTA_T = '(?:\\d+:)?\\d{1,3}:\\d{2}';  // 1:12, 105:20, 1:02:10
+const ACTA_L = `${ACTA_T}(?:\\s*[-–—]\\s*${ACTA_T})?(?:(?:\\s*[,;]\\s*|\\s+(?:y|e|and)\\s+)${ACTA_T}(?:\\s*[-–—]\\s*${ACTA_T})?)*`;
+// [1:12], [1:12, 3:40], [12:34–13:10] y ([1:02:10]), con el espacio de delante; «(10:30)» no, que puede ser una hora
+const ACTA_MIN = new RegExp(`\\s*(?:\\(\\s*\\[${ACTA_L}\\]\\s*\\)|\\[${ACTA_L}\\])`, 'g');
+function actaPlano(s) {  // sin minutos y con los enlaces como «texto (url)»; solo se toca lo que se quita (no «a .NET»)
+  return String(s).replace(ACTA_MIN, '').replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)').trim();
+}
+function actaInline(s, html) {  // un trozo del resumen: negrita y cursiva en HTML; en el texto, sin marcas
+  s = actaPlano(s);
   if (!html) return s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2').replace(/`([^`]+)`/g, '$1');
   return esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>').replace(/`([^`]+)`/g, '$1');
 }
-function actaItem(s) {  // «Responsable: tarea» con el responsable en negrita (también «Plazo: …» en los puntos)
-  const t = actaInline(s, false), m = t.match(/^([^:]{1,40}):\s+(.+)$/);
-  return m && m[1].split(/\s+/).length <= 5 && !/https?$/i.test(m[1]) ? `<b>${esc(m[1])}</b>: ${actaInline(m[2], true)}` : actaInline(s, true);
+function actaItem(s) {  // «Responsable: tarea» con el responsable en negrita (también «Plazo: …»); el resto, con su formato
+  const t = String(s).replace(ACTA_MIN, ''), i = t.indexOf(': '), head = i > 0 ? actaInline(t.slice(0, i), false) : '';
+  return head && head.length <= 40 && head.split(/\s+/).length <= 5 && !/https?$/i.test(head)
+    ? `<b>${esc(head)}</b>: ${actaInline(t.slice(i + 2), true)}` : actaInline(t, true);
 }
 function actaCorreo(sum, info) {
   info = info || {};
-  const people = String(info.people || '').trim(), secs = [{ h: '', blocks: [] }];
-  let para = null, list = null;
+  const secs = [{ h: '', blocks: [] }];
+  let para = null, list = null, table = null;
   const cur = () => secs[secs.length - 1];
-  for (const l of String(sum || '').replace(/\r/g, '').split('\n')) {
+  for (let l of String(sum || '').replace(/\r/g, '').split('\n')) {
     let m;
-    if ((m = l.match(/^\s*#{1,6}\s+(.*)/))) { para = list = null; secs.push({ h: m[1].trim(), blocks: [] }); }
-    else if (!l.trim() || /^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) para = list = null;
-    else if ((m = l.match(/^\s*(?:[-*•+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.*)/))) {
-      para = null;
-      if (!list) { list = { items: [] }; cur().blocks.push(list); }
-      if (m[1].trim()) list.items.push(m[1]);
-    } else {
-      list = null;
+    if (/^\s*(```|~~~)/.test(l)) continue;  // un resumen envuelto en ```markdown: fuera las vallas
+    l = l.replace(/^\s*>\s?/, '');  // citas: su texto
+    if ((m = l.match(/^\s*#{1,6}\s+(.*?)\s*#*\s*$/))) { para = list = table = null; secs.push({ h: m[1], blocks: [] }); }
+    else if (!l.trim() || /^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) para = list = table = null;
+    else if (/^\s*\|/.test(l)) {
+      para = list = null;
+      if (/^\s*\|?\s*:?-{2,}/.test(l)) continue;  // la fila |---|---|
+      if (!table) { table = { rows: [] }; cur().blocks.push(table); }
+      table.rows.push(l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim()));
+    } else if ((m = l.match(/^\s*(?:[-*•+]|(\d+)[.)])\s+(?:\[([ xX])\]\s*)?(.*)/))) {
+      para = table = null;
+      const ol = !!m[1];
+      if (!list || list.ol !== ol) { list = { ol, items: [] }; cur().blocks.push(list); }
+      if (m[3].trim()) list.items.push({ t: m[3], done: /x/i.test(m[2] || '') });
+    } else if (list && list.items.length && /^\s+\S/.test(l)) list.items[list.items.length - 1].t += ' ' + l.trim();
+    else {
+      list = table = null;
       if (!para) { para = { lines: [] }; cur().blocks.push(para); }
       para.lines.push(l.trim());
     }
   }
-  const head = [info.title, info.when, people].map(x => String(x || '').trim()).filter(Boolean);
+  const head = [info.title, info.when, info.people].map(x => String(x || '').trim()).filter(Boolean);
   const text = [], html = [];
   if (head.length) {
     text.push(head.join(' · '));
     html.push(`<p style="margin:0 0 10pt"><b>${esc(head[0])}</b>${head.slice(1).map(x => ' · ' + esc(x)).join('')}</p>`);
   }
+  const td = 'border:1px solid #bbb;padding:2pt 6pt;vertical-align:top';
   for (const s of secs) {
-    const blocks = s.blocks.filter(b => (b.items || b.lines).length);
-    if (!blocks.length || (s.h && people && ACTA_GENTE.test(actaInline(s.h, false).replace(/[:.]$/, '')))) continue;
+    const blocks = s.blocks.filter(b => (b.items || b.lines || b.rows).length);
+    if (!blocks.length) continue;
     if (s.h) { text.push('', actaInline(s.h, false)); html.push(`<p style="margin:12pt 0 4pt"><b>${actaInline(s.h, true)}</b></p>`); }
     for (const b of blocks) {
       if (b.lines) { text.push(actaInline(b.lines.join(' '), false)); html.push(`<p style="margin:0 0 6pt">${actaInline(b.lines.join(' '), true)}</p>`); }
-      else {
-        b.items.forEach(it => text.push('• ' + actaInline(it, false)));
-        html.push(`<ul style="margin:0 0 6pt;padding-left:18pt">${b.items.map(it => `<li>${actaItem(it)}</li>`).join('')}</ul>`);
+      else if (b.rows) {
+        b.rows.forEach(r => text.push(r.map(c => actaInline(c, false)).join(' · ')));
+        html.push(`<table style="border-collapse:collapse;margin:0 0 6pt">${b.rows.map((r, k) => `<tr>${r.map(c =>
+          `<td style="${td}">${k ? actaInline(c, true) : `<b>${actaInline(c, true)}</b>`}</td>`).join('')}</tr>`).join('')}</table>`);
+      } else {
+        const tag = b.ol ? 'ol' : 'ul';
+        b.items.forEach((it, k) => text.push(`${b.ol ? `${k + 1}.` : '•'} ${it.done ? '✓ ' : ''}${actaInline(it.t, false)}`));
+        html.push(`<${tag} style="margin:0 0 6pt;padding-left:18pt">${b.items.map(it => `<li>${it.done ? '✓ ' : ''}${actaItem(it.t)}</li>`).join('')}</${tag}>`);
       }
     }
   }
   return { text: text.join('\n').trim() + '\n', html: `<div style="${ACTA_FONT}">${html.join('')}</div>` };
 }
-/* Título, fecha («viernes 6 nov, 10:00») y asistentes CONFIRMADOS de la reunión: los que sugirió Outlook o Teams sin
-   confirmar no salen (como en el resumen y los destinos de salida). */
-function actaInfo(a) {
-  const p = (a && a.props) || {}, d = a ? aDate(a) : null;
+/* Título, fecha («viernes 6 nov, 10:00»; en inglés si el resumen va en inglés) y asistentes CONFIRMADOS de la reunión:
+   los que sugirió Outlook o Teams sin confirmar no salen (como en el resumen y los destinos de salida). Un audio sin
+   fecha lleva su nombre, como en la página; una fecha imposible en el nombre del fichero no rompe la copia. */
+function actaInfo(a, lang) {
+  const p = (a && a.props) || {}, d0 = a ? aDate(a) : null, d = d0 && !isNaN(d0) ? d0 : null, en = lang === 'en';
   const y = d && d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : '';
-  return { title: nfc(p.titulo || (a && a.label) || 'Reunión'),
-    when: d ? `${DIA[d.getDay()].toLowerCase()} ${d.getDate()} ${MES[d.getMonth()]}${y}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : '',
+  const dia = !d ? '' : en ? d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' }) + y
+    : `${DIA[d.getDay()].toLowerCase()} ${d.getDate()} ${MES[d.getMonth()]}${y}`;
+  return { title: nfc(p.titulo || (a && a.label) || (!d && a && a.stem) || (en ? 'Meeting' : 'Reunión')),
+    when: d ? `${dia}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : '',
     people: p.participantes && !p.participantes_origen ? nfc(String(p.participantes)) : '' };
 }
 async function loadSummary(a) {
@@ -459,7 +484,7 @@ main.addEventListener('click', async e => {
       setTimeout(() => renderSummary(a), 600);
     } catch (err) { toast(esc(err.message), 'err'); }
   } else if (act.dataset.act === 'sum-copy' && S.sum) {
-    const r = actaCorreo(S.sum.text, actaInfo(a && a.path === S.sum.path ? a : S.audios.get(S.sum.path)));
+    const r = actaCorreo(S.sum.text, actaInfo(a && a.path === S.sum.path ? a : S.audios.get(S.sum.path), S.config?.summary?.lang));
     copyRich(r.html, r.text, 'Copiado para correo: pégalo en Outlook o en Teams');
   }
   else if (act.dataset.act === 'sum-to-notes' && a && S.sum) {

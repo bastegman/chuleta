@@ -17,7 +17,7 @@ import sys
 import tempfile
 import unittest
 
-from test_copiar_correo import RESUMEN
+from test_copiar_correo import ACTA_DEFS, RESUMEN
 from test_frontend import js_defs, read
 
 WIN = sys.platform == "win32"
@@ -164,7 +164,7 @@ def pagina():
     start = app.index("async function copyRich(")
     rich = app[start:app.index("\n}\n", start) + 3]
     defs = "\n".join([js_defs(app, ["esc", "nfc", "pad", "MES", "DIA", "aDate"]), rich,
-                      js_defs(notas, ["ACTA_GENTE", "ACTA_FONT", "actaInline", "actaItem", "actaCorreo", "actaInfo"])])
+                      js_defs(notas, ACTA_DEFS)])
     return ("<!doctype html><meta charset=\"utf-8\"><title>probe</title>"
             "<style>html,body{margin:0;height:100%}button{width:100%;height:100%;font-size:32px}</style>"
             "<button id=\"b\">Copiar para correo</button><script>\n" + defs + "\n"
