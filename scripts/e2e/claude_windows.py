@@ -36,6 +36,13 @@ PROMPT = ("Sigue las INSTRUCCIONES que vienen por la entrada estandar y aplicala
           "Responde solo con el resultado pedido.")
 
 
+for _s in (sys.stdout, sys.stderr):  # la consola del runner es cp1252: lo que no quepa, sustituido (no una excepción)
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+
 def paso(nombre, **datos):
     datos = {"paso": nombre, **datos}
     R["pasos"].append(datos)
