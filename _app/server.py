@@ -12,6 +12,7 @@ para ver los mensajes). La interfaz se abre en una ventana propia (window.py, We
 """
 import atexit
 import copy
+import errno
 import hashlib
 import hmac
 import json
@@ -47,6 +48,7 @@ from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WIND
                     parse_srt, protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
 from common import TOKEN_FILE, TOKEN_HEADER, local_opener, read_token  # sesion local (P1-02) y loopback sin proxy
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
+from bandeja import Bandeja
 from window import Window, set_app_id
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -3084,7 +3086,7 @@ DIAG_LINES = (
     "   modelos de voces descargados",
     "   voces.json no se pudo leer ({e}); se aparta como voces.json.ilegible",
     # arranque, ajustes, grabadora, llamadas y apagado
-    "arranque · {u} · carpeta {t} · datos {t} · Python {v}",
+    "arranque · {u} · carpeta {t} · datos {t} · Python {v}⟦ · pid {n}⟧",
     "=" * 64,  # el recuadro de main() con la URL, la carpeta y como apagar
     f"  {APP_NAME.upper()}  ·  {{u}}",
     "  Carpeta: {t}",
@@ -3106,9 +3108,44 @@ DIAG_LINES = (
     "   reunión detectada ({a}): aviso enviado",
     "   Outlook: GetDateFormatEx/GetTimeFormatEx han fallado (error {n}): el filtro va con el formato de EE. UU.",
     "apagar pedido desde la interfaz ({n} trabajos en cola o en marcha)",
+    "apagar pedido desde la bandeja ({n} trabajos en cola o en marcha)",
+    # icono en la bandeja (bandeja.py) y arrancar con Windows
+    "icono en la bandeja (hwnd {n})",
+    "icono en la bandeja (hwnd None)",
+    "   sin icono en la bandeja ({c}): cerrar la ventana la deja en segundo plano como antes",
+    "icono de la bandeja retirado",
+    "   icono de la bandeja: el hilo de la ventana no contesta; se quita desde aquí",
+    "   primer cierre con la X: aviso en el icono de la bandeja",
+    "   salir desde la bandeja: está grabando, no se sale",
+    "   aviso: {t}",
+    "   salir desde la bandeja: cancelado (trabajos en marcha)",
+    "arrancar con Windows: activado",
+    "arrancar con Windows: desactivado",
+    "arrancar con Windows: acceso directo actualizado",
+    "   arrancar con Windows: {e}",
+    "ventana oculta: la app sigue en segundo plano (el acceso directo la vuelve a abrir)",
     "apagando ({t})",
     "apagado",
     "la app ya estaba abierta: se ensena su ventana",
+    # doble apertura al arrancar (fix-doble-apertura): la segunda copia, la marca de instancia y la ventana en camino
+    "la app ya estaba abierta: se enseña su ventana · pid {n}",
+    "otra copia tiene la marca y no contesta (arrancando): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (libre): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (otro): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "otra copia tiene la marca y no contesta (hermana): si se está abriendo, su ventana saldrá sola · pid {n}",
+    "   aún se está abriendo: su ventana saldrá sola",
+    "   la otra copia: pid {n}, desde hace {n} s",
+    "   no contesta a /api/mostrar: se abre en Edge desde aquí",
+    "   /api/mostrar: {e}",
+    "   Edge se ha abierto hace {n} s: no se abre otro",
+    "   marca de instancia: no se puede abrir ({e})",
+    "   marca de instancia: no se puede bloquear ({e})",
+    "   marca de instancia: sin carpeta de datos ({e})",
+    "   la versión anterior se ha cerrado pero su marca de instancia sigue: se continúa sin ella",
+    "   se ha vuelto a abrir mientras arrancaba: la ventana se trae al frente",
+    "la ventana propia no se ha enseñado en {n} s: se abre en Edge",
+    "ventana abierta (WebView2; hwnd {n})",
+    "ventana abierta (WebView2; hwnd None)",
     "AppUserModelID {t}: fijado",
     "AppUserModelID {t}: no disponible",
     "la ventana se ha cerrado sin apagar: la app sigue en segundo plano",
@@ -3550,14 +3587,17 @@ class App:
         self.jobs.shutdown()
 
     def apagar(self, b):
-        """Ajustes > Apagar: la unica salida explicita cuando no hay consola. Con una grabacion en curso se niega;
-        si no, responde y el proceso termina al cabo de 0,5 s (schedule_shutdown)."""
+        """Ajustes > Apagar y «Salir» del icono de la bandeja (tray_salir, con b["origen"] == "bandeja"): las unicas
+        salidas explicitas cuando no hay consola, y la misma. Con una grabacion en curso se niega; si no, responde y el
+        proceso termina al cabo de 0,5 s (schedule_shutdown)."""
         if self.rec and self.rec.alive():
             raise ApiError(f"Hay una grabación en curso. Para la grabación antes de apagar {APP_NAME}.", 409)
         with self.jobs.lock:
             activos = sum(1 for j in self.jobs.list if j.status in ("queued", "running"))
-        log(f"apagar pedido desde la interfaz ({activos} trabajos en cola o en marcha)")
-        schedule_shutdown("Ajustes > Apagar")
+        bandeja = b.get("origen") == "bandeja"
+        log(f"apagar pedido desde {'la bandeja' if bandeja else 'la interfaz'} ({activos} trabajos en cola o en "
+            "marcha)")
+        schedule_shutdown("bandeja > Salir" if bandeja else "Ajustes > Apagar")
         return {"ok": True, "activos": activos}
 
     def ocultar(self, b):
@@ -3565,9 +3605,15 @@ class App:
         return {"ok": bool(WINDOW is not None and WINDOW.hide())}
 
     def mostrar(self, b):
-        """El acceso directo, al ver que la app ya corre, pide la ventana: la propia si existe; si no, Edge."""
-        if WINDOW is not None and WINDOW.show():
-            return {"ok": True}
+        """El acceso directo, al ver que la app ya corre, pide la ventana: la propia si existe. Si aun se esta abriendo
+        (pending: en un PC lento, decenas de segundos), nada mas: sale sola y se trae al frente; abrir Edge ahi era la
+        segunda ventana del 02/11/2026. Sin ventana propia, Edge (open_ui no lo repite si lo acaba de abrir)."""
+        if WINDOW is not None:
+            r = WINDOW.request_show()
+            if r == "pending":
+                return {"ok": True, "pending": True}
+            if r:
+                return {"ok": True}
         open_ui()
         return {"ok": True, "browser": True}
 
@@ -5384,7 +5430,7 @@ class Handler(BaseHTTPRequestHandler):
         if (u.path.startswith("/api/") or u.path == "/media") and not self._token_ok():
             return self._denied()
         a = self.app
-        routes = {"/api/ping": lambda q: {"app": "audios", "version": VERSION},
+        routes = {"/api/ping": lambda q: {"app": "audios", "version": VERSION, "pid": os.getpid()},
                   "/api/config": a.config, "/api/tree": a.tree,
                   "/api/transcript": a.transcript, "/api/doc": a.doc, "/api/search": a.search,
                   "/api/jobs": a.jobs_list, "/api/rec/devices": a.rec_devices, "/api/rec/status": a.rec_status,
@@ -5392,7 +5438,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
                   "/api/reunion/actual": a.reunion_actual, "/api/perfil": a.perfil_get,
                   "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
-                  "/api/agente/estado": a.agente_estado}
+                  "/api/agente/estado": a.agente_estado,
+                  "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()}}
         try:
             if u.path in routes:
                 t0 = time.time()
@@ -5443,7 +5490,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
-                  "/api/acerca/abrir": a.acerca_abrir}
+                  "/api/acerca/abrir": a.acerca_abrir,
+                  "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)}}
         try:
             u = urlparse(self.path)
             if self.headers.get("Transfer-Encoding"):  # sin Content-Length no se sabe donde acaba el cuerpo (P0-1)
@@ -5565,17 +5613,35 @@ def ui_url(token=None):
     return URL + (f"?t={token}" if token else "")
 
 
-def open_ui(token=None):
+UI_REOPEN_GAP = 15.0  # s alrededor del Edge del arranque en los que no se abre otro: aun puede estar abriendose
+_UI_OPENED = {"inicio": 0.0, "ultimo": 0.0}  # time.monotonic() del Edge del arranque y del ultimo (0: nunca)
+_UI_LOCK = threading.Lock()
+
+
+def open_ui(token=None, inicio=False):
     """La interfaz en Edge (modo app, sin barra de direcciones) o, sin Edge, en el navegador por defecto. Es el
-    camino de siempre y el de reserva cuando no hay ventana propia (window.py)."""
+    camino de siempre y el de reserva cuando no hay ventana propia (window.py). Con dos lanzamientos seguidos, el Edge
+    del arranque (`inicio`) y el que pide el acceso directo serian dos ventanas: en UI_REOPEN_GAP s alrededor del
+    primero no se abre otro, en ningun orden. Despues, cada peticion abre el suyo (Edge cerrado: hay que volver a
+    abrirlo). True si lo abre."""
+    with _UI_LOCK:
+        ahora = time.monotonic()
+        antes = _UI_OPENED["ultimo" if inicio else "inicio"]
+        if antes and ahora - antes < UI_REOPEN_GAP:
+            log(f"   Edge se ha abierto hace {ahora - antes:.0f} s: no se abre otro")
+            return False
+        _UI_OPENED["ultimo"] = ahora
+        if inicio:
+            _UI_OPENED["inicio"] = ahora
     url = ui_url(token)
     for exe in (r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
                 r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"):
         exe = os.path.expandvars(exe)
         if os.path.exists(exe):
             subprocess.Popen([exe, f"--app={url}", "--window-size=1500,920"])
-            return
+            return True
     webbrowser.open(url)
+    return True
 
 
 def _local_request(path, token, data=None, timeout=1.5):
@@ -5657,9 +5723,12 @@ def retire_other_version(token=None, wait=10.0):
     puerto (probe_running) o "grabando"."""
     token = read_token(DATA_DIR) if token is None else token
     try:
-        vieja = _local_request("api/ping", token).get("version") or "anterior al 02/11/2026"
+        ping = _local_request("api/ping", token)
     except Exception:
-        vieja = "desconocida"
+        ping = {}
+    if ping.get("version") == VERSION:  # entretanto el puerto lo ha tomado una copia de esta version: no se toca
+        return "app"
+    vieja, vieja_pid = ping.get("version") or ("anterior al 02/11/2026" if ping else "desconocida"), ping.get("pid")
     log(f"otra versión de {APP_NAME} ({vieja}) tiene el puerto {PORT}: se le pide que se cierre")
     try:
         if _local_request("api/rec/status", token).get("recording"):
@@ -5674,9 +5743,9 @@ def retire_other_version(token=None, wait=10.0):
     if _wait_port_free(wait / 2, token):
         log("   cerrada")
         return "libre"
-    if WINDOWS:
+    if WINDOWS and probe_running(token) != "app":  # si el puerto es ya de una copia de esta version, no se mata
         pid = _port_owner_pid(PORT)
-        if pid and pid != os.getpid() and _is_python_process(pid):
+        if pid and pid != os.getpid() and (not vieja_pid or pid == vieja_pid) and _is_python_process(pid):
             log(f"   no se ha cerrado: se termina su proceso (pid {pid})")
             try:
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
@@ -5696,14 +5765,169 @@ def already_running(token=None):
     return probe_running(token) == "app"
 
 
-def ask_running_to_show(token=None):
-    """Pide a la copia que ya corre que ensene su ventana (POST /api/mostrar). False si no contesta que si (una
-    version anterior sin esa ruta): entonces se abre Edge como antes."""
+def allow_foreground(pid=None):
+    """Windows solo deja ponerse delante a quien tiene permiso: el acceso directo que se acaba de pulsar lo tiene y
+    se lo cede a la copia que corre (`pid`; sin el, a cualquiera, ASFW_ANY), para que su ventana no se quede detras
+    parpadeando en la barra de tareas. Solo Windows."""
+    if not WINDOWS:
+        return False
     try:
-        return bool(_local_request("api/mostrar", read_token(DATA_DIR) if token is None else token, b"{}",
-                                   timeout=5).get("ok"))
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.AllowSetForegroundWindow.argtypes = [ctypes.c_ulong]
+        return bool(user32.AllowSetForegroundWindow(int(pid) if pid else 0xFFFFFFFF))
     except Exception:
         return False
+
+
+def ask_running_to_show(token=None):
+    """Pide a la copia que ya corre que ensene su ventana (POST /api/mostrar) y le cede el primer plano. Devuelve su
+    respuesta ({"ok": true} y, si su ventana aun se esta abriendo, "pending"; si ha abierto Edge, "browser") o None si
+    no contesta que si: entonces se abre Edge desde aqui, como antes."""
+    token = read_token(DATA_DIR) if token is None else token
+    try:
+        allow_foreground(_local_request("api/ping", token).get("pid"))
+    except Exception:
+        pass
+    try:
+        r = _local_request("api/mostrar", token, b"{}", timeout=5)
+    except Exception as e:
+        log(f"   /api/mostrar: {e}")
+        return None
+    return r if isinstance(r, dict) and r.get("ok") else None
+
+
+INSTANCE_FILE = "instancia-{port}.lock"
+_INSTANCE = []  # el descriptor del fichero bloqueado: abierto mientras viva el proceso (el sistema lo suelta al morir)
+_LOCK_BYTE = 1 << 30  # en Windows se bloquea este byte, lejos del contenido (pid y hora), que las demas copias leen
+INSTANCE_WAIT = 8.0  # s que una segunda copia espera a que la otra conteste o suelte la marca (si se esta cerrando)
+INSTANCE_STUCK = 180.0  # s con la marca sin contestar a partir de los que se avisa de que la otra copia no responde
+
+
+def _lock_once(path):
+    """True: bloqueado por este proceso; False: lo tiene otro; None: no se ha podido comprobar."""
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)  # no heredable (PEP 446): recorder, worker… no lo retienen
+    except OSError as e:
+        log(f"   marca de instancia: no se puede abrir ({e})")
+        return None
+    try:
+        if WINDOWS:
+            import msvcrt
+            os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)  # msvcrt.locking bloquea desde la posicion actual (sin esperar)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        if isinstance(e, BlockingIOError) or (WINDOWS and e.errno in (errno.EACCES, errno.EDEADLK)):
+            return False
+        log(f"   marca de instancia: no se puede bloquear ({e})")
+        return None
+    try:  # quien la tiene y desde cuando: lo lee una segunda copia para saber si esta se ha quedado colgada
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()} {int(time.time())}\n".encode("ascii"))
+    except OSError:
+        pass
+    _INSTANCE[:] = [fd]
+    return True
+
+
+def instance_holder(data_dir, port):
+    """(pid, segundos desde que tomo la marca) de la copia que la tiene, o (None, None) si no se sabe."""
+    try:
+        with open(os.path.join(data_dir, INSTANCE_FILE.format(port=port)), "rb") as f:
+            pid, t = f.read(64).decode("ascii").split()[:2]
+        return int(pid), max(0, int(time.time()) - int(t))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None, None
+
+
+def release_instance():
+    """Suelta la marca antes de tiempo (fatal: esta copia no va a arrancar; que la siguiente no la espere)."""
+    for fd in _INSTANCE:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _INSTANCE[:] = []
+
+
+def instance_lock(data_dir, port, wait=0.0):
+    """Instancia unica: DATA_DIR\\instancia-<puerto>.lock bloqueado mientras viva esta copia (lo suelta el sistema al
+    terminar el proceso, tambien si se cuelga o lo matan). True: esta copia es la app; False: otra copia con la misma
+    carpeta de datos y el mismo puerto sigue viva, arrancando o abierta (`wait` s esperando a que lo suelte); None: no
+    se ha podido comprobar y se sigue como antes, solo por el puerto. Va antes que el puerto: un segundo lanzamiento
+    lo sabe al instante, sin esperar a que la primera copia conteste (en un PC lento tarda decenas de segundos)."""
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+    except OSError as e:
+        log(f"   marca de instancia: sin carpeta de datos ({e})")
+        return None
+    path = os.path.join(data_dir, INSTANCE_FILE.format(port=port))
+    end = time.monotonic() + wait
+    while True:
+        r = _lock_once(path)
+        if r is not False or time.monotonic() >= end:
+            return r
+        time.sleep(0.25)
+
+
+def wait_instance(estado, wait=None):
+    """Otra copia tiene la marca y no contesta como la app (`estado`): arranca (doble clic en el acceso directo), se
+    esta cerrando (Apagar y volver a abrir enseguida), tarda en contestar (abierta pero ocupada) o, en una
+    actualizacion, esta retirando la version anterior ("hermana"). Hasta INSTANCE_WAIT s a que conteste (se le pedira
+    la ventana) o suelte la marca (entonces arranca esta). Devuelve (instancia, estado) como en main()."""
+    end = time.monotonic() + (INSTANCE_WAIT if wait is None else wait)
+    while time.monotonic() < end:
+        time.sleep(0.5)
+        instancia = instance_lock(DATA_DIR, PORT)
+        if instancia is not False:  # la ha soltado (o ya no se puede comprobar): esta copia sigue como un arranque
+            return instancia, probe_running()
+        estado = probe_running(timeout=1.5)
+        if estado == "app":
+            break
+    return False, estado
+
+
+def _holder_is_port_owner():
+    """La marca la tiene quien contesta en el puerto (su /api/ping lleva su pid desde el 07/11/2026). Si no (la otra
+    version es anterior a la marca), la tiene una copia hermana de esta version."""
+    pid, _ = instance_holder(DATA_DIR, PORT)
+    try:
+        return bool(pid) and pid == _local_request("api/ping", read_token(DATA_DIR)).get("pid")
+    except Exception:
+        return False
+
+
+def show_running(no_browser, estado="app"):
+    """Esta copia sobra (la app ya corre, o se esta abriendo en otra copia): le pide su ventana y termina. Sin
+    respuesta de la otra (`estado` distinto de "app": aun no sirve), nada: su ventana saldra sola al terminar de
+    arrancar; si lleva mas de INSTANCE_STUCK s sin contestar, se avisa de que no responde. Si contesta pero no ensena
+    nada (no deberia pasar con la misma version), Edge desde aqui, como antes."""
+    if estado != "app":
+        log(f"otra copia tiene la marca y no contesta ({estado}): si se está abriendo, su ventana saldrá sola · pid "
+            f"{os.getpid()}")
+        pid, hace = instance_holder(DATA_DIR, PORT)
+        if pid:
+            log(f"   la otra copia: pid {pid}, desde hace {hace} s")
+        if pid and hace > INSTANCE_STUCK:
+            alert(f"{APP_NAME} no responde",
+                  f"{APP_NAME} ya está abierta (pid {pid}, desde hace {hace // 60} min) pero no contesta.\n\nSi su "
+                  f"ventana no aparece, ciérrala en el Administrador de tareas (pythonw.exe, pid {pid}) y vuelve a "
+                  f"abrir {APP_NAME}.")
+        return
+    log(f"la app ya estaba abierta: se enseña su ventana · pid {os.getpid()}")
+    if no_browser:
+        return
+    r = ask_running_to_show()
+    if r is None:
+        log("   no contesta a /api/mostrar: se abre en Edge desde aquí")
+        open_ui(read_token(DATA_DIR))
+    elif r.get("pending"):
+        log("   aún se está abriendo: su ventana saldrá sola")
 
 
 PORT_WAIT = 20.0  # s que se espera a otra copia que arranca a la vez (doble clic en el acceso directo)
@@ -5760,6 +5984,168 @@ def start_session(data_dir):
     return token
 
 
+# ----------------------------------------------------------------------------- icono en la bandeja (bandeja.py)
+
+def tray_estado():
+    """Lo que dice el icono: segundos de la grabacion en curso (o None) y trabajos en cola o en marcha."""
+    a = Handler.app
+    if a is None:
+        return {"grabando": None, "trabajos": 0}
+    rec = a.rec
+    with a.jobs.lock:
+        n = sum(1 for j in a.jobs.list if j.status in ("queued", "running"))
+    return {"grabando": time.time() - rec.started if rec and rec.alive() else None, "trabajos": n}
+
+
+def tray_balloon(titulo, texto):
+    w = WINDOW
+    return bool(w is not None and w.tray is not None and w.tray.alive and w.tray.balloon(titulo, texto))
+
+
+def tray_abrir():
+    """Clic en el icono (o «Abrir»): la ventana propia, delante."""
+    w = WINDOW
+    if w is not None and w.request_show() is None:
+        open_ui()
+
+
+def tray_grabar():
+    """«Grabar» / «Parar la grabación» del menu: lo mismo que Ctrl+Alt+R (los avisos los da rec_toggle)."""
+    if Handler.app is not None:
+        try:
+            Handler.app.rec_toggle({"source": "bandeja"})
+        except ApiError:
+            pass  # rec_toggle ya lo ha dicho (toast) y anotado
+
+
+def tell(titulo, texto):
+    """Aviso de Windows (MessageBox, delante de todo) desde un hilo cualquiera; fuera de Windows, al log. Para lo que no
+    puede quedarse en un globo de la bandeja (con «No molestar» Windows no los ensena)."""
+    log(f"   aviso: {titulo}")
+    if not WINDOWS:
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, texto, titulo, 0x0 | 0x40 | 0x10000 | 0x40000)  # MB_OK, ICONINFORMATION
+    except Exception:
+        log_exc()
+
+
+def ask_yes_no(titulo, texto):
+    """Pregunta Si/No de Windows (MessageBox delante de todo), desde un hilo cualquiera. Fuera de Windows, si."""
+    if not WINDOWS:
+        return True
+    try:
+        import ctypes
+        # MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST; IDYES = 6
+        return ctypes.windll.user32.MessageBoxW(None, texto, titulo, 0x4 | 0x20 | 0x100 | 0x10000 | 0x40000) == 6
+    except Exception:
+        log_exc()
+        return False
+
+
+def tray_salir():
+    """«Salir» del icono de la bandeja: el mismo apagado que Ajustes > Apagar (App.apagar). Grabando, no (un globo lo
+    dice); con trabajos en marcha, la misma pregunta que la pagina antes de apagar."""
+    a = Handler.app
+    if a is None:
+        return
+    if a.rec and a.rec.alive():
+        log("   salir desde la bandeja: está grabando, no se sale")
+        tell(f"{APP_NAME} está grabando", "Para la grabación antes de salir (Ctrl+Alt+R o su botón Parar).")
+        return
+    n = tray_estado()["trabajos"]
+    if n and not ask_yes_no(f"Salir de {APP_NAME}",
+                            f"Hay {n} trabajo{'s' if n != 1 else ''} en marcha (transcripciones o resúmenes): se "
+                            "cancelan (lo ya escrito se conserva) y podrás relanzarlos al volver.\n\n"
+                            f"¿Salir de {APP_NAME}?"):
+        log("   salir desde la bandeja: cancelado (trabajos en marcha)")
+        return
+    try:
+        a.apagar({"origen": "bandeja"})
+    except ApiError as e:  # ha empezado a grabar entretanto
+        tell(APP_NAME, e.msg)
+
+
+def shell_folder(csidl):
+    """Carpeta especial de Windows (SHGetFolderPathW, la que respeta la redireccion por directiva de empresa; las mismas
+    que [Environment]::GetFolderPath del instalador y el desinstalador), o None."""
+    if not WINDOWS:
+        return None
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buf) == 0 and buf.value:
+            return buf.value
+    except Exception:
+        log_exc()
+    return None
+
+
+def _startup_lnks():
+    """(acceso directo del menu Inicio que pone INSTALAR.bat, el de la carpeta Inicio de Windows) o (None, None)."""
+    if not WINDOWS:
+        return None, None
+    appdata = os.environ.get("APPDATA")
+    progs = shell_folder(0x02) or (appdata and os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs"))
+    startup = shell_folder(0x07) or (progs and os.path.join(progs, "Startup"))  # CSIDL_PROGRAMS, CSIDL_STARTUP
+    if not (progs and startup):
+        return None, None
+    return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(startup, f"{APP_NAME}.lnk")
+
+
+def inicio_windows_leer():
+    """«Arrancar con Windows»: True o False; None si no se puede (fuera de Windows, o sin el acceso directo del menu
+    Inicio, que es el que se copia: una copia descomprimida sin instalar)."""
+    origen, destino = _startup_lnks()
+    if not origen:
+        return None
+    if os.path.isfile(destino):
+        return True
+    return False if os.path.isfile(origen) else None
+
+
+def inicio_windows_poner(activado):
+    """Copia (o quita) el acceso directo del menu Inicio en la carpeta Inicio de Windows (shell:startup): mismo destino,
+    iconos y AppUserModelID, sin registro ni permisos de administrador. Devuelve el estado que queda."""
+    origen, destino = _startup_lnks()
+    if not origen:
+        return None
+    try:
+        if activado and os.path.isfile(origen):
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            shutil.copy2(origen, destino)
+            log("arrancar con Windows: activado")
+        elif not activado and os.path.isfile(destino):
+            os.remove(destino)
+            log("arrancar con Windows: desactivado")
+    except OSError as e:
+        log(f"   arrancar con Windows: {e}")
+    return inicio_windows_leer()
+
+
+def inicio_windows_al_dia():
+    """Al arrancar: si esta activado y el acceso directo del menu Inicio ha cambiado (lo rehace INSTALAR.bat al
+    actualizar), la copia de la carpeta Inicio se pone igual."""
+    origen, destino = _startup_lnks()
+    try:
+        if origen and os.path.isfile(destino) and os.path.isfile(origen):
+            with open(origen, "rb") as a, open(destino, "rb") as b:
+                if a.read() != b.read():
+                    shutil.copy2(origen, destino)
+                    log("arrancar con Windows: acceso directo actualizado")
+    except OSError as e:
+        log(f"   arrancar con Windows: {e}")
+
+
+def make_tray(ico_path):
+    """El icono de la bandeja (solo Windows, con la ventana propia): bandeja.Bandeja, aun sin poner."""
+    if not WINDOWS:
+        return None
+    return Bandeja(ico_path, {"abrir": tray_abrir, "grabar": tray_grabar, "salir": tray_salir,
+                              "inicio": (inicio_windows_leer, inicio_windows_poner)}, tray_estado)
+
+
 def shutdown(reason, exit_fn=os._exit):
     """Apagado ordenado (Ajustes > Apagar): medidor/grabadora, trabajos y procesos de Whisper, servidor HTTP, ventana
     y fin del proceso. recorder.py, worker.py y voices.py mueren solos al quedarse sin padre. No llamarlo desde el
@@ -5771,6 +6157,11 @@ def shutdown(reason, exit_fn=os._exit):
     except Exception:
         log_exc()
     remove_token(DATA_DIR, Handler.token)  # os._exit no pasa por atexit
+    try:  # el icono de la bandeja, antes de cerrar el log (window.destroy() lo repetiria sin efecto)
+        if WINDOW is not None and getattr(WINDOW, "tray", None) is not None:
+            WINDOW.tray.close()
+    except Exception:
+        log_exc()
     log("apagado")
     logging.shutdown()  # antes de parar el servidor: en cuanto serve_forever vuelve, el hilo principal sale solo
     try:
@@ -5808,6 +6199,7 @@ def arg(name, default=None):
 
 def fatal(text):
     """Error de arranque: al log, a la consola si la hay y, sin consola (pythonw.exe), un aviso de Windows."""
+    release_instance()  # mientras el aviso esta abierto, otro lanzamiento no debe esperar a esta copia
     alert(f"{APP_NAME} no ha podido arrancar", text)
     sys.exit(1)
 
@@ -5825,17 +6217,30 @@ def main():
     setup_logging(DATA_DIR)
     no_browser = "--no-browser" in sys.argv
     os.environ["CHULETA_DATOS"] = DATA_DIR  # el aviso flotante (proceso hijo) lee ahi sesion.token, tambien con --data
+    # instancia unica, antes que el puerto: un segundo lanzamiento (doble clic, o el acceso directo otra vez porque la
+    # ventana tarda) lo sabe al instante, aunque la primera copia aun no conteste
+    instancia = instance_lock(DATA_DIR, PORT)
     estado = probe_running()
+    if instancia is False and estado == "otra_version" and not _holder_is_port_owner():
+        estado = "hermana"  # actualizacion con doble clic: la marca es de otra copia nueva, que retira la vieja
+    if instancia is False and estado not in ("app", "otra_version"):  # la otra copia arranca, se cierra o tarda
+        instancia, estado = wait_instance(estado)
     if estado == "otra_version":  # una version anterior seguia abierta (actualizacion en el sitio, acceso viejo)
         estado = retire_other_version()
         if estado == "grabando":
             fatal(f"Hay abierta una versión anterior de {APP_NAME} y está grabando.\n\nPara esa grabación "
                   f"(Ctrl+Alt+R o su botón Parar) y vuelve a abrir {APP_NAME}.")
+        if instancia is False and estado == "libre":  # la marca era suya: el sistema la suelta al cerrarse
+            instancia = instance_lock(DATA_DIR, PORT, wait=5.0)
+            if instancia is False:
+                log("   la versión anterior se ha cerrado pero su marca de instancia sigue: se continúa sin ella")
+                instancia = None
+    if instancia is False and estado != "otra_version":  # esta app ya corre o se esta abriendo en otra copia
+        show_running(no_browser, estado)
+        return
     srv = None if estado == "app" else reserve_port()  # el puerto, antes de App() (P1-13)
     if srv is None:
-        log("la app ya estaba abierta: se ensena su ventana")
-        if not no_browser and not ask_running_to_show():
-            open_ui(read_token(DATA_DIR))
+        show_running(no_browser)
         return
     try:
         start_session(DATA_DIR)
@@ -5874,10 +6279,13 @@ def main():
     for line in ("=" * 64, f"  {APP_NAME.upper()}  ·  {URL}", f"  Carpeta: {ROOT}",
                  f"  Apagar: Ajustes > Apagar {APP_NAME} (con consola, también cerrándola o Ctrl+C).", "=" * 64):
         log(line)
-    log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]}")
+    log(f"arranque · {URL} · carpeta {ROOT} · datos {DATA_DIR} · Python {sys.version.split()[0]} · pid "
+        f"{os.getpid()}")  # el pid: con dos copias a la vez, las dos escriben en el mismo server.log
     if no_browser:  # para abrirla a mano (desarrollo): el token no va al log, que sale entero en el diagnostico
         log(f"  Interfaz: {URL}?t=<el contenido de {os.path.join(DATA_DIR, TOKEN_FILE)}>")
-    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, os.path.join(STATIC_DIR, "chuleta.ico"))
+    ico = os.path.join(STATIC_DIR, "chuleta.ico")
+    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, ico, tray=make_tray(ico))
+    inicio_windows_al_dia()
     if WINDOW is not None and WINDOW.available:
         # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar
         threading.Thread(target=srv.serve_forever, daemon=True, name="http").start()
@@ -5888,7 +6296,7 @@ def main():
         else:
             log("no se pudo abrir la ventana propia (detalle arriba): se abre en Edge")
             WINDOW = None
-            open_ui()
+            open_ui(inicio=True)
         try:
             while True:  # el servidor sigue en su hilo; con consola, Ctrl+C sale
                 time.sleep(1)
@@ -5897,7 +6305,7 @@ def main():
         return
     WINDOW = None
     if not no_browser:
-        threading.Timer(0.3, open_ui).start()
+        threading.Timer(0.3, open_ui, kwargs={"inicio": True}).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

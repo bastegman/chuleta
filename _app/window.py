@@ -11,7 +11,14 @@ ventana mas de Edge. Si pywebview no esta instalado o no puede crear la ventana,
     (server.shutdown): ocultar ahi es lo que hacia que Windows dijera que la app impide apagar.
   - Sin el runtime de WebView2, pywebview usaria MSHTML (el motor de Internet Explorer): run() no abre la ventana y
     server.py abre Edge.
+  - Con icono en la bandeja (bandeja.py; solo con la ventana propia): cerrar la oculta sin preguntar a la pagina y, la
+    primera vez, un globo en el icono dice que sigue ahi; Salir del menu del icono (o Ajustes > Apagar) apaga. Si el
+    icono no se puede poner, todo sigue como antes (el aviso de la pagina).
+  - Desde que se crea Window hasta que la ventana se ensena (evento shown) esta «en camino» (pending): en un PC lento
+    son decenas de segundos y el usuario vuelve a pulsar el acceso directo. Si en ese rato otra copia pide
+    /api/mostrar, no se abre Edge (eran las «2 veces la app» del 02/11/2026): la ventana sale sola y se trae al frente.
 """
+import json
 import os
 import threading
 import time
@@ -99,6 +106,9 @@ QUIT_REASONS = ("WindowsShutDown", "TaskManagerClosing")
 LET_CLOSE = QUIT_REASONS + ("ApplicationExitCall",)  # Application.Exit: la app ya se esta cerrando
 END_SESSION_WAIT = 5.0  # s que el hilo de la ventana espera al apagado limpio mientras Windows espera la respuesta
 _END_SESSION = []  # [fn]: el apagado limpio de server.py, shutdown(motivo) (Window.set_end_session)
+# s que la ventana puede estar «en camino» sin ensenarse: pasado ese tiempo se da por perdida y /api/mostrar abre Edge
+# (en el PC de Bernardo tardo 31 s el 02/11/2026; un arranque normal, 2-10 s)
+PENDING_MAX = 120.0
 
 
 def close_reason(v):
@@ -110,13 +120,27 @@ def close_reason(v):
 class Window:
     """La ventana de la app. run() en el hilo principal; show() y destroy() valen desde cualquier hilo."""
 
-    def __init__(self, url, data_dir, ico_path, webview=None):
+    def __init__(self, url, data_dir, ico_path, webview=None, tray=None):
         self.url, self.data_dir, self.ico_path = url, data_dir, ico_path
+        self.tray = tray  # bandeja.Bandeja (aun sin crear) o None; se crea en el hilo de la ventana (_hook_native)
+        self.tray_ok = False
+        self._notice_lock = threading.Lock()  # dos X seguidas: un solo globo
         self.webview = webview if webview is not None else import_webview()
         self.w, self.hwnd, self.quitting, self.alive = None, None, False, False
         self.native = False  # True con los manejadores propios de FormClosing/FormClosed enganchados (WinForms)
         self.ended = False   # ya se ha lanzado el apagado por fin de sesion
         self.on_end_session = None  # si no, el registrado con set_end_session (los tests ponen aqui un doble)
+        self._lock = threading.Lock()
+        # «en camino» desde aqui hasta shown (o hasta que run() vuelva): ver pending
+        self._pending_since = time.monotonic() if self.webview is not None else None
+        self.want_front = False  # otra copia la ha pedido mientras se abria: al ensenarse, al frente
+        self.shown_once = False  # _on_shown ha corrido (pywebview lanza su hilo ANTES de marcar events.shown)
+
+    @property
+    def pending(self):
+        """La ventana propia se esta abriendo (aun no se ha ensenado) y no hace PENDING_MAX s que empezo."""
+        t = self._pending_since
+        return t is not None and time.monotonic() - t < PENDING_MAX
 
     @staticmethod
     def set_end_session(fn):
@@ -159,6 +183,9 @@ class Window:
             return False
         finally:
             self.alive = False
+            with self._lock:
+                self._pending_since = None  # se ha cerrado o no se ha podido abrir: ya no esta en camino
+            self._close_tray()  # sin el bucle de mensajes de la ventana el icono ya no contestaria: fuera
 
     # --- eventos (hilo de la ventana)
     def _on_shown(self):
@@ -171,6 +198,16 @@ class Window:
             log(f"ventana abierta ({'WebView2' if WINDOWS else 'pywebview'}; hwnd {self.hwnd})")
         except Exception:
             log_exc()
+        finally:
+            with self._lock:
+                self.shown_once, self._pending_since = True, None
+                front, self.want_front = self.want_front, False
+            if front:  # el acceso directo se pulso otra vez mientras se abria
+                log("   se ha vuelto a abrir mientras arrancaba: la ventana se trae al frente")
+                try:
+                    self._to_front()
+                except Exception:
+                    log_exc()
 
     def _hook_native(self):
         """Manejadores propios de FormClosing y FormClosed en la Form de WinForms, despues de los de pywebview: son los
@@ -187,6 +224,7 @@ class Window:
         except Exception:
             log_exc()
             return False
+        self._create_tray(form)
         if WINDOWS:
             try:
                 import ctypes
@@ -194,6 +232,25 @@ class Window:
             except Exception:
                 log_exc()
         return True
+
+    def _create_tray(self, form):
+        """El icono de la bandeja, en el hilo de la ventana (su bucle de mensajes es el que lo atiende). Desde
+        before_show ya se esta en el; desde shown (pywebview sin before_show), por Invoke."""
+        if self.tray is None or self.tray_ok or self.quitting:  # apagando (p. ej. Apagar durante el arranque): no
+            return
+        try:
+            if getattr(form, "InvokeRequired", False):
+                import System
+                form.Invoke(System.Action(lambda: self._create_tray(form)))
+                return
+            self.tray_ok = bool(self.tray.create(form))
+        except Exception:
+            log_exc()
+            self.tray_ok = False
+
+    @property
+    def has_tray(self):
+        return bool(self.tray_ok and self.tray is not None and self.tray.alive)
 
     def _on_closing(self):
         """Cerrar = ocultar: devolver False cancela el cierre. Solo destroy() (apagar) deja cerrar. Antes de ocultar se
@@ -238,6 +295,7 @@ class Window:
         if self.ended:
             return
         self.ended = self.quitting = True
+        self._close_tray()  # aqui, en el hilo de la ventana: el apagado (otro hilo) esperaria a este, que espera
         texto = "Windows cierra la sesión o se apaga" if motivo == "WindowsShutDown" else "Windows ha pedido cerrar"
         log(f"{texto}: apagado limpio")
         fn = self.on_end_session or (_END_SESSION[0] if _END_SESSION else None)
@@ -253,6 +311,10 @@ class Window:
     def _ask_page_then_hide(self):
         time.sleep(0.05)
         if self.quitting:
+            return
+        if self.has_tray:  # con icono no hace falta el aviso de la pagina: se oculta y, la primera vez, un globo
+            if self._hide():
+                self._tray_notice()
             return
         js = 'typeof onWindowClosing === "function" ? onWindowClosing() : "no"'
         try:
@@ -279,6 +341,33 @@ class Window:
         except Exception:
             log_exc()
             return False
+
+    def _tray_notice(self):
+        """La primera vez que se cierra con la X (marca en DATA_DIR\bandeja.json): el globo del icono."""
+        path = os.path.join(self.data_dir, "bandeja.json")
+        with self._notice_lock:
+            try:
+                if os.path.isfile(path):
+                    return False
+                if not self.tray.balloon(f"{APP_NAME} sigue aquí",
+                                         "Cerrar la ventana no la apaga: sigue en la bandeja, junto al reloj (si no "
+                                         "ves el icono, en ^). Para salir: clic derecho en el icono > Salir."):
+                    return False  # sin globo no se marca: la proxima vez se vuelve a intentar
+                os.makedirs(self.data_dir, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"aviso_cerrar": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+                log("   primer cierre con la X: aviso en el icono de la bandeja")
+                return True
+            except OSError:
+                log_exc()
+                return False
+
+    def _close_tray(self):
+        if self.tray is not None:
+            try:
+                self.tray.close()
+            except Exception:
+                log_exc()
 
     def _find_hwnd(self):
         try:
@@ -308,26 +397,47 @@ class Window:
         return found[0] if found else None
 
     # --- desde otros hilos
+    def request_show(self):
+        """POST /api/mostrar (el acceso directo, desde otra copia): "shown" si se ha ensenado; "pending" si aun se esta
+        abriendo (sale sola y, al salir, se trae al frente: no hay que abrir nada mas); None si no hay ventana propia
+        (entonces, Edge)."""
+        with self._lock:
+            if self.pending:
+                self.want_front = True
+                return "pending"
+        return "shown" if self.show() else None
+
     def show(self):
-        """Vuelve a ensenar la ventana (POST /api/mostrar). False si ya no hay ventana (entonces, el navegador)."""
+        """Vuelve a ensenar la ventana. False si ya no hay ventana (entonces, el navegador) o si nunca llego a
+        ensenarse: pywebview esperaria a «shown» hasta 20 s (_shown_call) y quien la pide se cansa a los 5."""
         if not (self.alive and self.w):
+            return False
+        shown = getattr(getattr(self.w, "events", None), "shown", None)
+        if not self.shown_once and callable(getattr(shown, "is_set", None)) and not shown.is_set():
+            log(f"la ventana propia no se ha enseñado en {PENDING_MAX:.0f} s: se abre en Edge")
             return False
         try:
             self.w.show()  # Show() + Activate()
-            if WINDOWS and self.hwnd:
-                import ctypes
-                user32 = ctypes.windll.user32
-                if user32.IsIconic(self.hwnd):
-                    user32.ShowWindow(self.hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(self.hwnd)  # si Windows no lo permite, parpadea en la barra
+            self._to_front()
             return True
         except Exception:
             log_exc()
             return False
 
+    def _to_front(self):
+        """Restaura si esta minimizada y la pone delante. Windows solo lo deja si este proceso tiene permiso: el acceso
+        directo se lo cede (server.allow_foreground); si no, parpadea en la barra de tareas."""
+        if WINDOWS and self.hwnd:
+            import ctypes
+            user32 = ctypes.windll.user32
+            if user32.IsIconic(self.hwnd):
+                user32.ShowWindow(self.hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(self.hwnd)
+
     def destroy(self):
-        """Cierra de verdad (apagar): run() vuelve en el hilo principal."""
+        """Cierra de verdad (apagar): run() vuelve en el hilo principal. Antes, el icono de la bandeja."""
         self.quitting = True
+        self._close_tray()
         if self.alive and self.w:
             try:
                 self.w.destroy()

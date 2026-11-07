@@ -77,9 +77,12 @@ DESINSTALAR
 
 USO DIARIO
 ----------------------------------------------------------------------------------
-  - Abre con el acceso directo "Chuleta" (ya sin ventana negra). Si cierras la ventana de Chuleta,
-    la app sigue en segundo plano (Ctrl+Alt+R sigue funcionando) y el acceso directo la vuelve a
-    abrir. Para apagarla del todo: ⚙ Ajustes > Apagar Chuleta.
+  - Abre con el acceso directo "Chuleta" (ya sin ventana negra). Mientras está abierta, Chuleta
+    tiene su icono en la bandeja del sistema, junto al reloj (la primera vez Windows lo pone en
+    los iconos ocultos, la flecha ^: arrástralo junto al reloj si lo quieres siempre a la vista).
+    Si cierras la ventana, la app sigue ahí (Ctrl+Alt+R sigue funcionando): un clic en el icono o
+    el acceso directo la vuelven a abrir. Para salir del todo: clic derecho en el icono > Salir
+    (o ⚙ Ajustes > Apagar Chuleta). En ese menú también está "Arrancar con Windows".
   - ● Grabar (o Ctrl+Alt+R desde cualquier programa) empieza y para la grabación. Puedes elegir
     grabar con o sin micro, y con o sin transcripción en directo.
   - Voces dobles: si una salida solo repite a otra (un dispositivo virtual, el «espejo» de un

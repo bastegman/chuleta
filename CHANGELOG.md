@@ -197,6 +197,75 @@ Lo que vio el 06/11/2026: con Groq «fallaba la conexión», con «Con tu cuenta
   café (`/api/acerca/abrir` con `que: "donar"` lo abre en el navegador del sistema). Sin ventanas emergentes ni
   recordatorios.
 
+### Icono en la bandeja del sistema (07/11/2026)
+Lo que pidió Bernardo el 02/11/2026: «que Chuleta quedase abierta como una app aquí corriendo aunque le ponga salir,
+solo se pueda cerrar si la cierro desde ahí al salir».
+- **Chuleta tiene su icono en la bandeja** (la zona de notificación, junto al reloj) mientras está abierta, con la
+  ventana a la vista u oculta. Un clic la abre. El clic derecho abre un menú con «Abrir Chuleta», «Grabar» (o
+  «Parar la grabación», según toque; lo mismo que Ctrl+Alt+R), «Arrancar con Windows» y «Salir». El texto del icono
+  dice si está grabando (y cuánto lleva) y cuántos trabajos hay en marcha.
+- **Cerrar la ventana (la X, Alt+F4) la deja en la bandeja.** Ya no sale el aviso de «sigue en segundo plano» de la
+  página: la primera vez, un globo en el icono dice que sigue ahí y cómo salir (un clic en el globo abre la ventana;
+  si Windows no lo enseña, se vuelve a intentar la próxima vez).
+- **Salir** es el mismo apagado que ⚙ Ajustes › «Apagar Chuleta», que se mantiene (decisión por defecto del backlog).
+  Si está grabando no sale, y lo dice un aviso de Windows; con trabajos en marcha pregunta antes (Ajustes pregunta
+  siempre). El icono se quita al apagar, también cuando Windows cierra la sesión o si se apaga mientras arranca, para
+  que no quede un icono fantasma.
+- **Arrancar con Windows** (en el menú del icono; apagado por defecto) copia el acceso directo del menú Inicio en la
+  carpeta Inicio de Windows: sin registro ni permisos de administrador, con el mismo icono y AppUserModelID. Si
+  INSTALAR.bat rehace el acceso directo, la copia se pone al día la siguiente vez que se abre Chuleta; el
+  desinstalador la quita. Las carpetas son las que da Windows (también si la empresa las redirige). Al iniciar sesión
+  se abre con su ventana, como al pulsar el acceso directo. Si se desactiva desde el Administrador de tareas
+  (Aplicaciones de arranque), Windows no la abre aunque el menú siga marcado. `/api/inicio-windows` (GET y POST
+  `{"activado": true|false}`) queda para la casilla de Ajustes.
+- Windows pone los iconos nuevos en los iconos ocultos (la flecha ^): no se puede cambiar por programa; se arrastra
+  una vez junto al reloj (README y LEEME lo dicen).
+- Sin dependencias nuevas: `System.Windows.Forms.NotifyIcon` por pythonnet, que ya carga pywebview (`_app/bandeja.py`).
+  Si el icono no se puede poner, la app sigue como antes (con el aviso de la página al cerrar) y el log lo dice. Sin
+  ventana propia (sin WebView2, en Edge) no hay icono: se apaga desde Ajustes. Tras una revisión independiente: Apagar
+  durante el arranque ya no deja el icono puesto, lo que llegue al hilo de la ventana con el icono ya quitado no saca el
+  diálogo de error de WinForms y dos X seguidas dan un solo globo.
+- Tests: `tests/test_bandeja.py` (el menú, el clic, el texto, el globo, el Dispose, la caída limpia, cerrar sin el
+  aviso de la página, Salir y Arrancar con Windows) y, en windows-real, con WinForms y WebView2 de verdad: la X oculta
+  la ventana, el clic en el icono (el mensaje que Windows le manda) la vuelve a enseñar y al apagar el icono se quita
+  antes de terminar. lookfeel-e2e comprueba en el log que el icono se pone y se quita.
+
+### Doble apertura al arrancar (07/11/2026)
+Lo que se veía como «se me abrían como 2 veces la app»: al pulsar el acceso directo otra vez mientras la app
+arrancaba (en el portátil de la prueba del 02/11/2026, 31 s entre el arranque y la ventana), salían la ventana de
+Chuleta y otra de Edge con la misma interfaz, o un aviso de «No se puede usar el puerto 8765: lo tiene otro programa».
+- **Instancia única de verdad.** Al arrancar, la app bloquea `instancia-8765.lock` en su carpeta de datos (el sistema
+  lo suelta al terminar el proceso, también si se cuelga o se mata; dentro van su pid y la hora). Un segundo
+  lanzamiento lo ve al instante y espera como mucho 8 s, sin ventana: si la primera copia contesta, le pide su
+  ventana; si suelta la marca (pulsar «Apagar» y volver a abrir enseguida), arranca él; si no, termina sin más,
+  porque la ventana saldrá sola. Ya no acaba en el aviso de «puerto ocupado». Si la otra copia lleva más de 3 minutos
+  sin contestar, lo dice, con su pid, para poder cerrarla en el Administrador de tareas. Un aviso de error al
+  arrancar suelta la marca, para que el siguiente lanzamiento no espere a esa copia.
+- **Actualización con la versión anterior abierta.** Sigue retirándose como antes, pero nunca se apaga ni se mata una
+  copia de la versión nueva: con doble clic, la segunda copia deja que la retire la primera y le pide la ventana.
+- **La ventana «en camino».** Desde que la app empieza a abrir su ventana hasta que se ve, `/api/mostrar` (lo que pide
+  el acceso directo) ya no abre Edge: contesta que está en camino y, cuando aparece, se pone delante. Antes, en ese
+  rato, la ventana aún no existía (y se abría Edge) o existía sin enseñarse: pywebview esperaba hasta 20 s y el
+  acceso directo, cansado a los 5, abría Edge él mismo. Si en 2 minutos no llega a verse, se da por perdida y entonces
+  sí se abre Edge.
+- **Edge una sola vez.** Sin ventana propia (sin WebView2), el acceso directo pulsado en los 15 s del arranque ya no
+  abre otro Edge encima del que se está abriendo. Pasado ese rato, cada vez que se pulsa abre el suyo, como antes.
+- **Al frente, cuando Windows lo deja.** El acceso directo cede a la app que ya corre el permiso de Windows para
+  ponerse delante (`AllowSetForegroundWindow`), y la ventana que se estaba abriendo lo intenta al aparecer si alguien
+  la pidió mientras tanto. Windows retira ese permiso en cuanto el usuario toca otra cosa: tras una espera larga, lo
+  normal es que parpadee en la barra de tareas.
+- El log dice qué copia es cada una (`pid` en «arranque», en `/api/ping` y en las líneas de la segunda copia), y
+  «Copiar diagnóstico» enseña las líneas nuevas y «ventana abierta (WebView2; hwnd …)».
+- Tests: `tests/test_doble_apertura.py` (dos `server.py` de verdad con un pywebview falso que espera a «shown» como
+  el 6.2.1 y los tiempos de un PC lento; la marca de instancia entre procesos, también matando al primero; la ventana
+  en camino; Edge una vez; lo que hace `main()` en cada caso) y `VentanaRealTests` en windows-real con WebView2 de
+  verdad (la segunda copia antes de crear la ventana y con la ventana creada sin enseñar). Sin el arreglo, 4 de 5
+  escenarios y los 2 de windows-real fallaban con una ventana de Edge de más. lookfeel-e2e pulsa además el acceso
+  directo justo cuando el instalador abre la app: una ventana, ningún Edge, la segunda copia termina sola. Tras una
+  revisión independiente: la app ya abierta, oculta y lenta en contestar (la segunda copia se iba sin enseñarla),
+  Apagar y volver a abrir, la copia colgada, la actualización con doble clic y el Edge del arranque en los dos
+  órdenes.
+
 ### Arranque, primera pantalla y detección de llamadas (pruebas del 02/11/2026)
 Lo que falló en la primera prueba de la versión del 01/11/2026 en un portátil de empresa, con su causa y su arreglo.
 - **La interfaz ya no depende de importar Whisper.** Al abrirse, la página pide `/api/config`, que comprobaba qué

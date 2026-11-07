@@ -63,7 +63,8 @@ class NombreCentralizadoTests(unittest.TestCase):
         self.assertTrue(server.DATA_DIR.endswith("AudiosApp"))
         src = read("server.py")
         self.assertIn('self.headers.get("X-Audios") != "1"', src)
-        self.assertIn('{"app": "audios", "version": VERSION}', src)  # el ping sigue diciendo "audios" (y la version)
+        # el ping sigue diciendo "audios" (y la version y, para cederle el primer plano, el pid)
+        self.assertIn('{"app": "audios", "version": VERSION, "pid": os.getpid()}', src)
         notas = read("static", "notas.js")
         self.assertIn("${I.notes}Notas", notas)  # la pestaña
         self.assertIn("Tomar Notas", notas)
@@ -212,7 +213,7 @@ class ServidorHttpTests(unittest.TestCase):
 
     def test_mostrar_con_ventana_propia(self):
         win = mock.Mock()
-        win.show.return_value = True
+        win.request_show.return_value = "shown"
         with mock.patch.object(server, "open_ui") as open_ui:
             server.WINDOW = win
             try:
@@ -220,8 +221,34 @@ class ServidorHttpTests(unittest.TestCase):
             finally:
                 server.WINDOW = None
         self.assertEqual((code, body), (200, {"ok": True}))
-        win.show.assert_called_once()
+        win.request_show.assert_called_once()
         open_ui.assert_not_called()
+
+    def test_mostrar_con_la_ventana_en_camino_no_abre_edge(self):
+        """Doble apertura (msg 1143): el acceso directo otra vez mientras la ventana propia se abre. Ni Edge ni
+        nada: sale sola."""
+        win = mock.Mock()
+        win.request_show.return_value = "pending"
+        with mock.patch.object(server, "open_ui") as open_ui:
+            server.WINDOW = win
+            try:
+                code, body = self.call("/api/mostrar", {})
+            finally:
+                server.WINDOW = None
+        self.assertEqual((code, body), (200, {"ok": True, "pending": True}))
+        open_ui.assert_not_called()
+
+    def test_mostrar_si_la_ventana_propia_ya_no_esta_abre_edge(self):
+        win = mock.Mock()
+        win.request_show.return_value = None
+        with mock.patch.object(server, "open_ui") as open_ui:
+            server.WINDOW = win
+            try:
+                code, body = self.call("/api/mostrar", {})
+            finally:
+                server.WINDOW = None
+        self.assertEqual((code, body), (200, {"ok": True, "browser": True}))
+        open_ui.assert_called_once()
 
     def test_ocultar(self):
         win = mock.Mock()
@@ -237,18 +264,18 @@ class ServidorHttpTests(unittest.TestCase):
     def test_ask_running_to_show_usa_la_ruta(self):
         """El acceso directo (la copia que se abre cuando la app ya corre) lee el token de DATA_DIR\\sesion.token."""
         win = mock.Mock()
-        win.show.return_value = True
+        win.request_show.return_value = "shown"
         server.WINDOW = win
         tmp = tempfile.mkdtemp(prefix="chuleta-token-")
         try:
             with patched_paths(DATA_DIR=tmp):
-                self.assertFalse(server.ask_running_to_show())  # sin sesion.token: 403
-                win.show.assert_not_called()
+                self.assertIsNone(server.ask_running_to_show())  # sin sesion.token: 403
+                win.request_show.assert_not_called()
                 server.write_token(tmp, server.Handler.token)
-                self.assertTrue(server.ask_running_to_show())
+                self.assertEqual(server.ask_running_to_show(), {"ok": True})
         finally:
             server.WINDOW = None
-        win.show.assert_called_once()
+        win.request_show.assert_called_once()
 
     def test_config_lleva_app_name(self):
         """/api/config es el camino por el que app.js recibe el nombre (y si hay ventana propia) y los datos de
@@ -443,8 +470,8 @@ class LogSinConsolaTests(unittest.TestCase):
     def test_arranque_sin_print(self):
         """Con pythonw print() no falla pero se pierde: el arranque y el apagado solo hablan por el log."""
         tree = ast.parse(read("server.py"))
-        for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-                   and n.name in ("main", "shutdown", "fatal", "schedule_shutdown", "ask_running_to_show")):
+        nombres = ("main", "shutdown", "fatal", "schedule_shutdown", "ask_running_to_show", "show_running")
+        for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in nombres):
             calls = [c for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
                      and c.func.id == "print"]
             self.assertEqual(calls, [], fn.name)

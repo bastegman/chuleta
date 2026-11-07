@@ -63,8 +63,12 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    cuenta de Claude; el audio y el texto, al proveedor de la API. En algunas reuniones eso puede ser un bloqueante:
    compruébalo antes (política de tu empresa, acuerdo con tu cliente). Con Azure OpenAI el resumen aún no funciona,
    y con la API lo transcrito en local no se envía solo al resumen: ver «Privacidad».
-4. Cerrar la ventana deja Chuleta en segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando); el acceso directo la
-   vuelve a abrir. Para apagarla del todo: ⚙ Ajustes → Apagar Chuleta.
+4. Mientras está abierta, Chuleta tiene su icono en la bandeja del sistema (junto al reloj; la primera vez Windows lo
+   pone en los iconos ocultos, la flecha `^`, y se puede arrastrar junto al reloj). Cerrar la ventana la deja ahí, en
+   segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando): un clic en el icono o el acceso directo la vuelven a
+   abrir. Para salir del todo: clic derecho en el icono → Salir (o ⚙ Ajustes → Apagar Chuleta). El mismo menú tiene
+   «Arrancar con Windows» (copia el acceso directo del menú Inicio en la carpeta Inicio de Windows; apagado por
+   defecto). Sin WebView2 (la app se abre en Edge) no hay icono: se apaga desde Ajustes.
 5. Para actualizar, descomprime el zip nuevo y ejecuta su `INSTALAR.bat`: encuentra la instalación anterior (por
    Aplicaciones instaladas, por su acceso directo «Chuleta» o «Notas», el nombre anterior, o en
    `%USERPROFILE%\Chuleta`), la actualiza en su carpeta con tus grabaciones (nunca las mueve) y renombra el acceso
