@@ -154,9 +154,12 @@ def reunion(root):
 def instalar(env):
     t0 = time.time()
     if MODO == "nativo":
+        # Windows PowerShell 5.1, como el usuario; sin el PSModulePath de pwsh 7 (el paso de la CI corre en pwsh y
+        # powershell.exe con ese PSModulePath no encuentra Get-FileHash, que usa el instalador)
+        e = {k: v for k, v in env.items() if k.upper() != "PSMODULEPATH"}
         r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
                             "irm https://claude.ai/install.ps1 | iex"], capture_output=True, text=True,
-                           errors="replace", timeout=900, env=env)
+                           errors="replace", timeout=900, env=e)
         exe = os.path.join(os.environ["USERPROFILE"], ".local", "bin", "claude.exe")
         paso("instalar", segundos=round(time.time() - t0, 1), rc=r.returncode, salida=(r.stdout + r.stderr)[-600:],
              existe=os.path.isfile(exe))
@@ -199,6 +202,9 @@ def main():
         if not c["encontrado"]:
             fallos.append("Chuleta no encuentra claude después de instalarlo")
         ruta = c["ruta"] or exe
+        if not os.path.isfile(ruta):
+            fallos.append(f"no hay ejecutable de Claude Code tras instalar: {ruta}")
+            raise SystemExit(1)  # el finally deja resultados.json y server.log
         # medidas a mano: lo mismo que AgenteLocal.run/ClaudeCode.chat
         settings = os.path.join(datos, "agente-claude-settings.json")
         cwd = os.path.join(datos, "agente-cwd")
