@@ -194,24 +194,6 @@ class NombreDeLaCarpetaTests(unittest.TestCase):
         self.assertLessEqual(len(n), 11 + server.MEETING_DIR_MAX)
         self.assertTrue(largo.startswith(n[11:]) and largo[len(n) - 11] == " ")  # cortado por una palabra
 
-    def test_se_reconoce(self):
-        f = server.meeting_dir_matches
-        self.assertTrue(f("2026-11-07 Comité de seguimiento", self.STEM))
-        self.assertTrue(f("2026-11-07 Comité de seguimiento (2)", self.STEM))
-        self.assertTrue(f("2026-11-07 10-05", self.STEM))  # sin sitio para el nombre: la hora
-        self.assertTrue(f("2026-11-07 10-05", "2026-11-07 10-05-09"))
-        self.assertTrue(f("2026-11-07 comite de  seguimiento", self.STEM))  # acentos, mayusculas y espacios
-        largo = "2026-11-07 10-05-09 - Comité de dirección del programa de transformación digital y plan 2027"
-        self.assertTrue(f(server.meeting_dir_name(largo[22:], time.localtime()).replace(
-            time.strftime("%Y-%m-%d"), "2026-11-07"), largo))
-        for d, s in (("2026-11-08 Comité de seguimiento", self.STEM),  # otro dia
-                     ("2026-11-07 Comité", self.STEM),               # un trozo corto: puede ser una carpeta tuya
-                     ("2026-11-07 Comité de seguimiento semanal", self.STEM),
-                     ("Comité de seguimiento", self.STEM),
-                     ("2026-11-07 Comité de seguimiento", "Comité de seguimiento"),  # audio sin fecha
-                     ("2026-11-07 10-06", self.STEM)):
-            self.assertFalse(f(d, s), (d, s))
-
 
 class CarpetaPorReunionTests(TempTree):
     def setUp(self):
@@ -262,15 +244,28 @@ class CarpetaPorReunionTests(TempTree):
         self.assertEqual(self.files("Alfa"), [])
 
     def test_ruta_larga_de_windows_se_recorta(self):
-        hondo = "Alfa/" + "/".join(["Carpeta con un nombre bastante largo"] * 4)
-        os.makedirs(os.path.join(self.root, hondo))
         nombre = "Comité de dirección del programa de transformación digital y del plan estratégico"
-        with mock.patch.object(server, "WINDOWS", True), mock.patch.object(server, "WIN_PATH_MAX", 260):
-            r = rec(self.a, self, folder=hondo, name=nombre)
+        stem_len = len("2026-11-07 10-00-00 - ") + len(nombre)
+        longest = stem_len + len(server.voices.SIDECAR_EXT) + 6
+        tope = len(os.path.join(self.root, "Alfa")) + 1 + len(TODAY) + 1 + 24 + longest  # caben 24 del nombre
+        with mock.patch.object(server, "WINDOWS", True), mock.patch.object(server, "WIN_PATH_MAX", tope):
+            r = rec(self.a, self, name=nombre)
         carpeta = os.path.basename(r["carpeta"])
-        self.assertLess(len(carpeta), len(TODAY) + 1 + len(nombre))
-        self.assertTrue(server.meeting_dir_matches(carpeta, os.path.splitext(os.path.basename(r["path"]))[0]))
+        self.assertTrue(carpeta.startswith(TODAY + " Comité de"), carpeta)
+        self.assertLessEqual(len(carpeta), len(TODAY) + 1 + 24)
+        self.assertLessEqual(len(server.safe(r["path"])[:-4] + server.voices.SIDECAR_EXT), tope)
         self.assertTrue(server.own_meeting_dir(server.safe(r["path"])))
+        time.sleep(1.05)
+        with mock.patch.object(server, "WINDOWS", True), mock.patch.object(server, "WIN_PATH_MAX", 40):
+            r = rec(self.a, self, name=nombre)  # ni «AAAA-MM-DD HH-MM» cabe: a la principal, como antes
+        self.assertEqual((r["carpeta"], os.path.dirname(r["path"])), ("Alfa", "Alfa"))
+
+    def test_carpeta_principal_de_solo_lectura_se_dice(self):
+        with mock.patch.object(server.os, "makedirs", side_effect=PermissionError(13, "denegado")):
+            with self.assertRaises(server.ApiError) as cm:
+                rec(self.a, self)
+        self.assertIn("No se puede crear la carpeta de la reunión", cm.exception.msg)
+        self.assertIsNone(self.a.rec)
 
     def test_vista_previa_de_la_tarjeta_y_lo_que_crea_rec_start(self):
         st = self.a.settings.get()
@@ -303,30 +298,97 @@ class CarpetaPorReunionTests(TempTree):
 class ReconocerSuCarpetaTests(TempTree):
     STEM = "2026-11-07 10-05-09 - Comité"
 
-    def test_solo_con_una_grabacion_dentro_y_fuera_de_las_raices(self):
+    def test_solo_las_que_creo_la_app_con_una_grabacion_en_todo_su_arbol(self):
         p = self.wav(f"Alfa/2026-11-07 Comité/{self.STEM}.wav")
+        self.assertIsNone(server.own_meeting_dir(p))  # se llama como ella, pero no la creo la app
+        server.carpetas_reunion().add("Alfa/2026-11-07 Comité")
         self.assertEqual(server.own_meeting_dir(p), os.path.dirname(p))
-        self.wav(f"Alfa/2026-11-07 Comité/{self.STEM} (otra).wav")
+        self.wav(f"Alfa/2026-11-07 Comité/Anexos/{self.STEM} (otra).wav")  # otra reunion dentro: ya no es solo suya
         self.assertIsNone(server.own_meeting_dir(p))
-        self.assertIsNone(server.own_meeting_dir(self.wav(f"{self.STEM}.wav")))  # en la raiz
-        ext = os.path.join(self.tmp, "2026-11-07 Comité")  # una vinculada que se llama asi
+        server.carpetas_reunion().add("")
+        self.assertIsNone(server.own_meeting_dir(self.wav(f"{self.STEM}.wav")))  # la raiz, nunca
+        ext = os.path.join(self.tmp, "Ext")
         os.makedirs(ext)
-        server.LINKS[server.link_id(ext)] = {"name": "x", "path": ext}
+        lid = server.link_id(ext)
+        server.LINKS[lid] = {"name": "x", "path": ext}
+        server.carpetas_reunion().add(":" + lid)
         q = os.path.join(ext, self.STEM + ".wav")
         shutil.copy(p, q)
-        self.assertIsNone(server.own_meeting_dir(q))
+        self.assertIsNone(server.own_meeting_dir(q))  # ni la raiz de una vinculada
 
-    def test_scan_la_marca_solo_si_no_hay_nada_mas(self):
-        self.wav(f"A/2026-11-07 Comité/{self.STEM}.wav")
+    def test_una_carpeta_tuya_de_antes_que_se_llama_como_la_reunion(self):
+        """La de quien ya se hacia una carpeta por reunion a mano (P0-2 del refutador): mover o renombrar la reunion
+        mueve sus archivos, como antes; la carpeta, su presentacion y sus subcarpetas se quedan."""
+        d = "Clientes/2026-10-01 Comité de seguimiento"
+        stem = "2026-10-01 10-00-00 - Comité de seguimiento semanal"
+        self.wav(f"{d}/{stem}.wav")
+        self.write(f"{d}/{stem}.txt", "x\n")
+        for n in ("presentación.pptx", "notas.md", "Material/contrato.pdf"):
+            self.write(f"{d}/{n}", "x")
+        os.makedirs(os.path.join(self.root, "Beta"))
+        a = make_app(self)
+        with mock.patch.object(server, "log"):
+            new = a.move({"path": f"{d}/{stem}.wav", "folder": "Beta"})["path"]
+            self.assertEqual(new, f"Beta/{stem}.wav")
+            self.assertEqual(sorted(os.listdir(os.path.join(self.root, d))),
+                             ["Material", "notas.md", "presentación.pptx"])
+            a.move({"path": new, "folder": "Clientes/2026-10-01 Comité de seguimiento",
+                    "name": "2026-10-01 10-00-00 - Kick-off"})
+        self.assertEqual(sorted(os.listdir(os.path.join(self.root, "Clientes"))), ["2026-10-01 Comité de seguimiento"])
+        server.ALIASES.clear()
+
+    def test_scan_la_pliega_solo_si_es_suya_y_no_hay_nada_mas(self):
+        for x in "ABCD":
+            self.wav(f"{x}/2026-11-07 Comité/{self.STEM}.wav")
+            if x != "D":
+                server.carpetas_reunion().add(f"{x}/2026-11-07 Comité")
         self.write(f"A/2026-11-07 Comité/{self.STEM}.txt", "hola\n")
         self.write(f"A/2026-11-07 Comité/{self.STEM}.resumen.md", "r\n")
-        self.wav(f"B/2026-11-07 Comité/{self.STEM}.wav")
         self.write("B/2026-11-07 Comité/acta.md", "acta\n")  # un documento suyo: se ve la carpeta
-        self.wav(f"C/2026-11-07 Comité/{self.STEM}.wav")
         os.makedirs(os.path.join(self.root, "C", "2026-11-07 Comité", "Anexos"))
         tree, _ = server.scan()
         marca = {f["path"]: f["folders"][0].get("por_reunion", False) for f in tree["folders"]}
-        self.assertEqual(marca, {"A": True, "B": False, "C": False})
+        self.assertEqual(marca, {"A": True, "B": False, "C": False, "D": False})  # D: no la creo la app
+
+    def test_en_una_vinculada_se_ve_aunque_quede_un_nivel_mas_honda(self):
+        ext = os.path.join(self.tmp, "OneDrive")
+        hondo = os.path.join(ext, "a", "b", "c", "Principal")  # la principal, en el ultimo nivel que se mira (4)
+        os.makedirs(hondo)
+        lid = server.link_id(ext)
+        server.LINKS[lid] = {"name": "OneDrive", "path": ext}
+        a = make_app(self)
+        r = rec(a, self, folder=f":{lid}/a/b/c/Principal")
+        _, flat = server.scan()
+        self.assertIn(r["path"], [x["path"] for x in flat])
+        self.assertTrue(r["path"].startswith(f":{lid}/a/b/c/Principal/{TODAY} Comité/"))
+
+
+class MigracionTests(unittest.TestCase):
+    def test_la_ultima_carpeta_de_un_proyecto_que_era_la_de_una_reunion(self):
+        d = {"project_folders": {"Alfa": "Alfa/2026-11-03 Comité", "Beta": "Beta/Reuniones",
+                                 "Gamma": "2026-10-01 Kick-off", "Delta": ":ab12cd"},
+             "rec_folder": "Alfa/2026-11-03 Comité"}
+        cambios = server.migrate_main_folders(d)
+        self.assertEqual(d["project_folders"],
+                         {"Alfa": "Alfa", "Beta": "Beta/Reuniones", "Gamma": "", "Delta": ":ab12cd"})
+        self.assertEqual(d["rec_folder"], "Alfa")
+        self.assertEqual(d["carpetas_v"], 1)
+        self.assertEqual([c[0] for c in cambios], ["Alfa", "Gamma", "la última"])
+
+    def test_al_arrancar_una_vez(self):
+        tmp = tempfile.mkdtemp(prefix="chuleta-migra-")
+        try:
+            with open(os.path.join(tmp, "settings.json"), "w", encoding="utf-8") as f:
+                json.dump({"project_folders": {"Alfa": "Alfa/2026-11-03 Comité"}}, f)
+            st = server.Store(os.path.join(tmp, "settings.json"), server.DEFAULT_SETTINGS)
+            self.assertNotIn("carpetas_v", st.get())
+            st.update(server.migrate_main_folders)
+            self.assertEqual(server.Store(os.path.join(tmp, "settings.json"), server.DEFAULT_SETTINGS).get()
+                             ["project_folders"], {"Alfa": "Alfa"})
+            with open(server.__file__, encoding="utf-8") as f:
+                self.assertIn('if not self.settings.get().get("carpetas_v"):', f.read())  # App.__init__, una vez
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ----------------------------------------------------------------------------- mover y renombrar con su carpeta
@@ -343,6 +405,7 @@ class MoverConSuCarpetaTests(TempTree):
             self.write(f"{self.DIR}/{self.STEM}{e}", t)
         self.write(f"{self.DIR}/acta.pdf", "pdf")
         os.makedirs(os.path.join(self.root, "Beta"))
+        server.carpetas_reunion().add(self.DIR)  # la creo la app (rec_start)
         self.a = make_app(self, favorites=[{"kind": "f", "path": self.DIR}])
         self.rel = f"{self.DIR}/{self.STEM}.wav"
         server.COMPLETE.set(self.rel)
@@ -363,6 +426,8 @@ class MoverConSuCarpetaTests(TempTree):
                          sorted([self.STEM + e for e in (".wav", ".txt", ".srt", ".md", ".resumen.md")] + ["acta.pdf"]))
         self.assertFalse(os.path.exists(os.path.join(self.root, self.DIR)))  # la vieja no se queda vacia
         self.assertIn(new, server.COMPLETE)
+        self.assertIn("Beta/2026-11-07 Comité", server.carpetas_reunion())  # sigue siendo suya
+        self.assertNotIn(self.DIR, server.carpetas_reunion())
         self.assertEqual(server.temas().get(new), "Alfa/Vocabulario/General.txt")
         self.assertEqual(self.a.settings.get()["favorites"], [{"kind": "f", "path": "Beta/2026-11-07 Comité"}])
         self.assertEqual(server.alias_of(self.rel), new)  # unas notas que llegan con la ruta vieja van a la nueva
@@ -382,6 +447,65 @@ class MoverConSuCarpetaTests(TempTree):
         new = self.move(folder="Beta")
         self.assertEqual(new, f"Beta/2026-11-07 Comité (2)/{self.STEM}.wav")
 
+    def test_renombrar_nunca_pisa_un_documento_suyo(self):
+        # P0-1 del refutador: un documento de la carpeta que se llama como acabaria uno de la reunion renombrada
+        acta = os.path.join(self.root, self.DIR, "2026-11-07 10-05-09 - Acta.md")
+        with open(acta, "w", encoding="utf-8") as f:
+            f.write("mi acta")
+        with self.assertRaises(server.ApiError) as cm:
+            self.move(folder=self.DIR, name="2026-11-07 10-05-09 - Acta")
+        self.assertIn("Ya existe", cm.exception.msg)
+        with open(acta, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "mi acta")
+        self.assertTrue(os.path.isfile(server.safe(self.rel)))  # nada se ha movido
+
+    def test_renombrar_con_una_fecha_que_no_existe(self):
+        new = self.move(folder=self.DIR, name="2026-13-45 10-05-09 - Comité")
+        self.assertEqual(new, f"{self.DIR}/2026-13-45 10-05-09 - Comité.wav")  # la carpeta se queda como estaba
+
+    def test_a_la_carpeta_que_contiene_la_suya_la_saca(self):
+        new = self.move(folder="Alfa")  # se ve como carpeta (tiene acta.pdf): sacarla de ella
+        self.assertEqual(new, f"Alfa/{self.STEM}.wav")
+        self.assertEqual(sorted(os.listdir(os.path.join(self.root, self.DIR))), ["acta.pdf"])  # lo demas, alli
+        self.assertNotIn(self.DIR, server.carpetas_reunion())
+
+    def test_una_subcarpeta_con_algo_abierto_no_se_copia_a_medias(self):
+        # P1-5: en Windows, renombrar una carpeta con un archivo abierto dentro falla; shutil.move la copiaba entera y
+        # la borraba a medias. Ahora os.rename: falla sin tocar nada, se reintenta y se deshace lo movido
+        self.write(f"{self.DIR}/Anexos/plan.xlsx", "x")
+        real = os.rename
+
+        def rename(src, dst):
+            if src.endswith("Anexos"):
+                raise PermissionError(5, "Acceso denegado")
+            return real(src, dst)
+        with mock.patch.object(server.os, "rename", rename), mock.patch.object(server.time, "sleep"):
+            with self.assertRaises(server.ApiError):
+                self.move(folder="Beta")
+        self.assertEqual(os.listdir(os.path.join(self.root, "Beta")), [])  # sin carpeta fantasma
+        self.assertTrue(os.path.isfile(os.path.join(self.root, self.DIR, "Anexos", "plan.xlsx")))
+        self.assertTrue(os.path.isfile(server.safe(self.rel)))
+
+    def test_a_otra_unidad_copia_los_archivos_y_no_las_carpetas(self):
+        real = os.rename
+
+        def rename(src, dst):  # como entre C: y D:
+            if "Beta" in dst:
+                raise OSError(server.errno.EXDEV, "otra unidad")
+            return real(src, dst)
+        with mock.patch.object(server.os, "rename", rename):
+            new = self.move(folder="Beta")
+        self.assertTrue(os.path.isfile(server.safe(new)))
+        self.assertFalse(os.path.exists(os.path.join(self.root, self.DIR)))
+        self.wav(f"Gamma/2026-11-07 Kick-off/{self.STEM}.wav")  # con una subcarpeta, entre unidades no
+        self.write("Gamma/2026-11-07 Kick-off/Anexos/a.txt", "x")
+        server.carpetas_reunion().add("Gamma/2026-11-07 Kick-off")
+        with mock.patch.object(server.os, "rename", rename):
+            with self.assertRaises(server.ApiError) as cm:
+                self.move(path=f"Gamma/2026-11-07 Kick-off/{self.STEM}.wav", folder="Beta")
+        self.assertIn("otra unidad", cm.exception.msg)
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "Gamma", "2026-11-07 Kick-off", self.STEM + ".wav")))
+
     def test_dentro_de_su_propia_carpeta_no(self):
         os.makedirs(os.path.join(self.root, self.DIR, "Sub"))
         with self.assertRaises(server.ApiError):
@@ -396,14 +520,14 @@ class MoverConSuCarpetaTests(TempTree):
         self.assertEqual(sorted(os.listdir(os.path.join(self.root, "Gamma"))), ["otra.md"])
 
     def test_si_un_archivo_esta_en_uso_no_se_mueve_nada(self):
-        real, n = shutil.move, {"i": 0}
+        real, n = server.move_one, {"i": 0}
 
         def flaky(src, dst):
             n["i"] += 1
             if n["i"] >= 3 and src.endswith(".srt"):
                 raise PermissionError(32, "en uso")
             return real(src, dst)
-        with mock.patch.object(server.shutil, "move", flaky), mock.patch.object(server.time, "sleep"):
+        with mock.patch.object(server, "move_one", flaky), mock.patch.object(server.time, "sleep"):
             with self.assertRaises(server.ApiError) as cm:
                 self.move(folder="Beta")
         self.assertIn("en uso", cm.exception.msg)
@@ -430,10 +554,6 @@ class MoverConSuCarpetaTests(TempTree):
         self.assertNotIn("OBS", cm.exception.msg)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ----------------------------------------------------------------------------- la interfaz: la carpeta se ve como ella
 
 @unittest.skipUnless(shutil.which("node"), "node no instalado")
@@ -457,3 +577,7 @@ console.log(JSON.stringify([subFolders(f).map(x => x.name), ownAudios(f).map(a =
         src = read("app.js")
         self.assertIn("subFolders(n).forEach(f => w(f, d + 1))", src)  # flatFolders: Grabar, Mover…
         self.assertIn("if (S.folders.get(path)?.por_reunion) parts.pop();", src)  # la miga no la repite
+
+
+if __name__ == "__main__":
+    unittest.main()

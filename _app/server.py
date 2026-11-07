@@ -563,6 +563,7 @@ def scan(dirs=None):
     dirs: si se pasa un dict, se rellena con carpeta -> mtime_ns (Library lo usa para saber si hay que volver a
     escanear: la fecha de una carpeta cambia con cada alta, baja o renombrado dentro de ella)."""
     flat = []
+    mias = carpetas_reunion().keys()  # las carpetas de reunion que creo la app (rutas internas en normcase)
 
     def walk(abs_dir, rel, depth=0, max_depth=99):
         node = {"name": os.path.basename(abs_dir) if rel else APP_NAME, "path": rel,
@@ -579,9 +580,12 @@ def scan(dirs=None):
                 continue
             try:
                 if e.is_dir(follow_symlinks=False):
-                    # las carpetas Vocabulario no son reuniones ni documentos: las lee list_vocab
-                    if not in_app_dir(e.path) and depth < max_depth and fold(e.name) != VOCAB_FOLDER:
-                        node["folders"].append(walk(e.path, f"{rel}/{e.name}" if rel else e.name, depth + 1, max_depth))
+                    # las carpetas Vocabulario no son reuniones ni documentos: las lee list_vocab. La de una reunion
+                    # se mira aunque este un nivel por debajo del tope (la principal puede estar en el ultimo)
+                    sub = f"{rel}/{e.name}" if rel else e.name
+                    if not in_app_dir(e.path) and fold(e.name) != VOCAB_FOLDER and (
+                            depth < max_depth or os.path.normcase(sub) in mias):
+                        node["folders"].append(walk(e.path, sub, depth + 1, max_depth))
                 elif e.is_file():
                     files[e.name.lower()] = e
             except OSError:
@@ -634,9 +638,9 @@ def scan(dirs=None):
         node["folders"].sort(key=lambda n: natural_key(n["name"]))
         node["audios"].sort(key=lambda a: (a["date"] or "", natural_key(a["name"])))
         node["docs"].sort(key=lambda d: natural_key(d["name"]))
-        # la carpeta de una reunion (carpeta por reunion) con solo ella dentro: la interfaz la pinta como la reunion
-        if rel and not is_link_root(rel) and not node["folders"] and not node["docs"] and len(node["audios"]) == 1 \
-                and meeting_dir_matches(node["name"], node["audios"][0]["stem"]):
+        # la carpeta de una reunion (la creo la app) con solo ella dentro: la interfaz la pinta como la reunion
+        if rel and os.path.normcase(rel) in mias and not is_link_root(rel) and not node["folders"] \
+                and not node["docs"] and len(node["audios"]) == 1:
             node["por_reunion"] = True
         return node
 
@@ -1087,6 +1091,73 @@ class Movimientos:
             if out != self.data:
                 self.data = out
                 self._save()
+
+
+class CarpetasReunion:
+    """Las carpetas de reunion que ha creado la app (carpeta por reunion), por su ruta interna. Solo estas son «suyas»
+    (own_meeting_dir): una carpeta tuya que por casualidad se llama «AAAA-MM-DD Nombre», como las que algunos ya se
+    hacian a mano, no se mueve ni se renombra con la reunion. En DATA_DIR/carpetas_reunion.json; siguen a los
+    renombrados y movimientos que hace la app (moved). Sin el (otro PC, reinstalacion), la reunion se mueve como una
+    de antes: sus archivos."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = []
+        self.data = {os.path.normcase(r): r for r in data if isinstance(r, str) and r} if isinstance(data, list) else {}
+
+    def _save(self):
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(sorted(self.data.values()), f, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            log(f"   no se pudo guardar {os.path.basename(self.path)} ({e.__class__.__name__})")
+
+    def __contains__(self, rel):
+        return isinstance(rel, str) and os.path.normcase(rel) in self.data
+
+    def keys(self):
+        with self.lock:
+            return set(self.data)
+
+    def add(self, rel):
+        with self.lock:
+            if self.data.get(os.path.normcase(rel)) != rel:
+                self.data[os.path.normcase(rel)] = rel
+                self._save()
+
+    def discard(self, rel):
+        with self.lock:
+            if self.data.pop(os.path.normcase(rel or ""), None) is not None:
+                self._save()
+
+    def moved(self, old, new, folder=False):
+        with self.lock:
+            out = {}
+            for r in self.data.values():
+                m = moved_rel(r, old, new, folder)
+                r = r if m is None else m
+                out[os.path.normcase(r)] = r
+            if out != self.data:
+                self.data = out
+                self._save()
+
+
+_CARPETAS, _CARPETAS_LOCK = {}, threading.Lock()
+
+
+def carpetas_reunion():
+    """El registro CarpetasReunion de este DATA_DIR (los tests lo cambian)."""
+    path = os.path.join(DATA_DIR, "carpetas_reunion.json")
+    with _CARPETAS_LOCK:
+        if path not in _CARPETAS:
+            _CARPETAS[path] = CarpetasReunion(path)
+        return _CARPETAS[path]
 
 
 _TEMAS, _TEMAS_LOCK = {}, threading.Lock()
@@ -1706,36 +1777,24 @@ def meeting_dir_name(label="", when=None, limit=MEETING_DIR_MAX):
     return time.strftime("%Y-%m-%d", lt) + " " + (name or time.strftime("%H-%M", lt))
 
 
-def meeting_dir_matches(dirname, stem):
-    """La carpeta `dirname` tiene el nombre que le da la app a la de la reunion `stem` («AAAA-MM-DD HH-MM-SS -
-    Nombre»): misma fecha y su nombre (entero o recortado por una palabra) o su hora, con « (n)» si se repitio."""
-    m = DATE_RE.match(stem or "")
-    d = MEETING_DIR_RE.match(unicodedata.normalize("NFC", dirname or ""))
-    if not m or not d or d.group(1) != f"{m.group(1)}-{m.group(2)}-{m.group(3)}":
-        return False
-    rest = d.group(2)
-    if rest == f"{m.group(4)}-{m.group(5)}":
-        return True
-    label = " ".join(fold(stem[m.end():].strip(" -_·")).split())
-    rest = " ".join(fold(rest).split())
-    if not label or not label.startswith(rest):
-        return False
-    return rest == label or (len(rest) >= 12 and label[len(rest)] in " .-–—")
-
-
 def own_meeting_dir(abs_audio):
-    """La carpeta de la reunion si es «suya» (la crea rec_start con la carpeta por reunion): se llama como ella
-    (meeting_dir_matches) y no hay otra grabacion dentro. Sin eso (lo grabado antes, o una carpeta tuya), None."""
+    """La carpeta de la reunion si es «suya»: la creo la app para ella (carpetas_reunion) y no hay otra grabacion en
+    todo su arbol. Si no (lo grabado antes, una carpeta tuya, o una con otra reunion dentro), None: se mueve como una
+    reunion de antes, sus archivos."""
     d = os.path.dirname(abs_audio)
-    if not meeting_dir_matches(os.path.basename(d), os.path.splitext(os.path.basename(abs_audio))[0]):
-        return None
     if in_app_dir(d) or _norm_dir(d) in {_norm_dir(ROOT)} | {_norm_dir(l["path"]) for l in LINKS.values()}:
         return None
+    if rel_of(d) not in carpetas_reunion():
+        return None
+    n = 0
     try:
-        audios = [n for n in os.listdir(d) if os.path.splitext(n)[1].lower() in AUDIO_EXT]
+        for _, _, files in os.walk(d):
+            n += sum(1 for f in files if os.path.splitext(f)[1].lower() in AUDIO_EXT)
+            if n > 1:
+                return None
     except OSError:
         return None
-    return d if len(audios) == 1 else None
+    return d if n == 1 else None
 
 
 def free_dir(parent, name, mine=None):
@@ -1755,13 +1814,16 @@ def free_dir(parent, name, mine=None):
 
 def fit_meeting_dir(parent, label, when, stem):
     """El nombre de la carpeta de la reunion que cabe en una ruta de Windows con su archivo mas largo dentro (el
-    .hablantes.json): se recorta el nombre de la reunion y, si ni asi, «AAAA-MM-DD HH-MM»."""
+    .hablantes.json): se recorta el nombre de la reunion y, si ni asi, «AAAA-MM-DD HH-MM». None si ni eso cabe: la
+    grabacion va a la carpeta principal, como antes de la carpeta por reunion."""
     longest = len(stem) + len(voices.SIDECAR_EXT) + 6  # «\», « (n)» y margen
     limit = MEETING_DIR_MAX
     while True:
         name = meeting_dir_name(label, when, limit)
-        if not WINDOWS or len(os.path.join(parent, name)) + longest <= WIN_PATH_MAX or limit < 12:
+        if not WINDOWS or len(os.path.join(parent, name)) + longest <= WIN_PATH_MAX:
             return name
+        if limit < 12:
+            return None
         limit -= 8
 
 
@@ -1773,7 +1835,8 @@ def meeting_dir_preview(folder_rel, label="", st=None, when=None):
     parent = safe(folder_rel, "dir")
     lt = time.localtime(when) if isinstance(when, (int, float)) else (when or time.localtime())
     stem = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
-    return rel_of(free_dir(parent, fit_meeting_dir(parent, label, lt, stem)))
+    name = fit_meeting_dir(parent, label, lt, stem)
+    return rel_of(free_dir(parent, name)) if name else folder_rel
 
 
 def rec_destino(v, st, name="", when=None):
@@ -1802,9 +1865,34 @@ def display_rel(rel):
     return "\\" + "".join(p + "\\" for p in parts)
 
 
+def move_one(f, t):
+    """Mueve un archivo o una carpeta: en la misma unidad, os.rename (de una vez; con algo abierto dentro, falla sin
+    tocar nada). Entre unidades, copia y borra, y solo archivos: shutil.move copiaria una carpeta entera y la borraria
+    a medias si algo de dentro esta abierto (en Windows), y eso no se puede deshacer bien."""
+    try:
+        os.rename(f, t)
+        return
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise
+    if os.path.isdir(f):
+        raise ApiError("La carpeta de la reunión tiene subcarpetas y el destino está en otra unidad: muévela desde el "
+                       "Explorador.")
+    shutil.copy2(f, t)
+    try:
+        os.remove(f)
+    except OSError:
+        try:
+            os.remove(t)
+        except OSError:
+            pass
+        raise
+
+
 def move_files(moves):
-    """Mueve cada (origen, destino) en orden, con reintentos si el archivo esta en uso un instante (el reproductor,
-    OneDrive, el antivirus). Si uno no se puede, deshace los ya movidos y lanza ApiError: o se mueve todo o nada."""
+    """Mueve cada (origen, destino) en orden (move_one), con reintentos si el archivo esta en uso un instante (el
+    reproductor, OneDrive, el antivirus). Si uno no se puede, deshace los ya movidos y lanza ApiError: o se mueve todo o
+    nada. Quien llama comprueba antes que ningun destino existe (en Windows y en el Mac os.rename no avisa igual)."""
     done = []
     try:
         for f, t in moves:
@@ -1812,19 +1900,21 @@ def move_files(moves):
                 continue
             for attempt in range(12):
                 try:
-                    shutil.move(f, t)
+                    move_one(f, t)
                     break
                 except PermissionError:
                     if attempt == 11:
                         raise
                     time.sleep(0.25)
             done.append((f, t))
-    except OSError as e:
+    except (OSError, ApiError) as e:
         for f, t in reversed(done):
             try:
-                shutil.move(t, f)
-            except OSError:
+                move_one(t, f)
+            except (OSError, ApiError):
                 log_exc()
+        if isinstance(e, ApiError):
+            raise
         if isinstance(e, PermissionError):
             raise ApiError("El archivo está en uso (¿OneDrive sincronizando o abierto en otro programa?). "
                            "Prueba otra vez en unos segundos.")
@@ -1841,6 +1931,30 @@ def moved_rel(p, old, new, folder=False):
     if folder and p.startswith(old + "/"):
         return new + p[len(old):]
     return None
+
+
+MEETING_LIKE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ _-]")
+
+
+def migrate_main_folders(d):
+    """Una vez (carpetas_v), al llegar la carpeta por reunion: la carpeta de cada proyecto que apuntaba la app era
+    «la ultima usada», y la de quien ya se hacia una carpeta por reunion a mano es la de una reunion
+    («AAAA-MM-DD …»): las nuevas acabarian dentro de ella. Esa pasa a ser su carpeta padre; lo demas se queda como
+    asignacion. Igual con la ultima carpeta (rec_folder). Devuelve [(proyecto o «la última», vieja, nueva)]."""
+    out = []
+
+    def fix(rel, who):
+        if isinstance(rel, str) and MEETING_LIKE_RE.match(rel.rpartition("/")[2]) \
+                and not is_link_root(rel):
+            new = rel.rpartition("/")[0]
+            out.append((who, rel, new))
+            return new
+        return rel
+    d["project_folders"] = {k: fix(v, k) for k, v in (d.get("project_folders") or {}).items()}
+    if d.get("rec_folder"):
+        d["rec_folder"] = fix(d["rec_folder"], "la última")
+    d["carpetas_v"] = 1
+    return out
 
 
 def settings_moved(d, old, new, folder=False, project=None):
@@ -3446,6 +3560,7 @@ DIAG_LINES = (
     "   movimiento pendiente de {t}: la reunión ya no está ahí, se olvida",
     "   movimiento pendiente de {t}: la carpeta {t} ya no existe, se queda donde está",
     "   movimiento pendiente de {t}: {e} Se reintenta en {n} s",
+    "   carpeta principal de {t}: era la de una reunión ({t}); pasa a {t}",
     "   carpeta principal de {t}⟦ (workstream)⟧: {t}",
     "↺ {t}: transcripción original restaurada",
     "🔗 carpeta vinculada: {t}",
@@ -3706,6 +3821,11 @@ class App:
         self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
         if self.settings.get().get("procesado") not in PROCESADOS:  # ajustes de antes: se decide una vez y se guarda
             self.settings.update(lambda d: d.update(procesado=procesado_de(d)))
+        if not self.settings.get().get("carpetas_v"):  # la carpeta por reunion (07/11/2026): una vez
+            cambios = []
+            self.settings.update(lambda d: cambios.extend(migrate_main_folders(d)))
+            for k, old, new in cambios:
+                log(f"   carpeta principal de {k}: era la de una reunión ({old}); pasa a {new or 'la raíz'}")
         self._aviso_resumen_local()
         self._load_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
@@ -3837,14 +3957,19 @@ class App:
             label = clean_name(b["name"]) if b.get("name") else ""
             name = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
             # una carpeta por reunion, «AAAA-MM-DD Nombre», dentro de la principal (msg 1158); se crea al grabar
-            mdir = free_dir(folder, fit_meeting_dir(folder, label, lt, name)) if por_reunion(self.settings.get()) \
-                else None
+            mname = fit_meeting_dir(folder, label, lt, name) if por_reunion(self.settings.get()) else None
+            mdir = free_dir(folder, mname) if mname else None
             path = os.path.join(mdir or folder, name + ".wav")
             if os.path.exists(path):
                 raise ApiError("Ya existe un archivo con ese nombre.")
             made = mdir is not None and not os.path.isdir(mdir)
             if mdir:
-                os.makedirs(mdir, exist_ok=True)
+                try:
+                    os.makedirs(mdir, exist_ok=True)
+                except OSError as e:  # sin permiso de escritura (p. ej. una carpeta de solo lectura): se dice
+                    raise ApiError(f"No se puede crear la carpeta de la reunión en {display_rel(rel_of(folder))} "
+                                   f"({e.__class__.__name__}).")
+                carpetas_reunion().add(rel_of(mdir))
             if self.monitor:
                 self.monitor.stop(timeout=2)
                 self.monitor = None
@@ -3924,6 +4049,7 @@ class App:
                     if made:  # la carpeta de la reunion recien creada, si la grabadora no llego a escribir nada
                         try:
                             os.rmdir(mdir)
+                            carpetas_reunion().discard(rel_of(mdir))
                         except OSError:
                             pass
         log(f"● Grabando: {rel}" + (f" [{v['project']} · {v['name']}]" if v else "")
@@ -4521,6 +4647,7 @@ class App:
         if own:  # su carpeta (carpeta por reunion), si se ha quedado vacia
             try:
                 os.rmdir(own)
+                carpetas_reunion().discard(rel_of(own))
             except OSError:
                 pass
         COMPLETE.set(rel, False)
@@ -4836,22 +4963,27 @@ class App:
                 raise ApiError(f"{why}: podrás renombrarla cuando termine.")
             if why:  # se mueve sola al terminar (como «Cambiar» en la cabecera del directo)
                 return self._destino_pendiente(rel_of(src), rel_of(dest_dir))
+        own = own_meeting_dir(src) if ext.lower() in AUDIO_EXT else None
+        # a la carpeta que contiene la suya, sin renombrarla: sacarla de su carpeta (se ve como carpeta porque tiene
+        # algo mas dentro; lo demas se queda alli)
+        fuera = bool(own) and new_stem == stem and _norm_dir(dest_dir) == _norm_dir(os.path.dirname(own))
         with self._move_lock():
-            new = self._move_now(src, dest_dir, new_stem)
+            new = self._move_now(src, dest_dir, new_stem, fuera=fuera)
         if ext.lower() in AUDIO_EXT:
             self._movs().pop(rel_of(src))  # movida a mano: lo que estuviera pendiente ya no vale
         return {"path": new}
 
-    def _move_now(self, src, dest_dir, new_stem=None, target=None):
+    def _move_now(self, src, dest_dir, new_stem=None, target=None, fuera=False):
         """Mueve (o renombra) una reunion con todo lo suyo a `dest_dir` y devuelve la ruta interna nueva del audio.
-        Si vive en su carpeta (carpeta por reunion, own_meeting_dir) se mueve la carpeta entera, con lo que tenga
+        Si vive en su carpeta (la creo la app para ella: own_meeting_dir) se mueve la carpeta entera, con lo que tenga
         dentro: queda dentro de `dest_dir` con su nombre (el de la reunion renombrada, o « (2)» si ya hay otra asi) y,
-        si `dest_dir` es su propia carpeta, solo se renombra. Si no, el audio y sus archivos hermanos, como siempre.
-        O todo o nada (move_files). `target`: la carpeta de la reunion ya elegida (un movimiento que se reintenta)."""
+        si `dest_dir` es su propia carpeta, solo se renombra. Si no (o con `fuera`: sacarla de su carpeta), el audio y
+        sus archivos hermanos, como siempre. Nunca pisa nada y o todo o nada (move_files). `target`: la carpeta de la
+        reunion ya elegida (un movimiento pendiente que se retoma tras un cierre)."""
         stem, ext = os.path.splitext(os.path.basename(src))
         new_stem = new_stem or stem
         audio = ext.lower() in AUDIO_EXT
-        own = own_meeting_dir(src) if audio else None
+        own = own_meeting_dir(src) if audio and not fuera else None
         if own and _norm_dir(dest_dir) == _norm_dir(own):
             dest_dir = os.path.dirname(own)  # su propia carpeta: se renombra en su sitio
         if own and _inside(dest_dir, own):
@@ -4866,12 +4998,14 @@ class App:
             if target:
                 new_dir = target
             else:
-                m = DATE_RE.match(new_stem)
                 name = os.path.basename(own)
+                m = DATE_RE.match(new_stem)
                 if new_stem != stem and m:  # renombrada: su carpeta, con el nombre nuevo
-                    name = fit_meeting_dir(dest_dir, new_stem[m.end():].strip(" -_·"),
-                                           time.strptime(m.group(0)[:10] + " " + m.group(0)[11:], "%Y-%m-%d %H-%M-%S"),
-                                           new_stem)
+                    try:
+                        when = time.strptime(m.group(0)[:10] + " " + m.group(0)[11:], "%Y-%m-%d %H-%M-%S")
+                        name = fit_meeting_dir(dest_dir, new_stem[m.end():].strip(" -_·"), when, new_stem) or name
+                    except ValueError:  # una fecha que no existe (2026-13-45): la carpeta se queda como estaba
+                        pass
                 new_dir = free_dir(dest_dir, name, mine=own)
             mine = {os.path.normcase(f) for f in [src] + sibs}
             moves = [(os.path.join(own, n), os.path.join(new_dir, n)) for n in sorted(os.listdir(own))
@@ -4880,12 +5014,18 @@ class App:
             new_dir, moves = dest_dir, []
         # el audio el ultimo: si algo falla a medias, la reunion sigue en su ruta (move_files deshace lo movido)
         moves += [(f, os.path.join(new_dir, renamed(f))) for f in sibs] + [(src, os.path.join(new_dir, renamed(src)))]
-        for f, t in moves:
-            if os.path.normcase(t) != os.path.normcase(f) and os.path.exists(t):
-                raise ApiError("Ya existe un archivo con ese nombre en el destino: " + os.path.basename(t))
+        seen = {}
+        for f, t in moves:  # nada se pisa: ni lo que ya hay en el destino ni dos archivos que acabarian con un nombre
+            k = os.path.normcase(t)
+            if (k != os.path.normcase(f) and os.path.exists(t)) or seen.get(k, f) != f:
+                raise ApiError("Ya existe un archivo con ese nombre: " + os.path.basename(t))
+            seen[k] = f
         made = own is not None and not os.path.isdir(new_dir)
         if made:
-            os.makedirs(new_dir)
+            try:
+                os.makedirs(new_dir)
+            except OSError as e:
+                raise ApiError(f"No se puede crear la carpeta {display_rel(rel_of(new_dir))} ({e.__class__.__name__}).")
         try:
             move_files(moves)
         except ApiError:
@@ -4896,15 +5036,24 @@ class App:
                     pass
             raise
         old, new = rel_of(src), rel_of(moves[-1][1])
+        reg = carpetas_reunion()
         if own and _norm_dir(new_dir) != _norm_dir(own):  # la carpeta de la reunion se ha quedado vacia
             try:
                 os.rmdir(own)
             except OSError:
                 log(f"   no se pudo quitar la carpeta vacía {rel_of(own)}")
             old_dir, new_dir_rel = rel_of(own), rel_of(new_dir)
+            reg.discard(old_dir)
+            reg.add(new_dir_rel)
             self._rename_refs(old_dir, new_dir_rel, folder=True)  # favoritos e icono de la carpeta
             if getattr(self, "settings", None) is not None:
                 self.settings.update(lambda d: settings_moved(d, old_dir, new_dir_rel, folder=True))
+        elif fuera and os.path.dirname(src) != dest_dir:  # sacada de su carpeta: esa ya no es de ninguna reunion
+            reg.discard(rel_of(os.path.dirname(src)))
+            try:
+                os.rmdir(os.path.dirname(src))
+            except OSError:
+                pass
         self._moved_refs(old, new)
         log(f"↪ {old}  →  {new}")
         return new
@@ -5059,6 +5208,8 @@ class App:
                 moved = None
             if moved and os.path.isfile(moved):
                 movs.pop(rel)
+                carpetas_reunion().discard(rel.rpartition("/")[0])
+                carpetas_reunion().add(target)
                 self._moved_refs(rel, rel_of(moved))
                 self._nota_movida(rel, rel_of(moved))
                 return 1
@@ -5193,6 +5344,7 @@ class App:
         self.jobs.outputs_moved(old, new, folder=True)
         self.settings.update(lambda d: settings_moved(d, old, new, folder=True, project=project))
         self._movs().moved(old, new, folder=True)  # los movimientos pendientes: la reunion y la carpeta de destino
+        carpetas_reunion().moved(old, new, folder=True)  # y las carpetas de reunion que hay dentro
         self._themes_moved(new, project)
 
     def _themes_moved(self, new, project=None):

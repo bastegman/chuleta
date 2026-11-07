@@ -445,7 +445,7 @@ async function openRec() {
   openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (carpeta, idioma, tema y contexto) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
+      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (idioma, tema y contexto; se guarda en la carpeta de su proyecto, en una carpeta para esa reunión) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
       : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
     <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
@@ -524,9 +524,11 @@ async function openRec() {
       const v = vocabSel(), fit = $('#rVocabFit', d);
       if (fit) fit.innerHTML = vocabFit(v);
       if (initial && S.route.kind === 'f') return;  // se abrio desde una carpeta: esa manda
-      if (pf.folder != null) return;  // carpeta fija en el perfil: el tema no la cambia
-      // la ultima carpeta donde grabaste reuniones de ese proyecto; si aun no hay, se queda la elegida
-      const want = v ? S.config.project_folders?.[v.project] : (initial ? S.config.rec_folder || '' : undefined);
+      // la misma regla que Ctrl+Alt+R (server.rec_folder_origin): con tema, la carpeta principal de su workstream o de
+      // su proyecto (asignada o la del proyecto); sin tema, la fija del perfil o la última
+      const fija = pf.folder != null && S.folders.has(pf.folder) ? pf.folder : null;
+      const want = v ? (S.config.workstream_folders?.[v.id] ?? S.config.project_folders?.[v.project])
+        : (initial ? fija ?? (S.config.rec_folder || '') : undefined);
       if (want != null && [...fsel.options].some(o => o.value === want)) fsel.value = fsel.dataset.prev = want;
     };
     fsel.onchange = async () => {
