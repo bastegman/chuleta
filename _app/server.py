@@ -6708,17 +6708,21 @@ class App:
         n = 0
         if removed:
             self.library.refresh(max_age=5)
-            for a in list(self.library.flat):
-                if not a.get("_spk"):
-                    continue
-                data = voices.read_sidecar(a["_spk"])
-                if not data or not any(i.get("persona") == removed for i in (data.get("hablantes") or {}).values()):
-                    continue
-                for i in data["hablantes"].values():
-                    if i.get("persona") == removed:
-                        i["persona"] = keep
-                voices.write_sidecar(a["_spk"], data)
-                self.jobs.schedule_outputs(a["path"])  # destinos de salida: el documento con el nombre que queda
+            for a in list(self.library.flat):  # sin mirar a["_spk"]: en pleno movimiento el sidecar ya esta en la nueva
+                with self._voices_lock():  # como las correcciones: si se esta moviendo, espera y va a la ruta nueva
+                    try:
+                        abs_path = safe(alias_of(a["path"]), "file")
+                    except ApiError:
+                        continue  # ya no esta
+                    side = voices.sidecar_path(abs_path)
+                    data = voices.read_sidecar(side)
+                    if not data or not any(i.get("persona") == removed for i in (data.get("hablantes") or {}).values()):
+                        continue
+                    for i in data["hablantes"].values():
+                        if i.get("persona") == removed:
+                            i["persona"] = keep
+                    voices.write_sidecar(side, data)
+                    self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: con el nombre que queda
                 n += 1
         self.library.at = 0
         log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")

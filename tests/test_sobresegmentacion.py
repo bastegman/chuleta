@@ -546,10 +546,12 @@ class CorregirMientrasSeMueveTests(Reunion):
         self.assertTrue(espero, f"el movimiento no espera a la correccion: {res}")
         return ana, self.resultado(res)
 
-    def movimiento_primero(self, fn):
+    def movimiento_primero(self, fn, antes=None):
         """El movimiento ya ha llevado el sidecar a Dest y esta copiando el audio (el ultimo; entre unidades tarda) y
         llega la correccion: espera y va a la ruta nueva."""
         ana, en_medio, seguir, res, real = self.preparar(), threading.Event(), threading.Event(), {}, server.move_one
+        if antes:
+            antes(ana)
 
         def despacio(f, t):
             if f.endswith(".wav"):
@@ -590,6 +592,16 @@ class CorregirMientrasSeMueveTests(Reunion):
 
     def test_nombre_con_el_movimiento_primero(self):
         ana, side = self.movimiento_primero(self.NOMBRE)
+        self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
+
+    def test_fusionar_personas_con_el_movimiento_primero(self):
+        """Ajustes › Voces, «Fusionar»: la reunion donde sale la persona que desaparece se esta moviendo."""
+        def con_luis(ana):
+            self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": self.v.create("Luis")["id"]})
+
+        def fusionar(app, ana):
+            return app.voices_merge({"id_a": ana, "id_b": self.v.by_name("Luis")["id"]})
+        ana, side = self.movimiento_primero(fusionar, antes=con_luis)
         self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
 
     def test_nombre_con_el_movimiento_en_medio(self):
