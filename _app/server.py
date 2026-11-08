@@ -377,14 +377,21 @@ class Store:
                       + cuantos(extra, "clave adicional", "claves adicionales")
                       + cuantos(len(dig(("links",)) or []), "carpeta vinculada", "carpetas vinculadas")
                       + cuantos(len(dig(("vocab_links",)) or []), "carpeta de listas", "carpetas de listas")
-                      + cuantos(len(dig(("perfil", "outputs")) or []), "destino de salida", "destinos de salida"))
+                      + cuantos(len(dig(("perfil", "outputs")) or []), "destino de salida", "destinos de salida")
+                      + cuantos(len(dig(("project_folders",)) or {}) + len(dig(("workstream_folders",)) or {}),
+                                "carpeta principal asignada", "carpetas principales asignadas")
+                      + (["la carpeta por reunión apagada"] if dig(("carpeta_por_reunion",)) is False else []))
         self.broken = {"copia": os.path.basename(copia) if copia else None, "error": why, "recuperado": recuperado}
         log(f"   settings.json no se puede leer ({why})"
             + (f": copia en {os.path.basename(copia)}" if copia else "")
             + f"; recuperado: {', '.join(recuperado) or 'nada'}; lo demás vuelve a los valores por defecto")
         return saved
 
-    RESCUE = (("links",), ("vocab_links",), ("perfil", "outputs"))  # de un settings.json roto, ademas de los SECRETS
+    # de un settings.json roto, ademas de los SECRETS. Las carpetas principales asignadas (y si la carpeta por reunion
+    # esta apagada, con su marca de migracion) tambien: no hay donde volver a ponerlas en la interfaz (revision de la
+    # integracion del 08/11/2026)
+    RESCUE = (("links",), ("vocab_links",), ("perfil", "outputs"), ("project_folders",), ("workstream_folders",),
+              ("carpeta_por_reunion",), ("carpetas_v",))
 
     @classmethod
     def _rescue(cls, raw):
@@ -403,6 +410,13 @@ class Store:
                     ok = isinstance(v, str) and bool(v.strip())
                 elif keys in cls.SECRETS:  # las claves adicionales (las de cada proveedor): listas de textos
                     ok = isinstance(v, list) and bool(v) and all(isinstance(x, str) for x in v)
+                elif keys in (("project_folders",), ("workstream_folders",)):  # {proyecto o id de lista: carpeta}
+                    ok = isinstance(v, dict) and bool(v) and all(isinstance(a, str) and isinstance(b, str)
+                                                                 for a, b in v.items())
+                elif keys == ("carpeta_por_reunion",):  # encendida es lo de por defecto
+                    ok = v is False
+                elif keys == ("carpetas_v",):  # la migracion ya hecha no se repite
+                    ok = isinstance(v, int) and not isinstance(v, bool) and v >= 1
                 else:  # links, vocab_links y outputs: listas de {"path": …}
                     ok = isinstance(v, list) and bool(v) and all(isinstance(x, dict) and isinstance(x.get("path"), str)
                                                                  for x in v)

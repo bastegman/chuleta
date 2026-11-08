@@ -570,6 +570,41 @@ class MigracionTests(TempTree):
         self.assertLess(donde, src.index("    def rec_toggle(self, b):"))
 
 
+class SettingsRotoTests(unittest.TestCase):
+    """De un settings.json roto se rescatan tambien las carpetas principales asignadas, la carpeta por reunion apagada
+    y la marca de su migracion: no hay donde volver a ponerlas (revision de la integracion del 08/11/2026)."""
+
+    def store(self, text):
+        tmp = tempfile.mkdtemp(prefix="notas-carpetas-roto-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "settings.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        with mock.patch.object(server, "log"):
+            return server.Store(path, server.DEFAULT_SETTINGS)
+
+    def test_se_rescatan(self):
+        st = self.store('{"project_folders": {"Alfa": "Clientes/Alfa"}, "workstream_folders": {"Alfa/Vocabulario/'
+                        'Infra.txt": "Alfa/Infra"}, "carpeta_por_reunion": false, "carpetas_v": 1, "language": "es", '
+                        'ROTO')
+        d = st.get()
+        self.assertEqual(d["project_folders"], {"Alfa": "Clientes/Alfa"})
+        self.assertEqual(d["workstream_folders"], {"Alfa/Vocabulario/Infra.txt": "Alfa/Infra"})
+        self.assertIs(d["carpeta_por_reunion"], False)
+        self.assertEqual(d["carpetas_v"], 1)
+        self.assertEqual(d["language"], "")  # lo demas, por defecto
+        self.assertEqual(st.broken["recuperado"],
+                         ["2 carpetas principales asignadas", "la carpeta por reunión apagada"])
+
+    def test_lo_que_no_vale_no_se_rescata(self):
+        st = self.store('{"project_folders": {"Alfa": 3}, "workstream_folders": [], "carpeta_por_reunion": true, '
+                        '"carpetas_v": true, ROTO')
+        d = st.get()
+        self.assertEqual((d["project_folders"], d["workstream_folders"], d["carpeta_por_reunion"]), ({}, {}, True))
+        self.assertNotIn("carpetas_v", d)
+        self.assertEqual(st.broken["recuperado"], [])
+
+
 # ----------------------------------------------------------------------------- mover y renombrar con su carpeta
 
 class MoverConSuCarpetaTests(TempTree):
