@@ -79,6 +79,8 @@ proyecto o workstream» (msg 1158).
   (revisión de la integración del 08/11/2026). En cuanto existe, sigue.
 - Si `settings.json` se rompe, se rescatan también las carpetas principales asignadas y la carpeta por reunión
   apagada (antes volvían a «sin asignar» y a encendida sin avisar), y el aviso lo cuenta.
+- En Reuniones › Tabla, «Agrupar por carpeta» y la columna Carpeta usan la carpeta que contiene la de la reunión, como
+  el árbol y las migas: antes cada reunión nueva salía como su propio grupo.
 - En el árbol, la carpeta de una reunión se ve como la reunión (no se repite cada entrada) y no sale entre las carpetas
   de destino. Mover o renombrar la reunión mueve o renombra su carpeta con todo lo que tenga dentro, solo si la creó la
   app y no hay otra grabación dentro: una carpeta tuya que se llame igual se queda como está. Nunca se pisa un archivo

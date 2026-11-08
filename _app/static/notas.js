@@ -804,10 +804,16 @@ function tableRows() {
   list.sort(t.sort === 'dur' ? (x, y) => estDuration(y) - estDuration(x) : (x, y) => (t.sort === 'asc' ? 1 : -1) * key(x).localeCompare(key(y)));
   return list;
 }
+/* la carpeta de una reunión en la tabla: con una carpeta por reunión (server.scan la marca con por_reunion), la que la
+   contiene, como en el árbol y en las migas; si no, cada reunión era su propio grupo */
+function homeFolder(a) {
+  const f = S.folders.get(a.folder);
+  return f && f.por_reunion ? (f.parent ? f.parent.path : '') : a.folder;
+}
 function groupKey(a) {
   const g = S.tbl.group;
   if (g === 'month') { const d = aDate(a) || new Date(a.mtime * 1000); return `${MESES[d.getMonth()]} ${d.getFullYear()}`; }
-  if (g === 'folder') return a.folder ? pathLabel(a.folder) : 'Sin clasificar';
+  if (g === 'folder') return homeFolder(a) ? pathLabel(homeFolder(a)) : 'Sin clasificar';
   if (g === 'estado') return (a.props || {}).estado || 'Sin estado';
   return '';
 }
@@ -817,7 +823,7 @@ function rowHtml(a) {
     <td class="nm"><span class="ticon">${iconOf(a) || I.mic}</span>${esc(titleOf(a) || longTitle(a))}${titleOf(a) ? '' : (a.label ? ` <small class="muted">${esc(nfc(a.label))}</small>` : '')}</td>
     <td class="nw">${d ? `${d.getDate()} ${MES[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}` : '—'}</td>
     <td class="nw num">${fmtDur(estDuration(a))}</td>
-    <td class="muted">${esc(a.folder ? folderName(a.folder) : 'Sin clasificar')}</td>
+    <td class="muted">${esc(homeFolder(a) ? folderName(homeFolder(a)) : 'Sin clasificar')}</td>
     <td>${(p.etiquetas || []).map(x => `<span class="tag-chip sm">${esc(x)}</span>`).join('')}</td>
     <td>${p.estado ? `<span class="pill ${ESTADO_CLS[p.estado] || ''}">${esc(p.estado)}</span>` : ''}</td>
     <td>${statusPill(a)}</td></tr>`;

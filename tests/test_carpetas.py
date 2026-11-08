@@ -792,6 +792,27 @@ console.log(JSON.stringify([subFolders(f).map(x => x.name), ownAudios(f).map(a =
         self.assertIn("subFolders(n).forEach(f => w(f, d + 1))", src)  # flatFolders: Grabar, Mover…
         self.assertIn("if (S.folders.get(path)?.por_reunion) parts.pop();", src)  # la miga no la repite
 
+    def test_la_tabla_agrupa_por_la_carpeta_del_proyecto(self):
+        """Reuniones › Tabla, «Agrupar por carpeta» y la columna Carpeta: la carpeta que contiene la de la reunión
+        (revisión de la integración del 08/11/2026: cada reunión salía como su propio grupo)."""
+        import subprocess
+        from test_frontend import js_defs, read
+        code = js_defs(read("notas.js"), ["homeFolder", "groupKey"]) + """
+const alfa = {path: 'Alfa'}, raiz = {path: ''};
+const S = {tbl: {group: 'folder'}, folders: new Map([
+  ['Alfa', {path: 'Alfa', parent: raiz}],
+  ['Alfa/2026-11-07 Kickoff', {path: 'Alfa/2026-11-07 Kickoff', por_reunion: true, parent: alfa}],
+  ['2026-11-06 Comité', {path: '2026-11-06 Comité', por_reunion: true, parent: null}],
+  ['Alfa/Anexos', {path: 'Alfa/Anexos', parent: alfa}]])};
+const pathLabel = p => p.split('/').join(' › ');
+const as = ['Alfa/2026-11-07 Kickoff', 'Alfa', '2026-11-06 Comité', 'Alfa/Anexos', ''].map(folder => ({folder}));
+console.log(JSON.stringify([as.map(homeFolder), as.map(groupKey)]));"""
+        r = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), [["Alfa", "Alfa", "", "Alfa/Anexos", ""],
+                                                ["Alfa", "Alfa", "Sin clasificar", "Alfa › Anexos", "Sin clasificar"]])
+        self.assertIn("${esc(homeFolder(a) ? folderName(homeFolder(a)) : 'Sin clasificar')}", read("notas.js"))
+
 
 if __name__ == "__main__":
     unittest.main()
