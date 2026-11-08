@@ -106,6 +106,9 @@ USO DIARIO
     para la cola) se resume con "Resumir esta reunión", o también solo si lo activas en Ajustes >
     Resumen con IA (entonces su texto va al proveedor de la nube). Cada reunión tiene pestañas
     Resumen / Transcripción / Notas; la transcripción se puede corregir en la propia página.
+    "Copiar para correo" (en la pestaña Resumen) copia el resumen como acta con formato:
+    título, fecha, asistentes confirmados y el resumen, sin los minutos. Al pegarlo en Outlook
+    o en Teams sale con negritas y listas; en el Bloc de notas, como texto limpio.
   - Ctrl+P busca en todas las reuniones. Puedes arrastrar a la ventana audios que ya tengas
     (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
   - Si grabas con OBS, configúralo para que guarde en la carpeta Chuleta: la app lo detecta y

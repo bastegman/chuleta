@@ -308,6 +308,53 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(err, [], err)
         self.assertEqual(red, [], red)
 
+    def test_copiar_para_correo_con_formato(self):
+        """«Copiar para correo» (mock 08): al portapapeles van text/html y text/plain, sin Markdown ni minutos y sin
+        firma de IA. En WebView2 lo prueba test_portapapeles_webview2 (runner de Windows)."""
+        import wave
+        stem = os.path.join(self.root, "Reuniones", "2026-11-06 10-00-00 - Comite")
+        os.makedirs(os.path.dirname(stem), exist_ok=True)
+        with wave.open(stem + ".wav", "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"\0\0" * 16000)
+        with open(stem + ".txt", "w", encoding="utf-8") as f:
+            f.write("hola\n")
+        with open(stem + ".md", "w", encoding="utf-8") as f:
+            f.write("---\ntitulo: Comité de seguimiento\nparticipantes: Ana, Luis\n---\n")
+        with open(stem + ".resumen.md", "w", encoding="utf-8") as f:
+            f.write("---\nmodelo: prueba\n---\n\n## Resumen\nLa migración va **en plazo** [1:12].\n\n"
+                    "## Próximos pasos\n- [ ] Luis: escalar los permisos [2:05]\n\n## Participantes\n- Ana\n- Luis\n")
+        ctx = self.browser.new_context(bypass_csp=True)
+        self.addCleanup(ctx.close)
+        ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=self.base)
+        pg = ctx.new_page()
+        errores = []
+        pg.on("pageerror", lambda e: errores.append(f"pageerror: {e}"))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.evaluate("location.hash = '#/a/' + encodeURIComponent('Reuniones/2026-11-06 10-00-00 - Comite.wav')")
+        pg.wait_for_selector("[data-act='sum-copy']:has-text('Copiar para correo')", timeout=15000)
+        pg.click("[data-act='sum-copy']")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('Copiado para correo')",
+                             timeout=5000)
+        self.assertNotIn("sin formato", pg.inner_text("#toasts"))
+        r = pg.evaluate("""async () => {
+          const items = await navigator.clipboard.read(), out = {types: items.flatMap(i => i.types)};
+          out.html = await (await items[0].getType('text/html')).text();
+          out.text = await (await items[0].getType('text/plain')).text();
+          return out; }""")
+        self.assertIn("text/html", r["types"])
+        self.assertIn("text/plain", r["types"])
+        self.assertIn("<b>Luis</b>", r["html"])
+        self.assertIn("Comité de seguimiento", r["html"])
+        self.assertTrue(r["text"].startswith("Comité de seguimiento · "), r["text"])
+        self.assertIn("• Luis: escalar los permisos", r["text"])
+        for marca in ("##", "[ ]", "**", "[1:12]", "IA"):
+            self.assertNotIn(marca, r["text"], marca)
+        self.assertEqual(errores, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -112,6 +112,27 @@ Lo que pidió: «me gustaría poder conectar a una carpeta, no tener que pegarlo
   conectadas tienen ids `:v<id>/…`, que `safe()` no resuelve. Ajuste nuevo `vocab_links`, que se rescata de un
   `settings.json` roto como las carpetas vinculadas.
 
+### «Copiar para correo»: el resumen con formato (07/11/2026)
+Lo que pasaba: «Copiar» dejaba en el portapapeles el Markdown del resumen (`## Resumen`, `- [ ] Luis: …`, `[1:12]`), y
+así llegaba al correo (auditoría de UX del rediseño, A5; mock 08).
+- «Copiar» pasa a **«Copiar para correo»** (pestaña Resumen): copia un acta con el título, la fecha («viernes 6 nov,
+  10:00») y los asistentes confirmados, y el resumen con sus secciones, listas y negritas; el responsable de cada tarea,
+  en negrita. Sin `##`, sin `[ ]` y sin los minutos (en un correo no saltan al audio).
+- Al portapapeles van dos versiones a la vez: **HTML** (Outlook, Teams y Word lo pegan con formato, con letra Aptos o
+  Calibri; sin letra, Outlook pegaba en Times) y **texto limpio** de reserva (Bloc de notas, chats sin formato). Si el
+  navegador no deja escribir HTML, solo el texto, y el aviso lo dice («sin formato»).
+- Los participantes que sugirió Outlook o Teams sin confirmar no salen en la cabecera (como en el resumen). La sección
+  «Participantes» del resumen va tal cual, con sus roles.
+- Fiel a lo que se ve en la pantalla: tablas como tablas (en el texto, «a · b»), listas numeradas, tareas hechas con
+  «✓», líneas de continuación dentro de su punto, negritas dentro de una tarea, enlaces como «texto (url)». Solo se
+  quitan los minutos entre corchetes, también en grupo, en rango y de más de 100 minutos (`[1:12, 3:40]`,
+  `[12:34–13:10]`, `[105:20]`); «(10:30)» se queda, porque puede ser una hora. Un audio sin fecha lleva su nombre, una
+  fecha imposible en el nombre del fichero ya no rompe la copia, y con el resumen en inglés la fecha va en inglés.
+- Sin firma de IA: es tu correo y ya lo revisas (decisión D10). La página sigue diciendo que el resumen es de la IA.
+- Desarrollo y CI: `test_copiar_correo.py` (el acta, con node), un ui-smoke que lee el portapapeles en Chromium, y
+  `test_portapapeles_webview2.py`, que en `windows-real` abre WebView2, pulsa el botón con el ratón de Windows y lee los
+  formatos «HTML Format» y CF_UNICODETEXT del portapapeles de Windows.
+
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
 - La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja

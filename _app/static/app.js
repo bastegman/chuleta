@@ -1765,6 +1765,19 @@ main.addEventListener('keydown', e => {
   }
 });
 
+/* Con formato (text/html) y, de reserva, el mismo texto limpio (text/plain), en una sola copia: Outlook, Teams y Word
+   pegan el HTML; el Bloc de notas y lo que no admite formato, el texto. Si el navegador no deja escribir HTML, solo el
+   texto (que tampoco lleva Markdown). */
+async function copyRich(html, text, msg) {
+  try {
+    if (!window.ClipboardItem || !navigator.clipboard?.write) throw new Error('sin ClipboardItem');
+    await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }),
+      'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+    toast(msg);
+  } catch {
+    try { await navigator.clipboard.writeText(text); toast(msg + ' (sin formato)'); } catch { toast('No se pudo copiar', 'err'); }
+  }
+}
 async function copy(text, msg) {
   try { await navigator.clipboard.writeText(text); toast(msg); } catch { toast('No se pudo copiar', 'err'); }
 }
