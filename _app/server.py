@@ -1886,12 +1886,21 @@ MEETING_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (.+?)(?: \((\d{1,3})\))?$")
 WIN_PATH_MAX = 250  # rutas de Windows sin «rutas largas»: 260 con el terminador; se deja margen
 
 
-def project_home(v):
+def project_home(v, vs=None):
     """Ruta interna de la carpeta del proyecto de una lista (la que contiene su carpeta Vocabulario), si esta en el
-    arbol de la app (su raiz o una vinculada); None si no (p. ej. una lista de una carpeta de vocabulario conectada)."""
+    arbol de la app (su raiz o una vinculada); None si no. Una carpeta de vocabulario conectada nunca es destino de
+    grabacion (VLINK), tampoco si queda dentro de una vinculada: una lista de alli usa la carpeta de su proyecto en el
+    arbol, la de otra lista suya que si este (`vs`: las de list_vocab, si ya se tienen), y si no hay, ninguna."""
     if not v or not v.get("_abs"):
         return None
     d = _project_dir(v)
+    if v.get("conectada") or any(_inside(d, l["path"]) for l in VOCAB_LINKS.values()):
+        for o in (list_vocab() if vs is None else vs):
+            if not o.get("conectada") and o.get("_abs") and _of_project(o, v["project"]):
+                home = project_home(o, ())
+                if home is not None:
+                    return home
+        return None
     if in_app_dir(d) or not (_inside(d, ROOT) or any(_inside(d, l["path"]) for l in LINKS.values())):
         return None
     return rel_of(d)
@@ -1907,15 +1916,17 @@ def _usable_dir(rel):
         return False
 
 
-def rec_folder_origin(v, st):
+def rec_folder_origin(v, st, vs=None):
     """(carpeta principal, origen) de una grabacion nueva con el tema `v` (una lista de list_vocab, o None): la asignada
     a su workstream («workstream»), la asignada a su proyecto («proyecto») o la carpeta del proyecto en el arbol
     («carpeta_proyecto»); sin tema (o si ninguna existe ya), la fija del perfil («perfil»), la ultima usada («ultimo») o
-    la raiz («raiz»). Es la unica regla: la usan Ctrl+Alt+R, el aviso de Teams, el dialogo y /api/perfil."""
-    if v:
-        for origin, rel in (("workstream", (st.get("workstream_folders") or {}).get(v.get("id"))),
-                            ("proyecto", (st.get("project_folders") or {}).get(v.get("project"))),
-                            ("carpeta_proyecto", project_home(v))):
+    la raiz («raiz»). Es la unica regla: la usan Ctrl+Alt+R, el aviso de Teams, el dialogo y /api/perfil. `vs`: las
+    listas de list_vocab, si ya se tienen (project_home)."""
+    if v:  # en orden y solo hasta la primera que sirva (project_home de una lista conectada recorre las listas)
+        for origin, get in (("workstream", lambda: (st.get("workstream_folders") or {}).get(v.get("id"))),
+                            ("proyecto", lambda: (st.get("project_folders") or {}).get(v.get("project"))),
+                            ("carpeta_proyecto", lambda: project_home(v, vs))):
+            rel = get()
             if rel is not None and _usable_dir(rel):
                 return rel, origin
     fija = perfil_folder(st)
@@ -1930,10 +1941,11 @@ def rec_folder_origin(v, st):
 def project_folders_resolved(st):
     """proyecto -> carpeta principal de cada proyecto con listas (la asignada o la suya en el arbol), para la
     interfaz."""
-    out = {}
-    for v in list_vocab():
+    out, vs = {}, list_vocab()
+    for v in vs:
         if v["project"] not in out:
-            rel, origin = rec_folder_origin(dict(v, id=None), st)  # sin id: la del proyecto, no la de un workstream
+            # sin id: la del proyecto, no la de un workstream
+            rel, origin = rec_folder_origin(dict(v, id=None), st, vs)
             if origin in ("proyecto", "carpeta_proyecto"):
                 out[v["project"]] = rel
     for name, rel in (st.get("project_folders") or {}).items():  # asignadas a un proyecto sin listas
@@ -4307,10 +4319,10 @@ class App:
                     # la ultima carpeta principal usada: la de las reuniones sin tema (rec_folder_origin). La de un
                     # proyecto ya no se apunta al grabar: se asigna (/api/proyecto/carpeta) y, sin asignar, es la suya
                     d["rec_folder"] = rel_of(folder)
-                    # salvo si no tiene «la suya» en el arbol (sus listas vienen de una carpeta de vocabulario
-                    # conectada): la elegida a mano pasa a ser su carpeta principal, como antes de la carpeta por
-                    # reunion. Sin esto, Ctrl+Alt+R y el aviso de Teams con su tema caian en la ultima usada, que
-                    # puede ser la de otro proyecto (revision de la integracion del 08/11/2026)
+                    # salvo si no tiene «la suya» en el arbol (solo tiene listas de una carpeta de vocabulario
+                    # conectada: project_home): la elegida a mano pasa a ser su carpeta principal, como antes de la
+                    # carpeta por reunion. Sin esto, Ctrl+Alt+R y el aviso de Teams con su tema caian en la ultima
+                    # usada, que puede ser la de otro proyecto (revision de la integracion del 08/11/2026)
                     if v and not por_regla and project_home(v) is None:
                         d["project_folders"] = dict(d.get("project_folders") or {}, **{v["project"]: rel_of(folder)})
                     # "solo grabar" y "sin micro" son para una grabacion concreta: no se quedan como
@@ -4974,7 +4986,8 @@ class App:
 
     def vocab_link_remove(self, b):
         """POST /api/vocab/link/remove {rel}: deja de leer esa carpeta. No borra ni mueve nada de ella. El tema fijo del
-        perfil y el ultimo elegido, si eran de alli, vuelven a «automatico» y a ninguno."""
+        perfil y el ultimo elegido, si eran de alli, vuelven a «automatico» y a ninguno, y sus workstreams pierden la
+        carpeta principal asignada (como al borrar un tema o desvincular una carpeta)."""
         rel = str(b.get("rel") or b.get("path") or "")
         vid = rel[len(VLINK):].split("/")[0] if rel.startswith(VLINK) else ""
         if vid not in VOCAB_LINKS:
@@ -4988,6 +5001,8 @@ class App:
                 d["rec_vocab"] = ""
             if mine((d.get("perfil") or {}).get("vocab")):
                 d["perfil"] = dict(d["perfil"], vocab=None)
+            if any(mine(k) for k in (d.get("workstream_folders") or {})):
+                d["workstream_folders"] = {k: x for k, x in d["workstream_folders"].items() if not mine(k)}
         self.settings.update(upd)
         log(f"🔤 carpeta de listas desconectada (no se ha tocado nada): {l['path']}")
         return {"ok": True, "vocab_links": self._vocab_links_public()}

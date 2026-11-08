@@ -68,7 +68,11 @@ proyecto o workstream» (msg 1158).
   y el aviso de Ctrl+Alt+R dice dónde se guarda.
 - Un proyecto cuyas listas vienen de una carpeta conectada no tiene carpeta en el árbol: su carpeta principal es la
   última que elegiste a mano para él. Si no, Ctrl+Alt+R y el aviso de Teams con su tema grababan en la última carpeta
-  usada, que podía ser la de otro proyecto (revisión de la integración del 08/11/2026).
+  usada, que podía ser la de otro proyecto. Si el proyecto también está en el árbol, sus listas conectadas graban en
+  la carpeta del proyecto, como las demás. Una carpeta de listas conectada nunca es destino de grabación, tampoco si
+  queda dentro de una carpeta vinculada (antes las reuniones caían dentro y luego no se podía volver a conectar). Al
+  quitar una carpeta de listas, sus workstreams pierden la carpeta asignada (revisión de la integración del
+  08/11/2026).
 - En el árbol, la carpeta de una reunión se ve como la reunión (no se repite cada entrada) y no sale entre las carpetas
   de destino. Mover o renombrar la reunión mueve o renombra su carpeta con todo lo que tenga dentro, solo si la creó la
   app y no hay otra grabación dentro: una carpeta tuya que se llame igual se queda como está. Nunca se pisa un archivo

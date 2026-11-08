@@ -227,6 +227,70 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
         self.assertEqual(st["project_folders"], {})
         self.assertEqual(server.rec_folder_origin(self.alfa, st), ("Alfa", "carpeta_proyecto"))
 
+    def test_quitar_la_carpeta_de_listas_quita_la_carpeta_de_sus_workstreams(self):
+        ws = {self.b["id"]: "Cliente B", self.alfa["id"]: "Alfa"}
+        self.a.settings.update(lambda d: d.update(workstream_folders=ws))
+        with mock.patch.object(server, "log"), mock.patch.object(self.a, "_save_vocab_links"):
+            self.a.vocab_link_remove({"rel": self.b["conectada"]})
+        self.assertEqual(self.a.settings.get()["workstream_folders"], {self.alfa["id"]: "Alfa"})
+
+
+class CarpetaDeListasNuncaEsDestinoTests(TempTree):
+    """Una carpeta de listas conectada no es destino de grabacion (VLINK), tampoco si queda dentro de una vinculada; y
+    una lista conectada de un proyecto que tambien esta en el arbol graba en la carpeta de ese proyecto (revision de la
+    integracion del 08/11/2026: project_home tomaba la carpeta de listas por la del proyecto y las reuniones caian
+    dentro, donde luego no se puede volver a conectar)."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = make_app(self)
+        self.cliente = os.path.join(self.tmp, "OneDrive", "Cliente")
+
+    def conectar_y_vincular(self, lista):
+        """Conecta Cliente/Acme como carpeta de listas y luego vincula Cliente (la que la contiene) al arbol."""
+        acme = os.path.join(self.cliente, "Acme")
+        os.makedirs(os.path.dirname(os.path.join(acme, lista)))
+        with open(os.path.join(acme, lista), "w", encoding="utf-8") as f:
+            f.write("Kubernetes, VPN\n")
+        with mock.patch.object(server, "log"), mock.patch.object(self.a, "_save_vocab_links"), \
+                mock.patch.object(self.a, "_save_links"):
+            self.a.vocab_link_add({"path": acme})
+            self.a.link_add({"path": self.cliente})
+        v = next(v for v in server.list_vocab() if v["project"] == "Acme")
+        return acme, v
+
+    def no_graba_dentro(self, acme, v):
+        st = self.a.settings.get()
+        self.assertIsNone(server.project_home(v))
+        carpeta, origen = server.rec_folder_origin(v, st)
+        self.assertNotEqual(origen, "carpeta_proyecto")
+        rec(self.a, self, folder=carpeta, vocab=v["id"], name="Acme semanal")  # lo que haria Ctrl+Alt+R
+        self.assertFalse(any(e.is_dir() for e in os.scandir(acme) if e.name != "Vocabulario"), os.listdir(acme))
+
+    def test_listas_sueltas(self):
+        self.no_graba_dentro(*self.conectar_y_vincular("Infra.txt"))
+
+    def test_listas_en_su_carpeta_vocabulario(self):
+        self.no_graba_dentro(*self.conectar_y_vincular(os.path.join("Vocabulario", "Infra.txt")))
+
+    def test_proyecto_tambien_en_el_arbol(self):
+        self.write("Acme/Vocabulario/General.txt", "API, SLA\n")
+        os.makedirs(os.path.join(self.root, "Otra"))
+        ext = os.path.join(self.tmp, "OneDrive", "Listas")
+        os.makedirs(os.path.join(ext, "Acme", "Vocabulario"))
+        with open(os.path.join(ext, "Acme", "Vocabulario", "Infra.txt"), "w", encoding="utf-8") as f:
+            f.write("Kubernetes\n")
+        server.VOCAB_LINKS[server.link_id(ext)] = {"name": "Listas", "path": ext}
+        vs = [v for v in server.list_vocab() if v["project"] == "Acme"]
+        arbol, conectada = (next(v for v in vs if bool(v.get("conectada")) is c) for c in (False, True))
+        st = self.a.settings.get()
+        self.assertEqual(server.rec_folder_origin(conectada, st), ("Acme", "carpeta_proyecto"))
+        rec(self.a, self, folder="Otra", vocab=conectada["id"], name="Una vez en otra")  # a mano, una vez
+        st = self.a.settings.get()
+        self.assertEqual(st["project_folders"], {})  # no cambia la carpeta del proyecto
+        self.assertEqual(server.rec_folder_origin(arbol, st), ("Acme", "carpeta_proyecto"))
+        self.assertEqual(server.rec_folder_origin(conectada, st), ("Acme", "carpeta_proyecto"))
+
 
 # ----------------------------------------------------------------------------- la carpeta de cada reunion
 
