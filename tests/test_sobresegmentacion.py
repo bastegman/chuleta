@@ -465,35 +465,51 @@ class RutaUnirTests(unittest.TestCase):
 
 
 class CorregirMientrasSeMueveTests(Reunion):
-    """Corregir los hablantes (unir, reasignar) mientras la reunion se mueve (B1c: se mueve sola al quedar libre, justo
-    cuando se corrigen las voces): la correccion espera al movimiento y va a la ruta nueva, como las notas. Antes se
-    escribia en la ruta vieja: la reunion movida no la llevaba y quedaba un sidecar huerfano (revision de la integracion
-    del 08/11/2026)."""
+    """Corregir los hablantes (unir, reasignar, nombre) mientras la reunion se mueve (B1c: se mueve sola al quedar
+    libre, justo cuando se corrigen las voces): en los dos ordenes, la correccion y el movimiento no se pisan y la
+    correccion acaba en la reunion movida, como las notas. Antes se escribia en la ruta vieja (sidecar huerfano) o se
+    leia de alli con el sidecar ya movido («Ese hablante ya no está…») (revision de la integracion del 08/11/2026)."""
 
-    def corregir_mientras_se_mueve(self, funcion, corregir):
-        """Mientras `corregir()` esta dentro de voices.<funcion> (entre leer el sidecar y escribirlo: lo que tarde el
-        disco u OneDrive), se pide mover la reunion a Dest. Devuelve el sidecar de la reunion movida."""
+    UNIR = staticmethod(lambda app, ana: app.speakers_join({"path": "r.wav", "h": "h3", "con": "h1"}))
+    REASIGNAR = staticmethod(lambda app, ana: app.voices_reassign({"path": "r.wav", "h": "h3", "persona": ana}))
+    NOMBRE = staticmethod(lambda app, ana: app.voices_person({"path": "r.wav", "h": "h3", "nombre": "Ana"}))
+
+    def preparar(self):
         self.identificar(micro_en=None)
         os.makedirs(os.path.join(self.root, "Dest"))
         self.app.notes_lock = threading.Lock()
-        en_medio, seguir, res, real = threading.Event(), threading.Event(), {}, getattr(voices, funcion)
+        return self.v.create("Ana")["id"]
+
+    def mover(self, res):
+        res["movida"] = self.app._move_now(os.path.join(self.root, "r.wav"), os.path.join(self.root, "Dest"))
+
+    def corregir(self, fn, ana, res):
+        try:
+            res["ok"] = fn(self.app, ana)
+        except Exception as e:  # noqa: BLE001
+            res["error"] = repr(e)
+
+    def resultado(self, res):
+        self.assertNotIn("error", res, res)
+        self.assertEqual(res.get("movida"), "Dest/r.wav", res)
+        self.assertFalse(os.path.exists(self.sidecar()), "sidecar huerfano en la ruta vieja")
+        return voices.read_sidecar(os.path.join(self.root, "Dest", "r.hablantes.json"))
+
+    def correccion_primero(self, fn, funcion):
+        """La correccion ya esta dentro de voices.<funcion> (entre leer el sidecar y escribirlo) y llega el movimiento:
+        espera a que termine."""
+        ana, en_medio, seguir, res = self.preparar(), threading.Event(), threading.Event(), {}
+        real = getattr(voices, funcion)
 
         def despacio(*a, **k):
             en_medio.set()
             seguir.wait(5)
             return real(*a, **k)
-
-        def hilo():
-            try:
-                res["ok"] = corregir()
-            except Exception as e:  # noqa: BLE001
-                res["error"] = repr(e)
         with mock.patch.object(voices, funcion, despacio), mock.patch.object(server, "log"):
-            t = threading.Thread(target=hilo)
+            t = threading.Thread(target=self.corregir, args=(fn, ana, res))
             t.start()
             self.assertTrue(en_medio.wait(5))
-            m = threading.Thread(target=lambda: res.update(movida=self.app._move_now(
-                os.path.join(self.root, "r.wav"), os.path.join(self.root, "Dest"))))
+            m = threading.Thread(target=self.mover, args=(res,))
             m.start()
             m.join(0.5)
             espero = m.is_alive()
@@ -501,20 +517,64 @@ class CorregirMientrasSeMueveTests(Reunion):
             t.join(5)
             m.join(5)
         self.assertTrue(espero, f"el movimiento no espera a la correccion: {res}")
-        self.assertNotIn("error", res, res)
-        self.assertFalse(os.path.exists(self.sidecar()), "sidecar huerfano en la ruta vieja")
-        return voices.read_sidecar(os.path.join(self.root, "Dest", "r.hablantes.json"))
+        return ana, self.resultado(res)
 
-    def test_unir(self):
-        side = self.corregir_mientras_se_mueve(
-            "join_speakers", lambda: self.app.speakers_join({"path": "r.wav", "h": "h3", "con": "h1"}))
-        self.assertEqual(set(side["hablantes"]), {"h1", "h2"})
+    def movimiento_primero(self, fn):
+        """El movimiento ya ha llevado el sidecar a Dest y esta copiando el audio (el ultimo; entre unidades tarda) y
+        llega la correccion: espera y va a la ruta nueva."""
+        ana, en_medio, seguir, res, real = self.preparar(), threading.Event(), threading.Event(), {}, server.move_one
 
-    def test_reasignar(self):
-        ana = self.v.create("Ana")["id"]
-        side = self.corregir_mientras_se_mueve(
-            "assign", lambda: self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": ana}))
+        def despacio(f, t):
+            if f.endswith(".wav"):
+                en_medio.set()
+                seguir.wait(5)
+            return real(f, t)
+        with mock.patch.object(server, "move_one", despacio), mock.patch.object(server, "log"):
+            m = threading.Thread(target=self.mover, args=(res,))
+            m.start()
+            self.assertTrue(en_medio.wait(5))
+            t = threading.Thread(target=self.corregir, args=(fn, ana, res))
+            t.start()
+            t.join(0.5)
+            espero = t.is_alive()
+            seguir.set()
+            m.join(5)
+            t.join(5)
+        self.assertTrue(espero, f"la correccion no espera al movimiento: {res}")
+        return ana, self.resultado(res)
+
+    def test_unir_con_la_correccion_primero(self):
+        self.assertEqual(set(self.correccion_primero(self.UNIR, "join_speakers")[1]["hablantes"]), {"h1", "h2"})
+
+    def test_unir_con_el_movimiento_primero(self):
+        self.assertEqual(set(self.movimiento_primero(self.UNIR)[1]["hablantes"]), {"h1", "h2"})
+
+    def test_reasignar_con_la_correccion_primero(self):
+        ana, side = self.correccion_primero(self.REASIGNAR, "assign")
         self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
+
+    def test_reasignar_con_el_movimiento_primero(self):
+        ana, side = self.movimiento_primero(self.REASIGNAR)
+        self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
+
+    def test_nombre_con_la_correccion_primero(self):
+        ana, side = self.correccion_primero(self.NOMBRE, "assign")
+        self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
+
+    def test_nombre_con_el_movimiento_primero(self):
+        ana, side = self.movimiento_primero(self.NOMBRE)
+        self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
+
+    def test_nombre_con_el_movimiento_en_medio(self):
+        """Se mueve entera entre la comprobacion y la escritura (mientras se decide quien es): va a la ruta nueva."""
+        ana, res, real = self.preparar(), {}, self.app._persona_for_speaker
+
+        def y_se_mueve(*a, **k):
+            self.mover(res)
+            return real(*a, **k)
+        with mock.patch.object(self.app, "_persona_for_speaker", y_se_mueve), mock.patch.object(server, "log"):
+            self.corregir(self.NOMBRE, ana, res)
+        self.assertEqual(self.resultado(res)["hablantes"]["h3"]["persona"], ana)
 
 
 class EvalScoreTests(unittest.TestCase):
