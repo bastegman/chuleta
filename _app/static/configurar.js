@@ -267,20 +267,21 @@ function wzPaso2() {
   if (W.modo === 'agente') {
     const ag = S.config.agente || {};
     return `<h2 tabindex="-1">Conecta Claude Code</h2>
-      <p class="wz-lead">${esc(APP_NAME)} usa el Claude Code de tu PC para resumir. Tu contraseña no pasa por ${esc(APP_NAME)}: inicias sesión tú, en la página de Anthropic.</p>
+      <p class="wz-lead">${esc(APP_NAME)} usa el Claude Code de tu PC para resumir. Tu contraseña no pasa por ${esc(APP_NAME)}: entras tú, en la página de Claude.</p>
       ${wzDescargaHtml(true)}
       <ol class="wz-pasos">
-        <li><span class="num${ag.encontrado ? ' ok' : ''}" data-wz-num>${ag.encontrado ? I.check : '1'}</span><div><b>Instala Claude Code</b>
-          <div>Abre PowerShell, pega esta línea y pulsa Intro. No hace falta ser administrador.</div>
+        <li><span class="num${ag.encontrado ? ' ok' : ''}" data-wz-num>${ag.encontrado ? I.check : '1'}</span><div><b>Instala Claude Code (una vez)</b>
+          <div>Pulsa «Abrir PowerShell» (abajo), pega esta línea y pulsa Intro. Tarda menos de un minuto y no hace falta ser administrador.</div>
           <div class="wz-code"><code>irm https://claude.ai/install.ps1 | iex</code><button class="btn sm" type="button" data-wz="copiar">${I.copy || ''}Copiar</button></div>
-          <div class="help">¿Prefieres winget? <code>winget install Anthropic.ClaudeCode</code></div>
-          <div class="help">Si tu empresa no te deja instalar programas, pídele a IT que instale Claude Code.</div>
+          <div class="help">¿Prefieres winget? <code>winget install Anthropic.ClaudeCode</code> · Si tu empresa no te deja instalar programas, pídele a IT que instale Claude Code.</div>
           <div class="wz-est${ag.encontrado ? ' ok' : ''}" data-wz-encontrado>${ag.encontrado ? 'Instalado en este PC' : 'Todavía no lo encuentro en este PC'}</div></div></li>
-        <li><span class="num">2</span><div><b>Inicia sesión</b>
-          <div>En PowerShell escribe <code>claude</code>, pulsa Intro y sigue los pasos en el navegador. Vale tu cuenta personal o la de tu empresa (Pro, Max, Ultra, Team o Enterprise) y también una cuenta de Console, la de la API de Anthropic.</div></div></li>
+        <li><span class="num">2</span><div><b>Entra con tu cuenta</b>
+          <div>En esa misma ventana (o con «Abrir PowerShell» otra vez) escribe <code>claude</code> y pulsa Intro. Se abre el navegador con el inicio de sesión de Claude: entra con tu cuenta; si es la de tu empresa, con su inicio de sesión de siempre.</div>
+          <div class="help">Si el navegador no se abre, pulsa <code>c</code> para copiar el enlace; si te enseña un código, pégalo en PowerShell. Cuando ponga «Login successful», pulsa Intro y cierra la ventana. Vale una cuenta Pro, Max, Ultra, Team, Enterprise o de Console.</div></div></li>
         <li><span class="num">3</span><div><b>Pruébalo</b>
           <div>Pulsa Siguiente y luego «Probar»: ${esc(APP_NAME)} graba 3 s de tu voz, los transcribe en tu PC y le pide a Claude que los resuma.</div></div></li>
-      </ol>`;
+      </ol>
+      <p class="help">¿Usas Claude Code en VS Code? ${esc(APP_NAME)} también encuentra esa copia y su sesión. La app de escritorio de Claude no basta: su sesión es solo suya.</p>`;
   }
   const P = S.config.providers || {}, p = P[W.cloud.provider] || {}, c = S.config.cloud || {};
   const misma = W.cloud.provider === (c.provider || 'groq');
@@ -368,7 +369,9 @@ async function wzMirarClaude() {
   try {
     const r = await api('/api/agente/estado');
     const e = $('[data-wz-encontrado]', W.d), n = $('[data-wz-num]', W.d);
-    if (e) { e.textContent = r.encontrado ? 'Instalado en este PC' : 'Todavía no lo encuentro en este PC'; e.classList.toggle('ok', !!r.encontrado); }
+    // origen: «Claude Code de VS Code» si es la copia de la extensión (rama claude-empresa)
+    const de = r.origen && r.origen !== r.label ? ` (${r.origen})` : '';
+    if (e) { e.textContent = r.encontrado ? `Instalado en este PC${de}` : 'Todavía no lo encuentro en este PC'; e.classList.toggle('ok', !!r.encontrado); }
     if (n) { n.classList.toggle('ok', !!r.encontrado); n.innerHTML = r.encontrado ? I.check : '1'; }
     if (S.config.agente) S.config.agente.encontrado = !!r.encontrado;
   } catch { /* se reintenta */ }
@@ -483,7 +486,10 @@ async function wzAccion(tipo, b) {
   if (tipo === 'reintentar') return wzProbar();
   if (tipo === 'abrir_powershell') return api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
   if (tipo === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(b.dataset.url, '_blank'));
-  if (tipo === 'asistente' || tipo === 'procesado') { W.paso = 2; return wzPintar(); }  // la clave y la dirección, ahí
+  // con Claude, el modelo se elige en Ajustes › Procesado (el paso 2 no lo tiene); con la API, la clave y la dirección,
+  // en el paso 2
+  if (tipo === 'procesado' && W.modo === 'agente') { closeModal(false); return openSettings({ sec: 'procesado' }); }
+  if (tipo === 'asistente' || tipo === 'procesado') { W.paso = 2; return wzPintar(); }
   if (tipo === 'reintentar_descarga') { await wzBajar(); return wzProbar(); }
   if (tipo === 'avanzado') { closeModal(false); return openSettings({ sec: 'avanzado' }); }
   if (tipo === 'diagnostico') { try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); } }

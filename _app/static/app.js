@@ -1885,7 +1885,7 @@ function procesadoFieldsetHtml() {
   const opt = (v, titulo, texto, aviso) => `<label class="proc${mode === v ? ' on' : ''}"><input type="radio" name="proc" value="${v}"${mode === v ? ' checked' : ''}>
       <div><b>${titulo}</b><div class="help" style="margin-top:2px">${texto}</div>${aviso ? `<div class="notice proc-aviso">${I.info}${aviso}</div>` : ''}</div></label>`;
   const cuando = ag.comprobado ? new Date(ag.comprobado * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : '';
-  const estado = !ag.encontrado ? `${agLabel} no está instalado en este PC (o no está en el PATH)`
+  const estado = !ag.encontrado ? `Todavía no encuentro ${agLabel} en este PC`
     : cuando ? `${agLabel} ${esc(ag.version || '')} · comprobado el ${cuando}` : `${agLabel} encontrado · sin comprobar todavía`;
   return `<fieldset><legend>${I.monitor}${typeof cfgEstadoHtml === 'function' ? 'Cambiar de opción aquí' : 'Dónde se procesan tus reuniones'}</legend>
     ${typeof cfgEstadoHtml === 'function' ? '<div class="help" style="margin-top:0">Se aplica con «Aplicar ahora». Con «Cambiar…», arriba, el asistente te guía y lo prueba al final.</div>' : ''}
@@ -1900,15 +1900,16 @@ function procesadoFieldsetHtml() {
     ${typeof modelosHtml === 'function' ? modelosHtml() : ''}
     <div id="procAgente"${mode === 'agente' ? '' : ' hidden'}>
       <ol class="pasos">
-        <li><b>Instala ${agLabel}</b> (hace falta una cuenta Pro, Max, Ultra, Team o Enterprise, o una de Console). En Windows, abre PowerShell y ejecuta <code>irm https://claude.ai/install.ps1 | iex</code> (o <code>winget install Anthropic.ClaudeCode</code>). No hace falta ser administrador.</li>
-        <li><b>Inicia sesión</b>: abre una terminal nueva, escribe <code>claude</code> y sigue los pasos en el navegador con tu cuenta, la personal o la de tu empresa. Después puedes cerrar la terminal.</li>
-        <li><b>Comprueba</b>: ${esc(APP_NAME)} busca <code>claude</code> en este PC, lee su versión y le hace una petición mínima con tu cuenta.</li>
+        <li><b>Instala ${agLabel}</b> (una vez): pulsa «Abrir PowerShell», pega <code>irm https://claude.ai/install.ps1 | iex</code> y pulsa Intro (o <code>winget install Anthropic.ClaudeCode</code>). Tarda menos de un minuto y no hace falta ser administrador.</li>
+        <li><b>Entra con tu cuenta</b>: en esa misma ventana escribe <code>claude</code> y pulsa Intro. Se abre el navegador con el inicio de sesión de Claude: entra con tu cuenta (Pro, Max, Ultra, Team, Enterprise o Console); si es la de tu empresa, con su inicio de sesión de siempre. Cuando ponga «Login successful», pulsa Intro y cierra la ventana.</li>
+        <li><b>Comprueba</b>: ${esc(APP_NAME)} busca ${agLabel} en este PC, lee su versión y le hace una petición mínima con tu cuenta.</li>
       </ol>
+      <div class="help">¿Usas Claude Code en VS Code? ${esc(APP_NAME)} también encuentra esa copia y su sesión. La app de escritorio de Claude no basta: su sesión es solo suya.</div>
       <div class="grid2">
         <div><label>Modelo</label><select id="agModelo">${(ag.modelos || []).map(([v, l]) => `<option value="${esc(v)}"${v === ag.modelo ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
         <div><label>Estado</label><div class="help" style="margin-top:8px" id="agEstado">${estado}</div></div>
       </div>
-      <div class="row" style="margin-top:10px"><button class="btn sm" type="button" id="agCheck">Comprobar</button><span id="agRes" class="muted" style="font-size:12.5px"></span></div>
+      <div class="row" style="margin-top:10px"><button class="btn sm" type="button" id="agPs">Abrir PowerShell</button><button class="btn sm" type="button" id="agCheck">Comprobar</button><span id="agRes" class="muted" style="font-size:12.5px"></span></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:12px"><input type="checkbox" id="sAutoAg" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
       <div class="help">Desmarcado, solo se resume a mano con «Resumir esta reunión». Cada resumen gasta cupo de tu suscripción.</div>
     </div>
@@ -2024,7 +2025,7 @@ function openSettings(opts) {
         Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code><br>
         ${esc(APP_NAME)} es gratis. Si te sirve, puedes <a href="${esc(ac.donar || '#')}" id="aDonar">invitar al autor a un café</a> (PayPal).</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
-      <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas y destinos hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
+      <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas vinculadas y copias en otras carpetas hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
     </fieldset>
     <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:10px"><input type="checkbox" id="sInicioWin" disabled> Arrancar ${esc(APP_NAME)} al iniciar Windows <span class="muted" id="sInicioWinNota" style="font-weight:400">· lo mismo que «Arrancar con Windows» en el menú del icono de la bandeja</span></label>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
@@ -2162,11 +2163,16 @@ function openSettings(opts) {
       const timer = setInterval(tic, 1000);
       try {
         const r = await api('/api/agente/comprobar', { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value });
-        res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)</span>`;
-        $('#agEstado', d).textContent = `${S.config.agente?.label || 'Claude Code'} ${r.version} · comprobado ahora`;
+        // origen: «Claude Code de VS Code» si es la copia de la extensión; modelo_usado y aviso: si la cuenta no deja
+        // el modelo elegido, Claude Code usa su predeterminado y lo dice (rama claude-empresa, 08/11/2026)
+        const quien = r.origen || S.config.agente?.label || 'Claude Code';
+        res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(quien)} ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)${r.modelo_usado && !r.aviso ? ` · modelo ${esc(r.modelo_usado)}` : ''}</span>`
+          + (r.aviso ? `<span class="warn-txt" style="display:block;margin-top:4px">${esc(r.aviso)}</span>` : '');
+        $('#agEstado', d).textContent = `${quien} ${r.version} · comprobado ahora`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span> <span class="muted">(tras ${seg()} s)</span>`; }
       finally { clearInterval(timer); btn.disabled = false; }
     };
+    $('#agPs', d).onclick = () => api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
     $('#aDonar', d).onclick = e => { e.preventDefault(); if (ac.donar) api('/api/acerca/abrir', { que: 'donar' }).catch(() => window.open(ac.donar, '_blank')); };

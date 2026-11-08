@@ -3451,41 +3451,60 @@ class App:
                 "resumen_auto": st.get("summary_auto", True) is not False,
                 "resumen_local": bool(st.get("summary_auto_local"))}
 
+    # orígenes de la regla de carpetas (rama `carpetas`, rec_folder_origin) -> (origen, texto) de la tarjeta
+    _ORIGENES_REGLA = {"workstream": "workstream", "proyecto": "proyecto", "carpeta_proyecto": "proyecto",
+                       "perfil": "ajustes", "ultimo": "ultima", "raiz": "ajustes"}
+
     def _carpeta_origen(self, st, full):
-        """(origen, texto) de la carpeta que ha decidido rec_folder_for. Si la rama de carpetas expone
-        rec_folder_origen(v, st, rel), manda esa; si no, se reconoce comparando con lo que hay en los ajustes."""
+        """(origen, texto) de la carpeta que ha decidido rec_folder_for. Con la regla de la rama de carpetas
+        (rec_folder_origin(v, st) -> (carpeta, origen), de módulo), manda la suya si da esa misma carpeta; si no (o
+        sin ella), se reconoce comparando con lo que hay en los ajustes."""
+        regla = globals().get("rec_folder_origin")
+
+        def texto(origen, v, rel):
+            if origen == "workstream":
+                return "carpeta del workstream"
+            if origen == "proyecto":
+                return f"carpeta de {v['project']}"
+            if origen == "ultima":
+                return "la última usada"
+            return f"la carpeta de {APP_NAME}" if not rel else "Ajustes › Al grabar"
+
         def origen(v, rel):
-            hook = getattr(self, "rec_folder_origen", None)
-            if hook:
+            rel = rel or ""
+            if callable(regla):
                 try:
-                    return hook(full.get(v["id"]) if v else None, st, rel)
+                    r_rel, o = regla(full.get(v["id"]) if v else None, st)
                 except Exception:
                     log_exc()
-            rel = rel or ""
+                else:
+                    o = self._ORIGENES_REGLA.get(o, "ajustes")
+                    if (r_rel or "") == rel and (v or o not in ("workstream", "proyecto")):
+                        return o, texto(o, v, rel)
             if v:
                 wf = (st.get("workstream_folders") or {}).get(v["id"])
                 if wf is not None and wf == rel:
-                    return "workstream", "carpeta del workstream"
+                    return "workstream", texto("workstream", v, rel)
                 pf = (st.get("project_folders") or {}).get(v["project"])
                 if (pf is not None and pf == rel) or (v["id"] in full and rel == rel_of(_project_dir(full[v["id"]]))):
-                    return "proyecto", f"carpeta de {v['project']}"
+                    return "proyecto", texto("proyecto", v, rel)
             fija = perfil_folder(st)
             if fija is not None and fija == rel:
-                return "ajustes", "Ajustes › Al grabar"
+                return "ajustes", texto("ajustes", v, rel)
             if rel and rel == (st.get("rec_folder") or ""):
-                return "ultima", "la última usada"
-            return "ajustes", f"la carpeta de {APP_NAME}" if not rel else "Ajustes › Al grabar"
+                return "ultima", texto("ultima", v, rel)
+            return "ajustes", texto("ajustes", v, rel)
         return origen
 
     def _carpeta_plan(self, v, st, full):
         """La carpeta base de una grabación nueva: la que decide rec_folder_for. Con proyecto, si esa no es suya (la
         fija de Ajustes, que es la de las reuniones sin proyecto, o la última usada, que puede ser la de otro cliente),
         la del proyecto: la del workstream, la asignada al proyecto o, sin asignar, la carpeta del proyecto en el árbol
-        (la que contiene su Vocabulario; 11a′ del rediseño, msg 1158). Cuando la rama de carpetas exponga
-        rec_folder_origen, su rec_folder_for ya lo decide así y esto no hace nada."""
+        (la que contiene su Vocabulario; 11a′ del rediseño, msg 1158). Con la regla de la rama de carpetas
+        (rec_folder_origin), su rec_folder_for ya lo decide así y esto no hace nada: una sola regla."""
         fv = full.get(v["id"]) if v else None
         rel = self.rec_folder_for(fv, st)
-        if not fv or getattr(self, "rec_folder_origen", None):
+        if not fv or callable(globals().get("rec_folder_origin")):
             return rel
         if self._carpeta_origen(st, full)(v, rel)[0] not in ("ultima", "ajustes"):
             return rel
@@ -3522,14 +3541,56 @@ class App:
             except Exception:
                 log_exc()
         hist = grabar_plan.historial_de(list(getattr(lib, "flat", None) or []), listas)
-        reunion = globals().get("carpeta_reunion")  # rama de carpetas (B1b): la carpeta de la reunión en la base
         return grabar_plan.resolver(
             st, listas, sug, hist, pedido,
             carpeta_de=lambda v: self._carpeta_plan(v, st, full),
             carpeta_origen=self._carpeta_origen(st, full),
             sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
             motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
-            carpeta_reunion=(lambda base, nombre: reunion(base, nombre, st)) if callable(reunion) else None)
+            carpeta_reunion=self._carpeta_reunion(st))
+
+    @staticmethod
+    def _carpeta_reunion(st):
+        """La carpeta «AAAA-MM-DD Nombre» que creará rec_start dentro de la base, o None. Con la rama de carpetas
+        (B1b): su meeting_dir_preview, con el nombre como lo limpia rec_start (rec_destino hace lo mismo). Sin ella,
+        None: la grabación va en la base."""
+        previa = globals().get("meeting_dir_preview")
+        if not callable(previa):
+            return None
+
+        def reunion(base, nombre):
+            label = ""
+            if nombre:
+                try:
+                    label = clean_name(nombre)
+                except ApiError:
+                    label = calendario.nombre_archivo(nombre)
+            try:
+                sub = previa(base or "", label, st)
+            except (ApiError, OSError):
+                return None
+            return sub if sub and sub != (base or "") else None
+        return reunion
+
+    def _carpetas_de_proyectos(self, st):
+        """Ajustes › Proyectos: la carpeta principal de cada proyecto y de cada workstream con su origen, con el mismo
+        cálculo que el plan (lo que dice la tabla es lo que se usará al grabar). `sin_asignar`: la que tendría el
+        proyecto si se le quita la suya (para la opción «Sin asignar» al editarla)."""
+        full = {v["id"]: v for v in list_vocab()}
+        links = {k: l["name"] for k, l in LINKS.items()}
+
+        def una(v, s):
+            rel = self._carpeta_plan(v, s, full)
+            o, t = self._carpeta_origen(s, full)(v, rel)
+            return {"rel": rel or "", "ruta": grabar_plan.ruta_txt(rel, links), "origen": o, "texto": t}
+        sin_ws = dict(st, workstream_folders={})
+        proyectos, workstreams = {}, {}
+        for v in full.values():
+            workstreams[v["id"]] = una(v, st)
+            if v["project"] not in proyectos:
+                pf = {k: x for k, x in (st.get("project_folders") or {}).items() if k != v["project"]}
+                proyectos[v["project"]] = dict(una(v, sin_ws), sin_asignar=una(v, dict(sin_ws, project_folders=pf)))
+        return {"proyectos": proyectos, "workstreams": workstreams}
 
     def grabar_plan_api(self, b):
         """POST /api/grabar/plan {nombre?, vocab?, participantes?, cambios?, recientes?}: lo que se va a usar al grabar,
@@ -3546,6 +3607,8 @@ class App:
             vs = list_vocab()
             p["recientes"] = grabar_plan.recientes(grabar_plan.historial_de(
                 list(getattr(getattr(self, "library", None), "flat", None) or []), vs), {v["id"]: v for v in vs})
+        if b.get("proyectos"):  # Ajustes › Proyectos: la carpeta de cada uno, con lo que aún no se ha guardado
+            p["carpetas"] = self._carpetas_de_proyectos(st)
         return p
 
     def grabar_recordar(self, b):

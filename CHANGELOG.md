@@ -22,6 +22,22 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - Cada cosa a su sección: los motores a **Procesado**, el idioma y las instrucciones del resumen a **Resumen**, OBS a
   **Avanzado** y Outlook y el aviso flotante a **Calendario y Teams**, que dice en una frase si Teams funciona (y la
   reunión que ve ahora) y el estado de Outlook.
+- La tabla de **Proyectos** dice la carpeta que se usará de verdad, del mismo cálculo que la tarjeta de grabar: la
+  asignada, en negro; sin asignar, en gris, «su carpeta» (la que tiene su `Vocabulario`), «la de Al grabar» o «la
+  última usada», con la ruta; y si la asignada ya no existe, lo avisa. Antes decía «la última usada» aunque se fuera a
+  usar la del proyecto. Al editarla, «Sin asignar» dice cuál quedaría.
+- Con las ramas de esta semana: la tarjeta de grabar ofrece «Usar las listas de una carpeta…» en Proyecto y en el
+  panel del vocabulario (vocab-carpeta); «Se guarda en» enseña la carpeta «AAAA-MM-DD Nombre» que se creará dentro de
+  la del proyecto (carpetas); y «Con tu cuenta de Claude» dice qué copia respondió («Claude Code de VS Code»), con qué
+  modelo y, si la cuenta no deja el elegido, el aviso (claude-empresa).
+- «Con tu cuenta de Claude», en Ajustes › Procesado y en el paso 2 de «Configurar»: «Abrir PowerShell», la línea para
+  instalar, `claude` en esa misma ventana y el inicio de sesión en el navegador (con el de tu empresa, si es la suya),
+  hasta «Login successful». Que la copia de VS Code también vale y la app de escritorio de Claude no basta.
+- Botones de los errores de Claude Code: «pide acceso a … (IT)» lleva «Copiar diagnóstico» (PowerShell no lo arregla);
+  «ha caducado», «Abrir PowerShell» con el programa suelto y «Probar otra vez» con la copia de VS Code; «no puede usar
+  el modelo elegido», «Revisar en Ajustes».
+- Un solo nombre para los antiguos destinos de salida: «copias en otras carpetas», como en Ajustes, también en la
+  tarjeta de grabar, al confirmar participantes, al borrar una reunión y en «Copiar diagnóstico».
 - Si la app no puede leer la lista de micrófonos y salidas, Ajustes y la tarjeta de grabar lo dicen en una frase
   («No se ha podido leer la lista de micrófonos y salidas de audio») en vez de callarlo o de enseñar el final del error
   de la grabadora, que queda al pasar el ratón.

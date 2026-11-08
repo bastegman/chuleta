@@ -75,8 +75,18 @@ def explicar(err, proveedor=None):
         out["accion"] = _accion("asistente")
         return out
     # las tres de engines.ClaudeCode._why (07/11/2026, fix-claude-windows): ya vienen hechas, solo llevan su botón
-    if "no deja usar claude code con esta cuenta" in low:  # entrar con otra cuenta: claude y /login
-        out["accion"] = _accion("abrir_powershell")
+    if "no deja usar claude code con esta cuenta" in low:
+        # «pide acceso a … (IT)» no se arregla en PowerShell: el diagnóstico, para mandárselo a IT. Entrar con otra
+        # cuenta (o con el inicio de sesión de la empresa si no admite API keys) sí: claude y /login
+        out["accion"] = _accion("diagnostico" if "pide acceso" in low else "abrir_powershell")
+        return out
+    # rama claude-empresa (08/11/2026): con el programa suelto se entra otra vez en PowerShell; con la copia de VS Code,
+    # en su panel (allí no hay `claude`): entonces, «Probar otra vez»
+    if "ha caducado" in low and "la sesión de" in low:
+        out["accion"] = _accion("abrir_powershell" if "en powershell" in low else "reintentar")
+        return out
+    if "no puede usar el modelo elegido" in low:  # se elige otro modelo en Ajustes › Procesado
+        out["accion"] = _accion("procesado")
         return out
     if "claude code no puede conectar con anthropic" in low:  # red o proxy de la empresa
         out["accion"] = _accion("reintentar")

@@ -177,7 +177,7 @@ function perfilAvisoText(accion) {
 }
 function perfilAvisosHtml(avisos) {
   if (!avisos || !avisos.length) return '';
-  return `<div class="notice" style="margin-top:8px">Documentos sin escribir en los destinos:<ul style="margin:6px 0 0 18px;padding:0">${avisos.slice(0, 8).map(a =>
+  return `<div class="notice" style="margin-top:8px">Copias que no se han podido escribir:<ul style="margin:6px 0 0 18px;padding:0">${avisos.slice(0, 8).map(a =>
     `<li><code title="${esc(a.path)}">${esc(a.path)}</code> · ${esc(perfilAvisoText(a.accion))}</li>`).join('')}</ul></div>`;
 }
 function bindPerfilSettings(d) {

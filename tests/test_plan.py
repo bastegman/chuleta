@@ -296,6 +296,84 @@ class ServidorPlanTests(TempTree):
             a.rec_start(dict(p["rec"], name="Otra"))
         self.assertEqual(a.settings.get()["rec_folder"], "")
 
+    def regla_de_carpetas(self):
+        """La regla de la rama `carpetas` con su misma forma (rec_folder_origin y meeting_dir_preview, de módulo; su
+        rec_folder_for la llama): para probar aquí que el plan la usa tal cual cuando está."""
+        def origin(v, st):
+            if v and v["project"] == "Alfa":
+                return "Alfa/Reuniones", "carpeta_proyecto"
+            return "Sueltas", "perfil"
+
+        def preview(rel, label="", st=None, when=None):
+            return rel if st is not None and st.get("carpeta_por_reunion") is False else \
+                f"{rel}/2026-11-08 {label or '10-00'}"
+        return [mock.patch.object(server, "rec_folder_origin", origin, create=True),
+                mock.patch.object(server, "meeting_dir_preview", preview, create=True),
+                mock.patch.object(server.App, "rec_folder_for", lambda s, v, st: origin(v, st)[0])]
+
+    def test_con_la_regla_de_la_rama_de_carpetas(self):
+        """Contrato con `carpetas` (B1b y B1c): su regla decide la carpeta y su origen (sin el arreglo 11a′ de aquí,
+        que ella ya hace), y la tarjeta enseña la carpeta de la reunión que creará rec_start, con el nombre limpio
+        como lo limpia rec_start. rec.folder sigue siendo la principal."""
+        os.makedirs(os.path.join(self.root, "Beta", "Actas"))
+        a = self.app(rec_folder="Beta/Actas")
+        A = "Alfa/Vocabulario/General.txt"
+        for p in self.regla_de_carpetas():
+            p.start()
+            self.addCleanup(p.stop)
+        car = lineas(a.grabar_plan_api({"vocab": A, "nombre": "Comité: Q4"}))["carpeta"]
+        self.assertEqual((car["rel"], car["origen"], car["origen_txt"]),
+                         ("Alfa/Reuniones", "proyecto", "carpeta de Alfa"))
+        self.assertEqual(car["sub"], "Alfa/Reuniones/2026-11-08 " + server.calendario.nombre_archivo("Comité: Q4"))
+        self.assertIn("2026-11-08", car["valor"])
+        p = a.grabar_plan_api({"vocab": A, "nombre": "Comité"})
+        self.assertEqual(p["rec"]["folder"], "Alfa/Reuniones")
+        sin = lineas(a.grabar_plan_api({"vocab": ""}))["carpeta"]
+        self.assertEqual((sin["rel"], sin["origen"], sin["origen_txt"]),
+                         ("Sueltas", "ajustes", "Ajustes › Al grabar"))
+        # cambiada para esta reunión: la carpeta de la reunión, dentro de la elegida
+        p = a.grabar_plan_api({"vocab": A, "nombre": "Comité", "cambios": {"carpeta": "Beta/Actas"}})
+        self.assertEqual((lineas(p)["carpeta"]["sub"], p["rec"]["folder"]),
+                         ("Beta/Actas/2026-11-08 Comité", "Beta/Actas"))
+        # sin carpeta por reunión, la principal tal cual
+        a.settings.update(lambda d: d.update(carpeta_por_reunion=False))
+        self.assertIsNone(lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["sub"])
+
+    @unittest.skipUnless(hasattr(server, "rec_destino"), "solo con la rama de carpetas fusionada")
+    def test_contrato_rec_destino(self):
+        """Tras fusionar `carpetas`: la tarjeta dice la misma carpeta (principal y de la reunión) que rec_destino."""
+        a = self.app()
+        A = "Alfa/Vocabulario/General.txt"
+        car = lineas(a.grabar_plan_api({"vocab": A, "nombre": "Comité"}))["carpeta"]
+        d = server.rec_destino(server.find_vocab(None, None, A), a.settings.get(), "Comité")
+        self.assertEqual((car["rel"], car["sub"] or car["rel"]), (d["carpeta"], d["reunion"]))
+
+    def test_carpetas_de_proyectos_con_el_mismo_calculo(self):
+        """Ajustes › Proyectos (B2): la carpeta de cada proyecto y workstream con su origen, del mismo cálculo que la
+        tarjeta; la asignada, la del árbol si no hay, y la que tendría sin asignar."""
+        os.makedirs(os.path.join(self.root, "Beta", "Actas"))
+        a = self.app(rec_folder="Beta/Actas")
+        A, L = "Alfa/Vocabulario/General.txt", "Beta/Vocabulario/Legal.txt"
+        c = a.grabar_plan_api({"vocab": "", "proyectos": True})["carpetas"]
+        self.assertEqual((c["proyectos"]["Alfa"]["rel"], c["proyectos"]["Alfa"]["origen"]), ("Alfa", "proyecto"))
+        self.assertEqual(c["proyectos"]["Alfa"]["sin_asignar"]["rel"], "Alfa")
+        self.assertEqual((c["workstreams"][A]["rel"], c["workstreams"][A]["origen"]), ("Alfa", "proyecto"))
+        self.assertEqual(c["proyectos"]["Alfa"]["rel"], lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["rel"])
+        a.grabar_recordar({"clave": "carpeta", "valor": "Alfa/Reuniones", "alcance": "proyecto", "vocab": A})
+        c = a.grabar_plan_api({"vocab": "", "proyectos": True})["carpetas"]
+        self.assertEqual(c["proyectos"]["Alfa"]["rel"], "Alfa/Reuniones")
+        self.assertEqual(c["proyectos"]["Alfa"]["sin_asignar"]["rel"], "Alfa")  # al quitarla, la suya del árbol
+        self.assertEqual(c["proyectos"]["Beta"]["rel"], "Beta")
+        self.assertEqual(c["workstreams"][L]["origen"], "proyecto")
+        self.assertTrue(c["proyectos"]["Alfa"]["ruta"].endswith("Alfa\\Reuniones\\"), c["proyectos"]["Alfa"]["ruta"])
+        # con la regla de la rama de carpetas, lo que diga ella
+        for p in self.regla_de_carpetas():
+            p.start()
+            self.addCleanup(p.stop)
+        c = a.grabar_plan_api({"vocab": "", "proyectos": True})["carpetas"]
+        self.assertEqual((c["proyectos"]["Alfa"]["rel"], c["proyectos"]["Beta"]["origen"]),
+                         ("Alfa/Reuniones", "ajustes"))
+
     def test_ctrl_alt_r_con_asistentes_sin_origen_toma_el_de_la_reunion(self):
         a = self.app()
         self.sug.update(source="outlook", participants=["Ana"])

@@ -923,7 +923,7 @@ details.ag-como > summary:hover { color: var(--ink-2); }
 .pj-tabla th { text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .pj-tabla td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 13px; }
 .pj-tabla tr.pj-w td:first-child { padding-left: 22px; }
-.pj-tabla code { font: 12px var(--mono); }
+.pj-tabla code { font: 12px var(--mono); overflow-wrap: anywhere; }
 .pj-her { color: var(--muted); }
 .pj-tabla select { width: 100%; height: 30px; }
 .pj-tabla .pj-acc { white-space: nowrap; }

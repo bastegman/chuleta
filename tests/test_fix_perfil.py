@@ -597,7 +597,7 @@ class BorrarTests(TempTree):
         js = read("notas.js")
         dlg = js[js.index("async function deleteItem"):js.index("const dropFolder")]
         self.assertIn("S.config.perfil?.outputs", dlg)
-        self.assertIn("destinos de salida que nadie haya cambiado", dlg)
+        self.assertIn("copias en otras carpetas que nadie haya cambiado", dlg)  # el nombre de Ajustes (B2)
         self.assertIn("r.copias", dlg)
 
 

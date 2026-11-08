@@ -17,6 +17,9 @@ const GR_ALCANCES = { carpeta: ['reunion', 'proyecto', 'ajustes'], idioma: ['reu
 const GR_CLAVES = { carpeta: ['carpeta'], idioma: ['idioma'], contexto: ['contexto'], transcribe: ['live', 'preset'],
   audio: ['mic', 'sys'] };
 let G = null;  // la tarjeta abierta: {d, pedido, plan, tocado, recientes, seq, ...}
+// «Usar las listas de una carpeta…» en Proyecto (rama vocab-carpeta, msg 1148: perfil.js define vocabConectar): no es un
+// proyecto, abre el selector de carpetas y vuelve a la tarjeta con lo que tenías
+const GR_CONECTAR = '__conectar';
 
 function grFila(plan, clave) { return (plan?.lineas || []).find(l => l.clave === clave); }
 function grProyecto(plan) { return plan?.proyecto?.vocab ? plan.proyecto.proyecto : ''; }
@@ -127,7 +130,8 @@ function grPintar() {
   tag.className = 'gr-tag' + (p.nombre.origen === 'teams' || p.nombre.origen === 'outlook' ? ' de-reunion' : '');
   const sel = $('#grProy', d);
   sel.innerHTML = `<option value="">Sin proyecto</option>${(S.vocab || []).map(v => `<option value="${esc(v.id)}">${esc(v.project)} › ${esc(v.name)}</option>`).join('')}`
-    + `<option value="__nuevo">Nuevo proyecto o workstream…</option>`;
+    + `<option value="__nuevo">Nuevo proyecto o workstream…</option>`
+    + (typeof vocabConectar === 'function' ? `<option value="${GR_CONECTAR}">Usar las listas de una carpeta…</option>` : '');
   sel.value = p.proyecto.vocab || '';
   sel.classList.toggle('vacio', !p.proyecto.vocab);
   $('#grMotivo', d).textContent = p.proyecto.motivo || '';
@@ -139,7 +143,7 @@ function grPintar() {
   if (part.length) {
     const nombres = part.slice(0, 4).join(', ') + (part.length > 4 ? ` y ${part.length - 4} más` : '');
     $('#grAsist', d).innerHTML = `<span title="${esc(part.join(', '))}"><b>${esc(nombres)}</b> · de ${p.rec.sugerido === 'outlook' ? 'Outlook' : 'Teams'}</span>`
-      + ` <span class="muted">Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a los destinos hasta que los confirmes.</span>`
+      + ` <span class="muted">Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a las copias en otras carpetas hasta que los confirmes.</span>`
       + ` <a href="#" data-gr-sin-asist>Quitar</a>`;
   }
   grPintarFilas();
@@ -260,6 +264,7 @@ function grPanelHtml(k) {
       <div class="gr-panel-pie"><button class="btn sm" type="button" data-gr-ir="proyecto">Elegir otro proyecto</button>
         ${v ? `<button class="btn sm" type="button" data-gr-ir="editar">${I.edit}Editar la lista</button>` : ''}
         <button class="btn sm" type="button" data-gr-ir="nuevo">${I.plus}Nuevo proyecto o workstream…</button>
+        ${typeof vocabConectar === 'function' ? `<button class="btn sm" type="button" data-gr-ir="conectar" title="Elige la carpeta donde tienes tus listas: se leen al grabar, sin copiarlas">${I.folder}Usar las listas de una carpeta…</button>` : ''}
         <button class="btn sm primary" type="button" data-gr-listo="vocab">Listo</button></div>`;
   }
   // resume: lo decide Ajustes › Procesado
@@ -340,6 +345,7 @@ function grClick(e) {
     if (ir.dataset.grIr === 'proyecto') { grCerrarPanel(); $('#grProy', G.d).focus(); }
     else if (ir.dataset.grIr === 'editar' && v) openVocabEditor(v, volver);
     else if (ir.dataset.grIr === 'nuevo') openVocabEditor(null, volver, v?.project || '');
+    else if (ir.dataset.grIr === 'conectar' && typeof vocabConectar === 'function') vocabConectar(volver);
     else if (ir.dataset.grIr === 'procesado') { closeModal(false); openSettings({ sec: 'procesado' }); }
     return;
   }
@@ -386,6 +392,11 @@ function grProyectoElegido(val) {
   if (val === '__nuevo') {
     $('#grProy', G.d).value = G.plan?.proyecto?.vocab || '';
     return openVocabEditor(null, () => abrirGrabar({ seguir: true, vocab: S.vocabJustSaved || undefined }));
+  }
+  if (val === GR_CONECTAR) {
+    $('#grProy', G.d).value = G.plan?.proyecto?.vocab || '';
+    if (typeof vocabConectar === 'function') vocabConectar(() => abrirGrabar({ seguir: true }));
+    return;
   }
   G.pedido.vocab = val;
   G.tocado.vocab = true;

@@ -343,7 +343,13 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.select_option("#sLang", antes)  # se deja como estaba
         pg.click(".aj-nav [data-sec='proyectos']")
         pg.wait_for_selector("#pjTabla [data-pj-editar='Proyecto']", timeout=10000)
+        # la carpeta, del mismo cálculo que la tarjeta: sin asignar, la suya del árbol (11a′), en gris
+        celda = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"] td:nth-child(2)')?.innerText || ''"
+        pg.wait_for_function(f"({celda}).includes('su carpeta')", timeout=10000)
+        self.assertIn("Proyecto\\", pg.evaluate(celda))
+        self.assertNotIn("la última usada", pg.evaluate(celda))
         pg.click("#pjTabla [data-pj-editar='Proyecto']")
+        self.assertIn("Sin asignar · su carpeta", pg.inner_text("#pjTabla [data-pj-f]"))
         pg.select_option("#pjTabla [data-pj-l]", "en")
         pg.click("#pjTabla [data-pj-ok]")
         fila_p = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"]')?.innerText"
@@ -360,6 +366,84 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [])
+
+    def test_claude_de_empresa_en_ajustes_y_en_el_asistente(self):
+        """Rama claude-empresa (08/11/2026): «Comprobar» dice qué copia de Claude Code respondió (la de VS Code) y,
+        si la cuenta no deja el modelo elegido, el aviso; el paso 2 del asistente dice dónde lo encontró. Las respuestas
+        del servidor se simulan con la forma de esa rama (en esta no existen esos campos)."""
+        pg, errores, red = self.pagina()
+        aviso = ("El modelo elegido (sonnet) no está disponible con esta cuenta: se ha usado el predeterminado de tu "
+                 "Claude Code (empresa-modelo).")
+        pg.route("**/api/agente/comprobar", lambda r: r.fulfill(json={
+            "ok": True, "version": "2.1.319", "seconds": 1.4, "ruta": "C:/x/claude.exe",
+            "origen": "Claude Code de VS Code", "modelo_usado": "empresa-modelo", "aviso": aviso}))
+        pg.route("**/api/agente/estado", lambda r: r.fulfill(json={
+            "encontrado": True, "label": "Claude Code", "origen": "Claude Code de VS Code"}))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='procesado']")
+        pg.check("#modal input[name='proc'][value='agente']")
+        pg.wait_for_function("!document.querySelector('#procAgente').hidden", timeout=5000)
+        self.assertIn("Abrir PowerShell", pg.inner_text("#procAgente"))
+        self.assertIn("Login successful", pg.inner_text("#procAgente"))
+        pg.click("#agCheck")
+        pg.wait_for_function("document.querySelector('#agRes').innerText.includes('responde')", timeout=5000)
+        res = pg.inner_text("#agRes")
+        self.assertIn("Claude Code de VS Code 2.1.319 responde (1,4 s)", res)
+        self.assertIn(aviso, res)
+        self.assertNotIn("· modelo", res)  # con el aviso, el modelo ya va dicho en él
+        self.assertIn("Claude Code de VS Code 2.1.319", pg.inner_text("#agEstado"))
+        pg.click("#modal [data-m='no']")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        pg.evaluate("abrirConfigurar()")
+        pg.check("input[name='wzModo'][value='agente']")
+        pg.click("[data-wz='sig']")
+        pg.wait_for_selector(".dialog.wz h2:has-text('Conecta Claude Code')", timeout=5000)
+        pg.wait_for_function("document.querySelector('[data-wz-encontrado]').innerText.includes('VS Code')",
+                             timeout=10000)
+        self.assertEqual(pg.inner_text("[data-wz-encontrado]"), "Instalado en este PC (Claude Code de VS Code)")
+        paso = pg.inner_text(".dialog.wz")
+        for trozo in ("Entra con tu cuenta", "Login successful", "pulsa c para copiar el enlace",
+                      "La app de escritorio de Claude no basta"):
+            self.assertIn(trozo, paso.replace("\n", " "))
+        self.assertTrue(pg.is_visible("[data-wz='powershell']"))
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_tarjeta_con_listas_de_una_carpeta_conectada(self):
+        """Rama vocab-carpeta (msg 1148): si existe vocabConectar (perfil.js de esa rama), la tarjeta ofrece «Usar las
+        listas de una carpeta…» en Proyecto y en el panel del vocabulario; elegirla no cambia el proyecto y, al volver,
+        la tarjeta sigue con lo escrito. Aquí vocabConectar es de prueba, con su firma: vocabConectar(after)."""
+        pg, errores, red = self.pagina()
+        devs = {"mics": [], "outputs": [], "mic": "default", "sys": "all"}
+        pg.route("**/api/rec/devices*", lambda r: r.fulfill(json=devs))
+        pg.route("**/api/rec/monitor", lambda r: r.fulfill(json={"ok": True}))
+        nada = {"teams": None, "outlook": None, "reason": None, "sugerencia": {}}
+        pg.route("**/api/reunion/actual", lambda r: r.fulfill(json=nada))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        # (dentro de una función: evaluate llama a la función si la expresión acaba en una)
+        pg.evaluate("() => { window.vocabLlamadas = 0; window.vocabConectar = after => { window.vocabLlamadas++;"
+                    " setTimeout(after, 50); }; }")
+        pg.click("#btnRec")
+        pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=15000)
+        pg.fill("#grNombre", "Mi reunión")
+        antes = pg.input_value("#grProy")
+        self.assertIn("Usar las listas de una carpeta…", pg.inner_text("#grProy"))
+        pg.select_option("#grProy", "__conectar")
+        pg.wait_for_function("window.vocabLlamadas === 1", timeout=5000)
+        pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=15000)
+        self.assertEqual(pg.input_value("#grNombre"), "Mi reunión")  # se vuelve a la tarjeta con lo escrito
+        self.assertEqual(pg.input_value("#grProy"), antes)  # «Usar las listas…» no es un proyecto
+        pg.click("[data-gr-cambiar='vocab']")
+        pg.wait_for_selector("[data-panel='vocab'] [data-gr-ir='conectar']", timeout=5000)
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
 
     def test_sin_token_no_hay_sesion(self):
         """La pagina se sirve, pero sin la cookie la API contesta 403 y la pagina lo dice (no una pantalla muerta)."""

@@ -77,6 +77,6 @@ document.addEventListener('click', async e => {
   const v = ($('[data-prop="participantes"]')?.value ?? (a.props || {}).participantes ?? '').trim();
   await saveProps(a, { participantes: v });
   reunionParticipantesGuardados(a);
-  if (!(a.props || {}).participantes_origen) toast('Participantes confirmados: ya pueden ir al resumen con IA y a los destinos de salida');
+  if (!(a.props || {}).participantes_origen) toast('Participantes confirmados: ya pueden ir al resumen con IA y a las copias en otras carpetas');
   else b.disabled = false;
 });

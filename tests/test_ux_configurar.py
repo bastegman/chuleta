@@ -57,6 +57,33 @@ class ExplicarTests(unittest.TestCase):
                             "Ajustes → Ayuda.")
         self.assertEqual(self.accion("Claude Code ha fallado (código 2): boom"), "diagnostico")
 
+    def test_claude_de_empresa_cada_frase_con_su_boton(self):
+        """Las frases de la rama claude-empresa (engines.ClaudeCode._why, 08/11/2026), tal cual: el botón que sirve
+        para cada una. Pedir acceso a IT no se arregla en PowerShell; con la copia de VS Code no hay `claude` que
+        escribir."""
+        casos = (
+            ("Tu organización no deja usar Claude Code con esta cuenta (Your organization has disabled Claude "
+             "subscription access for Claude Code): pide acceso a quien gestiona Claude en tu empresa (IT) y vuelve a "
+             "probar.", "diagnostico"),
+            ("Tu organización no deja usar Claude Code con esta cuenta (Your organization has disabled API key "
+             "authentication): no admite API keys; en PowerShell escribe claude y luego /login, entra con tu cuenta de "
+             "Claude (la de la empresa) y vuelve a probar.", "abrir_powershell"),
+            ("La sesión de Claude Code ha caducado (Login expired): en PowerShell escribe claude y luego /login, entra "
+             "con tu cuenta (la de tu empresa, si es la que usas) y vuelve a probar.", "abrir_powershell"),
+            ("La sesión de Claude Code ha caducado (Login expired): abre VS Code y, en el panel de Claude Code, vuelve "
+             "a iniciar sesión con tu cuenta (la de tu empresa, si es la que usas) y vuelve a probar.", "reintentar"),
+            ("Claude Code de VS Code está instalado pero no tiene la sesión abierta: abre VS Code y, en el panel de "
+             "Claude Code, inicia sesión con tu cuenta (la de tu empresa, si es la que usas); luego vuelve a probar.",
+             "reintentar"),
+            ("Claude Code no puede usar el modelo elegido con esta cuenta (There's an issue with the selected model): "
+             "elige otro modelo en Ajustes o pide a tu IT que lo active, y vuelve a probar.", "procesado"),
+            ("Claude Code está renovando tu sesión en otra ventana (por ejemplo, en VS Code): espera un minuto y "
+             "vuelve a probar.", "reintentar"))
+        for frase, accion in casos:
+            r = explicar.explicar(frase)
+            self.assertEqual(r["frase"], frase)  # la frase de engines se queda
+            self.assertEqual((r["accion"] or {}).get("tipo"), accion, frase)
+
     def test_falta_una_pieza_de_la_instalacion(self):
         for err in (ModuleNotFoundError("No module named 'av'"), "No module named 'faster_whisper'",
                     ImportError("DLL load failed while importing _ctranslate2")):

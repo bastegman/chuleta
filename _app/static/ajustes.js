@@ -114,22 +114,47 @@ function bindAjAlGrabar(d) {
 
 /* ---------------------------------------------------------------- Proyectos: carpeta e idioma de cada uno */
 function ajProyectosHtml() {
-  return `<div class="ag-cab"><h4>Proyectos y workstreams</h4><div class="help" style="margin-top:2px">La carpeta y el idioma de cada uno. Lo que está en gris lo hereda: el workstream, del proyecto; el proyecto, de <a href="#" data-sec-ir="algrabar">Al grabar</a>. Los cambios de esta tabla se guardan al momento.</div></div>
+  return `<div class="ag-cab"><h4>Proyectos y workstreams</h4><div class="help" style="margin-top:2px">La carpeta y el idioma de cada uno. Lo que está en gris no lo has elegido aquí: el workstream usa lo del proyecto, y el proyecto, su carpeta y el idioma de <a href="#" data-sec-ir="algrabar">Al grabar</a>. Los cambios de esta tabla se guardan al momento.</div></div>
     <div id="pjTabla"><div class="gr-cargando">Cargando…</div></div>`;
 }
-function ajProyectosTabla() {
-  const c = S.config || {}, pf = c.project_folders || {}, pl = c.project_langs || {}, wl = c.workstream_langs || {};
+/* la carpeta de un proyecto que no tiene una asignada, en palabras (car: /api/grabar/plan con proyectos) */
+function ajCarpetaHeredada(x) {
+  if (!x) return 'sin asignar';
+  if (x.origen === 'proyecto') return 'su carpeta';
+  if (x.origen === 'ultima') return 'la última usada';
+  return x.rel ? 'la de Al grabar' : `la carpeta de ${APP_NAME}`;
+}
+/* car: {proyectos: {p: {rel, ruta, origen, texto, sin_asignar}}, workstreams: {id: {...}}}, del mismo cálculo que la
+   tarjeta de grabar (null mientras llega o si falla: entonces solo lo asignado) */
+function ajProyectosTabla(car) {
+  const c = S.config || {}, pl = c.project_langs || {}, wl = c.workstream_langs || {};
+  // con la rama de carpetas, project_folders llega resuelta (con la del árbol) y las asignadas van aparte
+  const asig = c.project_folders_asignadas || c.project_folders || {};
   const grupos = typeof perfilGroups === 'function' ? perfilGroups(S.vocab || []) : [];
-  if (!grupos.length) return `<div class="help" style="margin-top:0">Todavía no hay proyectos: créalos con «Nuevo proyecto» en las listas de vocabulario de abajo.</div>`;
+  if (!grupos.length) {
+    const conectar = typeof vocabConectar === 'function' ? ' o conecta la carpeta donde ya tienes tus listas' : '';
+    return `<div class="help" style="margin-top:0">Todavía no hay proyectos. Crea uno con «Nuevo proyecto», abajo en Listas de vocabulario${conectar}: cada proyecto tiene sus workstreams, y cada workstream, su lista de nombres y siglas.</div>`;
+  }
   const lang = code => esc(perfilLangLabel(code));
-  const ruta = rel => `<code title="${esc(rel)}">${esc(S.folders.has(rel) ? pathLabel(rel) || APP_NAME : rel)}</code>`;
+  const ruta = x => `<code title="${esc(x.ruta)}">${esc(x.ruta)}</code>`;
+  const carpeta = p => {
+    const x = car?.proyectos?.[p];
+    if (!x) return p in asig ? `<code>${esc(asig[p])}</code>` : '<span class="pj-her">sin asignar</span>';
+    if (p in asig && x.rel === asig[p]) return ruta(x);
+    const perdida = p in asig ? '<span class="warn-txt">La asignada ya no se encuentra</span> · ' : '';
+    return `${perdida}<span class="pj-her">${esc(ajCarpetaHeredada(x))} · ${ruta(x)}</span>`;
+  };
+  const carpetaW = id => {
+    const x = car?.workstreams?.[id];
+    return x && x.origen === 'workstream' ? ruta(x) : '<span class="pj-her">la del proyecto</span>';
+  };
   const filas = grupos.map(([p, vs]) => {
     const cab = `<tr class="pj-p" data-pj="${esc(p)}"><td><b>${esc(p)}</b></td>
-      <td>${p in pf ? ruta(pf[p]) : '<span class="pj-her">sin asignar · la última usada</span>'}</td>
-      <td>${p in pl ? lang(pl[p]) : `<span class="pj-her">el de Ajustes · ${lang(c.language)}</span>`}</td>
+      <td>${carpeta(p)}</td>
+      <td>${p in pl ? lang(pl[p]) : `<span class="pj-her">el de Al grabar · ${lang(c.language)}</span>`}</td>
       <td><button class="btn ghost sm" type="button" data-pj-editar="${esc(p)}">Editar</button></td></tr>`;
-    return cab + vs.map(v => `<tr class="pj-w" data-pjw="${esc(v.id)}"><td>› ${esc(v.name)} <span class="muted">· ${v.terms} términos</span></td>
-      <td><span class="pj-her">la del proyecto</span></td>
+    return cab + vs.map(v => `<tr class="pj-w" data-pjw="${esc(v.id)}"><td>› ${esc(v.name)} <span class="muted">· ${v.terms} ${v.terms === 1 ? 'término' : 'términos'}</span></td>
+      <td>${carpetaW(v.id)}</td>
       <td>${v.id in wl ? lang(wl[v.id]) : `<span class="pj-her">el del proyecto${p in pl ? ` · ${lang(pl[p])}` : ''}</span>`}</td>
       <td><button class="btn ghost sm" type="button" data-pjw-editar="${esc(v.id)}">Editar</button></td></tr>`).join('');
   }).join('');
@@ -138,25 +163,38 @@ function ajProyectosTabla() {
 function bindAjProyectos(d) {
   const box = $('#pjTabla', d);
   if (!box) return;
-  const pintar = () => { if (document.body.contains(box)) box.innerHTML = ajProyectosTabla(); };
+  let car = null, seq = 0;
+  const dibujar = () => { if (document.body.contains(box)) box.innerHTML = ajProyectosTabla(car); };
+  // las carpetas, del servidor (el mismo cálculo que la tarjeta, con lo escrito en Al grabar aunque no se haya guardado)
+  const pintar = async () => {
+    const n = ++seq;
+    try {
+      const p = await api('/api/grabar/plan', { nombre: '', participantes: '', vocab: '', proyectos: true, ajustes: ajAlGrabarValores(d) });
+      if (n === seq) car = p.carpetas || null;
+    } catch { if (n === seq) car = null; }
+    if (n === seq && !box.querySelector('.pj-ed')) dibujar();  // una fila a medio editar no se pisa
+  };
   loadVocab(S.config.language ?? 'es-en').then(pintar);
+  // al volver a Proyectos (quizá con otra carpeta en Al grabar), otra vez
+  d.addEventListener('click', e => { if (e.target.closest('.aj-nav [data-sec="proyectos"], [data-sec-ir="proyectos"]')) pintar(); });
   const guardar = async cuerpos => {
     try {
       for (const b of cuerpos) await api('/api/grabar/recordar', b);
       setConfig(await api('/api/config'));
       toast('Guardado');
     } catch (err) { toast(esc(err.message), 'err'); }
+    dibujar();
     pintar();
   };
   box.addEventListener('click', async e => {
     const pe = e.target.closest('[data-pj-editar]'), we = e.target.closest('[data-pjw-editar]'), ok = e.target.closest('[data-pj-ok]');
-    if (e.target.closest('[data-pj-no]')) return pintar();
+    if (e.target.closest('[data-pj-no]')) return dibujar();
     if (ok) {
       const tr = ok.closest('tr'), vid = tr.dataset.vocab, cuerpos = [];
       const f = $('[data-pj-f]', tr), l = $('[data-pj-l]', tr);
       if (f && f.value !== f.dataset.ini) cuerpos.push({ clave: 'carpeta', alcance: 'proyecto', vocab: vid, valor: f.value === PERFIL_AUTO ? null : f.value });
       if (l && l.value !== l.dataset.ini) cuerpos.push({ clave: 'idioma', alcance: tr.dataset.alcance, vocab: vid, valor: l.value === PERFIL_AUTO ? null : l.value });
-      return cuerpos.length ? guardar(cuerpos) : pintar();
+      return cuerpos.length ? guardar(cuerpos) : dibujar();
     }
     if (e.target.closest('[data-pj-lista]')) {
       const v = (S.vocab || []).find(x => x.id === e.target.closest('[data-pj-lista]').dataset.pjLista);
@@ -164,15 +202,16 @@ function bindAjProyectos(d) {
       return;
     }
     if (!pe && !we) return;
-    pintar();
+    dibujar();
     const c = S.config, langs = (sel, her) => `<option value="${PERFIL_AUTO}"${sel == null ? ' selected' : ''}>${esc(her)}</option>`
       + LANGS.map(([v, t]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(t)}</option>`).join('');
     if (pe) {
       const p = pe.dataset.pjEditar, v = (S.vocab || []).find(x => x.project === p), tr = $(`tr[data-pj="${CSS.escape(p)}"]`, box);
-      const fsel = c.project_folders?.[p] ?? PERFIL_AUTO, lsel = c.project_langs?.[p];
+      const asig = c.project_folders_asignadas || c.project_folders || {}, fsel = asig[p] ?? PERFIL_AUTO, lsel = c.project_langs?.[p];
+      const sa = car?.proyectos?.[p]?.sin_asignar, sinTxt = `Sin asignar · ${ajCarpetaHeredada(sa)}${sa ? ` (${sa.ruta})` : ''}`;
       tr.outerHTML = `<tr class="pj-ed" data-vocab="${esc(v?.id || '')}" data-alcance="proyecto"><td><b>${esc(p)}</b></td>
-        <td><select data-pj-f data-ini="${esc(fsel)}"><option value="${PERFIL_AUTO}"${fsel === PERFIL_AUTO ? ' selected' : ''}>Sin asignar · la última usada</option>${folderOpts(fsel).replace(/<option value="__pick">[^<]*<\/option>/, '')}</select></td>
-        <td><select data-pj-l data-ini="${esc(lsel ?? PERFIL_AUTO)}">${langs(lsel, `El de Ajustes · ${perfilLangLabel(c.language)}`)}</select></td>
+        <td><select data-pj-f data-ini="${esc(fsel)}" title="Dónde se guardan las reuniones de ${esc(p)}"><option value="${PERFIL_AUTO}"${fsel === PERFIL_AUTO ? ' selected' : ''}>${esc(sinTxt)}</option>${folderOpts(fsel).replace(/<option value="__pick">[^<]*<\/option>/, '')}</select></td>
+        <td><select data-pj-l data-ini="${esc(lsel ?? PERFIL_AUTO)}">${langs(lsel, `El de Al grabar · ${perfilLangLabel(c.language)}`)}</select></td>
         <td class="pj-acc"><button class="btn sm primary" type="button" data-pj-ok>Guardar</button><button class="btn ghost sm" type="button" data-pj-no>Cancelar</button></td></tr>`;
     } else {
       const id = we.dataset.pjwEditar, v = (S.vocab || []).find(x => x.id === id), tr = $(`tr[data-pjw="${CSS.escape(id)}"]`, box);

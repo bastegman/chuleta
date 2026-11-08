@@ -852,14 +852,14 @@ async function deleteItem(path) {
   if (!a && !d) return;
   // destinos de salida: sus documentos que nadie ha cambiado alli van tambien a la papelera; los editados se quedan
   const outs = a && (S.config.perfil?.outputs || []).length
-    ? ' También van a la papelera sus documentos en los destinos de salida que nadie haya cambiado allí; los que hayas editado se quedan donde están.' : '';
+    ? ' También van a la papelera sus copias en otras carpetas que nadie haya cambiado allí; las que hayas editado se quedan donde están.' : '';
   if (!await ask('¿Mandar a la papelera?', a
     ? `Se manda a la <b>papelera de Windows</b> la grabación con su transcripción y sus notas (.wav, .txt, .srt, .md). Se puede recuperar desde la papelera.${outs}`
     : 'Se manda a la <b>papelera de Windows</b>. Se puede recuperar desde ahí.', 'Mandar a la papelera')) return;
   if (S.playing === path) { audio.pause(); audio.removeAttribute('src'); audio.load(); S.playing = null; $('#player').classList.add('hidden'); document.body.classList.remove('playing'); }
   try {
     const r = await api('/api/delete', { path });
-    toast('🗑️ En la papelera de Windows' + (r.copias ? ` (con ${r.copias} ${r.copias === 1 ? 'documento' : 'documentos'} de los destinos de salida)` : ''));
+    toast('🗑️ En la papelera de Windows' + (r.copias ? ` (con ${r.copias} ${r.copias === 1 ? 'copia' : 'copias'} en otras carpetas)` : ''));
     const parent = (a || d).parent ? (a || d).parent.path : '';
     await refreshTree(true);
     go(parent ? 'f' : 'home', parent, null, true);

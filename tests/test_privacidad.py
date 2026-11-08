@@ -553,8 +553,8 @@ class ParticipantesTextosTests(unittest.TestCase):
                   "function reunionParticipantesGuardados(a)", "data-rn-confirmar", "saveProps(a, { participantes:"):
             self.assertIn(s, js, s)
         # al grabar, la tarjeta (grabar.js, 07/11/2026) lo dice con los asistentes de la cita, y deja quitarlos
-        self.assertIn("Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a los destinos hasta "
-                      "que los confirmes.", static("grabar.js"))
+        self.assertIn("Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a las copias en otras "
+                      "carpetas hasta que los confirmes.", static("grabar.js"))
         self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u26FF]")
         self.assertEqual(notas.count("${window.reunionParticipantesHtml?.(a) || ''}"), 1)
         self.assertEqual(notas.count(".then(() => window.reunionParticipantesGuardados?.(a))"), 1)
