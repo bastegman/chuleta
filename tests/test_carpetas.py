@@ -214,6 +214,14 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
         rec(self.a, self, folder="Cliente B 2", vocab=self.b["id"], name="Seguimiento")  # otra a mano: la nueva
         self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B 2", "proyecto"))
 
+    def test_tambien_desde_el_plan(self):
+        """La misma grabacion con «plan»: true (el camino del dialogo nuevo de ux-grabar, cuyo rec_start no apunta
+        nada cuando viene del plan). Si al fusionarla este test cae, hay que decidir: o se sigue apuntando para los
+        proyectos sin carpeta en el arbol, o se cambia por «Usarlo en» y se quitan este test, el bloque de rec_start
+        (sin_casa) y la frase de README/LEEME/CHANGELOG («la última que elegiste a mano para él»)."""
+        rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff", plan=True)
+        self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B", "proyecto"))
+
     def test_la_que_dio_la_regla_no_se_apunta(self):
         rec(self.a, self, folder="Alfa", vocab=self.alfa["id"], name="Comité")
         carpeta, origen = server.rec_folder_origin(self.b, self.a.settings.get())
