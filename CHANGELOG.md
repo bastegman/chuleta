@@ -70,8 +70,9 @@ proyecto o workstream» (msg 1158).
 - Un proyecto cuyas listas vienen de una carpeta conectada no tiene carpeta en el árbol: su carpeta principal es la
   última que elegiste a mano para él. Si no, Ctrl+Alt+R y el aviso de Teams con su tema grababan en la última carpeta
   usada, que podía ser la de otro proyecto. Si el proyecto también está en el árbol, sus listas conectadas graban en
-  la carpeta del proyecto, como las demás. Una carpeta de listas conectada nunca es destino de grabación, tampoco si
-  queda dentro de una carpeta vinculada (antes las reuniones caían dentro y luego no se podía volver a conectar). Al
+  la carpeta del proyecto, como las demás. La app ya no toma una carpeta de listas conectada por la carpeta de su
+  proyecto, tampoco si queda dentro de una carpeta vinculada (antes las reuniones caían dentro solas y luego no se
+  podía volver a conectar); una carpeta vinculada dentro de una de listas sí es del árbol. Al
   quitar una carpeta de listas, sus workstreams pierden la carpeta asignada (revisión de la integración del
   08/11/2026).
 - Al empezar a grabar, la app espera hasta 10 s (eran 3) a que la grabadora cree el archivo. Con el PC cargado tardó

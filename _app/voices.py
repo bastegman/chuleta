@@ -403,10 +403,15 @@ def consolidate(res, samples16=None, ex=None, fusion=FUSION, absorbe_min=ABSORBE
 
 def count_participants(text):
     """Cuantas personas nombra el campo «Participantes» (texto libre: «Ana, Luis y Pedro»). Con «;» (los de Outlook de
-    empresa: «Apellido, Nombre; Apellido, Nombre», calendario.join_participants) la coma es parte del nombre."""
-    text = str(text or "")
-    parts = re.split((r"[;\n/]+" if ";" in text else r"[,;\n/]+") + r"|\s+(?:y|e|and|&)\s+", text)
-    return len({p.strip().casefold() for p in parts if p.strip()})
+    empresa, calendario.join_participants: «Apellido, Nombre; Apellido, Nombre») un trozo entre «;» con una sola coma
+    es una persona; lo demas se parte por comas como siempre («García, Ana; Pérez, Luis, Pedro» → 4: mejor de mas, que
+    une menos, que de menos)."""
+    text, out = str(text or ""), set()
+    for trozo in re.split(r"[;\n/]+", text):
+        uno = ";" in text and re.fullmatch(r"[^,]+,[^,]+", trozo.strip()) and not re.search(r"\s(?:y|e|and|&)\s", trozo)
+        out |= {p.strip().casefold() for p in ([trozo] if uno else re.split(r",+|\s+(?:y|e|and|&)\s+", trozo))
+                if p.strip()}
+    return len(out)
 
 
 def mixed(huellas, umbral=DUDOSO):

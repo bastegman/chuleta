@@ -176,8 +176,11 @@ class CountParticipantsTests(unittest.TestCase):
 
     def test_nombres_de_directorio_de_outlook(self):
         """«Apellido, Nombre» (Outlook de empresa): con «;» la coma es parte del nombre."""
-        for text, n in (("Stegmaier, Bernardo; García López, Ana", 2), ("Stegmaier, Bernardo;\nGarcía, Ana; Luis", 3)):
+        for text, n in (("Stegmaier, Bernardo; García López, Ana", 2), ("Stegmaier, Bernardo;\nGarcía, Ana; Luis", 3),
+                        ("Ana; Luis, Pedro y Marta", 4), ("Ana; ana", 1)):
             self.assertEqual(voices.count_participants(text), n, text)
+        # anadido a mano con coma detras de los de Outlook: nunca de menos (de mas, la pista une menos)
+        self.assertGreaterEqual(voices.count_participants("García, Ana; Pérez, Luis, Pedro"), 3)
 
 
 class ParticipantesDeOutlookTests(unittest.TestCase):
