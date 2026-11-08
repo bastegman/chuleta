@@ -6,6 +6,7 @@ al mas parecido, numero de participantes como pista). Medido en reuniones reales
 sin sherpa-onnx, la logica con huellas sinteticas."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -204,9 +205,11 @@ class ParticipantesDeOutlookTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node no instalado")
     def test_js(self):
-        out = node(js_defs(read("reunion.js"), ["joinParticipants"]) + """
-console.log(JSON.stringify([joinParticipants(['Stegmaier, Bernardo', 'García, Ana']), joinParticipants(['Ana', 'Luis']),
-  joinParticipants(undefined)]));
+        """El dialogo Grabar (reunionPrefill) une igual."""
+        expr = re.search(r"^  d\.dataset\.rnParticipantes = (.+);$", read("reunion.js"), re.M).group(1)
+        out = node(f"""const f = s => {expr};
+console.log(JSON.stringify([f({{participants: ['Stegmaier, Bernardo', 'García, Ana']}}),
+  f({{participants: ['Ana', 'Luis']}}), f({{}})]));
 """)
         self.assertEqual(json.loads(out[0]), ["Stegmaier, Bernardo; García, Ana", "Ana, Luis", ""])
 

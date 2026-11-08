@@ -5,10 +5,6 @@
 
 function reunionHora(iso) { return (iso || '').slice(11, 16); }
 
-/* Los participantes en una línea, como calendario.join_participants: «; » si algún nombre lleva coma (Outlook de
-   empresa: «Apellido, Nombre»), y si no «, ». */
-function joinParticipants(ns) { ns = (ns || []).filter(Boolean); return ns.join(ns.some(n => n.includes(',')) ? '; ' : ', '); }
-
 /* Una línea para el botón «Probar»: lo que la app ve ahora mismo (o por qué no ve nada). */
 function reunionLinea(r) {
   const s = r.sugerencia || {}, o = r.outlook, t = r.teams;
@@ -122,7 +118,8 @@ async function reunionPrefill(d) {
     keepFolder(() => { sel.value = s.vocab; sel.dispatchEvent(new Event('change')); });
     vocabOk = true;
   }
-  d.dataset.rnParticipantes = joinParticipants(s.participants);
+  // como calendario.join_participants: «; » si algún nombre lleva coma (Outlook de empresa: «Apellido, Nombre»)
+  d.dataset.rnParticipantes = (s.participants || []).join((s.participants || []).some(n => n.includes(',')) ? '; ' : ', ');
   d.dataset.rnSource = s.source;
   const partes = [];
   if (name && s.name) partes.push(`nombre «${esc(s.name)}»`);
