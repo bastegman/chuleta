@@ -4979,8 +4979,13 @@ class App:
         env = engines.windows_env()
         cls, _ = agente_de(self.settings.get())
         ruta = cls.find()
-        if ruta:
-            env["PATH"] = os.path.dirname(os.path.abspath(ruta)) + os.pathsep + env.get("PATH", "")
+        # y la carpeta del instalador nativo aunque aún no exista: el paso 1 instala en esa misma ventana y el 2
+        # escribe claude en ella
+        dirs = [os.path.dirname(os.path.abspath(ruta))] if ruta else []
+        nativo = os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".local", "bin")
+        if os.path.normcase(nativo) not in map(os.path.normcase, dirs):
+            dirs.append(nativo)
+        env["PATH"] = os.pathsep.join(dirs + [env.get("PATH", "")])
         return env
 
     def abrir_powershell(self, b):

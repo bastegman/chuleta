@@ -469,17 +469,24 @@ class InicioDeSesionTests(ServidorComprobarTests):
 
     def test_powershell_con_claude_en_el_path(self):
         # el instalador nativo no pone ~/.local/bin en el PATH (medido en Windows): la ventana lo lleva delante
-        exe = os.path.join(self.tmp, "perfil", ".local", "bin", "claude.exe")
+        perfil = os.path.join(self.tmp, "perfil")
+        nativo = os.path.join(perfil, ".local", "bin")
+        vscode = os.path.join(perfil, ".vscode", "extensions", "anthropic.claude-code-2.1.319-win32-x64", "resources",
+                              "native-binary")
         a = self.app(procesado="agente")
-        with mock.patch.object(engines.ClaudeCode, "find", return_value=exe), \
-                mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema", "OTRA": "1"}):
-            env = a._powershell_env()
-        self.assertEqual(env["PATH"].split(os.pathsep)[0], os.path.dirname(exe))
-        self.assertIn("/sistema", env["PATH"])
-        self.assertEqual(env["OTRA"], "1")
-        with mock.patch.object(engines.ClaudeCode, "find", return_value=None), \
-                mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema"}):
-            self.assertEqual(a._powershell_env()["PATH"], "/sistema")  # sin Claude Code, el PATH de siempre
+        with mock.patch.dict(os.environ, {"USERPROFILE": perfil}):
+            with mock.patch.object(engines.ClaudeCode, "find", return_value=os.path.join(nativo, "claude.exe")), \
+                    mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema", "OTRA": "1"}):
+                env = a._powershell_env()
+            self.assertEqual(env["PATH"].split(os.pathsep), [nativo, "/sistema"])  # sin repetir la carpeta
+            self.assertEqual(env["OTRA"], "1")
+            with mock.patch.object(engines.ClaudeCode, "find", return_value=os.path.join(vscode, "claude.exe")), \
+                    mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema"}):
+                self.assertEqual(a._powershell_env()["PATH"].split(os.pathsep), [vscode, nativo, "/sistema"])
+            # sin Claude Code todavía: la del instalador nativo, para escribir claude en la misma ventana tras instalar
+            with mock.patch.object(engines.ClaudeCode, "find", return_value=None), \
+                    mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema"}):
+                self.assertEqual(a._powershell_env()["PATH"].split(os.pathsep), [nativo, "/sistema"])
 
     def test_abrir_powershell_usa_ese_entorno(self):
         a = self.app(procesado="agente")
