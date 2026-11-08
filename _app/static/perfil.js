@@ -90,11 +90,9 @@ const perfilOpt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selec
 function perfilReglasHtml() {
   const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [];
   const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
-  return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto</label><div><select id="pfFolder">${perfilOpt(PERFIL_AUTO, 'Automática · la última usada', folderSel)}${folderOpts(folderSel)}</select>
-      <span class="ag-hint">y las de un proyecto sin carpeta propia</span></div></div>
-    <div class="ag-regla"><label for="sLang">Idioma por defecto</label><div>${langSelect('sLang', c.language ?? 'es-en')}<span class="ag-hint">si el proyecto no tiene el suyo</span></div></div>
-    <div class="ag-regla"><label for="pfVocab">Proyecto al grabar</label><div><select id="pfVocab">${perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', vocabSel)}${perfilOpt('', 'Sin proyecto', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, vocabSel)).join('')}</optgroup>`).join('')}</select>
-      <span class="ag-hint">el de esa reunión otras veces, el título o la última</span></div></div>
+  return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto<small class="ag-sub">y de proyectos sin carpeta propia</small></label><div><select id="pfFolder">${perfilOpt(PERFIL_AUTO, 'Automática · la última usada', folderSel)}${folderOpts(folderSel)}</select></div></div>
+    <div class="ag-regla"><label for="sLang">Idioma por defecto<small class="ag-sub">si el proyecto no tiene el suyo</small></label><div>${langSelect('sLang', c.language ?? 'es-en')}</div></div>
+    <div class="ag-regla"><label for="pfVocab">Proyecto al grabar<small class="ag-sub">la reunión, su título o la última</small></label><div><select id="pfVocab">${perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', vocabSel)}${perfilOpt('', 'Sin proyecto', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, vocabSel)).join('')}</optgroup>`).join('')}</select></div></div>
     <div class="ag-regla"><label for="pfContext">Contexto</label><div><input class="input" id="pfContext" maxlength="500" value="${esc(p.context || '')}" placeholder="Opcional: de qué van tus reuniones y quién participa" autocomplete="off"></div></div>`;
 }
 /* Procesado: con qué motor empieza el directo y con cuál se transcribe después. */

@@ -9,7 +9,7 @@
 /* ---------------------------------------------------------------- Al grabar */
 function ajAlGrabarHtml() {
   const c = S.config || {};
-  return `<div class="ag-cab"><h4>Al grabar</h4><div class="help" style="margin-top:2px">Se usa con el botón Grabar, con Ctrl+Alt+R y con el aviso de Teams.</div></div>
+  return `<div class="ag-cab"><h4>Al grabar</h4><div class="help" style="margin-top:2px">Se usa con el botón Grabar, con Ctrl+Alt+R y con el aviso de Teams. <button type="button" class="ag-como-btn" aria-expanded="false" aria-controls="agComo">¿Cómo funciona?</button></div><div class="help" id="agComo" hidden>Lo de arriba sale de tres capas, de más a menos fuerte: lo que cambies para una reunión en la tarjeta de grabar, el proyecto o workstream (<a href="#" data-sec-ir="proyectos">Proyectos</a>) y estas reglas. <b>Español + inglés</b>, <b>Español + portugués</b> e <b>Inglés + portugués</b> detectan el idioma cada pocos segundos, pero solo entre esos dos, y dejan cada frase en su idioma; si una reunión es solo en uno, fijarlo es algo más preciso. El contexto lo recibe Whisper detrás del vocabulario (si no cabe todo, se recorta antes que el vocabulario) y lo tiene en cuenta el resumen.</div></div>
     <div class="ag-plan" aria-live="polite">
       <div class="ag-plan-h"><span>Así se graba ahora una reunión de</span><select id="agProy" title="El proyecto que quieres comprobar"></select></div>
       <div id="agFilas"><div class="gr-cargando">Calculando…</div></div>
@@ -18,11 +18,9 @@ function ajAlGrabarHtml() {
       ${typeof perfilReglasHtml === 'function' ? perfilReglasHtml() : `<div class="ag-regla"><label for="sLang">Idioma por defecto</label><div>${langSelect('sLang', c.language ?? 'es-en')}</div></div>`}
       ${'carpeta_por_reunion' in c ? `<div class="ag-regla"><label for="agPorReunion">Una carpeta por reunión</label><div><label class="ag-sw"><input type="checkbox" id="agPorReunion"${c.carpeta_por_reunion !== false ? ' checked' : ''}>fecha y nombre, dentro de la carpeta del proyecto</label></div></div>` : ''}
       <div class="ag-regla"><label for="agMic">Micrófono · audio del PC</label><div class="ag-dos"><select id="agMic" aria-label="Micrófono">${ajDispositivos(null)[0]}</select><select id="agSys" aria-label="Audio del PC">${ajDispositivos(null)[1]}</select><span id="agDevsAviso" class="hidden"></span></div></div>
-      <div class="ag-regla"><label for="agDirecto">Texto en directo</label><div><label class="ag-sw"><input type="checkbox" id="agDirecto"${c.rec_directo !== false ? ' checked' : ''}>si el portátil va lento, quítalo: solo graba y transcribe al terminar</label></div></div>
-      <div class="ag-regla"><label for="lMeet">Llamada detectada</label><div><label class="ag-sw"><input type="checkbox" id="lMeet"${c.meeting_detect !== false ? ' checked' : ''}>avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label></div></div>
-    </div>
-    <details class="ag-como"><summary>¿Cómo funciona?</summary><div class="help">Lo de arriba sale de tres capas, de más a menos fuerte: lo que cambies para una reunión en la tarjeta de grabar, el proyecto o workstream (<a href="#" data-sec-ir="proyectos">Proyectos</a>) y estas reglas. <b>Español + inglés</b>, <b>Español + portugués</b> e <b>Inglés + portugués</b> detectan el idioma cada pocos segundos, pero solo entre esos dos, y dejan cada frase en su idioma; si una reunión es solo en uno, fijarlo es algo más preciso. El contexto lo recibe Whisper detrás del vocabulario (si no cabe todo, se recorta antes que el vocabulario) y lo tiene en cuenta el resumen.</div></details>
-    <div class="ag-pie help">Carpeta, idioma y vocabulario de cada proyecto: <a href="#" data-sec-ir="proyectos">Proyectos ›</a></div>`;
+      <div class="ag-regla"><label for="agDirecto">Texto en directo</label><div><label class="ag-sw"><input type="checkbox" id="agDirecto"${c.rec_directo !== false ? ' checked' : ''}>si el portátil va lento, quítalo: transcribe al terminar</label></div></div>
+      <div class="ag-regla"><label for="lMeet">Llamada detectada</label><div><label class="ag-sw"><input type="checkbox" id="lMeet"${c.meeting_detect !== false ? ' checked' : ''}>avisarme si estoy en una llamada y no estoy grabando</label></div></div>
+    </div>`;
 }
 /* opciones de micrófono y audio del PC con lo guardado elegido (sin la lista de dispositivos: las genéricas) */
 function ajDispositivos(devs) {
@@ -92,6 +90,8 @@ function bindAjAlGrabar(d) {
     }
   };
   box.addEventListener('click', e => { if (e.target.closest('[data-ag-reintentar]')) pedir(); });
+  const como = $('.ag-como-btn', d), comoTxt = $('#agComo', d);
+  if (como && comoTxt) como.onclick = () => { comoTxt.hidden = !comoTxt.hidden; como.setAttribute('aria-expanded', String(!comoTxt.hidden)); };
   const luego = () => { clearTimeout(t); t = setTimeout(pedir, 250); };
   const listas = () => {
     const sel = proy.value;

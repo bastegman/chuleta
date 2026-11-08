@@ -489,6 +489,16 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("#pjTabla [data-pj-reintentar]")
         celda = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"] td:nth-child(2)')?.innerText || ''"
         pg.wait_for_function(f"({celda}).includes('su carpeta')", timeout=10000)
+        # «Al grabar»: las reglas, en una pantalla (§4.0 del rediseño) a 1500×920, sin desplazar
+        pg.set_viewport_size({"width": 1500, "height": 920})
+        pg.click(".aj-nav [data-sec='algrabar']")
+        pg.wait_for_selector("#agFilas .gr-fila[data-fila='audio']", timeout=5000)
+        alto = pg.evaluate("(() => { const m = document.querySelector('.aj-main');"
+                           " return [m.scrollHeight, m.clientHeight]; })()")
+        self.assertLessEqual(alto[0], alto[1], alto)
+        pg.click(".ag-como-btn")  # «¿Cómo funciona?», plegado en la línea de arriba
+        self.assertTrue(pg.is_visible("#agComo"))
+        self.assertEqual(pg.get_attribute(".ag-como-btn", "aria-expanded"), "true")
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, [r for r in red if "/api/grabar/plan" not in r and "/api/settings" not in r])
         self.assertEqual(err, [], (err, red))

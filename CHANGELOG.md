@@ -43,8 +43,10 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   «Probar»; mientras no se guarde, lo dice («Se activa al pulsar Guardar»). La ayuda larga, plegada en «¿Cómo
   funciona?». El aviso flotante dice que depende de «Llamada detectada» (Al grabar) y, con ella apagada, no se puede
   marcar: era una segunda casilla casi igual que no decía de cuál colgaba.
-- «Llamada detectada» (Al grabar) vuelve a decir lo que hace: «avisarme si estoy en una llamada (Teams, Zoom…) y no
-  estoy grabando». Decía «aviso con «Grabar»», que es el aviso flotante, otro ajuste.
+- «Llamada detectada» (Al grabar) vuelve a decir lo que hace: «avisarme si estoy en una llamada y no estoy
+  grabando». Decía «aviso con «Grabar»», que es el aviso flotante, otro ajuste.
+- «Al grabar» cabe en una pantalla a 1500×920 (antes 828 px para 655): las pistas de cada regla van bajo su nombre,
+  «¿Cómo funciona?» en la línea de arriba y sin la línea del pie, que repetía el enlace a Proyectos.
 - En la tabla de Proyectos, editar una fila ya no cambia los anchos de la tabla ni corta los desplegables por la
   mitad; «Guardar» y «Cancelar», uno encima del otro.
 - Un nombre de reunión escrito con signos que no admite un archivo (`\ / : * ? " < > |`, p. ej. «Comité: Q4») ya no
