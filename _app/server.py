@@ -1831,7 +1831,7 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     pick("context", ("elegido", elegido.get("context")), ("perfil", p["context"]))
     pick("name", ("elegido", elegido.get("name") or None), ("reunion", sug.get("name") or None), ("ultimo", ""))
     pick("participantes", ("elegido", elegido.get("participantes") or None),
-         ("reunion", ", ".join(sug.get("participants") or []) or None), ("ultimo", ""))
+         ("reunion", calendario.join_participants(sug.get("participants")) or None), ("ultimo", ""))
     return dict(out, origen=origen)
 
 
@@ -4183,7 +4183,7 @@ class App:
                                     "language": st.get("language") or "", "folder": self.rec_folder_for(v, st),
                                     "vocab": v["id"] if v else "", "name": b.get("name") or sug.get("name") or "",
                                     "participantes": b.get("participantes")
-                                    or ", ".join(sug.get("participants") or []),
+                                    or calendario.join_participants(sug.get("participants")),
                                     "sugerido": b.get("sugerido") or sug.get("source") or ""})
                 notify(f"● Grabando en {APP_NAME}", (f"{r['workstream']} · " if r.get("workstream") else "")
                        + (f"→ {display_rel(r['carpeta'])} · " if r.get("carpeta") is not None else "")
@@ -4259,7 +4259,7 @@ class App:
                 sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
                                                                               outlook=False))
                 b = dict(b, name=sug.get("name") or "", vocab=sug.get("vocab") or "",
-                         participantes=b.get("participantes") or ", ".join(sug.get("participants") or []),
+                         participantes=b.get("participantes") or calendario.join_participants(sug.get("participants")),
                          sugerido=b.get("sugerido") or sug.get("source") or "")
             folder = safe(b.get("folder", ""), "dir")  # la carpeta principal (rec_folder_for)
             if in_app_dir(folder):

@@ -1039,6 +1039,15 @@ def _puntos(terms, hay):
     return n
 
 
+def join_participants(names):
+    """Los participantes en una linea (la propiedad «Participantes» del .md): con «, » o, si algun nombre lleva coma
+    (el directorio de una empresa en Outlook: «Apellido, Nombre»), con «; », que es como los separa Outlook. Si no,
+    «Stegmaier, Bernardo, García, Ana» eran cuatro personas para quien lo lee y para la pista de quien habla
+    (voices.count_participants; revision de la integracion del 08/11/2026)."""
+    names = [n for n in (names or []) if n]
+    return ("; " if any("," in n for n in names) else ", ").join(names)
+
+
 def suggest(meeting, vocab_lists, min_score=2):
     """Nombre, tema y participantes sugeridos para la grabación.
 

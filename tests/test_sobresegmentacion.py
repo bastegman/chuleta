@@ -173,6 +173,43 @@ class CountParticipantsTests(unittest.TestCase):
                         ("Ana/Luis", 2), ("Ana e Inés", 2), ("Maya Ybarra", 1), ("Ana,\nLuis", 2)):
             self.assertEqual(voices.count_participants(text), n, text)
 
+    def test_nombres_de_directorio_de_outlook(self):
+        """«Apellido, Nombre» (Outlook de empresa): con «;» la coma es parte del nombre."""
+        for text, n in (("Stegmaier, Bernardo; García López, Ana", 2), ("Stegmaier, Bernardo;\nGarcía, Ana; Luis", 3)):
+            self.assertEqual(voices.count_participants(text), n, text)
+
+
+class ParticipantesDeOutlookTests(unittest.TestCase):
+    """fix-calendario x fix-sobresegmentacion (revision de la integracion del 08/11/2026): Outlook da los nombres del
+    directorio de la empresa como «Apellido, Nombre»; unidos con «, » eran el doble de personas en la pista."""
+
+    def test_de_la_cita_a_la_pista(self):
+        import calendario
+        sug = calendario.suggest({"subject": "Comité", "organizer": "Stegmaier, Bernardo",
+                                  "attendees": ["García López, Ana", "Stegmaier, Bernardo"]}, [])
+        texto = calendario.join_participants(sug["participants"])
+        self.assertEqual(texto, "Stegmaier, Bernardo; García López, Ana")
+        self.assertEqual(voices.count_participants(texto), 2)
+
+    def test_sin_comas_como_siempre(self):
+        import calendario
+        self.assertEqual(calendario.join_participants(["Ana", "", "Luis"]), "Ana, Luis")
+        self.assertEqual(calendario.join_participants(None), "")
+
+    def test_rec_start_y_el_perfil_usan_la_misma(self):
+        with open(os.path.join(APP, "server.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertEqual(src.count('", ".join(sug.get("participants")'), 0)
+        self.assertEqual(src.count('calendario.join_participants(sug.get("participants"))'), 3)
+
+    @unittest.skipUnless(shutil.which("node"), "node no instalado")
+    def test_js(self):
+        out = node(js_defs(read("reunion.js"), ["joinParticipants"]) + """
+console.log(JSON.stringify([joinParticipants(['Stegmaier, Bernardo', 'García, Ana']), joinParticipants(['Ana', 'Luis']),
+  joinParticipants(undefined)]));
+""")
+        self.assertEqual(json.loads(out[0]), ["Stegmaier, Bernardo; García, Ana", "Ana, Luis", ""])
+
 
 class PistaDeParticipantesTests(Reunion):
     """_run_voices pasa al subproceso cuantas personas nombra «Participantes», solo cuando es fiable."""

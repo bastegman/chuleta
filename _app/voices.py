@@ -402,8 +402,10 @@ def consolidate(res, samples16=None, ex=None, fusion=FUSION, absorbe_min=ABSORBE
 
 
 def count_participants(text):
-    """Cuantas personas nombra el campo «Participantes» (texto libre: «Ana, Luis y Pedro»)."""
-    parts = re.split(r"[,;\n/]+|\s+(?:y|e|and|&)\s+", str(text or ""))
+    """Cuantas personas nombra el campo «Participantes» (texto libre: «Ana, Luis y Pedro»). Con «;» (los de Outlook de
+    empresa: «Apellido, Nombre; Apellido, Nombre», calendario.join_participants) la coma es parte del nombre."""
+    text = str(text or "")
+    parts = re.split((r"[;\n/]+" if ";" in text else r"[,;\n/]+") + r"|\s+(?:y|e|and|&)\s+", text)
     return len({p.strip().casefold() for p in parts if p.strip()})
 
 
