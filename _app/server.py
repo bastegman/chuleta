@@ -4307,6 +4307,12 @@ class App:
                     # la ultima carpeta principal usada: la de las reuniones sin tema (rec_folder_origin). La de un
                     # proyecto ya no se apunta al grabar: se asigna (/api/proyecto/carpeta) y, sin asignar, es la suya
                     d["rec_folder"] = rel_of(folder)
+                    # salvo si no tiene «la suya» en el arbol (sus listas vienen de una carpeta de vocabulario
+                    # conectada): la elegida a mano pasa a ser su carpeta principal, como antes de la carpeta por
+                    # reunion. Sin esto, Ctrl+Alt+R y el aviso de Teams con su tema caian en la ultima usada, que
+                    # puede ser la de otro proyecto (revision de la integracion del 08/11/2026)
+                    if v and not por_regla and project_home(v) is None:
+                        d["project_folders"] = dict(d.get("project_folders") or {}, **{v["project"]: rel_of(folder)})
                     # "solo grabar" y "sin micro" son para una grabacion concreta: no se quedan como
                     # predeterminado (la siguiente, y Ctrl+Alt+R, vuelven a transcribir y a grabar el micro)
                     if mic != "none":

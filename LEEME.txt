@@ -114,8 +114,9 @@ USO DIARIO
   - Si grabas con OBS, configúralo para que guarde en la carpeta Chuleta: la app lo detecta y
     transcribe en directo mientras graba.
   - Cada grabación va en su propia carpeta, "AAAA-MM-DD Nombre", dentro de la carpeta principal
-    de su proyecto (sin asignar, la del proyecto: la que tiene su carpeta Vocabulario). Lo
-    grabado antes se queda donde está. Mover o renombrar la reunión mueve su carpeta entera.
+    de su proyecto (sin asignar, la del proyecto: la que tiene su carpeta Vocabulario; si sus
+    listas vienen de una carpeta conectada, la última que elegiste a mano para él). Lo grabado
+    antes se queda donde está. Mover o renombrar la reunión mueve su carpeta entera.
     En pleno directo, "Se guarda en ... · Cambiar" elige otra carpeta: la grabación sigue y,
     cuando terminan el directo, el repaso y el resumen, la reunión entera se mueve sola (hasta
     entonces se puede deshacer; si cierras Chuleta antes, se mueve al volver a abrirla).

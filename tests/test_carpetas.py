@@ -180,6 +180,54 @@ class CarpetaPrincipalTests(TempTree):
         self.assertEqual((r["folder"], r["origen"]["folder"]), ("Alfa", "carpeta_proyecto"))
 
 
+class ProyectoDeUnaCarpetaConectadaTests(TempTree):
+    """Carpeta por reunion x vocabulario desde una carpeta conectada (revision de la integracion del 08/11/2026): un
+    proyecto cuyas listas vienen de una carpeta conectada no tiene carpeta en el arbol (project_home None). Su carpeta
+    principal es la que se eligio a mano para el; si no, Ctrl+Alt+R y el aviso de Teams grababan en la ultima usada, que
+    puede ser la de otro proyecto."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("Alfa/Vocabulario/General.txt", "API, SLA\n")
+        for d in ("Cliente B", "Cliente B 2"):
+            os.makedirs(os.path.join(self.root, d))
+        ext = os.path.join(self.tmp, "OneDrive", "Listas")
+        os.makedirs(os.path.join(ext, "Cliente B", "Vocabulario"))
+        with open(os.path.join(ext, "Cliente B", "Vocabulario", "General.txt"), "w", encoding="utf-8") as f:
+            f.write("Contrato, Hito\n")
+        server.VOCAB_LINKS[server.link_id(ext)] = {"name": "Listas", "path": ext}
+        vs = {v["project"]: v for v in server.list_vocab()}
+        self.b, self.alfa = vs["Cliente B"], vs["Alfa"]
+        self.assertTrue(self.b["id"].startswith(server.VLINK))
+        self.assertIsNone(server.project_home(self.b))
+        self.a = make_app(self)
+
+    def test_la_elegida_a_mano_es_su_carpeta_principal(self):
+        rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff")
+        rec(self.a, self, folder="Alfa", vocab=self.alfa["id"], name="Comité")  # otro proyecto, por la regla
+        st = self.a.settings.get()
+        self.assertEqual(st["rec_folder"], "Alfa")
+        self.assertEqual(st["project_folders"], {"Cliente B": "Cliente B"})  # Alfa tiene la suya: no se apunta
+        self.assertEqual(server.rec_folder_origin(self.b, st), ("Cliente B", "proyecto"))
+        self.assertEqual(server.rec_folder_origin(self.alfa, st), ("Alfa", "carpeta_proyecto"))
+        self.assertEqual(server.project_folders_resolved(st)["Cliente B"], "Cliente B")  # el dialogo dice lo mismo
+        rec(self.a, self, folder="Cliente B 2", vocab=self.b["id"], name="Seguimiento")  # otra a mano: la nueva
+        self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B 2", "proyecto"))
+
+    def test_la_que_dio_la_regla_no_se_apunta(self):
+        rec(self.a, self, folder="Alfa", vocab=self.alfa["id"], name="Comité")
+        carpeta, origen = server.rec_folder_origin(self.b, self.a.settings.get())
+        self.assertEqual((carpeta, origen), ("Alfa", "ultimo"))
+        rec(self.a, self, folder=carpeta, vocab=self.b["id"], name="Kickoff")  # Ctrl+Alt+R: la de Alfa, sin elegir
+        self.assertEqual(self.a.settings.get()["project_folders"], {})  # no se queda la de otro proyecto
+
+    def test_un_proyecto_del_arbol_sigue_sin_apuntarse(self):
+        rec(self.a, self, folder="Cliente B", vocab=self.alfa["id"], name="Comité")  # Alfa, a mano en otra carpeta
+        st = self.a.settings.get()
+        self.assertEqual(st["project_folders"], {})
+        self.assertEqual(server.rec_folder_origin(self.alfa, st), ("Alfa", "carpeta_proyecto"))
+
+
 # ----------------------------------------------------------------------------- la carpeta de cada reunion
 
 class NombreDeLaCarpetaTests(unittest.TestCase):

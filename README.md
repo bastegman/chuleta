@@ -25,7 +25,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   se leen de una carpeta tuya («Usar las listas de una carpeta…»: cada `.txt` es un tema y se lee en vivo, sin
   copiarlo); «Copiar listas de otra carpeta…» las copia a la de la app.
 - **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin
-  asignar, la del proyecto: la que tiene su `Vocabulario`). Lo grabado antes se queda donde está. En pleno directo,
+  asignar, la del proyecto: la que tiene su `Vocabulario`; si sus listas vienen de una carpeta conectada, la última
+  que elegiste a mano para él). Lo grabado antes se queda donde está. En pleno directo,
   «Se guarda en … · Cambiar» elige otra: la reunión entera se mueve sola cuando terminan el directo, el repaso y el
   resumen (con «Deshacer» hasta entonces, y aunque cierres la app antes).
 - **Perfil de reunión**: carpeta de destino, idioma (también mezclas español + inglés / portugués), tema de
