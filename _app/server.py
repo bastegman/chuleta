@@ -1458,9 +1458,10 @@ def _vocab_link_ok(f, base, audio_stems, avisos):
     return not salidas.is_ours(f.path, "txt")
 
 
-def _list_vocab(avisos=None):
+def _list_vocab(avisos=None, conectadas=True):
     """list_vocab y, en `avisos` (id de carpeta conectada -> [{"lista", "motivo"}]), las listas que se saltan de las
-    carpetas conectadas."""
+    carpetas conectadas. conectadas=False: solo las del arbol (sin leer las carpetas conectadas, que pueden estar en
+    OneDrive o en la red)."""
     out, seen = [], set()
 
     def norm(p):
@@ -1511,7 +1512,7 @@ def _list_vocab(avisos=None):
         walk(l["path"], 0)
     # y las carpetas de listas conectadas, en tres formas: <carpeta>\*.txt sueltas y <carpeta>\Vocabulario\*.txt (del
     # proyecto que da su nombre la carpeta: vocab_link_name) y <carpeta>\<Proyecto>\Vocabulario\*.txt
-    for vid, l in vlinks:
+    for vid, l in (vlinks if conectadas else ()):
         base, warn = l["path"], [] if avisos is None else avisos.setdefault(vid, [])
         ok = lambda f, stems, base=base, warn=warn: _vocab_link_ok(f, base, stems, warn)  # noqa: E731
         extra = {"conectada": VLINK + vid}
@@ -1940,8 +1941,10 @@ def rec_folder_origin(v, st, vs=None):
 
 def project_folders_resolved(st):
     """proyecto -> carpeta principal de cada proyecto con listas (la asignada o la suya en el arbol), para la
-    interfaz."""
-    out, vs = {}, list_vocab()
+    interfaz. Solo con las listas del arbol: las de una carpeta conectada no tienen carpeta propia (project_home) y la
+    asignada a su proyecto sale igual en el segundo paso. Asi /api/config no lee las carpetas conectadas, que pueden
+    estar en la red o sin sincronizar (revision de la integracion del 08/11/2026)."""
+    out, vs = {}, _list_vocab(conectadas=False)
     for v in vs:
         if v["project"] not in out:
             # sin id: la del proyecto, no la de un workstream
@@ -5219,8 +5222,17 @@ class App:
         return notified
 
     def _vocab_terms(self):
-        """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión."""
-        return [dict(v, terms=read_vocab(v["_abs"])[1]) for v in list_vocab()]
+        """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión. La que no
+        se puede leer (a medio sincronizar en OneDrive, sin VPN, borrada entre listar y leer) se salta, como en
+        /api/vocab: si no, se perdía la sugerencia entera, con el nombre y los participantes de Outlook (revisión de la
+        integración del 08/11/2026)."""
+        out = []
+        for v in list_vocab():
+            try:
+                out.append(dict(v, terms=read_vocab(v["_abs"])[1]))
+            except OSError:
+                continue
+        return out
 
     def reunion_actual(self, q):
         """GET /api/reunion/actual: ventana de Teams, cita de Outlook (si está activado, o ?outlook=1 para probar)

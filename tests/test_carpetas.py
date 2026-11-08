@@ -227,6 +227,20 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
         self.assertEqual(st["project_folders"], {})
         self.assertEqual(server.rec_folder_origin(self.alfa, st), ("Alfa", "carpeta_proyecto"))
 
+    def test_config_no_lee_las_carpetas_conectadas(self):
+        """/api/config (project_folders_resolved) no recorre las carpetas conectadas: pueden estar en la red."""
+        rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff")
+        real, vistos, ext = os.scandir, [], os.path.join(self.tmp, "OneDrive")
+
+        def espia(p="."):
+            if os.fspath(p).startswith(ext):
+                vistos.append(p)
+            return real(p)
+        with mock.patch.object(server.os, "scandir", espia):
+            res = server.project_folders_resolved(self.a.settings.get())
+        self.assertEqual(vistos, [])
+        self.assertEqual((res["Cliente B"], res["Alfa"]), ("Cliente B", "Alfa"))
+
     def test_quitar_la_carpeta_de_listas_quita_la_carpeta_de_sus_workstreams(self):
         ws = {self.b["id"]: "Cliente B", self.alfa["id"]: "Alfa"}
         self.a.settings.update(lambda d: d.update(workstream_folders=ws))

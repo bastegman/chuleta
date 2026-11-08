@@ -558,6 +558,32 @@ class RefutadorTests(RutasTests):
         self.assertEqual(excel, "Íñigo\tAcme\r\n")
 
 
+class SugerenciaConUnaListaIlegibleTests(CarpetaTests):
+    """Con el calendario (fix-calendario), una lista de la carpeta conectada que no se puede leer en ese momento
+    (OneDrive a medio sincronizar, sin VPN) se salta y la sugerencia de la reunión sigue: nombre, tema y participantes
+    (revisión de la integración del 08/11/2026: tumbaba la sugerencia entera y /api/reunion/actual daba 500)."""
+
+    def test_se_salta_la_lista(self):
+        self.write("Alfa/Vocabulario/General.txt", "Alfa, Comité\n")
+        write(os.path.join(self.ext, "Legal.txt"), "Contrato\n")
+        self.connect()
+        real = server.read_vocab
+
+        def leer(path):
+            if path.endswith("Legal.txt"):
+                raise PermissionError(13, "Permission denied")
+            return real(path)
+        a = server.App.__new__(server.App)
+        cita = {"subject": "Comité Alfa", "organizer": "Ana", "attendees": ["Luis"], "categories": []}
+        with mock.patch.object(server, "read_vocab", leer):
+            terms = a._vocab_terms()
+            r = calendario.reunion_actual({"outlook_on": True}, terms, teams=lambda: None,
+                                          outlook_fn=lambda **k: (cita, None))
+        self.assertEqual([v["name"] for v in terms], ["General"])
+        self.assertEqual(r["sugerencia"]["participants"], ["Ana", "Luis"])
+        self.assertEqual(r["sugerencia"]["vocab"], "Alfa/Vocabulario/General.txt")
+
+
 class LecturaPorLineasTests(CarpetaTests):
     def test_un_byte_suelto_solo_cambia_su_linea(self):
         p = os.path.join(self.ext, "a.txt")
