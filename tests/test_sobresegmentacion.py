@@ -7,13 +7,18 @@ sin sherpa-onnx, la logica con huellas sinteticas."""
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
+import threading
+import types
 import unittest
+import urllib.request
 from unittest import mock
 
 import numpy as np
 
-from support import REPO, server
+from support import APP, REPO, server
 from test_fix_voces import Reunion, mix, node, unit
 from test_frontend import js_defs, read
 
@@ -306,6 +311,117 @@ J(spkJoinOptions({ h1: { segundos: 20 }, h2: { segundos: 75 }, h3: { segundos: 4
         body, opts = [json.loads(x) for x in out]
         self.assertEqual(body, {"path": "r.wav", "h": "h3", "con": "h1", "creado": "c1"})
         self.assertEqual(opts, [{"h": "h2", "text": "Hh2 · 1 min 15 s"}, {"h": "h1", "text": "Hh1 · 20 s"}])
+
+
+# ----------------------------------------------------------------------------- el cableado, sin sherpa-onnx
+# Revision de la integracion del 08/11/2026: quitar la llamada a consolidate en diarize, la pista en el subproceso o la
+# ruta /api/hablantes/unir no hacia caer ningun test (consolidate y speakers_join se probaban sueltos, y el unico test
+# de diarize de verdad necesita sherpa-onnx, que no instala ninguna CI). La interfaz, en test_ui_voces.
+
+class _Tramo:
+    def __init__(self, start, end, speaker):
+        self.start, self.end, self.speaker = start, end, speaker
+
+
+class DiarizeConsolidaTests(unittest.TestCase):
+    """diarize() con un sherpa de mentira: tres grupos, dos de ellos de la misma voz (coseno 1)."""
+
+    HUELLAS = {0.0: unit(0), 30.0: unit(0), 50.0: unit(2)}  # por el inicio del primer tramo de cada grupo
+
+    def diarize(self, **kw):
+        grupos = [_Tramo(0.0, 30.0, 0), _Tramo(30.0, 50.0, 1), _Tramo(50.0, 75.0, 2)]
+        sd = types.SimpleNamespace(sample_rate=voices.SR, process=lambda samples, cb: types.SimpleNamespace(
+            sort_by_start_time=lambda: list(grupos)))
+
+        def huella(ex, samples16, tramos, max_s=None):
+            return self.HUELLAS[tramos[0][0]], sum(b - a for a, b in tramos)
+        with mock.patch.object(voices, "_sherpa", return_value=object()), \
+                mock.patch.object(voices, "models_ready", return_value=True), \
+                mock.patch.object(voices, "model_paths", return_value={}), \
+                mock.patch.object(voices, "_diarizer", return_value=sd), \
+                mock.patch.object(voices, "_extractor", return_value=object()), \
+                mock.patch.object(voices, "fingerprint", side_effect=huella), \
+                mock.patch.object(voices, "consolidate", wraps=voices.consolidate) as consolidate:
+            res = voices.diarize(np.zeros(75 * voices.SR, np.int16), "datos", **kw)
+        return res, consolidate
+
+    def test_une_por_dentro(self):
+        res, consolidate = self.diarize()
+        self.assertEqual(consolidate.call_count, 1)
+        self.assertEqual(sorted(res["hablantes"]), ["h1", "h2"])  # la voz partida en dos, otra vez una
+        self.assertEqual(res["hablantes"]["h1"]["segundos"], 50.0)
+
+    def test_sin_consolidar_salen_los_grupos_de_sherpa(self):
+        res, consolidate = self.diarize(consolidar=False)
+        consolidate.assert_not_called()
+        self.assertEqual(len(res["hablantes"]), 3)
+
+    def test_la_pista_llega_a_consolidate(self):
+        consolidate = self.diarize(participantes=4)[1]
+        self.assertEqual(consolidate.call_args.kwargs.get("participantes"), 4)
+
+
+class SubprocesoPistaTests(unittest.TestCase):
+    """voices.py --diarize … --participantes N (lo que lanza el servidor) entrega N a diarize."""
+
+    def correr(self, *extra):
+        tmp = tempfile.mkdtemp(prefix="chuleta-pista-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        visto = os.path.join(tmp, "visto.json")
+        doble = os.path.join(tmp, "doble.py")
+        with open(doble, "w", encoding="utf-8") as f:
+            f.write(f"""import json, sys
+sys.path.insert(0, {APP!r})
+import numpy as np
+import voices
+voices.load_audio_16k = lambda path, cancelled=None: np.zeros(16000, np.int16)
+def diarize(samples, data_dir, threads=2, progress=None, **kw):
+    json.dump(kw, open({visto!r}, "w"))
+    return {{"tramos": [], "hablantes": {{}}, "huellas": {{}}, "duracion_s": 1.0}}
+voices.diarize = diarize
+sys.exit(voices.main(sys.argv[1:]))
+""")
+        r = subprocess.run([sys.executable, doble, "--diarize", os.path.join(tmp, "r.wav"), "--out",
+                            os.path.join(tmp, "r.hablantes.json"), "--data", tmp, *extra],
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(visto, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_con_pista(self):
+        self.assertEqual(self.correr("--participantes", "3").get("participantes"), 3)
+
+    def test_sin_pista(self):
+        self.assertIsNone(self.correr().get("participantes"))
+
+
+class RutaUnirTests(unittest.TestCase):
+    """POST /api/hablantes/unir llega a App.speakers_join (sin la ruta, «Es el mismo que…» daba 404)."""
+
+    @classmethod
+    def setUpClass(cls):
+        class Doble:
+            def __getattr__(self, name):
+                return lambda b=None: {"metodo": name, "cuerpo": b}
+        cls.srv = server.Server(("127.0.0.1", 0), server.Handler)
+        cls.port = cls.srv.server_address[1]
+        cls._antes = server.Handler.app, server.PORT, server.Handler.token
+        server.Handler.app, server.PORT, server.Handler.token = Doble(), cls.port, "prueba-unir"
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        server.Handler.app, server.PORT, server.Handler.token = cls._antes
+
+    def test_ruta(self):
+        body = {"path": "r.wav", "h": "h3", "con": "h1", "creado": "c1"}
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/hablantes/unir", data=json.dumps(body).encode(),
+                                     headers={server.TOKEN_HEADER: "prueba-unir", "X-Audios": "1",
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            self.assertEqual(json.load(r), {"metodo": "speakers_join", "cuerpo": body})
 
 
 class EvalScoreTests(unittest.TestCase):

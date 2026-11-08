@@ -157,6 +157,33 @@ class VocesEnNavegadorTests(unittest.TestCase):
         self.assertIsNone(self.api("/api/hablantes?path=" + urllib.request.quote(rel))["tu"])
         self.assertEqual(self.limpio(errores, red), ([], []))
 
+    def test_es_el_mismo_que(self):
+        """«Es el mismo que…» (msg 1242): la app partio una voz en dos hablantes y se juntan desde la etiqueta (la
+        revision de la integracion del 08/11/2026 vio que ningun test pulsaba el desplegable)."""
+        nombre = "R unir"
+        base = os.path.join(self.root, nombre)
+        with open(base + ".wav", "wb") as f:
+            f.write(wav_bytes(1.0))
+        with open(base + ".srt", "w", encoding="utf-8") as f:
+            f.write(srt_text([(0.5, 19.5, "Hola a todos."), (20.5, 39.5, "Empiezo yo."), (40.5, 59.5, "Seguimos.")]))
+        voices.write_sidecar(base + voices.SIDECAR_EXT, {
+            "version": 1, "tu": None, "micro": None, "creado": "2026-11-08T23:00:00",
+            "tramos": [{"inicio": 0, "fin": 20, "h": "h1"}, {"inicio": 20, "fin": 40, "h": "h2"},
+                       {"inicio": 40, "fin": 60, "h": "h3"}],
+            "hablantes": {h: {"segundos": 20.0, "persona": None} for h in ("h1", "h2", "h3")}})
+        rel = nombre + ".wav"
+        pg, errores, red = self.abrir(rel)
+        pg.click("#txBody .spk[data-spk='h3']")
+        pg.wait_for_selector(".spk-pop #spJoin", timeout=5000)
+        self.assertEqual(pg.eval_on_selector_all(".spk-pop #spJoin option", "os => os.map(o => o.value)"),
+                         ["", "h1", "h2"])
+        pg.select_option(".spk-pop #spJoin", "h1")
+        pg.wait_for_function("!document.querySelector(\"#txBody .spk[data-spk='h3']\")", timeout=10000)
+        hs = self.api("/api/hablantes?path=" + urllib.request.quote(rel))["hablantes"]
+        self.assertEqual(sorted(hs), ["h1", "h2"])
+        self.assertEqual(hs["h1"]["segundos"], 40.0)
+        self.assertEqual(self.limpio(errores, red), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()
