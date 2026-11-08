@@ -4,10 +4,13 @@ name: claude-windows
 # «Comprobar» tardó minutos en el PC de Bernardo). Instalador nativo oficial y npm (claude.cmd por cmd.exe, en una
 # carpeta con espacios, «&» y «%» que solo está en el PATH del registro). Chuleta arranca antes de instalar. Mide cuánto
 # tarda cada llamada en frío y en caliente, y si quedan procesos con la salida abierta. Sin login ni credenciales.
+# Cuenta de empresa (07/11/2026, msgs 1224-1228): «vscode», solo la copia que trae la extensión de VS Code (paquete de
+# Open VSX); «pasarela», una pasarela de empresa falsa en el propio runner puesta en el registro con Chuleta ya abierta
+# (token falso, sin Anthropic).
 on:
   workflow_dispatch:
   push:
-    branches: [main, fix-claude-windows]
+    branches: [main, fix-claude-windows, claude-empresa]
     paths:
       - "_app/engines.py"
       - "_app/server.py"
@@ -22,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instalacion: [nativo, npm]
+        instalacion: [nativo, npm, vscode, pasarela]
     runs-on: windows-latest
     timeout-minutes: 40
     env:

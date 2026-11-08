@@ -4731,7 +4731,8 @@ class App:
         if not ruta:
             raise ApiError(f"No encuentro {cls.label} en este PC. Haz los pasos 1 y 2 y vuelve a pulsar «Comprobar».")
         # lo que tarda cada paso, al log (07/11/2026: en el PC de Bernardo «Comprobar» tardó minutos sin decir en que)
-        log(f"   agente: comprobando {cls.label} ({modelo})…")
+        origen = cls.origen(ruta)  # «Claude Code de VS Code» si es la copia de la extension (07/11/2026)
+        log(f"   agente: comprobando {origen} ({modelo})…" + (f" · {ruta}" if origen != cls.label else ""))
         ag, t0 = cls(settings_dir=DATA_DIR), time.time()
         try:
             version, secs = ag.check(ruta, model=modelo)
@@ -4742,8 +4743,12 @@ class App:
         if isinstance(t, dict) and t:
             log(f"   agente: {self._agente_tiempos(ag, secs)}")
         self.settings.update(lambda d: d.update(agente_version=version, agente_comprobado=time.time()))
+        aviso = getattr(ag, "aviso", None)
+        if aviso:
+            log(f"   agente: {aviso}")
         log(f"   agente: {cls.label} {version} comprobado ({secs:.1f} s)")
-        return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta}
+        return {"ok": True, "version": version, "seconds": round(secs, 1), "ruta": ruta, "origen": origen,
+                "modelo_usado": getattr(ag, "modelo_usado", None), "aviso": aviso}
 
     @staticmethod
     def _agente_tiempos(ag, total):
@@ -4992,14 +4997,33 @@ class App:
     def agente_estado(self, q):
         """Para el paso 2 del asistente: si Claude Code ya está en este PC (se mira cada pocos segundos)."""
         cls, _ = agente_de(self.settings.get())
-        return {"encontrado": bool(cls.find()), "label": cls.label}
+        ruta = cls.find()
+        return {"encontrado": bool(ruta), "label": cls.label, "origen": cls.origen(ruta) if ruta else None}
+
+    def _powershell_env(self):
+        """El entorno de la ventana de «Abrir PowerShell»: el de una PowerShell nueva (engines.windows_env) y, delante
+        en su PATH, la carpeta del Claude Code que encuentra la app (08/11/2026). El instalador nativo no lo pone en el
+        PATH («…\\.local\\bin is not in your PATH», medido en Windows) y la copia de VS Code tampoco: así, en esa
+        ventana, `claude` (y su inicio de sesión en el navegador) funciona siempre. La app no inicia sesión por nadie:
+        el usuario escribe claude y entra en la página de Claude."""
+        env = engines.windows_env()
+        cls, _ = agente_de(self.settings.get())
+        ruta = cls.find()
+        # y la carpeta del instalador nativo aunque aún no exista: el paso 1 instala en esa misma ventana y el 2
+        # escribe claude en ella
+        dirs = [os.path.dirname(os.path.abspath(ruta))] if ruta else []
+        nativo = os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".local", "bin")
+        if os.path.normcase(nativo) not in map(os.path.normcase, dirs):
+            dirs.append(nativo)
+        env["PATH"] = os.pathsep.join(dirs + [env.get("PATH", "")])
+        return env
 
     def abrir_powershell(self, b):
-        """«Abrir PowerShell» del asistente: una ventana vacía, sin ejecutar nada."""
+        """«Abrir PowerShell» del asistente: una ventana vacía, sin ejecutar nada (con Claude Code en su PATH)."""
         if os.name != "nt":
             raise ApiError("Este botón solo funciona en Windows: abre una terminal y sigue los pasos.")
         subprocess.Popen(["powershell.exe", "-NoExit", "-NoLogo"], cwd=os.path.expanduser("~"),
-                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0), env=self._powershell_env())
         return {"ok": True}
 
     # --- modelos de Whisper en este PC (engines.WhisperModels): estado, descarga con progreso y cancelar

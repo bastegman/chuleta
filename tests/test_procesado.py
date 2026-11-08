@@ -125,10 +125,13 @@ class ClaudeCodeTests(unittest.TestCase):
             ag._parse(1, json.dumps([{"type": "system", "text": "inicia sesión por favor"}]), "", "sonnet")
         self.assertNotIn("sin sesión", str(c.exception))
         for txt in ("Authentication required · Sign in again to continue",
-                    "Invalid auth token · Fix external auth token", "Login expired · Please run /login"):
+                    "Invalid auth token · Fix external auth token"):
             with self.assertRaises(engines.EngineError) as c:
                 ag._parse(1, "", txt, "sonnet")
             self.assertIn("sin sesión iniciada", str(c.exception), txt)
+        with self.assertRaises(engines.EngineError) as c:  # caducada: su frase (claude-empresa, 07/11/2026)
+            ag._parse(1, "", "Login expired · Please run /login", "sonnet")
+        self.assertTrue(str(c.exception).startswith("La sesión de Claude Code ha caducado"), str(c.exception))
 
     def test_chat_lanza_claude_sin_herramientas_y_con_las_instrucciones_por_stdin(self):
         with tempfile.TemporaryDirectory() as d:
@@ -453,7 +456,8 @@ class ApiProcesadoTests(TempTree):
                 mock.patch.object(engines.ClaudeCode, "check", return_value=("2.1.314", 3.4)) as check, \
                 mock.patch.object(server, "log") as log:
             r = a.agente_comprobar({"tipo": "claude", "modelo": "opus"})
-        self.assertEqual(r, {"ok": True, "version": "2.1.314", "seconds": 3.4, "ruta": "/x/claude"})
+        self.assertEqual(r, {"ok": True, "version": "2.1.314", "seconds": 3.4, "ruta": "/x/claude",
+                             "origen": "Claude Code", "modelo_usado": None, "aviso": None})
         self.assertEqual(check.call_args.kwargs.get("model"), "opus")  # el modelo del formulario, sin guardarlo
         st = a.settings.get()
         self.assertEqual((st["agente_version"], st["agente"], st["procesado"]), ("2.1.314", None, "agente"))

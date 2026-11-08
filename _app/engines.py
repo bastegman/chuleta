@@ -14,9 +14,11 @@ import hashlib
 import itertools
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -1759,12 +1761,61 @@ def windows_path():
     return os.pathsep.join(x for x in partes if x)
 
 
+def windows_env(base=None):
+    """El entorno de `base` (os.environ si no se da) con las variables que hay AHORA en el registro (las de sistema y,
+    encima, las de usuario) y el PATH de windows_path(). Una PowerShell nueva las ve; el servidor, que arrancó antes,
+    no (07/11/2026, cuenta de empresa): el proxy y el certificado de la empresa (HTTPS_PROXY, NODE_EXTRA_CA_CERTS),
+    CLAUDE_CONFIG_DIR, CLAUDE_CODE_GIT_BASH_PATH o las de Bedrock y las pasarelas, puestas con setx o por IT después
+    de arrancar Chuleta. Las que el registro no tiene se quedan como estaban. Fuera de Windows, `base` tal cual."""
+    env = dict(os.environ if base is None else base)
+    if not _NT:
+        return env
+    try:
+        import winreg
+    except ImportError:
+        return env
+    expand_sz = getattr(winreg, "REG_EXPAND_SZ", 2)
+
+    def expand(v):  # solo %VAR%, con lo ya combinado (no $VAR, ni $$ o %% como os.path.expandvars de Windows)
+        return re.sub(r"%([^%\s]+)%", lambda m: env.get(m.group(1).upper(), m.group(0)), v)
+    for root, sub in ((winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                      (winreg.HKEY_CURRENT_USER, r"Environment")):
+        try:
+            with winreg.OpenKey(root, sub) as k:
+                i = 0
+                while True:
+                    try:
+                        name, v, typ = winreg.EnumValue(k, i)
+                    except OSError:
+                        break
+                    i += 1
+                    # USERNAME: la de sistema dice SYSTEM; el PATH lo combina windows_path()
+                    if isinstance(name, str) and name and isinstance(v, str) and \
+                            name.upper() not in ("PATH", "USERNAME"):
+                        env[name.upper()] = expand(v) if typ == expand_sz else v
+        except OSError:
+            pass
+    env["PATH"] = windows_path() or env.get("PATH", "")
+    return env
+
+
+def _version_tuple(s):
+    return tuple(int(x) for x in re.findall(r"\d+", s))
+
+
 class AgenteLocal:
     """Base de los agentes: donde esta el ejecutable, su version y una llamada de chat (system + user -> texto).
     SINGLE_CHARS y CHUNK_CHARS: contexto grande, una reunion de 3 h cabe en una llamada (los usa Summarizer)."""
     tipo = label = ""
     exe_names = ()
     win_paths = ()      # (variable de entorno, ruta relativa con comodines) de sus instaladores en Windows
+    # la copia que trae la extension de un editor (respaldo si no hay programa suelto): id de la extension y ruta del
+    # ejecutable dentro de su carpeta
+    ext_id = ""
+    ext_bin = ()
+    # carpetas de extensiones de cada editor, dentro del perfil del usuario, y su nombre para la interfaz
+    EDITORES = ((".vscode", "VS Code"), (".vscode-insiders", "VS Code Insiders"), (".cursor", "Cursor"),
+                (".windsurf", "Windsurf"), (".vscode-oss", "VSCodium"))
     MODELOS = ()        # (id, etiqueta)
     MODELO = ""
     SINGLE_CHARS = 400_000
@@ -1795,7 +1846,70 @@ class AgenteLocal:
             for p in sorted(glob.glob(os.path.join(base, rel)), reverse=True):
                 if os.path.isfile(p):
                     return p
-        return None
+        return cls.find_extension()
+
+    @classmethod
+    def _home(cls):
+        return os.environ.get("USERPROFILE") or os.path.expanduser("~")
+
+    @classmethod
+    def extension_dirs(cls):
+        """[(carpeta de extensiones, editor)]: las de cada editor en el perfil y la de VS Code portable."""
+        home = cls._home()
+        dirs = [(os.path.join(home, d, "extensions"), name) for d, name in cls.EDITORES]
+        portable = os.environ.get("VSCODE_PORTABLE")
+        if portable:
+            dirs.append((os.path.join(portable, "extensions"), "VS Code"))
+        return dirs
+
+    @classmethod
+    def find_extension(cls):
+        """La copia del programa que trae la extension del editor (07/11/2026: Bernardo usa Claude Code en VS Code con
+        la cuenta de su empresa y puede no tener el programa suelto; la extension no lo pone en el PATH). Carpeta
+        «<id>-<version>[-<plataforma>]» (p. ej. anthropic.claude-code-2.1.319-win32-x64, con el ejecutable en
+        resources\\native-binary\\claude.exe: paquete win32-x64 de Open VSX, 07/11/2026). La version mas alta de
+        todos los editores; sin las que el editor ya ha dado de baja (su fichero .obsolete). None si no hay."""
+        if not cls.ext_id or not cls.ext_bin:
+            return None
+        rx = re.compile(re.escape(cls.ext_id.lower()) + r"-(\d+(?:\.\d+)+)(?:-[a-z0-9_-]+)?$")
+        best = None
+        for d, _ in cls.extension_dirs():
+            try:
+                names = os.listdir(d)
+            except OSError:
+                continue
+            try:
+                with open(os.path.join(d, ".obsolete"), encoding="utf-8") as f:
+                    obsolete = {str(k).lower() for k, v in (json.load(f) or {}).items() if v}
+            except (OSError, ValueError, AttributeError):
+                obsolete = set()
+            for n in names:
+                m = rx.match(n.lower())
+                if not m or n.lower() in obsolete:
+                    continue
+                for rel in cls.ext_bins():
+                    p = os.path.join(d, n, *rel)
+                    if os.path.isfile(p):
+                        key = _version_tuple(m.group(1))
+                        if best is None or key > best[0]:
+                            best = (key, p)
+                        break
+        return best[1] if best else None
+
+    @classmethod
+    def ext_bins(cls):
+        """Rutas del ejecutable dentro de la carpeta de la extension, en orden."""
+        return [cls.ext_bin] if cls.ext_bin else []
+
+    @classmethod
+    def origen(cls, path):
+        """De donde sale `path`, para Ajustes y el log: «Claude Code de VS Code» si es la copia de una extension,
+        si no la etiqueta («Claude Code»)."""
+        p = os.path.normcase(os.path.abspath(str(path or "")))
+        for d, name in cls.extension_dirs():
+            if cls.ext_id and p.startswith(os.path.normcase(os.path.abspath(d)) + os.sep):
+                return f"{cls.label} de {name}"
+        return cls.label
 
     @staticmethod
     def _kill(proc):
@@ -1930,8 +2044,9 @@ class AgenteLocal:
         self.tiempos["version_s"] = round(time.time() - t0, 1)
         t1 = time.time()
         try:
-            out, _ = self.chat("Responde exactamente con la palabra OK, sin nada más.", "OK", 10, lambda **k: None,
-                               cancelled, model=model, timeout=AGENTE_CHECK_S, path=path)
+            out, self.modelo_usado = self.chat("Responde exactamente con la palabra OK, sin nada más.", "OK", 10,
+                                               lambda **k: None, cancelled, model=model, timeout=AGENTE_CHECK_S,
+                                               path=path)
         finally:
             self.tiempos["peticion_s"] = round(time.time() - t1, 1)
         if "OK" not in out.upper():
@@ -1951,6 +2066,23 @@ class ClaudeCode(AgenteLocal):
                  ("LOCALAPPDATA", os.path.join("Microsoft", "WinGet", "Packages", "Anthropic.ClaudeCode_*",
                                                "claude.exe")),  # winget sin enlace (sin modo desarrollador)
                  ("APPDATA", os.path.join("npm", "claude.cmd")))  # npm
+    ext_id = "anthropic.claude-code"  # la extension de VS Code (y Cursor, Windsurf…) trae su propia copia
+    ext_bin = ("resources", "native-binary", "claude.exe" if _NT else "claude")
+
+    @classmethod
+    def ext_bins(cls):
+        """Donde busca la propia extension su copia (extension.js 2.1.120, revision del 08/11/2026): primero
+        native-binaries/<plataforma>-<arquitectura>/ (en win32-arm64 tambien la x64), luego native-binary/."""
+        exe = cls.ext_bin[-1]
+        if _NT:
+            arm = "ARM64" in (os.environ.get("PROCESSOR_ARCHITECTURE") or "").upper()
+            plats = ["win32-arm64", "win32-x64"] if arm else ["win32-x64"]
+        else:
+            arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64"}.get(platform.machine().lower(),
+                                                                             platform.machine().lower())
+            plats = [f"{'darwin' if sys.platform == 'darwin' else 'linux'}-{arch}"]
+        return [("resources", "native-binaries", pl, exe) for pl in plats] + [cls.ext_bin]
+
     MODELOS = (("haiku", "Haiku · el más rápido"), ("sonnet", "Sonnet · equilibrado (recomendado)"),
                ("opus", "Opus · el más capaz, más lento"))
     MODELO = "sonnet"
@@ -1960,9 +2092,34 @@ class ClaudeCode(AgenteLocal):
     # «authentication required» y se decia «sin sesion iniciada»: volver a iniciar sesion no lo arregla
     RED = ("proxy", " 407", "connection error", "connection refused", "econnrefused", "econnreset", "etimedout",
            "enotfound", "getaddrinfo", "certificate", "self signed", "self-signed", "unable to get local issuer",
-           "unable to verify", "network error", "socket hang up")
+           "unable to verify", "network error", "socket hang up", "temporary network issue",
+           "check your connection", "unable to connect to api")
+    # Los textos de aqui en adelante son los de Claude Code 2.1.319 (sus cadenas, leidas en el binario sin ejecutarlo,
+    # y code.claude.com/docs/en/errors, 07/11/2026), salvo los que ya habia. Con -p salen otros que en la terminal
+    # («Failed to authenticate: OAuth session expired…» en vez de «Login expired · Please run /login»): estan los dos.
+    # Antes que la organizacion (revision del 08/11/2026): no se han podido CARGAR los ajustes que exige la empresa
+    # («Your organization requires remote managed settings to load, but they could not be loaded»; «…couldn't load
+    # your organization's settings») es la red o un momento, no que la empresa no deje
+    TRANSITORIO = ("could not be loaded", "couldn't load", "could not load", "couldn't reach", "could not reach",
+                   "timed out", "could not connect", "check your connection", "check your network")
+    # La organizacion (Team/Enterprise, o la de Console de una API key) no deja: pedir acceso a su IT. Nunca se
+    # sugiere la cuenta personal: es la reunion de su trabajo
     POLITICA = ("organization has disabled", "disabled by your organization", "not allowed by your organization",
-                "your organization does not allow", "blocked by your organization", "organization policy")
+                "your organization does not allow", "blocked by your organization", "organization policy",
+                "not allowed for this organization", "organization has been disabled", "disabled organization",
+                "allowed by your organization", "doesn't allow claude code for this account", "forceloginorguuid",
+                "administrator policy requires")
+    # sesion que no se puede renovar: caducada, revocada o con el tiempo maximo que fija la empresa
+    CADUCADA = ("login expired", "token revoked", "reached its time limit", "token has expired", "oauth token expired",
+                "session expired")
+    # la renueva otro proceso a la vez (VS Code abierto, por ejemplo): esperar, no iniciar sesion otra vez
+    RENOVANDO = ("another claude code process is refreshing", "being refreshed, often by another claude code process")
+    DISCO = ("could not refresh your login: the disk", "the disk that holds the claude code config")
+    AYUDANTE = ("apikeyhelper script is failing", "re-authenticate with your provider")
+    # el modelo elegido no esta para esta cuenta (pasarela, Bedrock, el plan o la empresa): se repite sin --model
+    MODELO_KO = ("issue with the selected model", "is not available on your", "model_not_found", "invalid model name",
+                 "model identifier is invalid", "restricts model selection", "block the default model",
+                 "is restricted by your organization's settings", "is not available with the claude")
     GIT_BASH = ("git-bash", "git bash")
 
     def _dir(self):
@@ -1991,15 +2148,58 @@ class ClaudeCode(AgenteLocal):
         os.makedirs(d, exist_ok=True)
         return d
 
+    CLAVES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+    @staticmethod
+    def _base_urls(env):
+        """ANTHROPIC_BASE_URL del entorno y del bloque env de los ajustes de Claude Code (los del usuario y el
+        managed-settings.json de la empresa en Windows): una pasarela puesta ahi y su token con setx tambien cuenta."""
+        urls = [env.get("ANTHROPIC_BASE_URL")]
+        cfg = env.get("CLAUDE_CONFIG_DIR") or os.path.join(env.get("USERPROFILE") or os.path.expanduser("~"), ".claude")
+        files = [os.path.join(cfg, "settings.json")]
+        if _NT:
+            files.append(os.path.join(env.get("ProgramFiles") or env.get("PROGRAMFILES") or r"C:\Program Files",
+                                      "ClaudeCode", "managed-settings.json"))
+        for f in files:
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    e = (json.load(fh) or {}).get("env") or {}
+                urls.append(e.get("ANTHROPIC_BASE_URL") if isinstance(e, dict) else None)
+            except (OSError, ValueError, AttributeError):
+                pass
+        return [str(u).strip() for u in urls if isinstance(u, str) and u.strip()]
+
+    @staticmethod
+    def _pasarela(env):
+        """La URL de la pasarela de la empresa (un ANTHROPIC_BASE_URL que no es la API de Anthropic), o None. Por
+        el host, como Claude Code (ni el usuario:clave@ ni el puerto lo convierten en pasarela)."""
+        import urllib.parse
+        for url in ClaudeCode._base_urls(env):
+            try:
+                host = (urllib.parse.urlsplit(url if "://" in url else "https://" + url).hostname or "").lower()
+            except ValueError:
+                host = ""
+            if host and host != "api.anthropic.com":
+                return url
+        return None
+
     @staticmethod
     def _env():
-        """Sin ANTHROPIC_API_KEY ni ANTHROPIC_AUTH_TOKEN: con -p la clave del entorno se usaria siempre, y el gasto
-        iria a la API y no a la cuenta del usuario, que es lo que prometen los textos de Ajustes. Y sin trafico no
-        esencial (07/11/2026; CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, code.claude.com/docs/en/env-vars): ni
-        actualizacion automatica, ni telemetria, ni comprobaciones de disponibilidad en estas llamadas. En una red de
-        empresa que frena o bloquea esas peticiones, cada arranque las esperaba; y el actualizador en segundo plano no
-        nace de nuestro proceso. Solo para estos procesos: la instalacion de Claude Code del usuario no cambia."""
-        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        """El entorno del usuario tal como lo veria una PowerShell nueva (windows_env: lo puesto en el registro despues
+        de arrancar Chuleta tambien cuenta), con dos cambios solo para estos procesos (la instalacion de Claude Code
+        del usuario no cambia):
+        - Sin ANTHROPIC_API_KEY ni ANTHROPIC_AUTH_TOKEN: con -p la clave del entorno se usaria siempre, y el gasto iria
+          a la API y no a la cuenta del usuario, que es lo que prometen los textos de Ajustes; con una cuenta de empresa
+          que exige su login (forceLoginOrgUUID), Claude Code ademas se niega a arrancar con ellas. Se quedan si hay una
+          pasarela de la empresa (ANTHROPIC_BASE_URL propia, 07/11/2026): ahi son la credencial de la empresa.
+        - Sin trafico no esencial (07/11/2026; CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, code.claude.com/docs/en/
+          env-vars): ni actualizacion automatica, ni telemetria, ni comprobaciones de disponibilidad. No toca lo de la
+          empresa: los ajustes que manda la organizacion (server-managed settings) no estan en esa lista y su descarga
+          solo se salta con un CLAUDE_CODE_USE_* o un ANTHROPIC_BASE_URL propio (docs/en/server-managed-settings)."""
+        env = windows_env()
+        if not ClaudeCode._pasarela(env):
+            for k in ClaudeCode.CLAVES:
+                env.pop(k, None)
         env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         return env
 
@@ -2009,15 +2209,49 @@ class ClaudeCode(AgenteLocal):
             raise EngineError(f"No encuentro {self.label} en este PC. Sigue el paso a paso de Ajustes y pulsa "
                               "«Comprobar».")
         model = model or self.MODELO
-        cmd = self.argv0(path) + ["-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
-                                  "--strict-mcp-config", "--settings", self._settings_file(), "--model", model,
-                                  self.PROMPT]
+        self.origen_ruta = self.origen(path)
+        self.aviso = None  # si el modelo elegido no estaba y se ha usado el de su Claude Code (en la respuesta de
+        # «Comprobar» y en server.log; la interfaz aun no lo pinta: Steve)
+
+        def cmd(m):
+            return self.argv0(path) + ["-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
+                                       "--strict-mcp-config", "--settings", self._settings_file()] + (
+                                           ["--model", m] if m else []) + [self.PROMPT]
         report(stage=f"Resumiendo con {self.label} ({model})…")
-        code, out, err = self.run(cmd, f"INSTRUCCIONES:\n{system}\n\n{user}", timeout=timeout or AGENTE_TIMEOUT_S,
-                                  cancelled=cancelled, cwd=self._cwd(), env=self._env())
+        stdin_text, total = f"INSTRUCCIONES:\n{system}\n\n{user}", timeout or AGENTE_TIMEOUT_S
+        t0 = time.time()
+        code, out, err = self.run(cmd(model), stdin_text, timeout=total, cancelled=cancelled, cwd=self._cwd(),
+                                  env=self._env())
+        fallo = self._texto_error(out, err)
+        if fallo is not None and any(k in fallo.lower() for k in self.MODELO_KO):
+            # el modelo elegido no esta para esta cuenta (lo restringe la empresa, o una pasarela o Bedrock lo llaman
+            # de otra forma): otra vez sin --model, con el de su Claude Code, que es el que fija su empresa
+            log = type(self).log  # por la clase: desde la instancia, la funcion log del servidor recibiria self
+            quedan = total - (time.time() - t0)
+            if cancelled():
+                raise Cancelled()
+            if quedan >= 5:  # con lo que quede del tope, no mas
+                if log:
+                    log(f"   agente: {self.label} no puede usar «{model}» con esta cuenta "
+                        f"({' '.join(fallo.split())[:120]}); se repite con su modelo predeterminado")
+                report(stage=f"Resumiendo con {self.label} (su modelo predeterminado)…")
+                code2, out2, err2 = self.run(cmd(None), stdin_text, timeout=quedan, cancelled=cancelled,
+                                             cwd=self._cwd(), env=self._env())
+                fallo2 = self._texto_error(out2, err2)
+                if fallo2 is None:
+                    text, used = self._parse(code2, out2, err2, None)
+                    self.aviso = (f"El modelo elegido ({model}) no está disponible con esta cuenta: se ha usado el "
+                                  f"predeterminado de tu {self.label} ({used}).")
+                    return text, used
+                if log:
+                    log(f"   agente: tampoco con su modelo predeterminado: {' '.join(fallo2.split())[:160]}")
+                if not any(k in fallo2.lower() for k in self.MODELO_KO):  # otro fallo: ese es el que cuenta
+                    return self._parse(code2, out2, err2, None)
         return self._parse(code, out, err, model)
 
-    def _parse(self, code, out, err, model):
+    @staticmethod
+    def _resultado(out):
+        """(salida sin espacios, el dict del resultado o None)."""
         s, d = out.strip(), None
         if s.startswith(("{", "[")):
             try:
@@ -2027,26 +2261,73 @@ class ClaudeCode(AgenteLocal):
             if isinstance(j, list):  # «verbose» del usuario: la salida son todos los mensajes; el resultado va al final
                 j = next((x for x in reversed(j) if isinstance(x, dict) and x.get("type") == "result"), None)
             d = j if isinstance(j, dict) else None
+        return s, d
+
+    def _texto_error(self, out, err):
+        """El texto del fallo (stderr o el del resultado; nunca la salida entera, que lleva la reunion), o None si la
+        salida es un resultado bueno."""
+        s, d = self._resultado(out)
         if d is None:
-            raise EngineError(self._why(code, err.strip() or ("" if s.startswith(("{", "[")) else s)))
+            return err.strip() or ("" if s.startswith(("{", "[")) else s)
         if d.get("is_error") or d.get("type") != "result":
-            raise EngineError(self._why(code, str(d.get("result") or d.get("error") or err or "").strip()))
+            return str(d.get("result") or d.get("error") or err or "").strip()
+        return None
+
+    def _parse(self, code, out, err, model):
+        fallo = self._texto_error(out, err)
+        if fallo is not None:
+            raise EngineError(self._why(code, fallo))
+        d = self._resultado(out)[1]
         text = (d.get("result") or "").strip()
         if not text:
             raise EngineError(f"{self.label} no ha devuelto texto")
-        used = next(iter((d.get("modelUsage") or {}).keys()), None) or model
+        used = next(iter((d.get("modelUsage") or {}).keys()), None) or model or "predeterminado"
         return text, used
+
+    def _de_editor(self):
+        """La copia de una extension (VS Code…), o None: entonces no hay `claude` en PowerShell y la sesion se inicia
+        en el panel de Claude Code del editor (comparten la sesion: %USERPROFILE%\\.claude\\.credentials.json)."""
+        o = getattr(self, "origen_ruta", None) or ""
+        return o[len(self.label) + 4:] if o.startswith(self.label + " de ") else None
 
     def _why(self, code, text):
         """Mensaje para Ajustes. text: solo stderr o el texto del resultado (nunca la salida entera, que lleva la
         reunion y podria contener cualquier palabra)."""
         low = text.lower()
         detalle = " ".join(text.split())[:160]
+        # lo que dice Claude Code antes del « · » con lo que hay que hacer (en ingles y para su terminal; sin
+        # «Please run /login», que explicar.py lee como «sin sesion» y cambiaria la frase entera)
+        corto = " ".join(text.split("·")[0].split())[:120]
+        editor = self._de_editor()
+        entrar = (f"abre {editor} y, en el panel de {self.label}, vuelve a iniciar sesión con tu cuenta" if editor else
+                  "en PowerShell escribe claude y luego /login, entra con tu cuenta")
         # «vuelve a probar» y no «pulsa Comprobar»: salen igual en Ajustes («Comprobar») y en el asistente («Probar»);
         # explicar.py les pone su boton (Abrir PowerShell / Probar otra vez)
+        if any(k in low for k in self.RENOVANDO):
+            return (f"{self.label} está renovando tu sesión en otra ventana (por ejemplo, en VS Code): espera un "
+                    "minuto y vuelve a probar.")
+        if any(k in low for k in self.DISCO):
+            return (f"{self.label} no puede renovar tu sesión porque el disco donde guarda su configuración está lleno "
+                    "(iniciar sesión otra vez no lo arregla): libera espacio y vuelve a probar.")
+        if any(k in low for k in self.MODELO_KO):
+            return (f"{self.label} no puede usar el modelo elegido con esta cuenta ({corto}): elige otro modelo en "
+                    "Ajustes o pide a tu IT que lo active, y vuelve a probar.")
+        if any(k in low for k in self.TRANSITORIO):
+            return (f"{self.label} no puede conectar con Anthropic desde esta red ({detalle}). En la red de una "
+                    "empresa suele ser el proxy: prueba con otra red o pide a tu IT que permita api.anthropic.com y "
+                    "claude.ai, y vuelve a probar.")
         if any(k in low for k in self.POLITICA):
-            return (f"Tu organización no deja usar {self.label} con esta cuenta ({detalle}): entra con tu cuenta "
-                    "personal (en PowerShell escribe claude y luego /login) o pide acceso a tu IT, y vuelve a probar.")
+            if "api key authentication" in low:  # la organizacion solo admite su login (claude.ai, con SSO)
+                return (f"Tu organización no deja usar {self.label} con esta cuenta ({corto}): no admite API keys; "
+                        f"{entrar} de Claude (la de la empresa) y vuelve a probar.")
+            return (f"Tu organización no deja usar {self.label} con esta cuenta ({detalle}): pide acceso a quien "
+                    "gestiona Claude en tu empresa (IT) y vuelve a probar.")
+        if any(k in low for k in self.CADUCADA):
+            return (f"La sesión de {self.label} ha caducado ({corto}): {entrar} (la de tu empresa, si es la que "
+                    "usas) y vuelve a probar.")
+        if any(k in low for k in self.AYUDANTE):
+            return (f"El programa de tu empresa que da las credenciales a {self.label} (apiKeyHelper) está fallando "
+                    f"({corto}): vuelve a identificarte como te indique tu IT y vuelve a probar.")
         if any(k in low for k in self.RED):
             return (f"{self.label} no puede conectar con Anthropic desde esta red ({detalle}). En la red de una "
                     "empresa suele ser el proxy: prueba con otra red o pide a tu IT que permita api.anthropic.com y "
@@ -2055,8 +2336,13 @@ class ClaudeCode(AgenteLocal):
             return (f"{self.label} necesita Git para Windows (Git Bash) en este PC ({detalle}): en PowerShell escribe "
                     "winget install --id Git.Git -e (o descárgalo de git-scm.com) y vuelve a probar.")
         if any(k in low for k in self.SESION):
-            return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
-                    "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")
+            if editor:  # sin «sin sesion iniciada»: explicar.py la cambiaria por la de PowerShell, que aqui no vale
+                return (f"{self.label} de {editor} está instalado pero no tiene la sesión abierta: abre {editor} y, en "
+                        f"el panel de {self.label}, inicia sesión con tu cuenta (la de tu empresa, si es la que usas); "
+                        "luego vuelve a probar.")
+            return (f"{self.label} está instalado pero sin sesión iniciada: abre PowerShell, escribe claude y entra "
+                    "con tu cuenta en el navegador que se abre (con el inicio de sesión de tu empresa, si es la que "
+                    "usas); luego vuelve a probar.")
         return f"{self.label} ha fallado" + (f" (código {code})" if code else "") + (f": {text[:200]}" if text else "")
 
 

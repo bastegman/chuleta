@@ -65,8 +65,11 @@ def explicar(err, proveedor=None):
                         "mientras tanto se sigue transcribiendo.")
         return out
     if "sin sesión iniciada" in low or "please run /login" in low or "not logged in" in low:
-        out["frase"] = ("Claude Code no tiene la sesión iniciada: en PowerShell escribe claude, entra con tu cuenta y "
-                        "vuelve a probar.")
+        # el inicio de sesión es el de Claude Code, en el navegador (con el SSO de la empresa si es su cuenta): la app
+        # no inicia sesión por nadie (claude-empresa, 08/11/2026, msg 1261)
+        out["frase"] = ("Claude Code no tiene la sesión iniciada: pulsa «Abrir PowerShell», escribe claude y entra con "
+                        "tu cuenta en el navegador que se abre (con el inicio de sesión de tu empresa, si es la que "
+                        "usas); luego vuelve a probar.")
         out["accion"] = _accion("abrir_powershell")
         return out
     if "no encuentro claude code" in low:
