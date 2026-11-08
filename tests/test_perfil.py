@@ -765,7 +765,8 @@ class RutasPerfilTests(TempTree):
         self.assertEqual(set(r), {"perfil", "resuelto", "avisos"})
         self.assertEqual(r["avisos"], [])
         self.assertEqual(r["perfil"]["language"], "es")
-        self.assertEqual(r["resuelto"]["origen"]["folder"], "ultimo")
+        # sin tema, sin perfil y sin ultima carpeta: la raiz (rec_folder_origin; antes «ultimo» con rec_folder vacio)
+        self.assertEqual(r["resuelto"]["origen"]["folder"], "raiz")
         r = self.call("/api/perfil", {"folder": "Alfa/Reuniones", "context": "ctx", "language": "es-pt"})
         self.assertEqual((r["perfil"]["folder"], r["perfil"]["context"], r["perfil"]["language"]),
                          ("Alfa/Reuniones", "ctx", "es-pt"))

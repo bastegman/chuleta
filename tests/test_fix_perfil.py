@@ -1231,7 +1231,9 @@ class TextosTests(unittest.TestCase):
         """P2-33: el diálogo Grabar no dice que Ctrl+Alt+R use «esta misma configuración»."""
         app = read("app.js")
         self.assertNotIn("con esta misma configuración", app)
-        self.assertIn("con el perfil de reunión por defecto (carpeta, idioma, tema y contexto)", app)
+        # 07/11/2026 (carpeta por reunion): la carpeta es la del proyecto, no la del perfil (server.rec_folder_origin)
+        self.assertIn("con el perfil de reunión por defecto (idioma, tema y contexto; se guarda en la carpeta de su "
+                      "proyecto, en una carpeta para esa reunión)", app)
 
     def test_la_carpeta_de_la_app_no_se_llama_audios(self):
         """P2-34: la interfaz nombra la carpeta de la app con APP_NAME, no «Audios»."""

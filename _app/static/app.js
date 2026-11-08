@@ -193,6 +193,12 @@ function indexTree(tree) {
 }
 const allAudios = () => [...S.audios.values()];
 const audiosUnder = f => { const out = []; (function w(n) { out.push(...n.audios); n.folders.forEach(w); })(f); return out; };
+/* la carpeta de una reunión (una carpeta por reunión: server.scan la marca con por_reunion) se ve como la reunión */
+const subFolders = f => f.folders.filter(x => !x.por_reunion);
+function ownAudios(f) {
+  return [...f.audios, ...f.folders.filter(x => x.por_reunion).flatMap(x => x.audios)]
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.name.localeCompare(b.name));
+}
 const isActive = j => j.status === 'queued' || j.status === 'running';
 const jobFor = path => S.jobs.find(j => j.path === path && isActive(j) && j.kind !== 'summary');  // los resúmenes van aparte
 const lastJobFor = path => { for (let i = S.jobs.length - 1; i >= 0; i--) if (S.jobs[i].path === path) return S.jobs[i]; };
@@ -273,7 +279,7 @@ function liveStatus(a, j) {
 function liveHeroSig(a, j, sel, mine, muted) {
   const p = S.presetsById[sel] || {}, falta = !j && p.cached === false ? (S.modelos?.[p.model]?.downloading ? 'd' : 'f') : '';
   return (j ? j.id + j.preset : 'none') + sel + mine + muted + (S.config.procesado || '') + (S.lhModelos ? 'm' : '')
-    + (typeof prepEstado === 'function' && prepEstado(j) ? 'p' : '') + falta;
+    + (typeof prepEstado === 'function' && prepEstado(j) ? 'p' : '') + falta + (typeof destinoSig === 'function' ? destinoSig(a) : '');
 }
 function renderLiveHero(a) {
   const el = $('#lHero');
@@ -296,7 +302,7 @@ function renderLiveHero(a) {
         : `<button class="btn primary" data-act="live" data-path="${esc(a.path)}">${I.spark}Transcribir en directo</button>`}
     </div>
     ${mine ? `<div class="lh-meters">${meterHtml('mic', I.mic + 'Micro')}${meterHtml('sys', I.volume + 'Ordenador')}</div>` : ''}
-    ${crumbs(a.folder)}
+    ${typeof destinoHtml === 'function' ? destinoHtml(a) : crumbs(a.folder)}
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
     <div id="directoBar"></div>
@@ -439,7 +445,7 @@ async function openRec() {
   openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
     <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
     <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (carpeta, idioma, tema y contexto) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
+      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (idioma, tema y contexto; se guarda en la carpeta de su proyecto, en una carpeta para esa reunión) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
       : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
     <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
     <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
@@ -518,9 +524,12 @@ async function openRec() {
       const v = vocabSel(), fit = $('#rVocabFit', d);
       if (fit) fit.innerHTML = vocabFit(v);
       if (initial && S.route.kind === 'f') return;  // se abrio desde una carpeta: esa manda
-      if (pf.folder != null) return;  // carpeta fija en el perfil: el tema no la cambia
-      // la ultima carpeta donde grabaste reuniones de ese proyecto; si aun no hay, se queda la elegida
-      const want = v ? S.config.project_folders?.[v.project] : (initial ? S.config.rec_folder || '' : undefined);
+      // la misma regla que Ctrl+Alt+R (server.rec_folder_origin): con tema, la carpeta principal de su workstream o de
+      // su proyecto (asignada o la del proyecto); sin tema, la fija del perfil o la última
+      const fija = pf.folder != null && S.folders.has(pf.folder) ? pf.folder : null;
+      const ws = S.config.workstream_folders?.[v?.id];  // la de su workstream, si sigue existiendo (como el servidor)
+      const want = v ? (ws != null && S.folders.has(ws) ? ws : S.config.project_folders?.[v.project])
+        : (initial ? fija ?? (S.config.rec_folder || '') : undefined);
       if (want != null && [...fsel.options].some(o => o.value === want)) fsel.value = fsel.dataset.prev = want;
     };
     fsel.onchange = async () => {
@@ -643,12 +652,12 @@ function renderTree() {
     html.push(`<div class="tsec live"><i class="recdot"></i> En directo</div>`);
     html.push(lives.map(a => audioRow(a, 0)).join(''));
   }
-  const loose = root.audios.filter(a => matchA(a, q) && !isLive(a));
+  const loose = ownAudios(root).filter(a => matchA(a, q) && !isLive(a));
   if (loose.length || !q) {
     html.push(`<div class="tsec" data-drop="">Sin clasificar ${loose.length ? `· ${loose.length}` : ''}</div>`);
     html.push(loose.length ? loose.map(a => audioRow(a, 0)).join('') : '<div class="trow muted" data-drop="" style="padding-left:16px;cursor:default">Nada suelto</div>');
   }
-  const folders = root.folders.map(f => folderNode(f, 0, q)).join('');
+  const folders = subFolders(root).map(f => folderNode(f, 0, q)).join('');
   if (folders) html.push('<div class="tsec">Carpetas</div>' + folders);
   root.docs.filter(d => matchD(d, q)).forEach(d => html.push(docRow(d, 0)));
   if (!html.length) html.push('<div class="empty">Sin resultados</div>');
@@ -663,8 +672,8 @@ function folderNode(f, depth, q) {
   const self = !q || fold(f.name).includes(q);
   const cq = self ? '' : q;
   const kids = [
-    ...f.folders.map(c => folderNode(c, depth + 1, cq)),
-    ...f.audios.filter(a => matchA(a, cq)).map(a => audioRow(a, depth + 1)),
+    ...subFolders(f).map(c => folderNode(c, depth + 1, cq)),
+    ...ownAudios(f).filter(a => matchA(a, cq)).map(a => audioRow(a, depth + 1)),
     ...f.docs.filter(d => matchD(d, cq)).map(d => docRow(d, depth + 1)),
   ].filter(Boolean);
   if (q && !self && !kids.length) return '';
@@ -746,11 +755,17 @@ document.addEventListener('drop', e => {
 
 async function moveItem(path, folder, name) {
   const item = S.audios.get(path) || S.docs.get(path);
-  if (!name && item && item.parent && item.parent.path === folder) return;
+  const home = item?.parent?.por_reunion ? item.parent.parent?.path : item?.parent?.path;  // su carpeta: ya es ella
+  if (!name && item && item.parent && (item.parent.path === folder || home === folder)) return;
   const wasPlaying = S.playing === path, t = audio.currentTime, playingNow = !audio.paused;
   if (wasPlaying) { audio.pause(); audio.removeAttribute('src'); audio.load(); }  // suelta el archivo para poder moverlo
   try {
     const r = await api('/api/move', { path, folder, name: name || undefined });
+    if (r.pendiente) {  // se está grabando o procesando: se mueve sola al terminar (directo.js)
+      if (wasPlaying) { const a = S.audios.get(path); S.playing = null; if (a) loadAudio(a, t, playingNow); }
+      toast(`Se moverá a <b>${esc(r.pendiente.display)}</b> cuando termine todo`);
+      return pollJobs(true);
+    }
     toast(name ? 'Renombrado' : `Movido a <b>${esc(folderName(folder))}</b>`);
     await refreshTree(true);
     if (wasPlaying) { const a = S.audios.get(r.path); S.playing = null; if (a) loadAudio(a, t, playingNow); }
@@ -766,6 +781,7 @@ async function moveItem(path, folder, name) {
 /* ---------------------------------------------------------------- componentes */
 function crumbs(path, last) {
   const parts = path ? path.split('/') : [];
+  if (S.folders.get(path)?.por_reunion) parts.pop();  // la carpeta de la reunión: ya es la reunión
   const out = [`<a href="#/">${esc(APP_NAME)}</a>`];
   parts.forEach((p, i) => out.push(`<span class="sep">›</span><a href="${href('f', parts.slice(0, i + 1).join('/'))}">${esc(nodeName(parts.slice(0, i + 1).join('/')))}</a>`));
   if (last) out.push(`<span class="sep">›</span><span>${esc(last)}</span>`);
@@ -929,7 +945,7 @@ function viewHome() {
   const secs = sum(all, estDuration);
   const recent = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.mtime - a.mtime).slice(0, 8);
   const pct = all.length ? Math.round(100 * done / all.length) : 0;
-  const lives = liveAudios(), loose = t.audios.filter(a => !isLive(a));
+  const lives = liveAudios(), loose = ownAudios(t).filter(a => !isLive(a));
   main.innerHTML = `<div class="page">
     ${lives.map(liveBanner).join('')}
     ${typeof avisoProbarHtml === 'function' ? avisoProbarHtml() : ''}
@@ -946,9 +962,9 @@ function viewHome() {
     </div>
     ${loose.length ? `<h2>Sin clasificar <span class="count">${loose.length}</span><span class="muted" style="font-weight:400;font-size:12.5px">· arrástralos a una carpeta de la izquierda</span></h2>${alist(loose)}` : ''}
     ${pending.length ? `<h2>Pendientes de transcribir <span class="count">${pending.length}</span></h2>${txBox(pending, 'Transcribir todos los pendientes', { resume: true })}<div style="height:12px"></div>${alist(pending, { folder: true })}` : ''}
-    <h2>Carpetas <span class="count">${t.folders.length}</span>
+    <h2>Carpetas <span class="count">${subFolders(t).length}</span>
       <button class="btn sm" data-act="new-folder" data-path="" style="margin-left:auto">${I.plus}Nueva carpeta</button></h2>
-    <div class="fgrid">${t.folders.map(fcard).join('')}</div>
+    <div class="fgrid">${subFolders(t).map(fcard).join('')}</div>
     <h2>Recientes</h2>${alist(recent, { folder: true })}
   </div>`;
 }
@@ -969,8 +985,8 @@ function viewFolder(f) {
     </div>
     ${f.linked ? `<div class="help">${I.link}Carpeta vinculada: <code>${esc(f.linked)}</code>${f.missing ? ' · <span class="warn-txt">ahora no se encuentra (¿disco o OneDrive desconectado?)</span>' : ''}. «Renombrar» solo cambia cómo se llama en ${esc(APP_NAME)}.</div>` : ''}
     ${pending.length ? `<h2>Pendientes <span class="count">${pending.length}</span></h2>${txBox(pending, pending.length === 1 ? 'Transcribir el pendiente' : `Transcribir los ${pending.length} pendientes`, { resume: true })}` : ''}
-    ${f.folders.length ? `<h2>Carpetas <span class="count">${f.folders.length}</span></h2><div class="fgrid">${f.folders.map(fcard).join('')}</div>` : ''}
-    ${f.audios.length || !f.folders.length ? `<h2>Grabaciones <span class="count">${f.audios.length}</span></h2>${alist(f.audios)}` : ''}
+    ${subFolders(f).length ? `<h2>Carpetas <span class="count">${subFolders(f).length}</span></h2><div class="fgrid">${subFolders(f).map(fcard).join('')}</div>` : ''}
+    ${ownAudios(f).length || !subFolders(f).length ? `<h2>Grabaciones <span class="count">${ownAudios(f).length}</span></h2>${alist(ownAudios(f))}` : ''}
     ${f.docs.length ? `<h2>Documentos <span class="count">${f.docs.length}</span></h2><div class="related">${f.docs.map(d => `<a href="${href('d', d.path)}">${I.doc}${esc(nfc(d.name))}</a>`).join('')}</div>` : ''}
   </div>`;
 }
@@ -1009,7 +1025,7 @@ function renderAudioHead(a, force) {
   if (!force && el.contains(ae) && (ae.isContentEditable || /INPUT|SELECT/.test(ae.tagName))) return;
   const st = statusOf(a), has = a.txt || a.srt;
   const docs = (a.parent?.docs || []);
-  el.innerHTML = `${crumbs(a.folder)}
+  el.innerHTML = `${crumbs(a.folder)}${typeof destinoPendienteHtml === 'function' ? destinoPendienteHtml(a) : ''}
     ${titleRowHtml(a)}
     ${propsHtml(a)}
     <div class="actions">
@@ -1784,7 +1800,11 @@ let jobsTimer = null;
 async function pollJobs(now) {
   clearTimeout(jobsTimer);
   if (S.off) return;
-  try { onJobs((await api('/api/jobs')).jobs); } catch { /* servidor reiniciandose */ }
+  try {
+    const r = await api('/api/jobs');
+    onJobs(r.jobs);
+    if (typeof onMovimientos === 'function') onMovimientos(r.movimientos);  // cambiar la carpeta en pleno directo
+  } catch { /* servidor reiniciandose */ }
   const active = S.jobs.some(isActive);
   jobsTimer = setTimeout(pollJobs, active ? 1000 : 4000);
 }
@@ -1905,7 +1925,7 @@ function ask(title, html, ok = 'Aceptar') {
 function flatFolders() {
   const out = [];
   if (!S.tree) return out;  // aún sin árbol (p. ej. «Reuniones» pulsado al arrancar): nada, no un TypeError
-  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); n.folders.forEach(f => w(f, d + 1)); })(S.tree, 0);
+  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); subFolders(n).forEach(f => w(f, d + 1)); })(S.tree, 0);
   return out;
 }
 /* vincular una carpeta de fuera de Audios (p. ej. la del proyecto): selector de carpetas de Windows */
@@ -1940,7 +1960,7 @@ function openMove(path) {
   if (!item) return;
   const isAudio = S.audios.has(path);
   const stem = nfc(isAudio ? item.stem : item.name.replace(/\.[^.]+$/, ''));
-  let dest = item.parent ? item.parent.path : '';
+  let dest = item.parent ? (item.parent.por_reunion ? item.parent.parent?.path ?? '' : item.parent.path) : '';
   const list = () => flatFolders().map(f => `<div data-f="${esc(f.path)}" class="${f.path === dest ? 'on' : ''}" style="padding-left:${10 + f.depth * 16}px">${f.depth ? I.folder : I.home}${esc(f.name)}</div>`).join('');
   openModal(`<h3>Mover / renombrar</h3>
     <label>Nombre</label><input class="input" id="mvName" value="${esc(stem)}" autofocus>

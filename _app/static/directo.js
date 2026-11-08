@@ -338,3 +338,163 @@ function collectDirectoSettings(d) {
   }
   return out;
 }
+
+/* ---------------------------------------------------------------- carpeta en pleno directo (msg 1198) */
+/* «Se guarda en … · Cambiar» en la cabecera del directo. La grabación sigue donde empezó; lo elegido se ve como «Se
+   moverá a … al terminar · Deshacer» y, cuando ya no queda nada en marcha (directo, repaso final, voces y resumen), el
+   servidor mueve la reunión entera (POST /api/reunion/destino, App._aplicar_movimientos). Lo pendiente y lo hecho
+   llegan con /api/jobs (movimientos); al moverse, la página pasa sola a la ruta nueva. */
+S.movs = { pendientes: {}, hechos: [] };
+S.movsVistos = new Set();
+S.movsDesde = Date.now() / 1000;
+
+(function destinoCss() {
+  const st = document.createElement('style');
+  st.id = 'destinoCss';
+  st.textContent = `
+.dest-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 10px 0 2px; font-size: 13px; color: var(--muted); }
+.dest-line svg { width: 16px; height: 16px; flex: none; }
+.dest-line code { font: 12.5px var(--mono); color: var(--ink); background: none; padding: 0; word-break: break-all; }
+.dest-line.pend { background: var(--accent-soft); border-radius: 8px; padding: 6px 10px; color: var(--ink); }
+.dest-line.pend code { color: var(--accent); }
+.dest-line .dest-sub, .dest-line .dest-err { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.dest-line .dest-err { color: var(--err); }
+.dest-pop { position: fixed; z-index: 60; min-width: 300px; max-width: 440px; max-height: 70vh; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.dest-pop .dp-t { font-weight: 600; font-size: 13px; padding: 4px 8px 6px; color: var(--ink); }
+.dest-pop .dp-it { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 8px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; font-size: 13.5px; cursor: pointer; }
+.dest-pop .dp-it:hover, .dest-pop .dp-it.on { background: var(--accent-soft); }
+.dest-pop .dp-it svg { width: 16px; height: 16px; flex: none; }
+.dest-pop .dp-it span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dest-pop .dp-it small { color: var(--muted); font-size: 12px; }
+.dest-pop .dp-n { font-size: 12px; color: var(--muted); padding: 8px 8px 2px; border-top: 1px solid var(--line); margin-top: 6px; }`;
+  document.head.appendChild(st);
+})();
+
+/* \Proyecto Alfa\2026-11-07 Comité\ (las vinculadas, con su nombre) */
+function destinoRel(rel) {
+  const parts = rel ? rel.split('/') : [];
+  return '\\' + parts.map((_, i) => nodeName(parts.slice(0, i + 1).join('/')) + '\\').join('');
+}
+/* la carpeta principal donde está ahora: la que contiene su carpeta (una carpeta por reunión) o la suya */
+function destinoActual(a) {
+  const f = S.folders.get(a.folder);  // la de la reunión (la creó la app, aunque tenga más cosas): la que la contiene
+  return f && (f.mia || f.por_reunion) ? (f.parent ? f.parent.path : '') : a.folder;
+}
+/* lo que obliga a repintar la cabecera del directo (liveHeroSig) */
+function destinoSig(a) {
+  const p = S.movs.pendientes[a.path];
+  return p ? `|${p.destino}|${p.error || ''}` : '';
+}
+function destinoPendienteHtml(a) {
+  const p = S.movs.pendientes[a.path];
+  if (!p) return '';
+  return `<div class="dest-line pend" data-dest="${esc(a.path)}">${I.folder}<span>Se moverá a</span><code>${esc(p.display)}</code>`
+    + `<span>al terminar</span><button class="btn ghost sm" type="button" data-dest-act="deshacer" data-path="${esc(a.path)}">Deshacer</button>`
+    + (p.error ? `<div class="dest-err">No se ha podido mover todavía: ${esc(p.error)} Se sigue intentando.</div>`
+      : '<div class="dest-sub">Audio, texto, notas, resumen y voces: la reunión entera, cuando acabe todo.</div>') + '</div>';
+}
+function destinoHtml(a) {
+  return destinoPendienteHtml(a) || `<div class="dest-line" data-dest="${esc(a.path)}">${I.folder}<span>Se guarda en</span>`
+    + `<code>${esc(destinoRel(a.folder))}</code><button class="btn ghost sm" type="button" data-dest-act="cambiar" data-path="${esc(a.path)}">Cambiar</button></div>`;
+}
+/* a dónde se puede mandar: la de ahora, la carpeta principal de cada proyecto y la de cada workstream con la suya */
+function destinoOpciones(a) {
+  const cur = destinoActual(a), pend = S.movs.pendientes[a.path];
+  const out = [], seen = new Set();
+  const add = (folder, label) => {
+    if (folder == null || seen.has(folder) || !S.folders.has(folder) || S.folders.get(folder).por_reunion) return;
+    seen.add(folder);
+    out.push({ folder, label });
+  };
+  add(cur, cur ? pathLabel(cur) : `${APP_NAME} (raíz)`);
+  const pf = S.config.project_folders || {};
+  Object.keys(pf).sort((x, y) => x.localeCompare(y)).forEach(p => add(pf[p], p));
+  Object.entries(S.config.workstream_folders || {}).forEach(([vid, f]) => {
+    const v = (S.vocab || []).find(x => x.id === vid);
+    if (v) add(f, `${v.project} › ${v.name}`);
+  });
+  return { out, cur, sel: pend ? pend.folder : cur };
+}
+function closeDestino() { $$('.dest-pop').forEach(p => p.remove()); }
+function openDestino(btn, path) {
+  closeDestino();
+  const a = S.audios.get(path);
+  if (!a) return;
+  const { out, cur, sel } = destinoOpciones(a);
+  const pop = document.createElement('div');
+  pop.className = 'dest-pop';
+  pop.dataset.path = path;
+  pop.innerHTML = '<div class="dp-t">Guardar esta reunión en</div>'
+    + out.map(o => `<button class="dp-it${o.folder === sel ? ' on' : ''}" type="button" data-dest-folder="${esc(o.folder)}" title="${esc(destinoRel(o.folder))}">`
+      + `${o.folder === sel ? I.check : I.folder}<span>${esc(nfc(o.label))}</span>${o.folder === cur ? '<small>ahora</small>' : ''}</button>`).join('')
+    + `<button class="dp-it" type="button" data-dest-otra="1">${I.ext}<span>Otra carpeta…</span><small>selector de Windows</small></button>`
+    + '<div class="dp-n">La grabación sigue sin cortes. Al terminar la transcripción y el resumen, se mueve sola.</div>';
+  document.body.append(pop);
+  const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+  pop.style.top = (r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+}
+async function destinoElegir(path, body) {
+  closeDestino();
+  try {
+    const r = await api('/api/reunion/destino', { path, ...body });
+    if (r.pendiente) S.movs.pendientes[path] = r.pendiente; else delete S.movs.pendientes[path];
+    if (r.movida || r.path !== path) await destinoSeguir(path, r.path);  // movida ya (el aviso llega con /api/jobs)
+    else if (r.pendiente) toast(`Se moverá a <b>${esc(r.pendiente.display)}</b> cuando termine todo`);
+    else if (body.folder === null) toast('Se queda donde está');
+    refreshView();
+    pollJobs(true);
+  } catch (err) { toast(esc(err.message), 'err'); }
+}
+async function destinoOtra(path) {
+  closeDestino();
+  toast('📂 Elige la carpeta en la ventana de Windows que se acaba de abrir…');
+  let abs;
+  try { abs = (await api('/api/link/pick', { title: 'Carpeta donde guardar esta reunión' })).path; }
+  catch (err) { abs = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta:`); }
+  if (!abs) return;
+  await destinoElegir(path, { folder_abs: abs });
+  try { setConfig(await api('/api/config')); await refreshTree(true); } catch { /* sigue: la elegida ya está apuntada */ }
+}
+/* la página (y lo que se esté escuchando) sigue a la reunión movida */
+async function destinoSeguir(old, nuevo) {
+  if (!nuevo || old === nuevo) return;
+  const pos = localStorage.getItem('pos:' + old);
+  if (pos) { localStorage.setItem('pos:' + nuevo, pos); localStorage.removeItem('pos:' + old); }
+  await refreshTree(true);
+  if (S.playing === old) S.playing = nuevo;
+  if ((S.route.kind === 'a') && S.route.path === old) go('a', nuevo, S.route.params?.toString() ? Object.fromEntries(S.route.params) : null, true);
+}
+/* /api/jobs → movimientos: {pendientes: {ruta: {folder, destino, display, error}}, hechos: [{de, a, carpeta, display,
+   error, at}]}. Cada hecho se avisa una vez («Movida a … · Abrir carpeta») y la página la sigue. */
+function onMovimientos(m) {
+  if (!m) return;
+  const antes = JSON.stringify(S.movs.pendientes);
+  S.movs = { pendientes: m.pendientes || {}, hechos: m.hechos || [] };
+  let cambio = antes !== JSON.stringify(S.movs.pendientes);
+  for (const h of S.movs.hechos) {
+    const k = h.de + '|' + h.at;
+    if (S.movsVistos.has(k)) continue;
+    S.movsVistos.add(k);
+    cambio = true;
+    const nuevo = h.at >= S.movsDesde - 5;  // de antes de abrir esta ventana: se sigue, sin aviso
+    if (h.error) { if (nuevo) toast(esc(h.error), 'err'); continue; }
+    destinoSeguir(h.de, h.a);
+    if (nuevo) toast(`${I.check} Movida a <b>${esc(h.display)}</b> · <u>Abrir carpeta</u>`, '',
+      () => api('/api/reveal', { path: h.carpeta }).catch(err => toast(esc(err.message), 'err')));
+  }
+  if (cambio) refreshView();
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-dest-act], [data-dest-folder], [data-dest-otra]');
+  if (!b) { if (!e.target.closest('.dest-pop')) closeDestino(); return; }
+  const path = b.dataset.path || b.closest('.dest-pop')?.dataset.path;
+  if (b.dataset.destAct === 'cambiar') {
+    if ($('.dest-pop') && $('.dest-pop').dataset.path === path) return closeDestino();
+    return openDestino(b, path);
+  }
+  if (b.dataset.destAct === 'deshacer') return destinoElegir(path, { folder: null });
+  if (b.dataset.destFolder !== undefined) return destinoElegir(path, { folder: b.dataset.destFolder });
+  if (b.dataset.destOtra) return destinoOtra(path);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDestino(); });
