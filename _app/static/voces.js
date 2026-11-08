@@ -76,6 +76,13 @@ function spkPickBody(a, h, i, target, creado) {
   return i.persona && !i.usuario ? ['/api/voces/fusionar', { id_a: target, id_b: i.persona }] : ['/api/voces/reasignar', { path: a.path, h, persona: target, creado }];
 }
 
+// «Es el mismo que…» (msg 1242): la app partió una voz en dos hablantes de esta reunión
+function spkJoinBody(a, h, con, creado) { return { path: a.path, h, con, creado }; }
+function spkJoinOptions(hablantes, h, label) {
+  return Object.entries(hablantes || {}).filter(([k]) => k !== h && k !== 'varios')
+    .sort((x, y) => (y[1].segundos || 0) - (x[1].segundos || 0)).map(([k, x]) => ({ h: k, text: `${label(k)} · ${fmtSecs(x.segundos || 0)}` }));
+}
+
 function closeSpkPop() { $$('.spk-pop').forEach(p => p.remove()); }
 function openSpeakerPop(h, anchor) {
   closePop(); closeSpkPop();
@@ -100,6 +107,7 @@ function openSpeakerPop(h, anchor) {
     <div class="row sp-actions">
       <button class="btn sm${i.usuario && !i.provisional ? ' on' : ''}" data-sa="me" title="Este hablante soy yo${s.usuario ? '' : ' (se crea tu persona para reconocerte también en reuniones presenciales)'}">${i.usuario && !i.provisional ? '✓ Soy yo' : 'Soy yo'}</button>
       <select id="spMerge" class="sm" title="${merge ? 'Si esta persona y otra ya guardada son la misma' : 'Este hablante es una persona ya guardada'}"><option value="">${merge ? 'Fusionar con…' : 'Es…'}</option>${personas.filter(p => p.id !== i.persona && !(merge && p.es_usuario)).map(p => `<option value="${esc(p.id)}">${esc(p.nombre)}${p.es_usuario ? ' (tú)' : ''}</option>`).join('')}</select>
+      ${Object.keys(s.hablantes || {}).length > 1 ? `<select id="spJoin" class="sm" title="La app ha partido esta voz en dos hablantes: se juntan en uno"><option value="">Es el mismo que…</option>${spkJoinOptions(s.hablantes, h, spkLabel).map(o => `<option value="${esc(o.h)}">${esc(o.text)}</option>`).join('')}</select>` : ''}
       ${i.persona || i.usuario ? `<button class="btn sm" data-sa="notme">${i.usuario ? 'No soy yo' : 'No es esta persona'}</button>` : ''}
       ${other ? '<button class="btn sm ghost danger" data-sa="forget" title="Borra su nombre y sus huellas de este PC">Olvidar persona</button>' : ''}
     </div>`;
@@ -122,6 +130,12 @@ function openSpeakerPop(h, anchor) {
     const [url, body] = spkPickBody(a, h, i, target, s.creado);
     await api(url, body);
     await refresh(url.endsWith('fusionar') ? 'Personas fusionadas: las reuniones anteriores ya muestran el nombre único' : 'Hablante asignado');
+  });
+  const join = $('#spJoin', pop);
+  if (join) join.onchange = () => run(async () => {
+    if (!join.value) return;
+    await api('/api/hablantes/unir', spkJoinBody(a, h, join.value, s.creado));
+    await refresh('Hablantes unidos');
   });
   pop.addEventListener('click', e => {
     const b = e.target.closest('[data-sa]');

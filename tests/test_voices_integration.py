@@ -69,12 +69,15 @@ def meeting(tmp, voices_, texts):
 class VoicesIntegrationTests(unittest.TestCase):
     def test_dos_voces_y_reconocimiento_en_otra_reunion(self):
         tmp = tempfile.mkdtemp(prefix="notas-voces-")
-        vv = {"A": "Mónica", "B": "Paulina"}
+        # Dos voces que el modelo distingue como a dos personas reales. Con «Mónica» y «Paulina» (las dos voces
+        # femeninas de Apple), la huella de una se parecia 0,84 a la de la otra: por encima de casi todo lo medido
+        # entre personas reales con scripts/eval_voces.py (el par mas alto, 0,78), y desde el 08/11/2026 la app las une.
+        vv = {"A": "Mónica", "B": "Eddy (Español (España))"}
         try:
             subprocess.run(["say", "-v", vv["B"], "-o", os.path.join(tmp, "p.aiff"), "x"], check=True,
                            capture_output=True)
         except subprocess.CalledProcessError:
-            vv["B"] = "Eddy (Español (España))"
+            vv["B"] = "Jorge"
         x1, truth1 = meeting(tmp, vv, TEXT)
         t0 = time.perf_counter()
         r1 = voices.diarize(x1, DATA, threads=2)

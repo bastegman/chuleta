@@ -12,6 +12,7 @@ personas entre reuniones y casado con las frases del .srt.
     y devuelve las huellas por stdout en JSON (como worker.py):
 
         python voices.py --diarize AUDIO --out SIDECAR [--niveles FICHERO] [--data DATA_DIR] [--threads 2]
+                         [--participantes N]
         python voices.py --fingerprint h2 --diarize AUDIO --out SIDECAR     (recalcular la huella de un hablante)
 
 Umbrales (spike del 30/10/2026): coseno >= 0,55 y segundo candidato a >= 0,10 → misma persona; 0,40-0,55 (o dos
@@ -22,6 +23,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import tarfile
 import threading
@@ -42,6 +44,22 @@ MIN_MATCH_S = 5.0        # voz acumulada para intentar emparejar (entre 5 y 20 s
 BREVE_S = 10.0           # clusteres con menos voz: «(breve)», no generan persona
 BLOQUE_S = 1800.0        # audio mas largo se diariza por bloques de <= 30 min enlazados por huella
 HUELLA_MAX_S = 90.0      # voz que se concatena para una huella (los tramos mas largos primero)
+# Calibrado el 08/11/2026 con scripts/eval_voces.py: reuniones reales de 4 personas del AMI Meeting Corpus (CC BY 4.0;
+# 3 para elegir y 4 de prueba) y 4 reuniones montadas con voces chilenas de OpenSLR 71 (CC BY-SA 4.0). Hasta entonces,
+# 0,5 sin unir nada al final: 36 hablantes visibles para 12 personas (DER 0,517) y 48 para 16 en las de prueba (0,494).
+# Con esto, 15/12 (0,228), 18/16 (0,248) y 16/16 en las chilenas, sin juntar a dos personas.
+UMBRAL_GRUPOS = 0.6      # corte del clustering de sherpa-onnx (distancia coseno; mayor = menos grupos; con 0,7 ya
+#                          juntaba a dos hombres chilenos)
+# Al terminar se unen los grupos que son la misma voz (consolidate): sherpa-onnx parte a cada persona en varios.
+FUSION = 0.70            # coseno entre las huellas de dos grupos para unirlos (0,65 ya junta a dos personas)
+TOPE_MIN = 0.65          # con el numero de participantes como pista: nunca se une por debajo de este coseno (con
+#                          0,3 una pista demasiado baja juntaba a personas distintas; con 0,65, da igual si se queda
+#                          corta)
+FUSION_GRANDES = 0.75    # el de FUSION cuando los dos grupos tienen >= GRANDE_S: sus dos huellas son fiables (dos
+GRANDE_S = 30.0          # hombres distintos de 57 y 70 s llegaban a 0,72)
+ABSORBE_MIN = 0.55       # coseno minimo para que un grupo breve pase al visible mas parecido (con 0,30, el 28 % de
+#                          la voz absorbida iba a otra persona: mejor «(breve)» que el nombre de otro)
+HOLGURA = 1              # tope de hablantes = participantes nombrados + HOLGURA (el usuario no suele apuntarse)
 SR = 16000
 MIC_PASO, MIC_DB, MIC_SOBRE_SYS_DB = 0.25, -40.0, 6.0
 # La grabadora estampa cada nivel con lo que YA ha escrito del WAV, pero el pico es de lo que acaba de llegar del
@@ -209,13 +227,13 @@ def _sherpa():
     return sherpa_onnx
 
 
-def _diarizer(so, paths, threads=2, shift=0.5):
+def _diarizer(so, paths, threads=2, shift=0.5, umbral=UMBRAL_GRUPOS):
     cfg = so.OfflineSpeakerDiarizationConfig(
         segmentation=so.OfflineSpeakerSegmentationModelConfig(
             pyannote=so.OfflineSpeakerSegmentationPyannoteModelConfig(model=paths["seg"], window_shift_ratio=shift),
             num_threads=threads),
         embedding=so.SpeakerEmbeddingExtractorConfig(model=paths["emb"], num_threads=threads),
-        clustering=so.FastClusteringConfig(num_clusters=-1, threshold=0.5),
+        clustering=so.FastClusteringConfig(num_clusters=-1, threshold=float(umbral)),
         min_duration_on=0.3, min_duration_off=0.5)
     if not cfg.validate():
         raise VoicesError("Configuracion de diarizacion no valida (¿faltan los modelos en models/voces?)")
@@ -264,6 +282,131 @@ def cosine(a, b):
     return float(np.dot(a, b) / (na * nb)) if na > 0 and nb > 0 else 0.0
 
 
+def _unit(v):
+    if v is None:
+        return None
+    v = np.asarray(v, dtype=np.float32)
+    n = float(np.linalg.norm(v))
+    return v / n if n > 0 else None
+
+
+def _intervals(tramos):
+    """Tramos ordenados y sin solapes (al unir dos grupos pueden pisarse); los que solo se tocan siguen aparte."""
+    out = []
+    for a, b in sorted(tramos):
+        if out and a < out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def consolidate(res, samples16=None, ex=None, fusion=FUSION, absorbe_min=ABSORBE_MIN, participantes=None,
+                tope_min=TOPE_MIN, fusion_grandes=None, grande_s=None):
+    """Une los grupos de una diarizacion que son la misma voz; devuelve el mismo formato, renumerado (h1 = el que mas
+    habla). sherpa-onnx parte a cada persona en varios grupos: en reuniones reales de 4 personas salian 7-11 hablantes
+    visibles y 43-59 grupos (scripts/eval_voces.py). Pasos, decididos con la media de las huellas de cada grupo
+    ponderada por sus segundos:
+    1) mientras dos grupos tengan huellas con coseno >= fusion (>= fusion_grandes si los dos tienen >= grande_s
+       segundos: sus huellas son fiables), se unen los mas parecidos;
+    2) si se sabe cuantos participantes hay, mientras haya mas hablantes visibles (>= BREVE_S) que participantes +
+       HOLGURA se une el par visible mas parecido, nunca por debajo de tope_min (ni, si los dos son grandes, de lo que
+       piden dos grandes): es una pista, no se fuerza;
+    3) cada grupo breve pasa al visible mas parecido si el coseno es >= absorbe_min; si no, sigue breve.
+    Con ex y samples16, la huella de cada grupo que ha cambiado se recalcula como las demas (fingerprint)."""
+    hue = res.get("huellas") or {}
+    by_h = {}
+    for t in res.get("tramos") or []:
+        by_h.setdefault(t["h"], []).append((float(t["inicio"]), float(t["fin"])))
+    groups = []
+    for h, tr in by_h.items():
+        tr = _intervals(tr)
+        v = _unit(hue.get(h))
+        secs = sum(b - a for a, b in tr)
+        groups.append({"tramos": tr, "fp": tr, "vec": v, "secs": secs, "orig": v, "cambia": False})
+
+    def visible(g):
+        return g["secs"] >= BREVE_S
+
+    def join(a, b, absorbe=False):
+        """b pasa a a. Al absorber un breve, ni su huella ni sus tramos cuentan para la huella de a (pocos segundos y
+        quiza de otra voz): solo para quien habla."""
+        if b["secs"] > a["secs"] and not absorbe:
+            a, b = b, a
+        if not absorbe:
+            if a["vec"] is not None and b["vec"] is not None:
+                a["vec"] = _unit(a["vec"] * max(a["secs"], 1.0) + b["vec"] * max(b["secs"], 1.0))
+            elif a["vec"] is None:
+                a["vec"] = b["vec"]
+            a["fp"] = _intervals(a["fp"] + b["fp"])
+            a["cambia"] = True
+        a["tramos"] = _intervals(a["tramos"] + b["tramos"])
+        a["secs"] = sum(x1 - x0 for x0, x1 in a["tramos"])
+        groups[:] = [g for g in groups if g is not b]
+
+    fusion_grandes = FUSION_GRANDES if fusion_grandes is None else fusion_grandes
+    grande_s = GRANDE_S if grande_s is None else grande_s
+
+    def need(a, b):  # dos grupos grandes: sus dos huellas son fiables y han de parecerse mas para ser la misma voz
+        return max(fusion, fusion_grandes) if min(a["secs"], b["secs"]) >= grande_s else fusion
+
+    def best_pair(cands, umbral=None):
+        """El par mas parecido entre los que llegan a su umbral (con umbral=None, el mas parecido sin mas)."""
+        best = (-2.0, None, None)
+        for i, a in enumerate(cands):
+            for b in cands[i + 1:]:
+                c = cosine(a["vec"], b["vec"])
+                if c > best[0] and (umbral is None or c >= umbral(a, b)):
+                    best = (c, a, b)
+        return best
+
+    while True:
+        c, a, b = best_pair([g for g in groups if g["vec"] is not None], need)
+        if a is None:
+            break
+        join(a, b)
+    if participantes and int(participantes) > 0:
+        while True:
+            vis = [g for g in groups if g["vec"] is not None and visible(g)]
+            if len(vis) <= int(participantes) + HOLGURA:
+                break
+            c, a, b = best_pair(vis, lambda x, y: need(x, y) if min(x["secs"], y["secs"]) >= grande_s else tope_min)
+            if a is None:
+                break
+            join(a, b)
+    vis = [g for g in groups if g["vec"] is not None and visible(g)]
+    for g in [g for g in groups if not visible(g) and g["vec"] is not None]:
+        if not vis:
+            break
+        c, dst = max(((cosine(g["vec"], d["vec"]), d) for d in vis), key=lambda x: x[0])
+        if c >= absorbe_min:
+            join(dst, g, absorbe=True)
+    groups.sort(key=lambda g: -g["secs"])
+    tramos, hablantes, huellas = [], {}, {}
+    for k, g in enumerate(groups, 1):
+        h = f"h{k}"
+        if g["cambia"] and ex is not None and samples16 is not None:
+            v, _ = fingerprint(ex, samples16, g["fp"])
+            g["vec"] = _unit(v) if v is not None else g["vec"]
+        elif not g["cambia"]:
+            g["vec"] = g["orig"]
+        tramos += [{"inicio": round(a, 2), "fin": round(b, 2), "h": h} for a, b in g["tramos"]]
+        hablantes[h] = {"persona": None, "score": None, "segundos": round(g["secs"], 1), "provisional": False,
+                        "breve": g["secs"] < BREVE_S}
+        if g["vec"] is not None:
+            huellas[h] = [round(float(x), 5) for x in g["vec"]]
+    tramos.sort(key=lambda t: (t["inicio"], t["fin"]))
+    out = dict(res)
+    out.update({"tramos": tramos, "hablantes": hablantes, "huellas": huellas})
+    return out
+
+
+def count_participants(text):
+    """Cuantas personas nombra el campo «Participantes» (texto libre: «Ana, Luis y Pedro»)."""
+    parts = re.split(r"[,;\n/]+|\s+(?:y|e|and|&)\s+", str(text or ""))
+    return len({p.strip().casefold() for p in parts if p.strip()})
+
+
 def mixed(huellas, umbral=DUDOSO):
     """Alguna huella de la persona no se parece a ninguna de las otras (coseno < umbral, lo que el emparejado
     llamaria «otra persona»): puede llevar la voz de alguien mas (p. ej. por el fallo de antes del 07/11/2026)."""
@@ -273,7 +416,8 @@ def mixed(huellas, umbral=DUDOSO):
     return any(max(cosine(a, b) for j, b in enumerate(vs) if j != i) < umbral for i, a in enumerate(vs))
 
 
-def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift=0.5):
+def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift=0.5, umbral_grupos=UMBRAL_GRUPOS,
+            consolidar=True, participantes=None):
     """Devuelve {"tramos": [{inicio, fin, h}], "hablantes": {h: {segundos, breve, …}}, "huellas": {h: [floats]},
     "duracion_s"}. Audio > 30 min: por bloques, enlazando los clusteres de cada bloque por huella (coseno >= umbral)."""
     progress = progress or (lambda **k: None)
@@ -282,7 +426,7 @@ def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift
     paths = model_paths(data_dir)
     if not models_ready(data_dir):
         raise VoicesError("Faltan los modelos de voces (activa la opcion en Ajustes para descargarlos)")
-    sd, ex = _diarizer(so, paths, threads, shift), _extractor(so, paths, threads)
+    sd, ex = _diarizer(so, paths, threads, shift, umbral_grupos), _extractor(so, paths, threads)
     if sd.sample_rate != SR:
         raise VoicesError(f"El modelo espera {sd.sample_rate} Hz")
     total_s = len(samples16) / SR
@@ -337,8 +481,12 @@ def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift
         if g["vec"] is not None:
             huellas[h] = [round(float(x), 5) for x in g["vec"]]
     tramos.sort(key=lambda t: (t["inicio"], t["fin"]))
+    out = {"tramos": tramos, "hablantes": hablantes, "huellas": huellas, "duracion_s": round(total_s, 1)}
+    if consolidar:
+        progress(stage="Uniendo voces parecidas…", frac=0.92)
+        out = consolidate(out, samples16, ex, participantes=participantes)
     progress(stage="Voces identificadas", frac=0.95)
-    return {"tramos": tramos, "hablantes": hablantes, "huellas": huellas, "duracion_s": round(total_s, 1)}
+    return out
 
 
 # ----------------------------------------------------------------------------- emparejado, casado y «Tu» (numpy puro)
@@ -788,6 +936,50 @@ def assign(data, h, pid, usuario=None):
     return data
 
 
+def join_speakers(data, h, con, usuario=None, names=None):
+    """«Es el mismo que…» (msg 1242): el hablante h de esta reunion es la misma voz que `con`, que la app partio en
+    dos. Los tramos de h pasan a `con`, que conserva quien es (o toma lo que se sabia de h si `con` no lo sabia), y h
+    desaparece. Si ya se sabe que son dos personas distintas (dos personas, o tu y otra), ValueError: eso no es unir,
+    sino corregir a uno de los dos. `names`: ids de las personas que siguen en voces.json. Modifica data."""
+    hablantes = data.get("hablantes") or {}
+    if h == con or h not in hablantes or con not in hablantes:
+        raise KeyError(con if h in hablantes else h)
+    names = names or {}
+
+    def who(x):  # quien es, si ya esta decidido (lo provisional y lo que dice el micro, no)
+        info = hablantes[x]
+        pid = info.get("persona")
+        if not pid or pid not in names or info.get("provisional") or info.get("origen") == "micro":
+            return None
+        return "tu" if pid == usuario else pid
+
+    wh, wc = who(h), who(con)
+    if wh and wc and wh != wc:
+        raise ValueError("Ya son dos personas distintas: corrige el nombre de uno de los dos.")
+    if wh and not wc:
+        for k in ("persona", "score", "provisional", "origen"):
+            if k in hablantes[h]:
+                hablantes[con][k] = hablantes[h][k]
+    ident = wh or wc
+    if ident and ident != "tu":  # `con` es otra persona: ninguno de los dos eres tu
+        if data.get("tu") in (h, con):
+            data["tu"] = None
+    elif data.get("tu") == h:
+        data["tu"] = con
+    mine = [(float(t["inicio"]), float(t["fin"])) for t in data.get("tramos") or [] if t.get("h") in (h, con)]
+    rest = [t for t in data.get("tramos") or [] if t.get("h") not in (h, con)]
+    joined = _intervals(mine)
+    data["tramos"] = sorted(rest + [{"inicio": round(a, 2), "fin": round(b, 2), "h": con} for a, b in joined],
+                            key=lambda t: (t["inicio"], t["fin"]))
+    secs = sum(b - a for a, b in joined)
+    hablantes[con].update(segundos=round(secs, 1), breve=secs < BREVE_S)
+    del hablantes[h]
+    for f in data.get("frases") or []:
+        if isinstance(f, dict) and f.get("h") == h:
+            f["h"] = con
+    return data
+
+
 def carry_manual(old, new, usuario=None, known=None):
     """Volver a identificar no borra lo que el usuario ya dijo: cada hablante nuevo hereda la decision manual del
     hablante antiguo con el que mas coincide en el tiempo (si cubre al menos la mitad de su voz), salvo que esa
@@ -894,6 +1086,7 @@ def main(argv=None):
                                                    "AudiosApp"))
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--fingerprint", metavar="H", help="solo recalcular la huella de ese hablante del sidecar")
+    ap.add_argument("--participantes", type=int, default=0, help="personas nombradas en la reunion (pista)")
     a = ap.parse_args(argv)
     proto = os.fdopen(os.dup(1), "wb")
     os.dup2(2, 1)  # cualquier print de las librerias nativas va a stderr y no rompe el protocolo
@@ -925,7 +1118,7 @@ def main(argv=None):
                 raise VoicesError("Voz insuficiente para una huella")
             send({"type": "result", "huellas": {a.fingerprint: [round(float(x), 5) for x in vec]}, "segundos": secs})
             return 0
-        res = diarize(samples, a.data, a.threads, progress)
+        res = diarize(samples, a.data, a.threads, progress, participantes=a.participantes or None)
         micro = None
         if a.niveles:
             try:
