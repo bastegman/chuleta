@@ -7,6 +7,7 @@ suite entera. Se salta si Playwright no está instalado (la CI lo instala en `ui
 
     pip install playwright && python -m playwright install chromium
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -26,8 +27,11 @@ except ImportError:  # pragma: no cover - sin Playwright el test se salta
     sync_playwright = None
 
 SERVER = os.path.join(REPO, "_app", "server.py")
-# fuera de Windows la grabadora (soundcard) no existe y /api/rec/devices contesta 400: no es un fallo de la interfaz
-PERMITIDAS = ("/api/rec/devices",) if sys.platform != "win32" else ()
+# sin soundcard (fuera de Windows, y en ui-smoke.yml también en Windows: no lo instala) la grabadora no lista los
+# dispositivos y /api/rec/devices contesta 400: no es un fallo de la interfaz. Hasta el 08/11/2026 se decidía por el
+# sistema y en Windows no se permitía: pasaba porque nadie esperaba esa respuesta (el diálogo de grabar se cerraba
+# antes de que llegara); Ajustes › Al grabar la pide al abrirse y espera lo bastante (f5366aa, run 42421762235)
+PERMITIDAS = ("/api/rec/devices",) if importlib.util.find_spec("soundcard") is None else ()
 
 
 def puerto_libre():
@@ -178,7 +182,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
         self.assertTrue(pg.evaluate("document.querySelector('#meetChip').classList.contains('hidden')"))
         err, red = self.limpiar(errores, red)
-        self.assertEqual(err, [], err)
+        self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)
 
     def test_asistente_configurar_tres_pasos_y_probar_sin_guardar(self):
@@ -233,7 +237,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_selector("#modal:not(.hidden) .aj-nav [data-sec='avanzado'].on", timeout=5000)  # la última vista
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
-        self.assertEqual(err, [])
+        self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [])
 
     def test_tarjeta_de_grabar(self):
@@ -322,6 +326,12 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#agFilas .gr-fila[data-fila='idioma']", timeout=10000)
+        if PERMITIDAS:  # sin grabadora la lista de dispositivos no llega: una frase, no el error de Python
+            pg.wait_for_selector("#agDevsAviso.gr-aviso", timeout=30000)
+            aviso = pg.inner_text("#agDevsAviso")
+            self.assertIn("No se ha podido leer la lista de micrófonos", aviso)
+            self.assertNotIn("Traceback", aviso)
+            self.assertNotIn("soundcard", aviso)
         antes = pg.evaluate("api('/api/config')")["language"]
         otro = "pt" if antes != "pt" else "de"
         pg.select_option("#sLang", otro)
@@ -348,7 +358,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
                     " vocab: 'Proyecto/Vocabulario/General.txt'})")
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
-        self.assertEqual(err, [])
+        self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [])
 
     def test_sin_token_no_hay_sesion(self):

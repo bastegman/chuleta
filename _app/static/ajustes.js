@@ -17,7 +17,7 @@ function ajAlGrabarHtml() {
     <div class="ag-reglas">
       ${typeof perfilReglasHtml === 'function' ? perfilReglasHtml() : `<div class="ag-regla"><label for="sLang">Idioma por defecto</label><div>${langSelect('sLang', c.language ?? 'es-en')}</div></div>`}
       ${'carpeta_por_reunion' in c ? `<div class="ag-regla"><label for="agPorReunion">Una carpeta por reunión</label><div><label class="ag-sw"><input type="checkbox" id="agPorReunion"${c.carpeta_por_reunion !== false ? ' checked' : ''}>fecha y nombre, dentro de la carpeta del proyecto</label></div></div>` : ''}
-      <div class="ag-regla"><label for="agMic">Micrófono · audio del PC</label><div class="ag-dos"><select id="agMic">${ajDispositivos(null)[0]}</select><select id="agSys">${ajDispositivos(null)[1]}</select></div></div>
+      <div class="ag-regla"><label for="agMic">Micrófono · audio del PC</label><div class="ag-dos"><select id="agMic">${ajDispositivos(null)[0]}</select><select id="agSys">${ajDispositivos(null)[1]}</select><span id="agDevsAviso" class="hidden"></span></div></div>
       <div class="ag-regla"><label for="agDirecto">Texto en directo</label><div><label class="ag-sw"><input type="checkbox" id="agDirecto"${c.rec_directo !== false ? ' checked' : ''}>si el portátil va lento, quítalo: solo graba y transcribe al terminar</label></div></div>
       <div class="ag-regla"><label for="lMeet">Llamada detectada</label><div><label class="ag-sw"><input type="checkbox" id="lMeet"${c.meeting_detect !== false ? ' checked' : ''}>aviso con «Grabar» al detectar una llamada (Teams, Zoom…)</label></div></div>
     </div>
@@ -102,7 +102,11 @@ function bindAjAlGrabar(d) {
     mic.innerHTML = m; sys.innerHTML = s;
     if ([...mic.options].some(x => x.value === vm)) mic.value = vm;
     if ([...sys.options].some(x => x.value === vs)) sys.value = vs;
-  }).catch(() => { });
+  }).catch(err => {
+    const av = $('#agDevsAviso', d);
+    if (!av || !document.body.contains(av)) return;
+    av.outerHTML = grDevsAviso(err.message, ': aquí solo están los predeterminados de Windows').replace('<span ', '<span id="agDevsAviso" ');
+  });
   // las listas pueden llegar después de abrir Ajustes
   loadVocab(c.language ?? 'es-en').then(() => { if (document.body.contains(proy)) { listas(); pedir(); } });
   pedir();

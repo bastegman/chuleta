@@ -145,6 +145,12 @@ function grPintar() {
   grPintarFilas();
 }
 
+/* la lista de micrófonos y salidas no ha llegado (sin grabadora, o Windows no contesta): una frase, y el detalle del
+   servidor (la cola del error de la grabadora) solo al pasar el ratón. También lo usa Ajustes › Al grabar */
+function grDevsAviso(msg, resto = '') {
+  return `<span class="gr-aviso" title="${esc(msg || '')}">No se ha podido leer la lista de micrófonos y salidas de audio${resto}.</span>`;
+}
+
 function grValorHtml(l) {
   if (l.clave === 'carpeta') return `<code class="gr-ruta" title="${esc(l.valor)}">${esc(l.valor)}</code>`;
   if (l.clave === 'audio') {
@@ -153,7 +159,7 @@ function grValorHtml(l) {
     const t = [l.mic === 'default' ? 'Micrófono predeterminado de Windows' : nom(G.devs?.mics, l.mic) || '',
       l.sys === 'all' ? 'Todo lo que suena en el ordenador' : nom(G.devs?.outputs, l.sys) || ''].filter(Boolean).join(' · ');
     return `<span class="gr-audio" title="${esc(t)}"><b>${mic}</b>${l.mic === 'none' ? '' : grMedidor('mic')}<b>· ${pc}</b>${l.sys === 'none' ? '' : grMedidor('sys')}</span>`
-      + (G.devsErr ? `<span class="gr-aviso">${esc(G.devsErr)}</span>` : '');
+      + (G.devsErr ? grDevsAviso(G.devsErr) : '');
   }
   if (l.clave === 'contexto') return esc(l.valor);
   return `<b>${esc(l.valor)}</b>`;

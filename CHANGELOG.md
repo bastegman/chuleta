@@ -22,6 +22,9 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - Cada cosa a su sección: los motores a **Procesado**, el idioma y las instrucciones del resumen a **Resumen**, OBS a
   **Avanzado** y Outlook y el aviso flotante a **Calendario y Teams**, que dice en una frase si Teams funciona (y la
   reunión que ve ahora) y el estado de Outlook.
+- Si la app no puede leer la lista de micrófonos y salidas, Ajustes y la tarjeta de grabar lo dicen en una frase
+  («No se ha podido leer la lista de micrófonos y salidas de audio») en vez de callarlo o de enseñar el final del error
+  de la grabadora, que queda al pasar el ratón.
 
 ### Grabar: una tarjeta que dice qué va a pasar, y lo mismo con Ctrl+Alt+R (07/11/2026)
 Lo que pidió: grabar «no es nada amigable» y no estaba claro si lo que se configura es lo que de verdad se usa
@@ -585,6 +588,10 @@ Lo que falló en la primera prueba de la versión del 01/11/2026 en un portátil
   (P2-37).
 
 ### Desarrollo y CI
+- `ui-smoke` en Windows (08/11/2026): el 400 de `/api/rec/devices` se permite cuando no está instalado `soundcard`
+  (el job no lo instala en ningún sistema), no según el sistema operativo. Hasta ahora pasaba en Windows solo porque
+  el diálogo de grabar se cerraba antes de que llegara esa respuesta; Ajustes › Al grabar la pide al abrirse y la
+  espera. Los fallos de esos tests dicen ya la URL que contestó con error.
 - **Workflows de Windows también en main** (P2-38): `lookfeel-e2e` (E2E del instalador y del desinstalador),
   `reunion-windows` (escritorio: ventana de Teams simulada, aviso flotante) y `windows-real`, nuevo (la suite con el
   formato regional `es-ES`, la ventana real ante `WM_QUERYENDSESSION` y `WM_ENDSESSION` y sin WebView2, y el aviso con
