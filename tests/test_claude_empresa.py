@@ -455,6 +455,42 @@ class RegistroTests(unittest.TestCase):
             self.assertEqual(engines.windows_env()["OTRA"], "2")
 
 
+class InicioDeSesionTests(ServidorComprobarTests):
+    """El camino principal (msg 1261): Claude Code instalado aparte, «Abrir PowerShell», `claude` y el inicio de sesión
+    en el navegador (con el SSO de la empresa). La app no inicia sesión por nadie: solo guía."""
+
+    def test_la_frase_lleva_al_navegador_con_el_boton_de_powershell(self):
+        import explicar
+        for texto in ("Not logged in · Please run /login", "Authentication required · Sign in again to continue"):
+            ex = explicar.explicar(engines.EngineError(engines.ClaudeCode()._why(1, texto)))
+            self.assertIn("pulsa «Abrir PowerShell», escribe claude y entra con tu cuenta en el navegador", ex["frase"])
+            self.assertIn("inicio de sesión de tu empresa", ex["frase"])
+            self.assertEqual(ex["accion"]["tipo"], "abrir_powershell")
+
+    def test_powershell_con_claude_en_el_path(self):
+        # el instalador nativo no pone ~/.local/bin en el PATH (medido en Windows): la ventana lo lleva delante
+        exe = os.path.join(self.tmp, "perfil", ".local", "bin", "claude.exe")
+        a = self.app(procesado="agente")
+        with mock.patch.object(engines.ClaudeCode, "find", return_value=exe), \
+                mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema", "OTRA": "1"}):
+            env = a._powershell_env()
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], os.path.dirname(exe))
+        self.assertIn("/sistema", env["PATH"])
+        self.assertEqual(env["OTRA"], "1")
+        with mock.patch.object(engines.ClaudeCode, "find", return_value=None), \
+                mock.patch.object(engines, "windows_env", return_value={"PATH": "/sistema"}):
+            self.assertEqual(a._powershell_env()["PATH"], "/sistema")  # sin Claude Code, el PATH de siempre
+
+    def test_abrir_powershell_usa_ese_entorno(self):
+        a = self.app(procesado="agente")
+        with mock.patch.object(server.os, "name", "nt"), \
+                mock.patch.object(server.App, "_powershell_env", return_value={"PATH": "X"}), \
+                mock.patch.object(server.subprocess, "Popen") as popen:
+            a.abrir_powershell({})
+        self.assertEqual(popen.call_args.kwargs["env"], {"PATH": "X"})
+        self.assertEqual(popen.call_args.args[0][0], "powershell.exe")
+
+
 class ServidorTests(ServidorComprobarTests):
     def test_comprobar_dice_de_donde_salio_y_el_aviso_del_modelo(self):
         def check(self_, path, model=None, cancelled=None):

@@ -31,8 +31,9 @@ class ExplicarTests(unittest.TestCase):
     def test_claude_sin_sesion_da_el_paso_y_el_boton(self):
         e = engines.ClaudeCode()._why(1, "Not logged in · Please run /login")
         r = explicar.explicar(e)
-        self.assertEqual(r["frase"], "Claude Code no tiene la sesión iniciada: en PowerShell escribe claude, entra "
-                                     "con tu cuenta y vuelve a probar.")
+        self.assertEqual(r["frase"], "Claude Code no tiene la sesión iniciada: pulsa «Abrir PowerShell», escribe "
+                                     "claude y entra con tu cuenta en el navegador que se abre (con el inicio de "
+                                     "sesión de tu empresa, si es la que usas); luego vuelve a probar.")
         self.assertEqual(r["accion"]["tipo"], "abrir_powershell")
         self.assertIn("sin sesión iniciada", r["tecnico"])  # el original queda para el log y el diagnóstico
 

@@ -371,6 +371,22 @@ def main():
                 paso(f"comprobar_{i}_ok_sin_sesion_inesperado", nota="respondió OK sin sesión iniciada")
             elif ESPERADO not in msg:
                 fallos.append(f"«Comprobar» {i} no llega a «{ESPERADO}»: {msg[:300]}")
+        if MODO in ("nativo", "npm"):  # «Probar» del asistente sin sesión: al inicio de sesión del navegador
+            code, out, _ = app.post("/api/probar", {"candidata": {"procesado": "agente",
+                                                                  "agente": {"tipo": "claude", "modelo": "sonnet"}}})
+            pid, est, t0 = out.get("id"), {}, time.time()
+            while pid and time.time() - t0 < 180:
+                est = app.get(f"/api/probar?id={pid}")
+                if est.get("terminada"):
+                    break
+                time.sleep(0.5)
+            fallo = est.get("fallo") or {}
+            paso("probar", http=code, segundos=round(time.time() - t0, 1), terminada=est.get("terminada"), fallo=fallo,
+                 pasos=[[x.get("id"), x.get("estado")] for x in est.get("pasos") or []])
+            if not (fallo.get("paso") == "cuenta" and "navegador" in (fallo.get("frase") or "")
+                    and (fallo.get("accion") or {}).get("tipo") == "abrir_powershell"):
+                fallos.append("«Probar» no lleva al inicio de sesión en el navegador con «Abrir PowerShell»: "
+                              + json.dumps(fallo, ensure_ascii=False)[:300])
         if pasarela:
             paso("pasarela_peticiones", peticiones=pasarela.peticiones[:20])
             modelos = [x.get("modelo") for x in pasarela.peticiones if x["metodo"] == "POST"]

@@ -2340,8 +2340,9 @@ class ClaudeCode(AgenteLocal):
                 return (f"{self.label} de {editor} está instalado pero no tiene la sesión abierta: abre {editor} y, en "
                         f"el panel de {self.label}, inicia sesión con tu cuenta (la de tu empresa, si es la que usas); "
                         "luego vuelve a probar.")
-            return (f"{self.label} está instalado pero sin sesión iniciada: abre una terminal, escribe claude e inicia "
-                    "sesión con tu cuenta (personal o de empresa); luego vuelve a pulsar «Comprobar».")
+            return (f"{self.label} está instalado pero sin sesión iniciada: abre PowerShell, escribe claude y entra "
+                    "con tu cuenta en el navegador que se abre (con el inicio de sesión de tu empresa, si es la que "
+                    "usas); luego vuelve a probar.")
         return f"{self.label} ha fallado" + (f" (código {code})" if code else "") + (f": {text[:200]}" if text else "")
 
 

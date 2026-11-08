@@ -31,7 +31,11 @@ Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1
 
 ### «Con tu cuenta de Claude» con la cuenta de la empresa (SSO) y Claude Code de VS Code (08/11/2026)
 Lo que pidió: que funcione con su cuenta de Claude de empresa, con SSO, y él usa Claude Code en VS Code (msgs 1224-1228).
-- Sin Claude Code instalado aparte, la app usa la copia que trae la **extensión de VS Code** (también Cursor, Windsurf y
+- El camino principal es **Claude Code instalado aparte** y su inicio de sesión **en el navegador**, con el de la empresa
+  si la cuenta es de empresa (msg 1261). «Abrir PowerShell» abre la ventana con Claude Code ya en su PATH (el
+  instalador oficial no lo pone en el PATH de Windows: «…\.local\bin is not in your PATH», medido) y, sin sesión, la
+  frase dice que se escriba `claude` y se entre en el navegador que se abre. La app no inicia sesión por nadie.
+- Sin Claude Code instalado aparte, la app usa (como respaldo) la copia que trae la **extensión de VS Code** (también Cursor, Windsurf y
   VSCodium; la versión más nueva): la extensión no pone `claude` en el PATH y antes la app decía «No encuentro Claude
   Code». «Comprobar» y `server.log` dicen de dónde salió («Claude Code de VS Code»). La sesión es la misma que la de
   VS Code (se guarda en la carpeta `.claude` del usuario).

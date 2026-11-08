@@ -4970,12 +4970,25 @@ class App:
         ruta = cls.find()
         return {"encontrado": bool(ruta), "label": cls.label, "origen": cls.origen(ruta) if ruta else None}
 
+    def _powershell_env(self):
+        """El entorno de la ventana de «Abrir PowerShell»: el de una PowerShell nueva (engines.windows_env) y, delante
+        en su PATH, la carpeta del Claude Code que encuentra la app (08/11/2026). El instalador nativo no lo pone en el
+        PATH («…\\.local\\bin is not in your PATH», medido en Windows) y la copia de VS Code tampoco: así, en esa
+        ventana, `claude` (y su inicio de sesión en el navegador) funciona siempre. La app no inicia sesión por nadie:
+        el usuario escribe claude y entra en la página de Claude."""
+        env = engines.windows_env()
+        cls, _ = agente_de(self.settings.get())
+        ruta = cls.find()
+        if ruta:
+            env["PATH"] = os.path.dirname(os.path.abspath(ruta)) + os.pathsep + env.get("PATH", "")
+        return env
+
     def abrir_powershell(self, b):
-        """«Abrir PowerShell» del asistente: una ventana vacía, sin ejecutar nada."""
+        """«Abrir PowerShell» del asistente: una ventana vacía, sin ejecutar nada (con Claude Code en su PATH)."""
         if os.name != "nt":
             raise ApiError("Este botón solo funciona en Windows: abre una terminal y sigue los pasos.")
         subprocess.Popen(["powershell.exe", "-NoExit", "-NoLogo"], cwd=os.path.expanduser("~"),
-                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0), env=self._powershell_env())
         return {"ok": True}
 
     # --- modelos de Whisper en este PC (engines.WhisperModels): estado, descarga con progreso y cancelar
