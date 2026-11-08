@@ -341,6 +341,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
         self.assertEqual(pg.evaluate("api('/api/config')")["language"], antes)  # aún no
         pg.select_option("#sLang", antes)  # se deja como estaba
+        # el plan vuelve a lo de antes antes de seguir: nada de lo de abajo depende de una petición que llegue tarde
+        pg.wait_for_function(f"!{fila}.includes('{nombre}')", timeout=5000)
         pg.click(".aj-nav [data-sec='proyectos']")
         pg.wait_for_selector("#pjTabla [data-pj-editar='Proyecto']", timeout=10000)
         # la carpeta, del mismo cálculo que la tarjeta: sin asignar, la suya del árbol (11a′), en gris
@@ -349,23 +351,194 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertIn("Proyecto\\", pg.evaluate(celda))
         self.assertNotIn("la última usada", pg.evaluate(celda))
         pg.click("#pjTabla [data-pj-editar='Proyecto']")
-        self.assertIn("Sin asignar · su carpeta", pg.inner_text("#pjTabla [data-pj-f]"))
+        self.assertTrue(pg.evaluate("document.activeElement.matches('#pjTabla tr.pj-ed select')"))  # foco en la fila
+        self.assertIn("Sin asignar (su carpeta", pg.inner_text("#pjTabla [data-pj-f]"))
         pg.select_option("#pjTabla [data-pj-l]", "en")
-        pg.click("#pjTabla [data-pj-ok]")
+        # se guarda al momento, sin ningún «Guardar» (revisión de B2: el de abajo lo perdía)
+        pg.wait_for_function("document.querySelector('#pjTabla .pj-estado')?.textContent === 'Guardado'", timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["project_langs"], {"Proyecto": "en"})
+        pg.click("#pjTabla [data-pj-no]")  # «Listo»
         fila_p = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"]')?.innerText"
         pg.wait_for_function(f"{fila_p}.includes('Solo inglés')", timeout=5000)
-        self.assertEqual(pg.evaluate("api('/api/config')")["project_langs"], {"Proyecto": "en"})
+        self.assertTrue(pg.evaluate("document.activeElement.matches(\"[data-pj-editar='Proyecto']\")"))
         pg.click(".aj-nav [data-sec='algrabar']")
         origen = "document.querySelector('#agFilas [data-fila=idioma] .gr-origen').textContent"
         pg.wait_for_function(f"{origen} === 'de Proyecto'", timeout=5000)
         pg.click(".aj-nav [data-sec='calendario']")
         self.assertTrue(pg.inner_text("#ctTeamsEstado").strip())
+        # Outlook una sola vez. Con fix-calendario, su estado lo pinta reunion.js (#rnEstado) y la fila de aquí se
+        # retira; sin ella, la fila con su estado, «Activar» y «Desactivar» (la casilla de reunion.js no se enseña dos
+        # veces) y «Probar» en la fila. La ayuda larga, plegada
+        if pg.evaluate("!!document.querySelector('#rnEstado')"):
+            self.assertFalse(pg.is_visible("#ctOutFila"))
+            self.assertTrue(pg.is_visible("#rnEstado"))
+        else:
+            self.assertFalse(pg.is_visible("#rnOutlook"))
+            self.assertEqual(pg.inner_text("#ctOutEstado"), "No conectado")
+            self.assertFalse(pg.is_visible("#rnProbar"))  # «Probar» es de Outlook: con Outlook activado, en su fila
+            pg.click("#ctOutAcc [data-ct-outlook='1']")
+            self.assertTrue(pg.is_checked("#rnOutlook"))
+            self.assertEqual(pg.inner_text("#ctOutEstado"), "Activado")
+            self.assertTrue(pg.is_visible("#ctOutFila #rnProbar"))
+            self.assertIn("Se activa al pulsar Guardar", pg.inner_text("#ctOutFrase"))
+            pg.click("#ctOutAcc [data-ct-outlook='0']")
+            self.assertFalse(pg.is_checked("#rnOutlook"))
+        ayuda = "[data-secc='calendario'] fieldset details.ag-como .help"
+        self.assertTrue(pg.evaluate(f"!!document.querySelector(\"{ayuda}\")"))  # la ayuda larga existe, plegada
+        self.assertFalse(pg.is_visible(ayuda))
+        # el aviso flotante depende de «Llamada detectada» (Al grabar): apagada, no se puede marcar
+        self.assertFalse(pg.is_disabled("#rnAviso"))
+        pg.click(".aj-nav [data-sec='algrabar']")
+        pg.uncheck("#lMeet")
+        pg.click(".aj-nav [data-sec='calendario']")
+        self.assertTrue(pg.is_disabled("#rnAviso"))
+        pg.click(".aj-nav [data-sec='algrabar']")
+        pg.check("#lMeet")
         pg.evaluate("api('/api/grabar/recordar', {clave: 'idioma', valor: null, alcance: 'proyecto',"
                     " vocab: 'Proyecto/Vocabulario/General.txt'})")
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [])
+
+    def test_proyectos_lo_de_una_fila_no_se_pierde(self):
+        """Revisión de B2 (09/11/2026, P0-1): una fila editada y el «Guardar» de abajo justo después. Antes la fila solo
+        se guardaba con su propio «Guardar» y el de abajo decía «Ajustes guardados» sin ella; ahora se guarda al
+        momento. Y la carpeta de un workstream también se elige en su fila."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='proyectos']")
+        pg.wait_for_selector("#pjTabla [data-pj-editar='Proyecto']", timeout=10000)
+        pg.click("#pjTabla [data-pj-editar='Proyecto']")
+        pg.select_option("#pjTabla [data-pj-l]", "pt")
+        pg.click("#modal [data-m='ok']")  # el «Guardar» de abajo, enseguida
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        pg.wait_for_function("api('/api/config').then(c => c.project_langs?.Proyecto === 'pt')", timeout=5000)
+        # la carpeta de un workstream
+        ws = "Proyecto/Vocabulario/General.txt"
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='proyectos']")
+        pg.wait_for_selector(f"#pjTabla [data-pjw-editar='{ws}']", timeout=10000)
+        pg.click(f"#pjTabla [data-pjw-editar='{ws}']")
+        self.assertIn("La del proyecto", pg.inner_text("#pjTabla tr.pj-ed [data-pj-f] option"))
+        pg.select_option("#pjTabla tr.pj-ed [data-pj-f]", "Proyecto")
+        pg.wait_for_function("document.querySelector('#pjTabla .pj-estado')?.textContent === 'Guardado'", timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["workstream_folders"], {ws: "Proyecto"})
+        pg.click("#pjTabla [data-pj-no]")
+        celda = f"document.querySelector('#pjTabla tr[data-pjw=\"{ws}\"] td:nth-child(2)').innerText"
+        pg.wait_for_function(f"!{celda}.includes('la del proyecto')", timeout=5000)
+        for body in ({"clave": "idioma", "valor": None, "alcance": "proyecto", "vocab": ws},
+                     {"clave": "carpeta", "valor": None, "alcance": "workstream", "vocab": ws}):
+            pg.evaluate("b => api('/api/grabar/recordar', b)", body)  # deja los ajustes como estaban
+        self.assertEqual(pg.evaluate("api('/api/config')")["workstream_folders"], {})
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_lo_no_guardado_errores_y_foco(self):
+        """Revisión de B2 (09/11/2026): al abrir, el foco va a la sección y el plan no se desplaza fuera de la vista
+        (900×600); el plan cambia con el motor del directo elegido en Procesado sin guardar, y «Transcribe» dice que
+        sale de allí; sin micrófono y sin audio del PC lo avisa y no deja guardarlo; si el plan falla, una frase con
+        «Probar otra vez» (en Al grabar y en Proyectos), sin el texto técnico."""
+        pg, errores, red = self.pagina()
+        pg.set_viewport_size({"width": 900, "height": 600})
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila[data-fila='transcribe']", timeout=10000)
+        self.assertTrue(pg.evaluate("document.activeElement.matches('.aj-nav [data-sec].on')"))
+        self.assertEqual(pg.evaluate("document.querySelector('.aj-main').scrollTop"), 0)
+        cfg = pg.evaluate("api('/api/config')")
+        actual = cfg["live_preset"]
+        otro = next(p for p in cfg["presets"] if p["id"] != actual and p["engine"] == "local")
+        pg.click(".aj-nav [data-sec='procesado']")
+        pg.select_option("#lPreset", otro["id"])
+        pg.click(".aj-nav [data-sec='algrabar']")
+        t = "document.querySelector('#agFilas [data-fila=transcribe]').innerText"
+        pg.wait_for_function(f"{t}.includes({json.dumps(otro['live_label'].split(' · ')[0])})", timeout=5000)
+        self.assertIn("Ajustes › Procesado", pg.inner_text("#agFilas [data-fila='transcribe']"))
+        pg.click(".aj-nav [data-sec='procesado']")
+        pg.select_option("#lPreset", actual)
+        pg.click(".aj-nav [data-sec='algrabar']")
+        # sin micrófono y sin el audio del PC
+        pg.select_option("#agMic", "none")
+        pg.select_option("#agSys", "none")
+        audio = "document.querySelector('#agFilas [data-fila=audio]').innerText"
+        pg.wait_for_function(f"{audio}.includes('Así no se graba nada')", timeout=5000)
+        pg.click("#modal [data-m='ok']")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('no se graba nada')", timeout=5000)
+        self.assertTrue(pg.is_visible("#modal .aj-nav"))  # Ajustes sigue abierto, con lo escrito
+        c2 = pg.evaluate("api('/api/config')")
+        self.assertEqual((c2["rec_mic"], c2["rec_sys"]), (cfg["rec_mic"], cfg["rec_sys"]))
+        pg.select_option("#agMic", "default")
+        pg.select_option("#agSys", "all")
+        # el plan falla: una frase y «Probar otra vez», sin el error de Python
+        tecnico = {"error": "'NoneType' object has no attribute 'get'"}
+        pg.route("**/api/grabar/plan", lambda r: r.fulfill(status=500, json=tecnico))
+        pg.select_option("#sLang", "de")
+        pg.wait_for_selector("#agFilas [data-ag-reintentar]", timeout=5000)
+        self.assertIn("No se ha podido calcular", pg.inner_text("#agFilas"))
+        self.assertNotIn("NoneType", pg.inner_text("#agFilas"))
+        pg.click(".aj-nav [data-sec='proyectos']")
+        pg.wait_for_selector("#pjTabla [data-pj-reintentar]", timeout=5000)
+        self.assertNotIn("sin asignar", pg.inner_text("#pjTabla"))  # no una tabla que parezca correcta
+        pg.unroute("**/api/grabar/plan")
+        pg.click("#pjTabla [data-pj-reintentar]")
+        celda = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"] td:nth-child(2)')?.innerText || ''"
+        pg.wait_for_function(f"({celda}).includes('su carpeta')", timeout=10000)
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, [r for r in red if "/api/grabar/plan" not in r and "/api/settings" not in r])
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_micro_sin_guardar_y_listas_que_cambian(self):
+        """Revisión de B2 (09/11/2026): un micrófono elegido sin guardar se conserva al volver de un subdiálogo aunque
+        la lista de dispositivos llegue después; y si cambian las listas de vocabulario (p. ej. al conectar una carpeta,
+        rama vocab-carpeta), la tabla de Proyectos y el selector de «Así se graba ahora» se rehacen."""
+        pg, errores, red = self.pagina()
+        devs = {"mics": [{"id": "m1", "name": "Micro uno", "default": True},
+                         {"id": "m2", "name": "Micro dos", "default": False}],
+                "outputs": [{"id": "o1", "name": "Altavoces", "default": True}], "mic": "default", "sys": "all"}
+        pendientes = []
+        pg.route("**/api/rec/devices*", lambda r: pendientes.append(r))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_function("document.querySelector('#agFilas .gr-fila')", timeout=10000)
+        pendientes.pop(0).fulfill(json=devs)
+        pg.wait_for_selector("#agMic option[value='m2']", state="attached", timeout=5000)
+        pg.select_option("#agMic", "m2")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        ws = "Proyecto/Vocabulario/General.txt"
+        pg.click(".aj-nav [data-sec='proyectos']")
+        pg.click(f"#pjTabla [data-pjw-editar='{ws}']")
+        pg.click("#pjTabla [data-pj-lista]")  # el editor de la lista: Ajustes se cierra
+        pg.wait_for_selector("#modal textarea#veTerms", timeout=5000)
+        pg.click("#modal [data-m='no']")  # vuelve a Ajustes, con lo escrito
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertNotEqual(pg.input_value("#agMic"), "m2")  # aún no está la opción
+        for _ in range(50):  # la segunda petición (al reabrir Ajustes), que se responde ahora
+            if pendientes:
+                break
+            pg.wait_for_timeout(100)
+        pendientes.pop(0).fulfill(json=devs)
+        pg.wait_for_function("document.querySelector('#agMic').value === 'm2'", timeout=5000)
+        self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
+        # las listas cambian (otro proyecto) y el bloque de listas se repinta: la tabla y el selector, también
+        pg.evaluate("api('/api/vocab/save', {project: 'Otro cliente', name: 'General', terms: 'uno, dos'})")
+        pg.evaluate("loadVocab(S.config.language ?? 'es-en').then(() => { const b = document.querySelector('#sVocab');"
+                    " b.innerHTML = b.innerHTML; })")
+        pg.wait_for_selector("#pjTabla [data-pj-editar='Otro cliente']", timeout=5000)
+        pg.wait_for_selector("#agProy option[value='Otro cliente/Vocabulario/General.txt']", state="attached",
+                             timeout=5000)
+        pg.evaluate("api('/api/vocab/delete', {id: 'Otro cliente/Vocabulario/General.txt'})")
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
 
     def test_claude_de_empresa_en_ajustes_y_en_el_asistente(self):
         """Rama claude-empresa (08/11/2026): «Comprobar» dice qué copia de Claude Code respondió (la de VS Code) y,
@@ -430,7 +603,14 @@ class InterfazEnNavegadorTests(unittest.TestCase):
                     " setTimeout(after, 50); }; }")
         pg.click("#btnRec")
         pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=15000)
+        # un nombre con signos que no admite un archivo: se dice cómo se guardará (y se graba así)
+        pg.fill("#grNombre", "Comité: Q4")
+        pg.wait_for_function("document.querySelector('#grNombreTag').textContent.includes('se guarda como')",
+                             timeout=5000)
+        self.assertEqual(pg.inner_text("#grNombreTag"), "se guarda como «Comité Q4»")
         pg.fill("#grNombre", "Mi reunión")
+        pg.wait_for_function("!document.querySelector('#grNombreTag').textContent.includes('se guarda como')",
+                             timeout=5000)
         antes = pg.input_value("#grProy")
         self.assertIn("Usar las listas de una carpeta…", pg.inner_text("#grProy"))
         pg.select_option("#grProy", "__conectar")

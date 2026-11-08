@@ -178,7 +178,7 @@ class ExplicarClaudeTests(unittest.TestCase):
             self.assertEqual(ex["frase"], str(e), texto)  # la frase de engines, tal cual
             self.assertIn(trozo, ex["frase"], texto)
             # con la frase de claude-empresa («pide acceso a … IT»), el diagnóstico para IT en vez de PowerShell
-            esperada = "diagnostico" if "pide acceso" in ex["frase"] else accion
+            esperada = "diagnostico" if "pide acceso a quien gestiona" in ex["frase"] else accion
             self.assertEqual(ex["accion"]["tipo"], esperada, texto)
             self.assertIn(ex["accion"]["etiqueta"], ("Probar otra vez", "Abrir PowerShell", "Copiar diagnóstico"))
             self.assertTrue(ex["frase"].endswith("y vuelve a probar."), ex["frase"])  # vale en Ajustes y en «Probar»

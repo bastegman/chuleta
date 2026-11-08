@@ -819,6 +819,7 @@ body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen Â«GuardarÂ
 .gr-nombre .input { width: 100%; height: 38px; font-size: 15px; font-weight: 500; }
 .gr-tag { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; min-width: 70px; }
 .gr-tag.de-reunion { color: var(--ok); }
+.gr-tag.archivo { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--warn); white-space: normal; }
 .gr-proyecto { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .gr-proy { width: auto !important; max-width: 100%; height: 32px; padding: 0 30px 0 12px; border-radius: 16px; border-color: var(--accent-line); background-color: var(--accent-soft); color: var(--accent); font-weight: 600; cursor: pointer; }
 .gr-proy.vacio { background-color: var(--panel-2); border-color: var(--line-2); color: var(--ink-2); }
@@ -919,15 +920,16 @@ details.ag-como > summary { cursor: pointer; font-size: 12.5px; color: var(--mut
 details.ag-como > summary:hover { color: var(--ink-2); }
 .ag-pie { margin-top: 14px; }
 .ag-pie a, .ag-cab a, .dialog .help a[data-sec-ir] { color: var(--accent); font-weight: 600; }
-.pj-tabla { width: 100%; margin-top: 14px; }
+.pj-tabla { width: 100%; margin-top: 14px; table-layout: fixed; }
 .pj-tabla th { text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .pj-tabla td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 13px; }
 .pj-tabla tr.pj-w td:first-child { padding-left: 22px; }
 .pj-tabla code { font: 12px var(--mono); overflow-wrap: anywhere; }
 .pj-her { color: var(--muted); }
 .pj-tabla select { width: 100%; height: 30px; }
-.pj-tabla .pj-acc { white-space: nowrap; }
-.pj-tabla .pj-acc .btn + .btn { margin-left: 4px; }
+.pj-tabla tr.pj-ed .pj-acc .btn { display: block; width: 100%; }
+.pj-tabla .pj-estado { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ct-off { opacity: .55; }
 .pj-tabla tr.pj-ed td { background: var(--hover); }
 .ct-filas { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .ct-fila { display: grid; grid-template-columns: 110px auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }

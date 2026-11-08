@@ -240,8 +240,9 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     preset = str(cambios.get("preset") or st.get("live_preset") or "medium")
     if preset not in presets and presets:
         preset = "medium" if "medium" in presets else next(iter(presets))
-    t_origen = "reunion" if ("live" in cambios or "preset" in cambios) else "ajustes"
-    t_txt = "cambiado para esta reunión" if t_origen == "reunion" else "Ajustes › Al grabar"
+    # el motor se elige en Ajustes › Procesado (Motores); «Texto en directo», en Al grabar, que lo dice debajo
+    t_origen = "reunion" if ("live" in cambios or "preset" in cambios) else "procesado"
+    t_txt = "cambiado para esta reunión" if t_origen == "reunion" else "Ajustes › Procesado"
     # con «Solo grabar» transcribe la cola al terminar, con el motor de después (Ajustes › Procesado)
     p_tx = presets.get(preset) if live else presets.get(st.get("preset") or "rapido")
     lineas.append(_linea("transcribe", "Transcribe", transcribe_txt(live, p_tx or {}, motores),
@@ -254,9 +255,11 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     mic = str(cambios["mic"]) if "mic" in cambios else (st.get("rec_mic") or "default")
     sys_dev = str(cambios["sys"]) if "sys" in cambios else (st.get("rec_sys") or "all")
     a_origen = "reunion" if ("mic" in cambios or "sys" in cambios) else "ajustes"
+    extra = {"aviso": "Así no se graba nada: deja al menos el micrófono o el audio del PC."} \
+        if mic == "none" and sys_dev == "none" else {}
     lineas.append(_linea("audio", "Audio", audio_txt(mic, sys_dev), a_origen,
                          "cambiado para esta reunión" if a_origen == "reunion" else "Ajustes › Al grabar",
-                         mic=mic, sys=sys_dev))
+                         mic=mic, sys=sys_dev, **extra))
 
     # --- participantes: los de la cita de Outlook (sin confirmar) salvo que la tarjeta los quite
     if "participantes" in pedido:

@@ -81,12 +81,18 @@ class CapasTests(unittest.TestCase):
         st = {"live_preset": "medium", "preset": "rapido", "rec_mic": "none", "rec_sys": "all"}
         b = lineas(resolver(st, pedido={"vocab": A}))
         self.assertEqual(b["transcribe"]["valor"], "Este PC, en directo · Normal")
+        # el motor se elige en Ajustes › Procesado (revisión de B2: decía «Ajustes › Al grabar»)
+        self.assertEqual((b["transcribe"]["origen"], b["transcribe"]["origen_txt"]),
+                         ("procesado", "Ajustes › Procesado"))
+        self.assertNotIn("aviso", b["audio"])
         self.assertEqual(b["resume"]["valor"], "Claude con tu cuenta, al terminar")
         self.assertEqual((b["audio"]["valor"], b["audio"]["origen"]),
                          ("Sin micrófono · todo lo que suena en el PC", "ajustes"))
         b = lineas(resolver(st, pedido={"vocab": A, "cambios": {"live": False, "mic": "default"}}))
         self.assertEqual(b["transcribe"]["valor"], "Este PC, al terminar · Rápido")  # el motor de la cola
         self.assertEqual((b["transcribe"]["origen"], b["audio"]["origen"]), ("reunion", "reunion"))
+        b = lineas(resolver(dict(st, rec_mic="none", rec_sys="none"), pedido={"vocab": A}))
+        self.assertIn("Así no se graba nada", b["audio"]["aviso"])
         local = dict(MOTORES, procesado="local")
         b = lineas(plan.resolver({}, LISTAS, {}, [], {}, motores=local))
         self.assertEqual(b["resume"]["valor"], "No se resume: todo se queda en este PC")
@@ -373,6 +379,77 @@ class ServidorPlanTests(TempTree):
         c = a.grabar_plan_api({"vocab": "", "proyectos": True})["carpetas"]
         self.assertEqual((c["proyectos"]["Alfa"]["rel"], c["proyectos"]["Beta"]["origen"]),
                          ("Alfa/Reuniones", "ajustes"))
+
+    def test_sin_microfono_y_sin_audio_del_pc_no_se_guarda(self):
+        """Revisión de B2: «Sin micrófono» y «Sin el audio del PC» a la vez no graban nada (rec_start lo rechaza al
+        empezar): no se guardan así, ni desde Ajustes ni con «Usarlo en: todas»."""
+        a = self.app(rec_mic="none", rec_sys="all")
+        with self.assertRaises(server.ApiError) as c:
+            a.save_settings({"rec_sys": "none"})
+        self.assertIn("no se graba nada", c.exception.msg)
+        with self.assertRaises(server.ApiError):
+            a.save_settings({"rec_mic": "none", "rec_sys": "none"})
+        with self.assertRaises(server.ApiError):
+            a.grabar_recordar({"clave": "sys", "valor": "none", "alcance": "ajustes"})
+        self.assertEqual(a.settings.get()["rec_sys"], "all")
+        a.grabar_recordar({"clave": "mic", "valor": "default", "alcance": "ajustes"})
+        a.grabar_recordar({"clave": "sys", "valor": "none", "alcance": "ajustes"})  # con micrófono, sí
+        self.assertEqual((a.settings.get()["rec_mic"], a.settings.get()["rec_sys"]), ("default", "none"))
+
+    def test_ajustes_lo_no_guardado_de_otras_secciones_y_la_plantilla(self):
+        """Revisión de B2: «Así se graba ahora» con lo que aún no se ha guardado en otras secciones (motores, resumir
+        al terminar, vocabulario general, carpeta por reunión), y sin reunión la carpeta de la reunión como patrón."""
+        a = self.app(live_preset="medium", preset="rapido", summary_auto=True, procesado="agente")
+        A = "Alfa/Vocabulario/General.txt"
+        resume = lineas(a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": {}}))["resume"]["valor"]
+        self.assertIn("al terminar", resume)
+        aj = {"live_preset": "rapido", "summary": {"auto": False}, "prompt": "SLA, KPI"}
+        b = lineas(a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": aj}))
+        self.assertEqual(b["transcribe"]["valor"], "Este PC, en directo · Rápido")
+        self.assertIn("cuando lo pidas", b["resume"]["valor"])
+        self.assertEqual(b["vocab"]["valor"], "El general · 2 términos")
+        for p in self.regla_de_carpetas():
+            p.start()
+            self.addCleanup(p.stop)
+        car = lineas(a.grabar_plan_api({"nombre": "", "vocab": A, "ajustes": {}}))["carpeta"]
+        self.assertEqual(car["sub"], "Alfa/Reuniones/" + server.App.PLANTILLA_REUNION)
+        self.assertIn("AAAA-MM-DD Nombre de la reunión", car["valor"])
+        apagada = {"nombre": "", "vocab": A, "ajustes": {"carpeta_por_reunion": False}}
+        car = lineas(a.grabar_plan_api(apagada))["carpeta"]
+        self.assertIsNone(car["sub"])  # apagada sin guardar: ya no
+        car = lineas(a.grabar_plan_api({"nombre": "", "vocab": A}))["carpeta"]  # la tarjeta: la de ahora
+        self.assertEqual(car["sub"], "Alfa/Reuniones/2026-11-08 10-00")
+
+    def test_carpeta_de_un_workstream(self):
+        """Ajustes › Proyectos: la carpeta principal de un workstream (la regla de la rama de carpetas la usa antes que
+        la del proyecto; sin ella, aquí también)."""
+        os.makedirs(os.path.join(self.root, "Alfa", "Infra"))
+        a = self.app(project_folders={"Alfa": "Alfa/Reuniones"})
+        A = "Alfa/Vocabulario/General.txt"
+        a.grabar_recordar({"clave": "carpeta", "valor": "Alfa/Infra", "alcance": "workstream", "vocab": A})
+        self.assertEqual(a.settings.get()["workstream_folders"], {A: "Alfa/Infra"})
+        car = lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]
+        self.assertEqual((car["rel"], car["origen"], car["origen_txt"]),
+                         ("Alfa/Infra", "workstream", "carpeta del workstream"))
+        c = a.grabar_plan_api({"vocab": "", "proyectos": True})["carpetas"]
+        self.assertEqual((c["workstreams"][A]["origen"], c["proyectos"]["Alfa"]["rel"]),
+                         ("workstream", "Alfa/Reuniones"))
+        a.hotkey = types.SimpleNamespace(ok=True, error=None)
+        self.assertEqual(a.config({})["workstream_folders"], {A: "Alfa/Infra"})
+        a.grabar_recordar({"clave": "carpeta", "valor": None, "alcance": "workstream", "vocab": A})
+        self.assertEqual(lineas(a.grabar_plan_api({"vocab": A}))["carpeta"]["rel"], "Alfa/Reuniones")
+
+    def test_nombre_con_signos_que_no_admite_un_archivo(self):
+        """«Comité: Q4» escrito en la tarjeta: rec_start rechazaba el nombre («Nombre no válido») al empezar. El plan lo
+        manda ya sin esos signos (como la carpeta de la reunión) y lo dice; Ctrl+Alt+R, igual."""
+        a = self.app()
+        p = a.grabar_plan_api({"nombre": "Comité: Q4 | Alfa?", "vocab": ""})
+        self.assertEqual((p["rec"]["name"], p["nombre"]["archivo"]), ("Comité Q4 Alfa", "Comité Q4 Alfa"))
+        self.assertEqual(p["nombre"]["valor"], "Comité: Q4 | Alfa?")  # lo escrito se queda en la caja
+        with mock.patch.object(server, "RecorderProcess", FakeRec), mock.patch.object(server, "log"):
+            r = a.rec_start(dict(p["rec"], resumen=p["resumen"]))
+        self.assertTrue(r["path"].endswith(" - Comité Q4 Alfa.wav"), r["path"])
+        self.assertNotIn("archivo", a.grabar_plan_api({"nombre": "Comité Q4", "vocab": ""})["nombre"])
 
     def test_ctrl_alt_r_con_asistentes_sin_origen_toma_el_de_la_reunion(self):
         a = self.app()

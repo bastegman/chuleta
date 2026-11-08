@@ -78,7 +78,7 @@ def explicar(err, proveedor=None):
     if "no deja usar claude code con esta cuenta" in low:
         # «pide acceso a … (IT)» no se arregla en PowerShell: el diagnóstico, para mandárselo a IT. Entrar con otra
         # cuenta (o con el inicio de sesión de la empresa si no admite API keys) sí: claude y /login
-        out["accion"] = _accion("diagnostico" if "pide acceso" in low else "abrir_powershell")
+        out["accion"] = _accion("diagnostico" if "pide acceso a quien gestiona" in low else "abrir_powershell")
         return out
     # rama claude-empresa (08/11/2026): con el programa suelto se entra otra vez en PowerShell; con la copia de VS Code,
     # en su panel (allí no hay `claude`): entonces, «Probar otra vez»

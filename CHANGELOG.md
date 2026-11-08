@@ -15,10 +15,11 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - Ajustes abre en **«Al grabar»**: arriba, «Así se graba ahora una reunión de [proyecto]», el mismo cálculo que la
   tarjeta de grabar y Ctrl+Alt+R, que cambia al momento con lo que escribas debajo aunque aún no lo hayas guardado.
   Debajo, solo las reglas, una por línea: reuniones sin proyecto, idioma por defecto, proyecto al grabar, contexto,
-  micrófono y audio del PC, texto en directo y el aviso al detectar una llamada. La ayuda larga, plegada.
+  micrófono y audio del PC, texto en directo y «Llamada detectada». La ayuda larga, plegada.
 - **«Proyectos»** junta lo que antes eran Vocabulario y Carpetas: una tabla con la carpeta y el idioma de cada proyecto
-  y workstream, que dice si son suyos o heredados («la del proyecto», «el de Ajustes») y se edita en la propia fila; las
-  listas de vocabulario, las carpetas fuera de la app y las copias en otras carpetas (los antiguos destinos de salida).
+  y workstream, que dice si son suyos o heredados («la del proyecto», «el de Al grabar») y se edita en la propia fila;
+  las listas de vocabulario, las carpetas fuera de la app y las copias en otras carpetas (los antiguos destinos de
+  salida).
 - Cada cosa a su sección: los motores a **Procesado**, el idioma y las instrucciones del resumen a **Resumen**, OBS a
   **Avanzado** y Outlook y el aviso flotante a **Calendario y Teams**, que dice en una frase si Teams funciona (y la
   reunión que ve ahora) y el estado de Outlook.
@@ -38,6 +39,33 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   el modelo elegido», «Revisar en Ajustes».
 - Un solo nombre para los antiguos destinos de salida: «copias en otras carpetas», como en Ajustes, también en la
   tarjeta de grabar, al confirmar participantes, al borrar una reunión y en «Copiar diagnóstico».
+- **Calendario y Teams**, sin repetir nada: Outlook sale una vez, en su fila, con «Activar» o «Desactivar» y, activado,
+  «Probar»; mientras no se guarde, lo dice («Se activa al pulsar Guardar»). La ayuda larga, plegada en «¿Cómo
+  funciona?». El aviso flotante dice que depende de «Llamada detectada» (Al grabar) y, con ella apagada, no se puede
+  marcar: era una segunda casilla casi igual que no decía de cuál colgaba.
+- «Llamada detectada» (Al grabar) vuelve a decir lo que hace: «avisarme si estoy en una llamada (Teams, Zoom…) y no
+  estoy grabando». Decía «aviso con «Grabar»», que es el aviso flotante, otro ajuste.
+- En la tabla de Proyectos, editar una fila ya no cambia los anchos de la tabla ni corta los desplegables por la
+  mitad; «Guardar» y «Cancelar», uno encima del otro.
+- Un nombre de reunión escrito con signos que no admite un archivo (`\ / : * ? " < > |`, p. ej. «Comité: Q4») ya no
+  hace fallar «Empezar a grabar» con «Nombre no válido»: se graba sin esos signos y la tarjeta dice antes cómo se
+  guardará («se guarda como «Comité Q4»»). Ctrl+Alt+R, igual.
+- En **Proyectos**, lo que cambias en una fila se guarda al momento («Guardando…», «Guardado» en la propia fila) y
+  «Listo» la cierra. Antes hacía falta el «Guardar» de la fila, y el «Guardar» de abajo la perdía diciendo «Ajustes
+  guardados». Ahora también se elige la carpeta de cada workstream, y una carpeta asignada que ya no existe se avisa
+  también al editarla.
+- **«Así se graba ahora»** cambia también con lo que aún no has guardado en otras secciones (los motores de
+  Procesado, resumir al terminar, el vocabulario de las reuniones sin proyecto y «Una carpeta por reunión») y se
+  recalcula al volver de Proyectos. «Transcribe» dice que sale de Ajustes › Procesado, donde están los motores. Sin
+  reunión, la carpeta de la reunión se enseña como «AAAA-MM-DD Nombre de la reunión», no con la hora de ese minuto.
+- No se puede dejar en Ajustes «Sin micrófono» y «Sin el audio del PC» a la vez (no se grabaría nada): el plan lo avisa
+  y al guardar se dice por qué.
+- Si no se puede calcular el plan o la carpeta de cada proyecto, Ajustes lo dice en una frase con «Probar otra vez»,
+  sin texto técnico ni una tabla que parezca correcta.
+- Al abrir Ajustes, el foco va a la sección abierta: a 900×600 el plan ya no se queda fuera de la vista. El micrófono
+  elegido sin guardar se conserva al volver de un subdiálogo (editar una lista, el asistente…).
+- Accesibilidad: cada desplegable y casilla de Ajustes y de los paneles «Cambiar» de la tarjeta tiene su nombre para
+  un lector de pantalla (los de la tabla de Proyectos dicen de qué proyecto son, y cada «Editar», cuál edita).
 - Si la app no puede leer la lista de micrófonos y salidas, Ajustes y la tarjeta de grabar lo dicen en una frase
   («No se ha podido leer la lista de micrófonos y salidas de audio») en vez de callarlo o de enseñar el final del error
   de la grabadora, que queda al pasar el ratón.

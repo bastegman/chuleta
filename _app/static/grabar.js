@@ -126,8 +126,11 @@ function grPintar() {
   if (!g.tocado.nombre && nombre.value !== (p.nombre.valor || '')) nombre.value = p.nombre.valor || '';  // no lo has tocado
   nombre.placeholder = 'Nombre de la reunión (opcional)';
   const tag = $('#grNombreTag', d);
-  tag.textContent = p.nombre.texto || '';
-  tag.className = 'gr-tag' + (p.nombre.origen === 'teams' || p.nombre.origen === 'outlook' ? ' de-reunion' : '');
+  // con signos que un nombre de archivo no admite, se graba sin ellos: se dice cómo quedará
+  tag.textContent = p.nombre.archivo != null ? `se guarda como «${p.nombre.archivo || 'sin nombre'}»` : p.nombre.texto || '';
+  tag.title = p.nombre.archivo != null ? 'Un nombre de archivo no puede llevar \\ / : * ? " < > |' : '';
+  tag.className = 'gr-tag' + (p.nombre.archivo != null ? ' archivo'
+    : p.nombre.origen === 'teams' || p.nombre.origen === 'outlook' ? ' de-reunion' : '');
   const sel = $('#grProy', d);
   sel.innerHTML = `<option value="">Sin proyecto</option>${(S.vocab || []).map(v => `<option value="${esc(v.id)}">${esc(v.project)} › ${esc(v.name)}</option>`).join('')}`
     + `<option value="__nuevo">Nuevo proyecto o workstream…</option>`
@@ -163,7 +166,7 @@ function grValorHtml(l) {
     const t = [l.mic === 'default' ? 'Micrófono predeterminado de Windows' : nom(G.devs?.mics, l.mic) || '',
       l.sys === 'all' ? 'Todo lo que suena en el ordenador' : nom(G.devs?.outputs, l.sys) || ''].filter(Boolean).join(' · ');
     return `<span class="gr-audio" title="${esc(t)}"><b>${mic}</b>${l.mic === 'none' ? '' : grMedidor('mic')}<b>· ${pc}</b>${l.sys === 'none' ? '' : grMedidor('sys')}</span>`
-      + (G.devsErr ? grDevsAviso(G.devsErr) : '');
+      + (G.devsErr ? grDevsAviso(G.devsErr) : '') + (l.aviso ? `<span class="gr-aviso">${esc(l.aviso)}</span>` : '');
   }
   if (l.clave === 'contexto') return esc(l.valor);
   return `<b>${esc(l.valor)}</b>`;
@@ -231,20 +234,20 @@ function grPanelHtml(k) {
   const quitar = l.origen === 'reunion' ? `<a href="#" class="gr-quitar" data-gr-quitar="${k}">Quitar el cambio</a>` : '';
   const pie = (alc = true) => `${alc ? grAlcanceHtml(k) : ''}<div class="gr-panel-pie">${quitar}<button class="btn sm primary" type="button" data-gr-listo="${k}">Listo</button></div>`;
   if (k === 'carpeta') {
-    return `<label class="gr-l">Guardar esta reunión en</label><select data-gr="carpeta">${folderOpts(l.rel)}</select>${pie()}`;
+    return `<label class="gr-l" for="grSelCarpeta">Guardar esta reunión en</label><select data-gr="carpeta" id="grSelCarpeta">${folderOpts(l.rel)}</select>${pie()}`;
   }
   if (k === 'idioma') {
-    return `<label class="gr-l">Idioma de la reunión</label><select data-gr="idioma">${LANGS.map(([v, t]) => `<option value="${v}"${v === l.code ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>
+    return `<label class="gr-l" for="grSelIdioma">Idioma de la reunión</label><select data-gr="idioma" id="grSelIdioma">${LANGS.map(([v, t]) => `<option value="${v}"${v === l.code ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>
       <div class="help">Las mezclas detectan el idioma cada pocos segundos, pero solo entre esos dos. Con uno solo, lo que se diga en otro idioma se pasa a ese.</div>${pie()}`;
   }
   if (k === 'contexto') {
-    return `<label class="gr-l">De qué va y quién participa</label><input class="input" data-gr="contexto" maxlength="500" value="${esc(l.valor || '')}" placeholder="Una o dos frases: las recibe Whisper detrás del vocabulario, y el resumen" autocomplete="off">${pie()}`;
+    return `<label class="gr-l" for="grCtx">De qué va y quién participa</label><input class="input" data-gr="contexto" id="grCtx" maxlength="500" value="${esc(l.valor || '')}" placeholder="Una o dos frases: las recibe Whisper detrás del vocabulario, y el resumen" autocomplete="off">${pie()}`;
   }
   if (k === 'transcribe') {
     const presets = (S.config.presets || []).map(x => `<option value="${esc(x.id)}"${x.id === l.preset ? ' selected' : ''}>${esc(x.live_label || x.label)} · ${liveFit(x)[1]}</option>`).join('');
     return `<div class="seg2 gr-modo"><label class="${l.live ? 'on' : ''}"><input type="radio" name="grLive" data-gr="live" value="1"${l.live ? ' checked' : ''}><b>En directo</b><span>El texto va saliendo mientras se habla</span></label>
       <label class="${l.live ? '' : 'on'}"><input type="radio" name="grLive" data-gr="live" value="0"${l.live ? '' : ' checked'}><b>Solo grabar</b><span>Si el portátil va lento: se transcribe al terminar</span></label></div>
-      <label class="gr-l">Modelo del directo</label><select data-gr="preset"${l.live ? '' : ' disabled'}>${presets}</select>${pie()}`;
+      <label class="gr-l" for="grSelPreset">Modelo del directo</label><select data-gr="preset" id="grSelPreset"${l.live ? '' : ' disabled'}>${presets}</select>${pie()}`;
   }
   if (k === 'audio') {
     const o = (v, t, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(t)}</option>`;
@@ -254,8 +257,8 @@ function grPanelHtml(k) {
     const outs = o('all', 'Todo lo que suena en el ordenador · recomendado', l.sys)
       + o('default', `Salida predeterminada de Windows (ahora: ${def(dv.outputs)})`, l.sys)
       + `<optgroup label="Fijar una salida">${dv.outputs.map(x => o(x.id, nfc(x.name), l.sys)).join('')}</optgroup>` + o('none', 'No grabar el audio del ordenador', l.sys);
-    return `<label class="gr-l">Micrófono</label><select data-gr="mic">${mics}</select>
-      <label class="gr-l">Audio del ordenador</label><select data-gr="sys">${outs}</select>
+    return `<label class="gr-l" for="grSelMic">Micrófono</label><select data-gr="mic" id="grSelMic">${mics}</select>
+      <label class="gr-l" for="grSelSys">Audio del ordenador</label><select data-gr="sys" id="grSelSys">${outs}</select>
       <div class="help">Con las opciones de arriba da igual que conectes o quites los cascos: la grabación sigue con el dispositivo nuevo. Pon algo a sonar para ver que la barra se mueve.</div>${pie()}`;
   }
   if (k === 'vocab') {

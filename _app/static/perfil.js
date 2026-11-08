@@ -91,7 +91,7 @@ function perfilReglasHtml() {
   const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [];
   const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
   return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto</label><div><select id="pfFolder">${perfilOpt(PERFIL_AUTO, 'Automática · la última usada', folderSel)}${folderOpts(folderSel)}</select>
-      <span class="ag-hint">las de un proyecto, en su carpeta</span></div></div>
+      <span class="ag-hint">y las de un proyecto sin carpeta propia</span></div></div>
     <div class="ag-regla"><label for="sLang">Idioma por defecto</label><div>${langSelect('sLang', c.language ?? 'es-en')}<span class="ag-hint">si el proyecto no tiene el suyo</span></div></div>
     <div class="ag-regla"><label for="pfVocab">Proyecto al grabar</label><div><select id="pfVocab">${perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', vocabSel)}${perfilOpt('', 'Sin proyecto', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, vocabSel)).join('')}</optgroup>`).join('')}</select>
       <span class="ag-hint">el de esa reunión otras veces, el título o la última</span></div></div>

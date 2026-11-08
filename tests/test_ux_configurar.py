@@ -78,7 +78,10 @@ class ExplicarTests(unittest.TestCase):
             ("Claude Code no puede usar el modelo elegido con esta cuenta (There's an issue with the selected model): "
              "elige otro modelo en Ajustes o pide a tu IT que lo active, y vuelve a probar.", "procesado"),
             ("Claude Code está renovando tu sesión en otra ventana (por ejemplo, en VS Code): espera un minuto y "
-             "vuelve a probar.", "reintentar"))
+             "vuelve a probar.", "reintentar"),
+            # la de esta rama antes de fusionar: propone primero entrar con otra cuenta en PowerShell (revisión de B2)
+            (str(engines.ClaudeCode()._why(1, "Your organization has disabled Claude Code for this account.")),
+             "abrir_powershell"))
         for frase, accion in casos:
             r = explicar.explicar(frase)
             self.assertEqual(r["frase"], frase)  # la frase de engines se queda

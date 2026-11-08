@@ -1536,6 +1536,9 @@ def update_perfil(d, cambios):
         d["language"] = cambios["language"]
 
 
+SIN_AUDIO = "Sin micrófono y sin el audio del PC no se graba nada: deja al menos uno de los dos."
+
+
 def ajustes_previstos(st, a):
     """Los ajustes con lo que Ajustes › Al grabar tiene escrito y sin guardar (solo para enseñar el plan; no se guarda
     nada). Se aceptan las claves de esa sección, validadas como al guardar; lo que no vale se ignora."""
@@ -1550,6 +1553,16 @@ def ajustes_previstos(st, a):
         st["rec_directo"] = bool(a["rec_directo"])
     if a.get("live_preset") in LIVE_PRESETS:
         st["live_preset"] = a["live_preset"]
+    if a.get("preset") in engines.PRESETS_BY_ID:  # Procesado › Motores: el de después («Solo grabar»)
+        st["preset"] = a["preset"]
+    s = a.get("summary") if isinstance(a.get("summary"), dict) else {}
+    for k, clave in (("auto", "summary_auto"), ("local", "summary_auto_local")):
+        if k in s:
+            st[clave] = bool(s[k])
+    if isinstance(a.get("prompt"), str):  # el vocabulario de las reuniones sin proyecto (Proyectos)
+        st["prompt"] = a["prompt"]
+    if "carpeta_por_reunion" in a:  # rama de carpetas: una carpeta por reunión
+        st["carpeta_por_reunion"] = a["carpeta_por_reunion"] is not False
     if isinstance(a.get("perfil"), dict):
         try:
             claves = ("folder", "vocab", "context")
@@ -3506,8 +3519,8 @@ class App:
         rel = self.rec_folder_for(fv, st)
         if not fv or callable(globals().get("rec_folder_origin")):
             return rel
-        if self._carpeta_origen(st, full)(v, rel)[0] not in ("ultima", "ajustes"):
-            return rel
+        # el mismo orden que la regla de la rama de carpetas: la del workstream, la asignada al proyecto, la del
+        # proyecto en el árbol; sin ninguna, la de rec_folder_for (la fija de Ajustes o la última usada)
         for cand in ((st.get("workstream_folders") or {}).get(v["id"]),
                      (st.get("project_folders") or {}).get(v["project"]), rel_of(_project_dir(fv))):
             if cand is None:
@@ -3519,7 +3532,7 @@ class App:
                 continue
         return rel  # sin carpeta propia en la app (p. ej. listas de una carpeta conectada): lo de siempre, a la vista
 
-    def plan_grabar(self, pedido, st=None, sug=None):
+    def plan_grabar(self, pedido, st=None, sug=None, plantilla=False):
         """El plan de una grabación nueva con el origen de cada valor (ver plan.py). `pedido`: lo elegido en la
         tarjeta; `sug`: la reunión en curso (si no se da, la última lectura del vigilante o Teams al momento)."""
         st = st or self.settings.get()
@@ -3541,24 +3554,42 @@ class App:
             except Exception:
                 log_exc()
         hist = grabar_plan.historial_de(list(getattr(lib, "flat", None) or []), listas)
-        return grabar_plan.resolver(
+        p = grabar_plan.resolver(
             st, listas, sug, hist, pedido,
             carpeta_de=lambda v: self._carpeta_plan(v, st, full),
             carpeta_origen=self._carpeta_origen(st, full),
             sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
             motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
-            carpeta_reunion=self._carpeta_reunion(st))
+            carpeta_reunion=self._carpeta_reunion(st, plantilla))
+        # un nombre escrito con \ / : * ? " < > | (p. ej. «Comité: Q4») no vale como nombre de archivo y rec_start lo
+        # rechazaría al empezar: se graba sin esos signos, como la carpeta de la reunión (rec_destino), y se dice
+        n = p["rec"].get("name") or ""
+        if n:
+            try:
+                clean_name(n)
+            except ApiError:
+                p["rec"]["name"] = p["nombre"]["archivo"] = calendario.nombre_archivo(n)
+        return p
 
-    @staticmethod
-    def _carpeta_reunion(st):
+    PLANTILLA_REUNION = "AAAA-MM-DD Nombre de la reunión"
+
+    @classmethod
+    def _carpeta_reunion(cls, st, plantilla=False):
         """La carpeta «AAAA-MM-DD Nombre» que creará rec_start dentro de la base, o None. Con la rama de carpetas
         (B1b): su meeting_dir_preview, con el nombre como lo limpia rec_start (rec_destino hace lo mismo). Sin ella,
-        None: la grabación va en la base."""
+        None: la grabación va en la base. plantilla (Ajustes › Al grabar, sin reunión): sin nombre, el patrón y no
+        «AAAA-MM-DD HH-MM» de ahora, que cambiaría cada minuto."""
         previa = globals().get("meeting_dir_preview")
         if not callable(previa):
             return None
 
         def reunion(base, nombre):
+            if plantilla and not nombre:
+                try:
+                    activa = previa(base or "", "", st) != (base or "")
+                except (ApiError, OSError):
+                    return None
+                return f"{base}/{cls.PLANTILLA_REUNION}".lstrip("/") if activa else None
             label = ""
             if nombre:
                 try:
@@ -3602,7 +3633,7 @@ class App:
         st = self.settings.get()
         if isinstance(b.get("ajustes"), dict):  # Ajustes › Al grabar: cómo quedaría con lo que aún no se ha guardado
             st = ajustes_previstos(st, b["ajustes"])
-        p = self.plan_grabar(pedido, st=st)
+        p = self.plan_grabar(pedido, st=st, plantilla=isinstance(b.get("ajustes"), dict))
         if b.get("recientes"):
             vs = list_vocab()
             p["recientes"] = grabar_plan.recientes(grabar_plan.historial_de(
@@ -3632,17 +3663,22 @@ class App:
             else:
                 k = v["id"] if sitio == "workstream" else v["project"]
                 cambios = {sitio + "_langs": lambda cur: _con_o_sin(cur, k, lang)}
-        elif clave == "carpeta" and alcance in ("proyecto", "ajustes"):
+        elif clave == "carpeta":
             rel = None if valor is None else str(valor or "").replace("\\", "/").strip("/")
             if rel is not None and in_app_dir(safe(rel, "dir")):
                 raise ApiError("No se puede grabar ahí")
             if alcance == "ajustes":
                 cambios = {"perfil": {"folder": rel}}
+            elif alcance == "workstream":  # Ajustes › Proyectos: la de un workstream (None: la del proyecto)
+                cambios = {"workstream_folders": lambda cur: _con_o_sin(cur, v["id"], rel)}
             else:
                 cambios = {"project_folders": lambda cur: _con_o_sin(cur, v["project"], rel)}
         elif clave in ("mic", "sys", "live", "preset", "contexto") and alcance == "ajustes":
             if clave == "preset" and valor not in LIVE_PRESETS:
                 raise ApiError("Ese motor no existe.")
+            otro = self.settings.get().get("rec_sys" if clave == "mic" else "rec_mic")
+            if clave in ("mic", "sys") and valor == "none" and otro == "none":
+                raise ApiError(SIN_AUDIO)
             if clave == "contexto":
                 cambios = {"perfil": check_perfil({"context": valor})}
             elif clave == "live":
@@ -4030,6 +4066,7 @@ class App:
                 "favorites": st.get("favorites") or [], "folder_icons": st.get("folder_icons") or {},
                 "links": [{"rel": LINK + k, "name": l["name"], "path": l["path"]} for k, l in LINKS.items()],
                 "rec_folder": st.get("rec_folder") or "", "project_folders": st.get("project_folders") or {},
+                "workstream_folders": dict(st.get("workstream_folders") or {}),
                 "project_langs": st.get("project_langs") or {}, "workstream_langs": st.get("workstream_langs") or {},
                 "rec_directo": st.get("rec_directo", True) is not False, "rec_mic": st.get("rec_mic") or "default",
                 "rec_sys": st.get("rec_sys") or "all",
@@ -4873,6 +4910,11 @@ class App:
         perfil = (check_perfil(b["perfil"], perfil_de(self.settings.get())["outputs"])  # valida antes de guardar
                   if isinstance(b.get("perfil"), dict) else {})
         antes = procesado_de(self.settings.get())
+        cur = self.settings.get()
+        audio = [(b[k].strip() or defecto) if isinstance(b.get(k), str) else (cur.get(k) or defecto)
+                 for k, defecto in (("rec_mic", "default"), ("rec_sys", "all"))]
+        if audio == ["none", "none"]:
+            raise ApiError(SIN_AUDIO)
 
         def upd(d):
             for k in ("preset", "language", "prompt"):

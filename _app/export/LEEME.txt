@@ -57,8 +57,8 @@ ACTUALIZAR A UNA VERSIÓN NUEVA
 
   Si la misma carpeta de reuniones la usan varias copias de Chuleta (en otro PC, o en una carpeta
   de OneDrive compartida), actualízalas todas a la vez: una copia de una versión anterior envía al
-  resumen con IA y a los destinos de salida los participantes que propuso Outlook o Teams aunque
-  no los hayas confirmado, y la del 30/10 (cuando se llamaba Notas) no entiende el idioma ni el
+  resumen con IA y a las copias en otras carpetas los participantes que propuso Outlook o Teams
+  aunque no los hayas confirmado, y la del 30/10 (cuando se llamaba Notas) no entiende el idioma ni el
   contexto de las reuniones nuevas y mezcla todas sus propiedades con las notas.
 
 
@@ -126,9 +126,10 @@ USO DIARIO
     las reglas: la carpeta de las reuniones sin proyecto, el idioma por defecto (se detecta solo;
     "Español + inglés", "Español + portugués" e "Inglés + portugués" son para reuniones que
     mezclan dos), el proyecto al grabar, un contexto de una o dos frases (de qué va, quién
-    participa), el micrófono y el audio del PC, el texto en directo y el aviso de llamada. En
-    la página de la reunión, idioma y contexto se cambian sobre la marcha y el directo los usa
-    desde el siguiente trozo. El resumen también tiene en cuenta el contexto.
+    participa), el micrófono y el audio del PC, el texto en directo y "Llamada detectada" (te
+    avisa si estás en una llamada y no grabas; el aviso flotante con "Grabar" está en Calendario y
+    Teams). En la página de la reunión, idioma y contexto se cambian sobre la marcha y el directo
+    los usa desde el siguiente trozo. El resumen también tiene en cuenta el contexto.
   - Ajustes > Proyectos: una tabla con la carpeta y el idioma de cada proyecto y workstream, los
     que se usarán al grabar. En gris, lo que no has elegido tú: sin carpeta asignada, la del
     proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. "Editar" lo
@@ -172,8 +173,8 @@ QUIÉN HABLA (opcional)
     transcripción con el nombre de quien habla y «Exportar con hablantes» guarda
     <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
   - Privacidad: las voces se separan y se reconocen en tu PC, y las huellas no salen de él. Los
-    nombres que pongas van con la transcripción: al resumen con IA (si lo usas) y a los destinos
-    de salida. Por reunión se guarda <grabación>.hablantes.json junto al audio (tramos y
+    nombres que pongas van con la transcripción: al resumen con IA (si lo usas) y a las copias en
+    otras carpetas. Por reunión se guarda <grabación>.hablantes.json junto al audio (tramos y
     «Persona N», sin datos de voz). Las huellas de voz que decidas recordar van a
     %LOCALAPPDATA%\AudiosApp\voces.json, cifrado con tu cuenta de Windows, fuera de OneDrive,
     máximo 5 por persona, y se borran con «Olvidar». Una huella de voz es un dato biométrico:
