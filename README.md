@@ -19,8 +19,9 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   suscripción a través de Claude Code, con el paso a paso dentro de la app) o con una API externa; las dos últimas,
   con su aviso.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
-- **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas (y se pueden importar las listas
-  de otra carpeta).
+- **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas. Las listas se escriben en la app o
+  se leen de una carpeta tuya («Usar las listas de una carpeta…»: cada `.txt` es un tema y se lee en vivo, sin
+  copiarlo); «Copiar listas de otra carpeta…» las copia a la de la app.
 - **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin
   asignar, la del proyecto: la que tiene su `Vocabulario`). Lo grabado antes se queda donde está. En pleno directo,
   «Se guarda en … · Cambiar» elige otra: la reunión entera se mueve sola cuando terminan el directo, el repaso y el
@@ -147,8 +148,9 @@ El manual completo está en `LEEME.txt`.
 - Los destinos de salida escriben texto (nunca audio) en las carpetas que tú elijas, sin los participantes sugeridos
   que no hayas confirmado: si están sincronizadas (OneDrive, SharePoint), ese texto sale de tu PC por esa vía. Al
   borrar una reunión, sus documentos que nadie haya cambiado allí van también a la papelera.
-- Las listas de vocabulario (`<proyecto>/Vocabulario/*.txt`) suelen llevar nombres de personas y empresas: no se
-  incluyen en el zip que genera la app salvo que lo marques, y este repositorio las ignora.
+- Las listas de vocabulario (`<proyecto>/Vocabulario/*.txt` y las de las carpetas conectadas) suelen llevar nombres de
+  personas y empresas: no se incluyen en el zip que genera la app salvo que lo marques, y este repositorio las ignora.
+  Una carpeta conectada se lee donde está (nada se copia) y quitarla no borra nada.
 - La API local (`127.0.0.1:8765`) solo atiende a quien presenta el token de la sesión en marcha (ver «API local y
   token de sesión»): en un PC con varias sesiones de Windows a la vez (escritorio remoto, AVD, Citrix), otro usuario
   no puede leer tus reuniones ni manejar la grabadora.

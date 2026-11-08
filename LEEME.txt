@@ -136,8 +136,14 @@ USO DIARIO
     proyecto y sus temas, cada uno con su lista de nombres, siglas y productos separados por
     comas (los más importantes primero). Al grabar eliges el proyecto y el tema y Whisper los
     escribe bien. Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan
-    fuera. Si ya tienes listas en otra carpeta (de un compañero, de otra copia), "Importar listas
-    de otra carpeta…" las copia sin pisar las tuyas.
+    fuera. Si ya tienes tus listas en una carpeta (en OneDrive, por ejemplo), "Usar las listas
+    de una carpeta…" la conecta: cada .txt es un tema (términos separados por comas o uno
+    por línea) y se lee en vivo al grabar, sin copiarlo. Valen los .txt sueltos (el proyecto
+    es el nombre de la carpeta), una subcarpeta Vocabulario o una carpeta por proyecto con su
+    Vocabulario dentro. Quitarla no borra nada. Un archivo "solo en línea" de OneDrive se
+    salta con aviso: clic derecho > "Mantener siempre en este dispositivo". Para las listas
+    de un compañero o de otra copia, "Copiar listas de otra carpeta…" las copia sin pisar
+    las tuyas.
 
 
 QUIÉN HABLA (opcional)

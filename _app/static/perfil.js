@@ -62,21 +62,24 @@ function perfilTemaOptions(vocab, proj, sel) {
     `<option value="${esc(v.id)}" data-proj="${esc(v.project)}"${v.id === sel ? ' selected' : ''}${v.project !== proj ? ' hidden' : ''}>${esc(v.name)}${v.desc ? ' · ' + esc(v.desc) : ''}</option>`).join('');
 }
 function perfilVocabEmptyHtml() {
-  return `<div class="help" style="margin-top:0">Todavía no hay listas. Cada lista es un archivo de texto <code>&lt;Proyecto&gt;\\Vocabulario\\&lt;Tema&gt;.txt</code> en la carpeta de la app (junto a <code>_app</code>) o en una carpeta vinculada, con los nombres, siglas y productos de esas reuniones separados por comas, los más importantes primero.</div>`;
+  return `<div class="help" style="margin-top:0">Todavía no hay listas. Si ya tienes tus listas en una carpeta (en OneDrive, por ejemplo), conéctala: cada archivo <code>.txt</code> es un tema, con los nombres, siglas y productos de esas reuniones separados por comas o uno por línea, los más importantes primero. También puedes crearlas aquí.</div>`;
 }
+const VOCAB_CONECTAR = '__conectar';  // opción del <select> Proyecto: «Usar las listas de una carpeta…»
+const VOCAB_COPIAR_TITLE = 'Copia a la carpeta de la app las listas <Proyecto>\\Vocabulario\\*.txt de otra carpeta (la de un compañero, un USB, otra copia de la app…) sin pisar las que ya tengas. Para usar tus listas sin copiarlas, «Usar las listas de una carpeta…»';
 /* Bloque «Tema» del diálogo Grabar. sel: id de la lista preseleccionada ('' = sin vocabulario). */
 function perfilTemaHtml(sel) {
   const vocab = S.vocab || [];
   const label = `<label>${I.topic}Tema <span class="muted" style="font-weight:400">· el vocabulario que recibe Whisper</span></label>`;
   if (!vocab.length) {
     return `${label}${perfilVocabEmptyHtml()}
-      <div class="row" style="gap:8px;margin-top:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button>
-        <button class="btn sm" type="button" id="rVocabImport" title="Copia las listas <Proyecto>\\Vocabulario\\*.txt de otra carpeta (la de un compañero, otra copia de la app…) sin pisar las que ya tengas">${I.folder}Importar listas de otra carpeta…</button></div>`;
+      <div class="row" style="gap:8px;margin-top:8px"><button class="btn sm" type="button" id="rVocabConectar" title="Elige la carpeta donde tienes tus listas: se leen al grabar, sin copiarlas">${I.folder}Usar las listas de una carpeta…</button>
+        <button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button>
+        <button class="btn ghost sm" type="button" id="rVocabImport" title="${esc(VOCAB_COPIAR_TITLE)}">Copiar listas de otra carpeta…</button></div>`;
   }
   const cur = vocab.find(v => v.id === sel), proj = cur ? cur.project : '';
   return `${label}
     <div class="row pf-tema" style="gap:6px;flex-wrap:nowrap">
-      <select id="rProj" title="Proyecto"><option value="">Sin vocabulario</option>${perfilGroups(vocab).map(([p]) => `<option value="${esc(p)}"${p === proj ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>
+      <select id="rProj" title="Proyecto"><option value="">Sin vocabulario</option>${perfilGroups(vocab).map(([p]) => `<option value="${esc(p)}"${p === proj ? ' selected' : ''}>${esc(p)}</option>`).join('')}<option value="${VOCAB_CONECTAR}">Usar las listas de una carpeta…</option></select>
       <select id="rVocab" title="Tema del proyecto">${perfilTemaOptions(vocab, proj, sel)}</select>
       <button class="btn sm" type="button" id="rVocabNew" title="Crear un proyecto o tema nuevo con su lista de nombres y siglas">${I.plus}Nuevo…</button>
     </div><div class="help" id="rVocabFit"></div>`;
@@ -90,8 +93,16 @@ function perfilBindTema(d) {
     if (v && proj.value !== v.project) proj.value = v.project;
     if (!tema.value) proj.value = '';
     [...tema.options].forEach(o => { o.hidden = !!o.value && o.dataset.proj !== proj.value; });
+    proj.dataset.prev = proj.value;
   };
+  proj.dataset.prev = proj.value;
   proj.onchange = () => {
+    if (proj.value === VOCAB_CONECTAR) {  // como «Otra carpeta…» en Carpeta: no es un proyecto, abre el selector
+      proj.value = proj.dataset.prev || '';
+      vocabConectar(openRec);
+      return;
+    }
+    proj.dataset.prev = proj.value;
     const first = vocab.find(v => v.project === proj.value);
     tema.value = first ? first.id : '';
     sync();
@@ -117,6 +128,8 @@ function perfilBindRec(d) {
   if (fijo != null && (fijo === '' || (S.vocab || []).some(v => v.id === fijo))) d.dataset.pfVocab = '1';
   const imp = $('#rVocabImport', d);
   if (imp) imp.onclick = () => perfilImportar($('#rProj', d)?.value || '', openRec);
+  const con = $('#rVocabConectar', d);
+  if (con) con.onclick = () => vocabConectar(openRec);
   const save = $('#rPerfilSave', d);
   if (save) save.onclick = async () => {
     const body = { language: $('#rLang', d)?.value ?? '', context: $('#rCtx', d)?.value.trim() || '' };
@@ -158,6 +171,58 @@ function perfilImportText(r) {
   const n = r.copiadas || 0, o = r.omitidas || 0;
   if (!n) return `No había listas nuevas${o ? ` (${o} ya existían o no tenían un nombre válido)` : ''}`;
   return `${n} ${n === 1 ? 'lista copiada' : 'listas copiadas'} · ${esc((r.proyectos || []).join(', '))}${o ? ` · ${o} ya existían` : ''}`;
+}
+
+/* ---------------------------------------------------------------- carpetas de listas conectadas (msg 1148) */
+/* «Usar las listas de una carpeta…»: selector de carpetas de Windows (o pegar la ruta) → POST /api/vocab/link/add.
+   Las listas se leen en vivo al grabar y al transcribir: nada se copia. after: a dónde volver (openRec, o redibujar). */
+async function vocabConectar(after) {
+  toast('Elige la carpeta donde tienes tus listas en la ventana de Windows que se acaba de abrir…');
+  let path;
+  try { path = (await api('/api/link/pick', { title: 'Carpeta con tus listas de vocabulario (.txt)' })).path; }
+  catch (err) { path = prompt(`${err.message}\n\nPega aquí la ruta de la carpeta con tus listas (.txt):`); }
+  if (!path) return;
+  try {
+    const r = await api('/api/vocab/link/add', { path });
+    S.config.vocab_links = r.vocab_links || S.config.vocab_links;
+    await loadVocab(S.config.language ?? 'es-en');
+    toast(vocabConectadaText(r), r.listas ? '' : 'err');
+    if (after) after();
+  } catch (err) { toast(esc(err.message), 'err'); }
+}
+function vocabConectadaText(r) {
+  const n = r.listas || 0, s = (r.avisos || []).length;
+  const listas = `${n} ${n === 1 ? 'lista' : 'listas'}`;
+  const salta = s ? ` · ${s} ${s === 1 ? 'se salta' : 'se saltan'}: lo ves en Ajustes › Vocabulario` : '';
+  if (r.ya) return `«${esc(r.name)}» ya estaba conectada · ${listas}${salta}`;
+  return `${I.check}Conectada «${esc(r.name)}» · ${listas} · se leen al grabar, sin copiarlas${salta}`;
+}
+async function vocabDesconectar(rel, after) {
+  try {
+    const r = await api('/api/vocab/link/remove', { rel });
+    S.config.vocab_links = r.vocab_links || [];
+    await loadVocab(S.config.language ?? 'es-en');
+    toast('Carpeta quitada · no se ha borrado nada de ella');
+    if (after) after();
+  } catch (err) { toast(esc(err.message), 'err'); }
+}
+/* Una lista que se salta, con qué hacer (GET /api/vocab → carpetas[].avisos). */
+function vocabAvisoText(a) {
+  if (a.motivo === 'nube') return `«${a.lista}» está solo en OneDrive y no se descarga sola: en el Explorador, clic derecho › «Mantener siempre en este dispositivo»`;
+  if (a.motivo === 'grande') return `«${a.lista}» pesa ${a.kb} KB: no parece una lista (se leen hasta 64 KB)`;
+  return `«${a.lista}»: ${a.motivo}`;
+}
+/* Ajustes › Vocabulario: las carpetas conectadas, con cuántas listas dan, lo que se salta, «Abrir» y «quitar». */
+function vocabCarpetasHtml(carpetas) {
+  carpetas = carpetas || [];
+  const ayuda = `<div class="help">Cada <code>.txt</code> es un tema, con los términos separados por comas o uno por línea. Valen tres formas: los <code>.txt</code> sueltos (el proyecto es el nombre de la carpeta), una subcarpeta <code>Vocabulario</code>, o una carpeta por proyecto con su <code>Vocabulario</code> dentro. Lo que cambies en esos archivos se usa en la siguiente grabación. Quitar una carpeta no borra nada.</div>`;
+  if (!carpetas.length) return `<div class="help" style="margin-top:0">Ninguna. Con «Usar las listas de una carpeta…» eliges la carpeta donde ya tienes tus listas (en OneDrive, por ejemplo) y ${esc(APP_NAME)} las lee de allí, sin copiarlas.</div>${ayuda}`;
+  // la ruta, debajo del nombre y partible por cualquier sitio: una ruta larga de OneDrive no ensancha Ajustes
+  return `<table class="vtable vc-carpetas">${carpetas.map(c => `<tr><td style="width:100%">${I.folder}${esc(nfc(c.name))}
+      <div style="white-space:normal;overflow-wrap:anywhere;font-weight:400"><code title="${esc(c.path)}">${esc(c.path)}</code></div></td>
+      <td style="white-space:nowrap">${c.existe ? `${c.listas} ${c.listas === 1 ? 'lista' : 'listas'}` : '<span class="warn-txt">No se encuentra</span>'}</td>
+      <td style="white-space:nowrap">${c.existe ? `<button class="btn ghost sm" type="button" data-vopen="${esc(c.rel)}" title="Abrir la carpeta en el Explorador">${I.ext}Abrir</button>` : ''}<button class="btn ghost sm" type="button" data-vunlink="${esc(c.rel)}" title="Deja de leerla: no se borra nada">quitar</button></td></tr>${c.existe ? '' : `<tr><td colspan="3" class="warn-txt" style="font-size:12.5px;white-space:normal;font-weight:400">No se encuentra la carpeta: ¿la has movido o renombrado, o falta la VPN?</td></tr>`}${(c.avisos || []).map(a =>
+      `<tr><td colspan="3" class="warn-txt" style="font-size:12.5px;white-space:normal;font-weight:400">${esc(vocabAvisoText(a))}</td></tr>`).join('')}`).join('')}</table>${ayuda}`;
 }
 
 /* ---------------------------------------------------------------- página de la reunión y directo */

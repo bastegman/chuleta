@@ -133,9 +133,9 @@ S.vocab = [];
 async function loadVocab(language) {
   try {
     const r = await api('/api/vocab' + (language != null ? '?language=' + enc(language) : ''));
-    S.vocab = r.items; S.vocabLast = r.last;
+    S.vocab = r.items; S.vocabLast = r.last; S.vocabCarpetas = r.carpetas || [];  // carpetas de listas conectadas
     return r;
-  } catch { return { items: S.vocab, last: S.vocabLast || '' }; }
+  } catch { return { items: S.vocab, last: S.vocabLast || '', carpetas: S.vocabCarpetas || [] }; }
 }
 function vocabOf(a) {
   const p = a.props || {};
@@ -177,6 +177,7 @@ function openVocabEditor(v, after = openSettings, project = '') {
     <label>Términos <span class="muted" style="font-weight:400">· separados por comas, los más importantes primero</span></label>
     <textarea id="veTerms" rows="9" placeholder="Nombre del proyecto, siglas, sistemas, nombres y apellidos de los participantes…">${esc(v ? v.text || '' : '')}</textarea>
     <div class="help" id="veFit">&nbsp;</div>
+    ${v && v.conectada ? `<div class="help">${I.folder}Está en tu carpeta conectada «${esc(((S.vocabCarpetas || []).find(c => c.rel === v.conectada) || {}).name || v.project)}»: al guardar se cambia ese archivo (y «Borrar» lo manda a la papelera).</div>` : ''}
     <div class="btns">${v ? '<button class="btn danger" data-m="del" style="margin-right:auto">Borrar</button>' : ''}<button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">Guardar</button></div>`, d => {
     let t = null;
     const check = async () => {

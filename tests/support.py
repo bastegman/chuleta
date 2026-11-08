@@ -32,15 +32,16 @@ def app_modules():
 
 @contextlib.contextmanager
 def patched_paths(**values):
-    """Sustituye ROOT, APP_DIR… (y vacía LINKS) en todos los módulos de _app mientras dura el bloque."""
+    """Sustituye ROOT, APP_DIR… (y vacía LINKS y VOCAB_LINKS) en todos los módulos de _app mientras dura el bloque."""
     saved = []
     for m in app_modules():
         for k, v in values.items():
             if hasattr(m, k):
                 saved.append((m, k, getattr(m, k)))
                 setattr(m, k, v)
-    links_saved = dict(server.LINKS)
+    links_saved, vlinks_saved = dict(server.LINKS), dict(server.VOCAB_LINKS)
     server.LINKS.clear()
+    server.VOCAB_LINKS.clear()
     try:
         yield
     finally:
@@ -48,6 +49,8 @@ def patched_paths(**values):
             setattr(m, k, v)
         server.LINKS.clear()
         server.LINKS.update(links_saved)
+        server.VOCAB_LINKS.clear()
+        server.VOCAB_LINKS.update(vlinks_saved)
 
 
 class TempTree(unittest.TestCase):

@@ -268,6 +268,46 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("location.hash"), "#/r/")                     # se pinta la ruta elegida
         self.assertEqual(self.limpiar(errores, red)[0], [])
 
+    def api_post(self, path, body):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode("utf-8"), method="POST",
+                                     headers={"X-Chuleta-Token": self.token, "X-Audios": "1",
+                                              "Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req, timeout=10))
+
+    def test_vocabulario_desde_una_carpeta_conectada(self):
+        """Ajustes › Vocabulario (msg 1148): la carpeta conectada sale con sus listas y lo que se salta; sus temas,
+        con «carpeta conectada»; «quitar» la quita sin borrar nada. La conexión va por la API: el selector de carpetas
+        de Windows no se puede pulsar desde aquí."""
+        listas = os.path.join(self.tmp, "Listas de prueba")
+        os.makedirs(listas)
+        with open(os.path.join(listas, "Infra.txt"), "w", encoding="utf-8") as f:
+            f.write("Kubernetes\nVPN\n")
+        with open(os.path.join(listas, "Glosario.txt"), "w", encoding="utf-8") as f:
+            f.write("x" * 70000)
+        r = self.api_post("/api/vocab/link/add", {"path": listas})
+        self.assertEqual((r["listas"], [a["motivo"] for a in r["avisos"]]), (1, ["grande"]))
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
+        pg.click(".aj-nav [data-sec='vocabulario']")
+        pg.wait_for_selector("#sVocabCarpetas:has-text('Listas de prueba')", timeout=10000)
+        caja = pg.inner_text("#sVocabCarpetas")
+        self.assertIn("1 lista", caja)
+        self.assertIn("pesa 69 KB", caja)
+        self.assertIn("carpeta conectada", pg.inner_text("#sVocab"))
+        self.assertIn("Infra", pg.inner_text("#sVocab"))
+        for boton in ("Usar las listas de una carpeta…", "Copiar listas de otra carpeta…"):
+            self.assertTrue(pg.is_visible(f"#sVocab button:has-text('{boton}')"), boton)
+        pg.click("#sVocabCarpetas [data-vunlink]")
+        pg.wait_for_selector("#sVocabCarpetas:has-text('Ninguna')", timeout=10000)
+        self.assertNotIn("Infra", pg.inner_text("#sVocab"))
+        self.assertEqual(sorted(os.listdir(listas)), ["Glosario.txt", "Infra.txt"])  # nada borrado
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], err)
+        self.assertEqual(red, [], red)
+
 
 if __name__ == "__main__":
     unittest.main()
