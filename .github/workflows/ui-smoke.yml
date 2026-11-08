@@ -43,7 +43,7 @@ jobs:
           mkdir -p "$NOTAS_ARTEFACTOS"
           python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas 2>&1 | tee salida.txt
           test ${PIPESTATUS[0]} -eq 0
-          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke o test_ui_voces se ha saltado"; exit 1; fi
+          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces o test_e2e_carpetas se ha saltado"; exit 1; fi
           grep -q "^Ran [1-9][0-9]* tests\?" salida.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()

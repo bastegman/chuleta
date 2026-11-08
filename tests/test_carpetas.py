@@ -307,6 +307,49 @@ class NombreDeLaCarpetaTests(unittest.TestCase):
         self.assertTrue(largo.startswith(n[11:]) and largo[len(n) - 11] == " ")  # cortado por una palabra
 
 
+class GrabadoraLentaTests(TempTree):
+    """La grabadora tarda en crear el WAV (PC cargado): rec_start la espera hasta REC_ARRANQUE_S y la reunion lleva su
+    cabecera. Con 3 s fijos, el E2E de carpetas fallo asi con la maquina cargada (revision de la integracion del
+    08/11/2026)."""
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.root, "Alfa"))
+        self.a = make_app(self)
+
+    def grabar(self, retraso, espera):
+        hilos = []
+
+        class Lenta(FakeRec):
+            def __init__(rec_self, path, *args):
+                rec_self.path, rec_self.status = path, {}
+
+                def crear():
+                    with open(path, "wb") as f:
+                        f.write(b"\0" * 44)
+                hilos.append(threading.Timer(retraso, crear))
+                hilos[-1].start()
+        with mock.patch.object(server, "REC_ARRANQUE_S", espera), mock.patch.object(server, "log_exc"):
+            r = rec(self.a, self, _rec=Lenta, name="Lenta", contexto="Seguimiento semanal")
+        for t in hilos:  # el WAV llega igual (tarde): antes de mirar y de borrar la carpeta del test
+            t.join()
+        wav = os.path.join(self.root, *r["path"].split("/"))
+        self.assertTrue(os.path.isfile(wav))
+        return r, os.path.isfile(wav[:-4] + ".md")
+
+    def test_la_espera(self):
+        r, md = self.grabar(0.4, 3.0)
+        self.assertEqual((r["aviso"], md), (None, True))
+
+    def test_sin_esperar_lo_bastante_se_queda_sin_cabecera(self):
+        r, md = self.grabar(0.4, 0.1)  # control: el test ve el fallo
+        self.assertIn("sin cabecera de notas", r["aviso"] or "")
+        self.assertFalse(md)
+
+    def test_valor(self):
+        self.assertGreaterEqual(server.REC_ARRANQUE_S, 10)
+
+
 class CarpetaPorReunionTests(TempTree):
     def setUp(self):
         super().setUp()

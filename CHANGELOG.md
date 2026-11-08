@@ -73,6 +73,9 @@ proyecto o workstream» (msg 1158).
   queda dentro de una carpeta vinculada (antes las reuniones caían dentro y luego no se podía volver a conectar). Al
   quitar una carpeta de listas, sus workstreams pierden la carpeta asignada (revisión de la integración del
   08/11/2026).
+- Al empezar a grabar, la app espera hasta 10 s (eran 3) a que la grabadora cree el archivo. Con el PC cargado tardó
+  más y la reunión se quedaba sin cabecera (tema, contexto, participantes) y sin directo; se vio en el E2E de carpetas
+  (revisión de la integración del 08/11/2026). En cuanto existe, sigue.
 - En el árbol, la carpeta de una reunión se ve como la reunión (no se repite cada entrada) y no sale entre las carpetas
   de destino. Mover o renombrar la reunión mueve o renombra su carpeta con todo lo que tenga dentro, solo si la creó la
   app y no hay otra grabación dentro: una carpeta tuya que se llame igual se queda como está. Nunca se pisa un archivo

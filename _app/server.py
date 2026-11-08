@@ -4097,6 +4097,12 @@ def open_dir(path):
         subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
 
 
+# Lo que rec_start espera a que la grabadora cree el WAV con su cabecera antes de escribir la del .md y arrancar el
+# directo. Eran 3 s: con el PC cargado la grabadora tardo mas (medido en la revision de la integracion del 08/11/2026)
+# y la reunion se quedaba sin cabecera ni directo («No existe el archivo»). Se sale en cuanto existe.
+REC_ARRANQUE_S = 10.0
+
+
 class App:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -4275,7 +4281,8 @@ class App:
             started = False
             try:
                 self.rec = RecorderProcess(path, mic, sys_dev, APP_DIR, DATA_DIR)
-                for _ in range(60):  # espera a que exista el archivo con su cabecera
+                fin = time.monotonic() + REC_ARRANQUE_S
+                while time.monotonic() < fin:  # espera a que exista el archivo con su cabecera
                     if os.path.isfile(path) and os.path.getsize(path) >= 44 or not self.rec.alive():
                         break
                     time.sleep(0.05)
