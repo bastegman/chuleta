@@ -197,17 +197,41 @@ class ParticipantesDeOutlookTests(unittest.TestCase):
         self.assertEqual(calendario.join_participants(["Ana", "", "Luis"]), "Ana, Luis")
         self.assertEqual(calendario.join_participants(None), "")
 
-    def test_rec_start_y_el_perfil_usan_la_misma(self):
-        with open(os.path.join(APP, "server.py"), encoding="utf-8") as f:
-            src = f.read()
-        self.assertEqual(src.count('", ".join(sug.get("participants")'), 0)
-        self.assertEqual(src.count('calendario.join_participants(sug.get("participants"))'), 3)
+    def test_nadie_une_los_participantes_con_comas(self):
+        """Ningun camino del servidor une a mano los participantes de la sugerencia: todos con join_participants. Si una
+        rama nueva trae su propio camino (p. ej. el plan de ux-grabar, plan.py), este test lo señala."""
+        malos, buenos = [], 0
+        for n in sorted(os.listdir(APP)):
+            if n.endswith(".py"):
+                with open(os.path.join(APP, n), encoding="utf-8") as f:
+                    src = f.read()
+                malos += [f"{n}: {m.group(0)}"
+                          for m in re.finditer(r"""["'][,;] ?["']\.join\([^)\n]*participants""", src)]
+                buenos += src.count("calendario.join_participants(sug.get(\"participants\"))")
+        self.assertEqual(malos, [], "usar calendario.join_participants")
+        self.assertGreaterEqual(buenos, 3)
+
+    def test_la_interfaz_no_parte_ni_une_por_comas(self):
+        """Lo mismo en la interfaz: ni unir los de la sugerencia con «, » ni partir «Participantes» por comas (con
+        «Apellido, Nombre; …» serian el doble). Si ux-grabar trae grabar.js con su propio recuento, este test lo
+        señala."""
+        static, malos = os.path.join(APP, "static"), []
+        for n in sorted(os.listdir(static)):
+            if n.endswith(".js"):
+                with open(os.path.join(static, n), encoding="utf-8") as f:
+                    src = f.read()
+                malos += [f"{n}: {m.group(0)}" for m in re.finditer(
+                    r"participants\b[^;\n]*\)\.join\(['\"], ?['\"]\)"
+                    r"|participantes\b[^;\n]*\.split\(['\"],['\"]\)", src)]
+        self.assertEqual(malos, [], "separar con «; » si algún nombre lleva coma, como calendario.join_participants")
 
     @unittest.skipUnless(shutil.which("node"), "node no instalado")
     def test_js(self):
         """El dialogo Grabar (reunionPrefill) une igual."""
-        expr = re.search(r"^  d\.dataset\.rnParticipantes = (.+);$", read("reunion.js"), re.M).group(1)
-        out = node(f"""const f = s => {expr};
+        m = re.search(r"^  d\.dataset\.rnParticipantes = (.+);$", read("reunion.js"), re.M)
+        self.assertIsNotNone(m, "reunionPrefill ya no une los participantes: si el dialogo nuevo (ux-grabar) los une "
+                                "en otro sitio, que use calendario.join_participants (plan.py) y probar alli lo mismo")
+        out = node(f"""const f = s => {m.group(1)};
 console.log(JSON.stringify([f({{participants: ['Stegmaier, Bernardo', 'García, Ana']}}),
   f({{participants: ['Ana', 'Luis']}}), f({{}})]));
 """)
