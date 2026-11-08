@@ -6577,14 +6577,24 @@ class App:
                 "otro hablante")
         return n
 
+    def _voices_lock(self):
+        """Quien corrige los hablantes de una reunion desde la interfaz coge el candado de las notas: mientras la
+        reunion se mueve (B1c, _move_now) espera y, al soltarlo, alias_of ya da su ruta nueva. Sin el, la correccion
+        se escribia en la ruta vieja y se perdia (revision de la integracion del 08/11/2026)."""
+        lock = getattr(self, "notes_lock", None)
+        return lock if lock is not None else contextlib.nullcontext()
+
     def _speaker_update(self, abs_path, h, fn, creado=None):
-        side = voices.sidecar_path(abs_path)
-        data = self._speaker_check(abs_path, h, creado)
-        fn(data["hablantes"][h], data)
-        voices.write_sidecar(side, data)
+        """Aplica fn(info, data) al hablante h y guarda el sidecar. Devuelve la ruta de la reunion (la nueva si se
+        acaba de mover)."""
+        with self._voices_lock():
+            abs_path = safe(alias_of(rel_of(abs_path)), "file")
+            data = self._speaker_check(abs_path, h, creado)
+            fn(data["hablantes"][h], data)
+            voices.write_sidecar(voices.sidecar_path(abs_path), data)
         self.library.at = 0
         self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento lleva quien habla
-        return data
+        return abs_path
 
     def _persona_for_speaker(self, v, b, nombre, consent):
         """Quien es un hablante segun lo que se pide desde su etiqueta: la persona del usuario («Soy yo»; escribir
@@ -6633,7 +6643,7 @@ class App:
             before = side["hablantes"][h].get("persona")
             pid = self._persona_for_speaker(v, b, nombre, consent)
             uid = (v.user() or {}).get("id")
-            self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid), b.get("creado"))
+            abs_path = self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid), b.get("creado"))
             self._not_the_user(rel_of(abs_path), h, before, pid)
         elif not pid:
             if not nombre and not b.get("es_usuario"):
@@ -6713,29 +6723,29 @@ class App:
             raise ApiError("Esa persona ya no existe.")
         uid = (v.user() or {}).get("id")
         before = (self._speaker_check(abs_path, h, b.get("creado"))["hablantes"][h]).get("persona")
-        self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid), b.get("creado"))
+        abs_path = self._speaker_update(abs_path, h, lambda info, d: voices.assign(d, h, pid, uid), b.get("creado"))
         self._not_the_user(rel_of(abs_path), h, before, pid)
-        return self.speakers_get({"path": b.get("path")})
+        return self.speakers_get({"path": rel_of(abs_path)})
 
     def speakers_join(self, b):
         """«Es el mismo que…» (msg 1242): dos hablantes de esta reunion son la misma voz (la app la partio en dos)."""
-        abs_path = safe(b.get("path"), "file")
-        h, con = b.get("h"), b.get("con")
-        data = self._speaker_check(abs_path, h, b.get("creado"))
-        if not con or con == h or con not in (data.get("hablantes") or {}):
-            raise ApiError("Elige otro hablante de esta reunión.")
-        v = self.jobs.voices
-        try:
-            voices.join_speakers(data, h, con, usuario=(v.user() or {}).get("id"), names=v.names())
-        except ValueError as e:
-            raise ApiError(str(e))
-        voices.write_sidecar(voices.sidecar_path(abs_path), data)
+        h, con, v = b.get("h"), b.get("con"), self.jobs.voices
+        with self._voices_lock():  # dentro: si la reunion se acaba de mover (B1c), su ruta nueva
+            abs_path = safe(alias_of(b.get("path")), "file")
+            data = self._speaker_check(abs_path, h, b.get("creado"))
+            if not con or con == h or con not in (data.get("hablantes") or {}):
+                raise ApiError("Elige otro hablante de esta reunión.")
+            try:
+                voices.join_speakers(data, h, con, usuario=(v.user() or {}).get("id"), names=v.names())
+            except ValueError as e:
+                raise ApiError(str(e))
+            voices.write_sidecar(voices.sidecar_path(abs_path), data)
         rel = rel_of(abs_path)
         for k in (h, con):  # la huella en memoria de `con` ya no es la de toda su voz: «Recordar» la recalcula
             (self.jobs.voice_vectors.get(rel) or {}).pop(k, None)
         self.library.at = 0
         self.jobs.schedule_outputs(rel)
-        return self.speakers_get({"path": b.get("path")})
+        return self.speakers_get({"path": rel})
 
     def voices_export(self, b):
         abs_path = safe(b.get("path"), "file")

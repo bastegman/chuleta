@@ -32,7 +32,9 @@ def app_modules():
 
 @contextlib.contextmanager
 def patched_paths(**values):
-    """Sustituye ROOT, APP_DIR… (y vacía LINKS y VOCAB_LINKS) en todos los módulos de _app mientras dura el bloque."""
+    """Sustituye ROOT, APP_DIR… (y vacía LINKS, VOCAB_LINKS y ALIASES) en todos los módulos de _app mientras dura el
+    bloque. ALIASES (las rutas nuevas de las reuniones movidas, de carpetas) tambien: un test que mueve «r.wav» dejaba
+    su alias y el Handler llevaba el «r.wav» de otro test a esa ruta (revision de la integracion del 08/11/2026)."""
     saved = []
     for m in app_modules():
         for k, v in values.items():
@@ -40,6 +42,9 @@ def patched_paths(**values):
                 saved.append((m, k, getattr(m, k)))
                 setattr(m, k, v)
     links_saved, vlinks_saved = dict(server.LINKS), dict(server.VOCAB_LINKS)
+    with server.ALIASES_LOCK:
+        aliases_saved = dict(server.ALIASES)
+        server.ALIASES.clear()
     server.LINKS.clear()
     server.VOCAB_LINKS.clear()
     try:
@@ -51,6 +56,9 @@ def patched_paths(**values):
         server.LINKS.update(links_saved)
         server.VOCAB_LINKS.clear()
         server.VOCAB_LINKS.update(vlinks_saved)
+        with server.ALIASES_LOCK:
+            server.ALIASES.clear()
+            server.ALIASES.update(aliases_saved)
 
 
 class TempTree(unittest.TestCase):

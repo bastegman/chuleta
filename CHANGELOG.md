@@ -48,8 +48,9 @@ Lo que pidió: «Quiero poder cambiar la carpeta durante la reunión. Es posible
 - Lo elegido se guarda: si cierras Chuleta antes (o a medio mover), se termina al volver a abrirla. Si un archivo está
   en uso (OneDrive, el antivirus), no se mueve nada y se reintenta con espera durante unos 20 minutos; si no se puede,
   la reunión se queda donde estaba y se dice. Unas notas o una corrección que se guarden justo al moverla esperan un
-  instante y van a la ruta nueva; renombrar o borrar a la vez, también esperan. «Deshacer» manda mientras no se haya
-  movido.
+  instante y van a la ruta nueva; renombrar o borrar a la vez, también esperan. Desde la revisión de la integración
+  del 08/11/2026, también las correcciones de quién habla (nombre, «No es esta persona», «Es el mismo que…»), que
+  antes se escribían en la ruta vieja y se perdían. «Deshacer» manda mientras no se haya movido.
 - Arrastrar en el árbol una reunión que se está grabando o procesando ya no da el aviso de OBS: se moverá al terminar.
   Renombrarla, cuando termine.
 - Cambiar el tema (el proyecto) en pleno directo hace lo mismo: si la reunión estaba en la carpeta de su proyecto, se
