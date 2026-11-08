@@ -2750,6 +2750,19 @@ class Jobs:
             meta["participants"] = ", ".join(dict.fromkeys(known))
         return out
 
+    def _participant_hint(self, abs_path, old):
+        """Cuantas personas nombra «Participantes» del .md: pista para no partir a una persona en varias
+        (voices.consolidate). Solo si los sugirio Teams/Outlook o si aun no se habia identificado nunca: despues,
+        _suggest_participants pudo rellenarlo solo con las voces reconocidas, y seria un tope demasiado bajo."""
+        md = os.path.splitext(abs_path)[0] + ".md"
+        try:
+            props = parse_notes(read_text(md))[0] if os.path.isfile(md) else {}
+        except (OSError, ValueError):
+            return 0
+        if old and props.get("participantes_origen") not in PARTICIPANTES_ORIGENES:
+            return 0
+        return voices.count_participants(props.get("participantes"))
+
     def _suggest_participants(self, abs_path, data):
         """Propiedad «Participantes» con los nombres reconocidos, solo si esta vacia (no se pisa lo escrito a mano)."""
         names = self.voices.names()
@@ -2793,7 +2806,9 @@ class Jobs:
             # el subproceso reescribe el sidecar con hablantes nuevos (h1, h2… otra vez): las huellas en memoria de la
             # identificacion anterior ya no son de esos hablantes y «Recordar» guardaria la voz de otro
             self.voice_vectors.pop(job.path, None)
-            res = self._voices_subprocess(job, ["--diarize", abs_path, "--out", side])
+            n = self._participant_hint(abs_path, old)
+            res = self._voices_subprocess(job, ["--diarize", abs_path, "--out", side,
+                                                *(["--participantes", str(n)] if n else [])])
             huellas = res.get("huellas") or {}
             data = voices.read_sidecar(side)
             if not data or not data.get("tramos"):
@@ -5263,6 +5278,26 @@ class App:
         self._not_the_user(rel_of(abs_path), h, before, pid)
         return self.speakers_get({"path": b.get("path")})
 
+    def speakers_join(self, b):
+        """«Es el mismo que…» (msg 1242): dos hablantes de esta reunion son la misma voz (la app la partio en dos)."""
+        abs_path = safe(b.get("path"), "file")
+        h, con = b.get("h"), b.get("con")
+        data = self._speaker_check(abs_path, h, b.get("creado"))
+        if not con or con == h or con not in (data.get("hablantes") or {}):
+            raise ApiError("Elige otro hablante de esta reunión.")
+        v = self.jobs.voices
+        try:
+            voices.join_speakers(data, h, con, usuario=(v.user() or {}).get("id"), names=v.names())
+        except ValueError as e:
+            raise ApiError(str(e))
+        voices.write_sidecar(voices.sidecar_path(abs_path), data)
+        rel = rel_of(abs_path)
+        for k in (h, con):  # la huella en memoria de `con` ya no es la de toda su voz: «Recordar» la recalcula
+            (self.jobs.voice_vectors.get(rel) or {}).pop(k, None)
+        self.library.at = 0
+        self.jobs.schedule_outputs(rel)
+        return self.speakers_get({"path": b.get("path")})
+
     def voices_export(self, b):
         abs_path = safe(b.get("path"), "file")
         data = self.jobs.speakers_for(abs_path)
@@ -5488,6 +5523,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/activar": a.voices_toggle, "/api/voces/identificar": a.voices_identify,
                   "/api/voces/persona": a.voices_person, "/api/voces/fusionar": a.voices_merge,
                   "/api/voces/olvidar": a.voices_forget, "/api/voces/reasignar": a.voices_reassign,
+                  "/api/hablantes/unir": a.speakers_join,
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
                   "/api/acerca/abrir": a.acerca_abrir,

@@ -10,6 +10,22 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### «Quién habla»: una persona ya no sale como varias (08/11/2026)
+Lo que vio: «a una persona la cataloga como 10 personas distintas a lo largo de la reunión» (msg 1242).
+- Medido con reuniones reales de 4 personas con los hablantes anotados (AMI Meeting Corpus, CC BY 4.0) y
+  `scripts/eval_voces.py`: la versión anterior partía a cada persona en 4 grupos de media (hasta 8) y enseñaba 36
+  hablantes para 12 personas (48 para 16 en las de prueba).
+- Al terminar de separar las voces, la app **une los grupos con la misma voz** (huellas parecidas), pasa los trozos
+  cortos al hablante que más se les parece y separa con un corte más alto. Ajustado con 3 reuniones y comprobado con
+  otras 4: 12 hablantes para 12 personas y 18 para 16, con la tasa de error de quién habla de 0,52 a 0,20 y de 0,49 a
+  0,23.
+- Si la reunión trae participantes (de Outlook o Teams, o escritos antes de identificar las voces), su número sirve de
+  pista: con más hablantes que participantes + 1 se unen los dos que más se parecen, pero nunca dos voces que no se
+  parecen lo bastante.
+- **«Es el mismo que…»** en la etiqueta de un hablante: si aun así la app parte a alguien en dos, se juntan en uno.
+  Se niega si los dos ya son personas distintas (o tú y otra persona): eso es corregir el nombre de uno de ellos.
+- Las reuniones ya identificadas no cambian hasta «Volver a identificar».
+
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
 - La app espera a que Claude Code **termine**, no a que se cierre su salida: en Windows un proceso que Claude Code deja
