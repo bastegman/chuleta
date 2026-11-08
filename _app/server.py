@@ -1901,15 +1901,29 @@ MEETING_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (.+?)(?: \((\d{1,3})\))?$")
 WIN_PATH_MAX = 250  # rutas de Windows sin «rutas largas»: 260 con el terminador; se deja margen
 
 
+def _en_carpeta_de_listas(d):
+    """`d` esta en una carpeta de listas conectada: de las carpetas que la contienen (la raiz, las vinculadas y las de
+    listas), la mas interior es de listas. Una vinculada dentro de una de listas es del arbol (el usuario la vinculo
+    para grabar); una de listas dentro de una vinculada, no."""
+    best = (-1, False)
+    for path, listas in ([(ROOT, False)] + [(l["path"], False) for l in LINKS.values()]
+                         + [(l["path"], True) for l in VOCAB_LINKS.values()]):
+        n = len(os.path.normcase(os.path.normpath(path)))
+        if n > best[0] and _inside(d, path):
+            best = (n, listas)
+    return best[1]
+
+
 def project_home(v, vs=None):
     """Ruta interna de la carpeta del proyecto de una lista (la que contiene su carpeta Vocabulario), si esta en el
     arbol de la app (su raiz o una vinculada); None si no. Una carpeta de vocabulario conectada nunca es destino de
-    grabacion (VLINK), tampoco si queda dentro de una vinculada: una lista de alli usa la carpeta de su proyecto en el
-    arbol, la de otra lista suya que si este (`vs`: las de list_vocab, si ya se tienen), y si no hay, ninguna."""
+    grabacion (VLINK), tampoco si queda dentro de una vinculada (_en_carpeta_de_listas): una lista de alli usa la
+    carpeta de su proyecto en el arbol, la de otra lista suya que si este (`vs`: las de list_vocab, si ya se tienen),
+    y si no hay, ninguna."""
     if not v or not v.get("_abs"):
         return None
     d = _project_dir(v)
-    if v.get("conectada") or any(_inside(d, l["path"]) for l in VOCAB_LINKS.values()):
+    if v.get("conectada") or _en_carpeta_de_listas(d):
         for o in (list_vocab() if vs is None else vs):
             if not o.get("conectada") and o.get("_abs") and _of_project(o, v["project"]):
                 home = project_home(o, ())
@@ -4337,6 +4351,10 @@ class App:
                         log_exc()
                         avisos.append(f"sin cabecera de notas ({e.msg if isinstance(e, ApiError) else e})")
 
+                # fuera de upd, que corre con el candado de los ajustes: project_home de una lista conectada lee las
+                # carpetas de listas (OneDrive, la red) y mientras tanto nadie podria leer los ajustes
+                sin_casa = bool(v) and not por_regla and project_home(v) is None
+
                 def upd(d):
                     if "vocab" in b:
                         d["rec_vocab"] = v["id"] if v else ""
@@ -4347,7 +4365,7 @@ class App:
                     # conectada: project_home): la elegida a mano pasa a ser su carpeta principal, como antes de la
                     # carpeta por reunion. Sin esto, Ctrl+Alt+R y el aviso de Teams con su tema caian en la ultima
                     # usada, que puede ser la de otro proyecto (revision de la integracion del 08/11/2026)
-                    if v and not por_regla and project_home(v) is None:
+                    if sin_casa:
                         d["project_folders"] = dict(d.get("project_folders") or {}, **{v["project"]: rel_of(folder)})
                     # "solo grabar" y "sin micro" son para una grabacion concreta: no se quedan como
                     # predeterminado (la siguiente, y Ctrl+Alt+R, vuelven a transcribir y a grabar el micro)

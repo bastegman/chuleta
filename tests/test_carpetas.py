@@ -227,6 +227,20 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
         self.assertEqual(st["project_folders"], {})
         self.assertEqual(server.rec_folder_origin(self.alfa, st), ("Alfa", "carpeta_proyecto"))
 
+    def test_grabar_no_lee_las_carpetas_conectadas_con_los_ajustes_cogidos(self):
+        """rec_start decide si apunta la carpeta fuera de Store.update: leer una carpeta de la red con el candado de
+        los ajustes cogido pararia cualquier peticion que los lea."""
+        real, cogido = server._list_vocab, []
+
+        def espia(*args, **kw):
+            cogido.append(self.a.settings.lock.locked())
+            return real(*args, **kw)
+        with mock.patch.object(server, "_list_vocab", espia):
+            rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff")
+        self.assertTrue(cogido)
+        self.assertNotIn(True, cogido)
+        self.assertEqual(self.a.settings.get()["project_folders"], {"Cliente B": "Cliente B"})
+
     def test_config_no_lee_las_carpetas_conectadas(self):
         """/api/config (project_folders_resolved) no recorre las carpetas conectadas: pueden estar en la red."""
         rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff")
@@ -286,6 +300,27 @@ class CarpetaDeListasNuncaEsDestinoTests(TempTree):
 
     def test_listas_en_su_carpeta_vocabulario(self):
         self.no_graba_dentro(*self.conectar_y_vincular(os.path.join("Vocabulario", "Infra.txt")))
+
+    def test_una_vinculada_dentro_de_una_de_listas_si_es_del_arbol(self):
+        """El orden inverso: conectar OneDrive/Clientes como listas y luego vincular OneDrive/Clientes/ProyA para
+        grabar. ProyA es del arbol y es la carpeta de su proyecto, como antes."""
+        x = os.path.join(self.tmp, "OneDrive", "Clientes")
+        proy = os.path.join(x, "ProyA")
+        os.makedirs(os.path.join(proy, "Vocabulario"))
+        with open(os.path.join(x, "Glosario.txt"), "w", encoding="utf-8") as f:
+            f.write("Kubernetes, VPN\n")
+        with open(os.path.join(proy, "Vocabulario", "General.txt"), "w", encoding="utf-8") as f:
+            f.write("SLA, API\n")
+        with mock.patch.object(server, "log"), mock.patch.object(self.a, "_save_vocab_links"), \
+                mock.patch.object(self.a, "_save_links"):
+            self.a.vocab_link_add({"path": x})
+            self.a.link_add({"path": proy})
+        lid = next(k for k, l in server.LINKS.items() if l["path"] == proy)
+        v = next(v for v in server.list_vocab() if v["project"] == "ProyA")
+        self.assertEqual(server.project_home(v), ":" + lid)
+        self.assertEqual(server.rec_folder_origin(v, {}), (":" + lid, "carpeta_proyecto"))
+        glosario = next(v for v in server.list_vocab() if v["name"] == "Glosario")
+        self.assertIsNone(server.project_home(glosario))  # la de listas sigue sin ser destino
 
     def test_proyecto_tambien_en_el_arbol(self):
         self.write("Acme/Vocabulario/General.txt", "API, SLA\n")
