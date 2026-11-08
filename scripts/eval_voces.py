@@ -15,7 +15,8 @@ Por reunión:
   y sus partes (no detectado, falsa alarma, confusión);
 - `pureza` (cuánto de cada grupo es de una sola persona) y `cobertura` (cuánto de cada persona cae en su grupo);
 - `partes`: en cuántos grupos se parte cada persona (aquellos de los que es la voz mayoritaria, con ≥ 5 s suyos).
-No escribe nada fuera de --cache. Los audios no van al repositorio.
+La «media» es la media por reunión (no un DER ponderado por tiempo). No escribe nada fuera de --cache. Los audios no
+van al repositorio.
 """
 import argparse
 import json

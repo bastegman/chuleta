@@ -47,7 +47,7 @@ HUELLA_MAX_S = 90.0      # voz que se concatena para una huella (los tramos mas 
 # Calibrado el 08/11/2026 con scripts/eval_voces.py: reuniones reales de 4 personas del AMI Meeting Corpus (CC BY 4.0;
 # 3 para elegir y 4 de prueba) y 4 reuniones montadas con voces chilenas de OpenSLR 71 (CC BY-SA 4.0). Hasta entonces,
 # 0,5 sin unir nada al final: 36 hablantes visibles para 12 personas (DER 0,517) y 48 para 16 en las de prueba (0,494).
-# Con esto, 15/12 (0,216), 18/16 (0,231) y 16/16 en las chilenas, sin juntar a dos personas.
+# Con esto, 15/12 (0,228), 18/16 (0,248) y 16/16 en las chilenas, sin juntar a dos personas.
 UMBRAL_GRUPOS = 0.6      # corte del clustering de sherpa-onnx (distancia coseno; mayor = menos grupos; con 0,7 ya
 #                          juntaba a dos hombres chilenos)
 # Al terminar se unen los grupos que son la misma voz (consolidate): sherpa-onnx parte a cada persona en varios.
@@ -57,7 +57,8 @@ TOPE_MIN = 0.65          # con el numero de participantes como pista: nunca se u
 #                          corta)
 FUSION_GRANDES = 0.75    # el de FUSION cuando los dos grupos tienen >= GRANDE_S: sus dos huellas son fiables (dos
 GRANDE_S = 30.0          # hombres distintos de 57 y 70 s llegaban a 0,72)
-ABSORBE_MIN = 0.30       # coseno minimo para que un grupo breve pase al grupo grande mas parecido
+ABSORBE_MIN = 0.55       # coseno minimo para que un grupo breve pase al visible mas parecido (con 0,30, el 28 % de
+#                          la voz absorbida iba a otra persona: mejor «(breve)» que el nombre de otro)
 HOLGURA = 1              # tope de hablantes = participantes nombrados + HOLGURA (el usuario no suele apuntarse)
 SR = 16000
 MIC_PASO, MIC_DB, MIC_SOBRE_SYS_DB = 0.25, -40.0, 6.0
@@ -322,21 +323,25 @@ def consolidate(res, samples16=None, ex=None, fusion=FUSION, absorbe_min=ABSORBE
         tr = _intervals(tr)
         v = _unit(hue.get(h))
         secs = sum(b - a for a, b in tr)
-        groups.append({"tramos": tr, "vec": v, "secs": secs, "orig": v, "cambia": False})
+        groups.append({"tramos": tr, "fp": tr, "vec": v, "secs": secs, "orig": v, "cambia": False})
 
     def visible(g):
         return g["secs"] >= BREVE_S
 
-    def join(a, b):
-        if b["secs"] > a["secs"]:
+    def join(a, b, absorbe=False):
+        """b pasa a a. Al absorber un breve, ni su huella ni sus tramos cuentan para la huella de a (pocos segundos y
+        quiza de otra voz): solo para quien habla."""
+        if b["secs"] > a["secs"] and not absorbe:
             a, b = b, a
-        if a["vec"] is not None and b["vec"] is not None:
-            a["vec"] = _unit(a["vec"] * max(a["secs"], 1.0) + b["vec"] * max(b["secs"], 1.0))
-        elif a["vec"] is None:
-            a["vec"] = b["vec"]
+        if not absorbe:
+            if a["vec"] is not None and b["vec"] is not None:
+                a["vec"] = _unit(a["vec"] * max(a["secs"], 1.0) + b["vec"] * max(b["secs"], 1.0))
+            elif a["vec"] is None:
+                a["vec"] = b["vec"]
+            a["fp"] = _intervals(a["fp"] + b["fp"])
+            a["cambia"] = True
         a["tramos"] = _intervals(a["tramos"] + b["tramos"])
         a["secs"] = sum(x1 - x0 for x0, x1 in a["tramos"])
-        a["cambia"] = True
         groups[:] = [g for g in groups if g is not b]
 
     fusion_grandes = FUSION_GRANDES if fusion_grandes is None else fusion_grandes
@@ -375,15 +380,13 @@ def consolidate(res, samples16=None, ex=None, fusion=FUSION, absorbe_min=ABSORBE
             break
         c, dst = max(((cosine(g["vec"], d["vec"]), d) for d in vis), key=lambda x: x[0])
         if c >= absorbe_min:
-            v = dst["vec"]
-            join(dst, g)
-            dst["vec"] = v  # un breve no mueve la huella del visible (sus segundos son pocos y ruidosos)
+            join(dst, g, absorbe=True)
     groups.sort(key=lambda g: -g["secs"])
     tramos, hablantes, huellas = [], {}, {}
     for k, g in enumerate(groups, 1):
         h = f"h{k}"
         if g["cambia"] and ex is not None and samples16 is not None:
-            v, _ = fingerprint(ex, samples16, g["tramos"])
+            v, _ = fingerprint(ex, samples16, g["fp"])
             g["vec"] = _unit(v) if v is not None else g["vec"]
         elif not g["cambia"]:
             g["vec"] = g["orig"]
@@ -943,11 +946,12 @@ def join_speakers(data, h, con, usuario=None, names=None):
         raise KeyError(con if h in hablantes else h)
     names = names or {}
 
-    def who(x):
-        if is_user(x, data, names, usuario):
-            return "tu"
+    def who(x):  # quien es, si ya esta decidido (lo provisional y lo que dice el micro, no)
         info = hablantes[x]
-        return info["persona"] if info.get("persona") in names and not info.get("provisional") else None
+        pid = info.get("persona")
+        if not pid or pid not in names or info.get("provisional") or info.get("origen") == "micro":
+            return None
+        return "tu" if pid == usuario else pid
 
     wh, wc = who(h), who(con)
     if wh and wc and wh != wc:
@@ -956,8 +960,12 @@ def join_speakers(data, h, con, usuario=None, names=None):
         for k in ("persona", "score", "provisional", "origen"):
             if k in hablantes[h]:
                 hablantes[con][k] = hablantes[h][k]
-    if data.get("tu") == h:
-        data["tu"] = con if "tu" in (wh, wc) else None
+    ident = wh or wc
+    if ident and ident != "tu":  # `con` es otra persona: ninguno de los dos eres tu
+        if data.get("tu") in (h, con):
+            data["tu"] = None
+    elif data.get("tu") == h:
+        data["tu"] = con
     mine = [(float(t["inicio"]), float(t["fin"])) for t in data.get("tramos") or [] if t.get("h") in (h, con)]
     rest = [t for t in data.get("tramos") or [] if t.get("h") not in (h, con)]
     joined = _intervals(mine)

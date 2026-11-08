@@ -96,6 +96,22 @@ class ConsolidateTests(unittest.TestCase):
         self.assertEqual(quien(res, 32), quien(res, 10))
         self.assertAlmostEqual(voices.cosine(res["huellas"][quien(res, 10)], unit(0)), 1.0, places=5)
 
+    def test_un_breve_absorbido_no_entra_en_la_huella_recalculada(self):
+        """Con el extractor (lo que hace la app): la huella se recalcula solo con lo unido por fusion, no con los
+        tramos de un breve absorbido, que puede ser de otra voz."""
+        g = diar({"h1": ([(0, 20)], unit(0)), "h1b": ([(40, 60)], mix(unit(0), unit(1), 0.9)),
+                  "h2": ([(30, 35)], mix(unit(0), unit(3), 0.5)), "h3": ([(70, 110)], unit(2))})
+        with mock.patch.object(voices, "fingerprint", return_value=(unit(7), 40.0)) as fp:
+            res = voices.consolidate(g, samples16=np.zeros(16000, np.int16), ex=object(), **P)
+        fp.assert_called_once()
+        self.assertEqual(fp.call_args[0][2], [(0, 20), (40, 60)])  # sin (30, 35) del breve
+        self.assertEqual(quien(res, 32), quien(res, 10))  # pero su voz si pasa al visible
+        g = diar({"h1": ([(0, 20)], unit(0)), "h2": ([(30, 35)], mix(unit(0), unit(1), 0.5))})
+        with mock.patch.object(voices, "fingerprint", return_value=(unit(7), 40.0)) as fp:
+            res = voices.consolidate(g, samples16=np.zeros(16000, np.int16), ex=object(), **P)
+        fp.assert_not_called()  # solo absorbio: su huella es la de antes
+        self.assertAlmostEqual(voices.cosine(res["huellas"]["h1"], unit(0)), 1.0, places=5)
+
     def test_un_breve_de_otra_voz_sigue_breve(self):
         res = voices.consolidate(diar({"h1": ([(0, 30)], unit(0)), "h2": ([(30, 34)], mix(unit(0), unit(1), 0.1)),
                                        "h3": ([(40, 70)], unit(2))}), **P)
@@ -183,6 +199,11 @@ class PistaDeParticipantesTests(Reunion):
         self.assertIsNone(self.correr({"titulo": "x"}))
         self.assertIsNone(self.correr())
 
+    def test_con_el_sidecar_que_deja_la_grabadora(self):
+        """Al parar, la grabadora escribe un sidecar con solo la linea de tiempo del micro: sigue siendo la primera."""
+        voices.write_sidecar(self.sidecar(), {"version": 1, "micro": {"paso": 0.25, "activo": "0101", "desfase": 0}})
+        self.assertEqual(self.correr({"participantes": "Ana, Luis y Pedro"}), 3)
+
     def test_al_reidentificar_no_se_fia_de_lo_que_relleno_la_app(self):
         """Tras identificar, _suggest_participants pudo dejar solo los reconocidos: no vale como tope."""
         self.identificar(micro_en=None)
@@ -235,10 +256,28 @@ class UnirHablantesTests(Reunion):
 
     def test_tu_y_otra_persona_no_se_unen(self):
         self.usuario()
-        self.identificar(micro_en="h2")
+        self.identificar(micro_en=None)
+        self.app.voices_person({"path": "r.wav", "h": "h2", "es_usuario": True})  # «Soy yo»
         self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana"})
         with self.assertRaises(server.ApiError):
             self.unir("h2", "h1")
+
+    def test_lo_que_dice_el_micro_o_lo_provisional_no_impide_unir(self):
+        """«Tú» solo por el micro, o un «¿Tú?» provisional, no es una decision: unirlo a Ana dice que es Ana."""
+        uid = self.usuario()
+        self.identificar(micro_en="h2")
+        ana = self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana"})["id"]
+        self.unir("h2", "h1")
+        side = self.leer()
+        self.assertEqual((side["hablantes"]["h1"]["persona"], side["tu"]), (ana, None))
+        self.identificar(micro_en=None)
+        data = self.leer()
+        data["hablantes"]["h2"].update(persona=uid, provisional=True)
+        voices.write_sidecar(self.sidecar(), data)
+        self.app.voices_person({"path": "r.wav", "h": "h1", "nombre": "Ana"})
+        self.unir("h2", "h1")
+        labels, _ = self.etiquetas()
+        self.assertEqual(labels["h1"], ("Ana", False))
 
     def test_la_huella_en_memoria_se_descarta(self):
         self.identificar(micro_en=None)

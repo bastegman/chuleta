@@ -2759,7 +2759,8 @@ class Jobs:
             props = parse_notes(read_text(md))[0] if os.path.isfile(md) else {}
         except (OSError, ValueError):
             return 0
-        if old and props.get("participantes_origen") not in PARTICIPANTES_ORIGENES:
+        if old.get("tramos") and props.get("participantes_origen") not in PARTICIPANTES_ORIGENES:  # la grabadora
+            # deja un sidecar con solo «micro»: eso aun no es una identificacion
             return 0
         return voices.count_participants(props.get("participantes"))
 
