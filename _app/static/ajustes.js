@@ -199,7 +199,7 @@ function bindAjAlGrabar(d) {
     }
     const av = $('.ag-sin-listas', d);
     // aquí, en una línea (Al grabar tiene que caber en una pantalla); en Proyectos y en las listas, con su recuadro
-    if (S.vocabError && !S.vocab?.length && !av) $('.ag-plan', d)?.insertAdjacentHTML('afterend', '<div class="ag-sin-listas help warn-txt" style="margin-top:4px">No se han podido leer las listas de vocabulario: solo se puede comprobar «Sin proyecto». <a href="#" data-aj-listas-otra>Probar otra vez</a></div>');
+    if (S.vocabError && !S.vocab?.length && !av) $('.ag-plan', d)?.insertAdjacentHTML('afterend', '<div class="ag-sin-listas help" style="margin-top:4px"><span class="warn-txt">No se han podido leer las listas de vocabulario: solo se puede comprobar «Sin proyecto».</span> <a href="#" data-aj-listas-otra>Probar otra vez</a></div>');
     else if (av && !S.vocabError) av.remove();
     if ([...proy.options].map(o => o.value).join('|') + '#' + proy.value !== antes) pedir();
   };
