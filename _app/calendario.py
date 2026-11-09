@@ -1126,9 +1126,10 @@ class Vigia:
     def recordar(self, r):
         with self.lock:
             self.ultimo, self.ultimo_at = r, time.time()
-            p = ((r or {}).get("sugerencia") or {}).get("participants") or []
-            if p:
-                self.historial = (self.historial + [(self.ultimo_at, list(p))])[-20:]
+            p = list(((r or {}).get("sugerencia") or {}).get("participants") or [])
+            if p:  # la misma lista que la anterior (el vigilante relee cada minuto): solo se renueva su hora
+                h = [x for x in self.historial if x[1] != p]
+                self.historial = (h + [(self.ultimo_at, p)])[-20:]
         return r
 
     def participantes_recientes(self, max_age=3600):

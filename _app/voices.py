@@ -403,23 +403,27 @@ def consolidate(res, samples16=None, ex=None, fusion=FUSION, absorbe_min=ABSORBE
 
 def count_participants(text, sugeridos=False):
     """Cuantas personas nombra el campo «Participantes». Texto libre («Ana, Luis y Pedro»): se parte por comas, «;»,
-    lineas, «/» e «y/and/&»; ante la duda cuenta de mas, que une menos voces. sugeridos=True: el texto es el que
-    escribio la app con los de Outlook o Teams (calendario.join_participants), que separa con «; » si algun nombre
-    lleva coma («Apellido, Nombre»): entonces cada trozo entre «;» con una coma es una persona por cada nombre de
-    detras de la coma («Pérez, Ana y Luis» son dos; el «y» de «Ortega y Gasset, José» no separa), y lo demas se parte
-    como el texto libre. Asi los nombres del directorio de una empresa no cuentan doble (revision de la integracion
-    del 08/11/2026)."""
+    lineas, «/» e «y/and/&» (en mayusculas tambien); ante la duda cuenta de mas, que une menos voces. sugeridos=True:
+    el texto es el que escribio la app con los de Outlook o Teams (calendario.join_participants), un trozo por
+    destinatario: con «; » si algun nombre lleva coma («Apellido, Nombre»), si no con «, ». Cada trozo cuenta una
+    persona, o una por cada nombre unido con «y/and/&» o «/» detras de la primera coma («Pérez, Ana y Luis» son dos; el
+    «y» de «Ortega y Gasset, José» no separa; lo que va entre parentesis no cuenta). En un trozo sin coma, «y» separa
+    («José Ortega y Gasset» cuenta dos: de mas). Asi los nombres del directorio de una empresa no cuentan doble
+    (revision de la integracion del 08/11/2026)."""
     text, sep = str(text or ""), r"\s+(?:y|e|and|&)\s+|/"
     if sugeridos:
         parts = []
         for trozo in re.split(r"[;\n]+" if ";" in text else r"[,\n]+", text):
-            if trozo.count(",") == 1:
-                ape, nom = trozo.split(",")
-                parts += [ape.strip() + ", " + n.strip() for n in re.split(sep, nom) if n.strip()]
+            t = re.sub(r"\([^)]*\)", " ", trozo).strip() or trozo.strip()
+            if not t:
+                continue
+            if "," in t:
+                ape, nom = t.split(",", 1)
+                parts += [ape.strip() + ", " + n.strip() for n in re.split(sep, nom, flags=re.I) if n.strip()] or [t]
             else:
-                parts += re.split(r",|" + sep, trozo)
+                parts += [n for n in re.split(sep, t, flags=re.I) if n.strip()] or [t]
     else:
-        parts = re.split(r"[,;\n/]+|\s+(?:y|e|and|&)\s+", text)
+        parts = re.split(r"[,;\n/]+|\s+(?:y|e|and|&)\s+", text, flags=re.I)
     return len({p.strip().casefold() for p in parts if p.strip()})
 
 

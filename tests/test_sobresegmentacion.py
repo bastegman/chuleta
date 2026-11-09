@@ -180,7 +180,11 @@ class CountParticipantsTests(unittest.TestCase):
                         ("Ana, Luis", 2), ("Ortega y Gasset, José; Ana", 2), ("", 0),
                         # una entrada que nombra a dos (una pareja, un buzon compartido): dos, nunca una (RF5)
                         ("Pérez, Ana y Luis; García, Pedro", 3), ("Ana y Luis Pérez, Pedro García", 3),
-                        ("Equipo Ventas / Marketing, Ana López", 3)):
+                        ("Equipo Ventas / Marketing, Ana López", 3),
+                        # en mayusculas, sin nombre, con parentesis o con dos comas (RF6)
+                        ("PÉREZ, ANA Y LUIS; GARCÍA, PEDRO", 3), ("Smith, John And Jane; Doe, Mary", 3),
+                        ("Pérez,; García, Pedro", 2), ("Pérez, Luis (Ventas, Madrid); García, Ana", 2),
+                        ("Smith, John, Jr.; Doe, Mary", 2)):
             self.assertEqual(voices.count_participants(text, sugeridos=True), n, text)
 
     def test_editado_a_mano_nunca_de_menos(self):
@@ -368,6 +372,14 @@ class PistaDeParticipantesTests(Reunion):
         with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos:
             rec(a, self, participantes=texto, sugerido="outlook", name="Otra")
         self.assertEqual(vistos, set())
+
+    def test_el_historial_no_se_llena_de_repetidos(self):
+        """El vigilante relee cada minuto: la misma lista solo renueva su hora y no echa a las anteriores (RF6)."""
+        vg = server.calendario.Vigia()
+        vg.recordar({"sugerencia": {"participants": ["Pérez, Ana"]}})
+        for _ in range(30):
+            vg.recordar({"sugerencia": {"participants": ["García, Luis"]}})
+        self.assertEqual(vg.participantes_recientes(), [["Pérez, Ana"], ["García, Luis"]])
 
     def test_de_grabar_a_confirmar(self):
         """La cadena entera: grabar con la sugerencia de Outlook → el .md → «Confirmar» (el mismo texto, como
@@ -777,16 +789,17 @@ class CorregirMientrasSeMueveTests(Reunion):
 
 
 class FusionarPersonasTests(Reunion):
-    """«Fusionar» (Ajustes › Voces): una reunion cuyo sidecar no se puede escribir (OneDrive, el antivirus) no deja la
-    fusion a medias ni da error: las demas se actualizan y la respuesta dice cuantas no (revision de la integracion
-    del 08/11/2026)."""
+    """«Fusionar» (Ajustes › Voces) con una reunion cuyo sidecar no se puede escribir (OneDrive, el antivirus): no borra
+    a la persona hasta haber reescrito todas, dice cuantas faltan y se puede repetir (revision de la integracion del
+    08/11/2026: antes la borraba primero y esas reuniones se quedaban con un id que ya no existia)."""
 
-    def test_una_reunion_bloqueada(self):
+    def test_una_reunion_bloqueada_y_luego_libre(self):
         self.identificar(micro_en=None)
         luis, ana = self.v.create("Luis")["id"], self.v.create("Ana")["id"]
         self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": luis})
         self.wav("s.wav", seconds=0.5)
-        voices.write_sidecar(os.path.join(self.root, "s.hablantes.json"), dict(self.leer()))
+        s_side = os.path.join(self.root, "s.hablantes.json")
+        voices.write_sidecar(s_side, dict(self.leer()))
         real = voices.write_sidecar
 
         def bloqueado(path, data):
@@ -794,9 +807,17 @@ class FusionarPersonasTests(Reunion):
                 raise PermissionError(13, "en uso")
             return real(path, data)
         with mock.patch.object(voices, "write_sidecar", bloqueado), mock.patch.object(server, "log"):
-            r = self.app.voices_merge({"id_a": ana, "id_b": luis})
-        self.assertEqual((r["reuniones"], r["sin_actualizar"]), (1, 1))
+            with self.assertRaises(server.ApiError) as e:
+                self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertIn("1 reunión no se ha podido actualizar", str(e.exception.msg))
+        self.assertIsNotNone(self.v.find(luis))  # sigue: se puede repetir
         self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], ana)
+        self.assertEqual(voices.read_sidecar(s_side)["hablantes"]["h3"]["persona"], luis)
+        with mock.patch.object(server, "log"):
+            r = self.app.voices_merge({"id_a": ana, "id_b": luis})  # ya libre
+        self.assertEqual(r["reuniones"], 1)
+        self.assertIsNone(self.v.find(luis))
+        self.assertEqual(voices.read_sidecar(s_side)["hablantes"]["h3"]["persona"], ana)
 
 
 class EvalScoreTests(unittest.TestCase):

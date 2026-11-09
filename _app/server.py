@@ -6728,17 +6728,21 @@ class App:
         return {"id": pid, "huellas": remembered, "personas": v.public()}
 
     def voices_merge(self, b):
+        """«Fusionar» dos personas (keep se queda, other desaparece). Primero se reescriben los sidecars que citan a
+        other y solo despues se borra: si una reunion no se puede escribir (OneDrive o el antivirus con el fichero
+        abierto), other sigue existiendo, se dice cuantas faltan y «Fusionar» se puede repetir (antes la persona se
+        borraba primero y esas reuniones se quedaban con un id que ya no existe; revision de la integracion del
+        08/11/2026)."""
         v = self.jobs.voices
         keep, other = b.get("id_a"), b.get("id_b")
-        try:
-            removed = v.merge(keep, other)
-        except KeyError:
+        a_, b_ = v.find(keep), v.find(other)
+        if keep != other and (not a_ or not b_):
             raise ApiError("Alguna de las dos personas ya no existe.")
-        except ValueError:
+        if keep != other and (a_.get("es_usuario") or b_.get("es_usuario")):
             raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
                            "«No soy yo»; si eres tú, «Soy yo».")
         n, fallidas = 0, []
-        if removed:
+        if keep != other:
             self.library.refresh(max_age=5)
             for a in list(self.library.flat):  # sin mirar a["_spk"]: en pleno movimiento el sidecar ya esta en la nueva
                 with self._voices_lock():  # como las correcciones: si se esta moviendo, espera y va a la ruta nueva
@@ -6748,12 +6752,12 @@ class App:
                         continue  # ya no esta
                     side = voices.sidecar_path(abs_path)
                     data = voices.read_sidecar(side)
-                    if not data or not any(i.get("persona") == removed for i in (data.get("hablantes") or {}).values()):
+                    if not data or not any(i.get("persona") == other for i in (data.get("hablantes") or {}).values()):
                         continue
                     for i in data["hablantes"].values():
-                        if i.get("persona") == removed:
+                        if i.get("persona") == other:
                             i["persona"] = keep
-                    try:  # una reunion con el fichero abierto (OneDrive, el antivirus) no deja las demas a medias
+                    try:  # una reunion con el fichero abierto no deja las demas a medias
                         voices.write_sidecar(side, data)
                     except OSError as e:
                         fallidas.append(f"{display_rel(rel_of(abs_path))} ({e.__class__.__name__})")
@@ -6761,9 +6765,20 @@ class App:
                     self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: con el nombre que queda
                 n += 1
         self.library.at = 0
-        log(f"🗣 personas fusionadas ({n} reuniones actualizadas)"
-            + (f"; sin actualizar: {', '.join(fallidas)}" if fallidas else ""))
-        return {"id": keep, "reuniones": n, "personas": v.public(), "sin_actualizar": len(fallidas)}
+        if fallidas:
+            log(f"🗣 fusión a medias ({n} reuniones actualizadas); sin actualizar: {', '.join(fallidas)}")
+            raise ApiError(f"{len(fallidas)} {'reunión no se ha' if len(fallidas) == 1 else 'reuniones no se han'} "
+                           "podido actualizar (¿abiertas en OneDrive o en otro programa?). Las dos personas siguen "
+                           "ahí: ciérralas y vuelve a fusionar.")
+        try:
+            v.merge(keep, other)
+        except KeyError:
+            raise ApiError("Alguna de las dos personas ya no existe.")
+        except ValueError:
+            raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
+                           "«No soy yo»; si eres tú, «Soy yo».")
+        log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
+        return {"id": keep, "reuniones": n, "personas": v.public()}
 
     def voices_forget(self, b):
         v = self.jobs.voices
