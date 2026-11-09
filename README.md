@@ -99,6 +99,26 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
    cambiar un instalador: el instalador lo detecta y dice cómo volver a anclarla. Si varias copias de Tenca usan la
    misma carpeta de reuniones (otro PC, OneDrive), actualízalas todas a la vez (ver «Privacidad»).
 
+### Instalar con Setup.exe (otra forma, la misma instalación)
+
+`Tenca - Setup.exe` es un asistente de Inno Setup que hace lo mismo que el zip y su `INSTALAR.bat`: doble clic,
+«Instalar», y se abre la misma ventana del instalador con sus pasos. Por dentro lleva el contenido del zip y ejecuta su
+`_app\instalar.ps1`, así que se instala igual (para tu usuario, sin permisos de administrador, en `%USERPROFILE%\Tenca`
+o en la carpeta que ya tuvieras), con los mismos accesos directos, la misma entrada en «Aplicaciones instaladas» y el
+mismo desinstalador; si ya la tenías (también con su nombre anterior), actualiza la de siempre sin tocar tus
+reuniones. No lleva listas de vocabulario (se compila en la CI y es público). El zip sigue siendo la forma principal.
+
+- **SmartScreen.** El Setup.exe no está firmado, así que Windows lo para la primera vez: «Windows protegió tu PC» →
+  «Más información» → «Ejecutar de todas formas». Es el mismo aviso que con `INSTALAR.bat`; con un ejecutable sin
+  firma no hay forma legítima de evitarlo. Firmar no lo quita del todo: un certificado nuevo también avisa hasta que
+  acumula reputación. En un PC con Smart App Control activado (Windows 11 doméstico, no los de empresa) un ejecutable
+  sin firma se bloquea sin botón para seguir: ahí, el zip.
+- **En silencio** (para TI): `"Tenca - Setup.exe" /VERYSILENT /SUPPRESSMSGBOXES` instala sin preguntas ni ventanas y
+  sin abrir la app; sale con código 1 si la instalación no terminó (el motivo, en
+  `%LOCALAPPDATA%\AudiosApp\instalar.log`).
+- Lo genera `python scripts/build_setup.py` en Windows con Inno Setup 6 (ver «Generar el Setup.exe»); la CI lo
+  compila y lo prueba en cada push a main que lo toque (`setup-exe`, artefacto `Tenca-Setup`).
+
 ### Red y proxy de empresa
 
 - Las llamadas de Tenca a sí misma (a `127.0.0.1`, las del acceso directo y del aviso flotante) no pasan por el
@@ -274,6 +294,10 @@ en un sitio público. `server.log` y `voces.log` sí llevan nombres de reuniones
 - `lookfeel-e2e` (E2E del instalador y del desinstalador), `reunion-windows` (ventana de Teams simulada, aviso
   flotante) y `windows-real` (formato regional español, la ventana real ante el apagado de Windows y sin WebView2):
   con cada push a main que toque lo que prueban, y a mano. `lookfeel-spike` (medición archivada), solo a mano.
+- `setup-exe`: compila el Setup.exe con el Inno Setup del runner y lo prueba en Windows con PowerShell 5.1
+  (`scripts/e2e/setup_e2e.ps1`: instalación en silencio, el asistente pulsado con UI Automation y sus capturas,
+  desinstalar, la versión de main anterior al renombrado con el Setup encima y un fallo simulado); con cada push a main
+  que lo toque, y a mano. Deja el Setup.exe como artefacto `Tenca-Setup`.
 - Agnosticismo: `test_sin_rastro_de_clientes` (`tests/test_package.py`) revisa todo lo que git tiene en el índice con
   la lista privada del secreto de Actions `NOTAS_PALABRAS_VETADAS` (expresiones regulares separadas por comas o una
   por línea, sin distinguir mayúsculas, con `^` y `$` por línea). Si encuentra algo, falla con fichero:línea y número
@@ -322,6 +346,17 @@ python3 scripts/build_zip.py            # deja dist/Tenca - instalador.zip (sin 
 
 `--vocab [CARPETA]` añade las listas `<proyecto>/Vocabulario/*.txt` de esa carpeta (por defecto, la raíz del repo):
 llevan nombres de personas y empresas, así que ese zip es solo para gente del mismo proyecto, nunca para publicar.
+
+### Generar el Setup.exe
+
+```
+python scripts/build_setup.py                        # Windows con Inno Setup 6: dist/Tenca - Setup.exe (sin vocabulario)
+python3 scripts/build_setup.py --preparar CARPETA    # cualquier sistema: solo el contenido y la orden de ISCC
+```
+
+Lleva lo mismo que el zip (sale de `server.build_package`) y la misma versión. El asistente es
+`scripts/setup/tenca.iss`; su imagen lateral la rehace `python scripts/setup/imagenes.py` (Pillow) desde
+`_app/static/tenca.png`.
 
 ### Regenerar los iconos
 

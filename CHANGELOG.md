@@ -10,6 +10,31 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Setup.exe: otra forma de instalar, con un asistente (09/11/2026)
+
+Fase 1 del instalador «de verdad» (aprobada por Bernardo, msg 1296; research de Harvey del 02/11/2026). El zip sigue
+siendo la forma principal.
+
+- **`Tenca - Setup.exe`** (Inno Setup 6.7): doble clic, una bienvenida con el icono de Tenca y «Instalar»; después, la
+  misma ventana del instalador de siempre con sus pasos y «Abrir». Por usuario y sin permisos de administrador. Lleva
+  dentro lo mismo que el zip (sale de `server.build_package`) y ejecuta su `_app\instalar.ps1`, así que instala igual:
+  carpeta propia, accesos directos con el AppUserModelID, su entrada en «Aplicaciones instaladas» y el desinstalador
+  de siempre; encima de Tenca o de Chuleta, actualiza la de siempre sin perder datos ni dejar nada con el nombre
+  viejo. Inno no pone carpeta, entrada ni desinstalador propios (`CreateAppDir=no`, `Uninstallable=no`) ni su página
+  final (la ventana del instalador ya dice cómo ha ido).
+- **Sin firma**: Windows enseña SmartScreen («Windows protegió tu PC» → «Más información» → «Ejecutar de todas
+  formas»), como con `INSTALAR.bat`. No se esquiva. Con Smart App Control activado (Windows 11 doméstico) no hay botón
+  para seguir: ahí, el zip.
+- **En silencio** (`/VERYSILENT /SUPPRESSMSGBOXES`): sin ventanas ni abrir la app; sale con 1 si la instalación no
+  terminó.
+- `instalar.ps1 -DesdeSetup`: lo que cambia cuando lo lanza el Setup desde su carpeta temporal: no habla de «la
+  carpeta descomprimida», nunca se instala en ella y sale con 1 si algo falla también en modo ventana.
+- **Desarrollo y CI**: `scripts/build_setup.py` (prepara el contenido del zip y llama a ISCC; `--preparar` sin Inno),
+  `scripts/setup/tenca.iss` y la imagen del asistente (`scripts/setup/imagenes.py`); `setup-exe.yml` lo compila con el
+  Inno Setup del runner y lo prueba en Windows (`scripts/e2e/setup_e2e.ps1`): instalación en silencio, el asistente
+  pulsado con UI Automation y sus capturas, desinstalar, la Chuleta de `2242e63` con el Setup encima y un fallo
+  simulado. El Setup.exe sale como artefacto `Tenca-Setup`.
+
 ### Tenca encima de Chuleta: la carpeta con su nombre de verdad (09/11/2026)
 
 - **Rutas**: la tarjeta de grabar, el aviso de Ctrl+Alt+R, la cabecera del directo («Se guarda en … · Cambiar»), los
