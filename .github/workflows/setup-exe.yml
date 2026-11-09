@@ -1,0 +1,68 @@
+name: setup-exe
+
+# Setup.exe, fase 1 (ítem 8 del backlog): un asistente de Inno Setup que envuelve instalar.ps1. Se compila con el ISCC
+# que traen los runners de Windows de GitHub (Inno Setup 6.7) y se prueba de verdad con PowerShell 5.1
+# (scripts/e2e/setup_e2e.ps1): instalación nueva en silencio, el asistente pulsado como el usuario (UI Automation, con
+# capturas), desinstalar, la Chuleta de main (CHULETA_SHA, la que tiene Bernardo) con el Setup encima y un fallo
+# simulado. El Setup.exe (sin firma: Windows enseña SmartScreen) sale como artefacto «Tenca-Setup».
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, setup-exe]
+    paths:
+      - "_app/**"
+      - "INSTALAR.bat"
+      - "ABRIR TENCA.bat"
+      - "LEEME.txt"
+      - "LICENSE"
+      - "requirements.txt"
+      - "scripts/build_zip.py"
+      - "scripts/build_setup.py"
+      - "scripts/setup/**"
+      - "scripts/e2e/setup_e2e.ps1"
+      - ".github/workflows/setup-exe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: La Chuleta de main (para instalar el Setup encima)
+        shell: bash
+        run: git fetch --no-tags --depth=1 origin "$CHULETA_SHA"
+        env:
+          CHULETA_SHA: 2242e6332ea03285ede8e7f5d1b82e36aa5c0175
+      - name: numpy (build_zip importa live.py)
+        shell: powershell
+        run: python -m pip install --disable-pip-version-check numpy
+      - name: Compilar Setup.exe (Inno Setup del runner)
+        shell: powershell
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path -LiteralPath $iscc) { Write-Host ("Inno Setup " + (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion) }
+          python scripts\build_setup.py "$env:GITHUB_WORKSPACE\dist\Tenca - Setup.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: E2E del Setup.exe (PowerShell 5.1)
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\e2e\setup_e2e.ps1" -Setup "$env:GITHUB_WORKSPACE\dist\Tenca - Setup.exe" -Repo "$env:GITHUB_WORKSPACE" -Out "$env:GITHUB_WORKSPACE\setup-e2e-out" -Chuleta "2242e6332ea03285ede8e7f5d1b82e36aa5c0175"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: Tenca-Setup
+          path: dist/Tenca - Setup.exe
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: setup-e2e
+          path: setup-e2e-out
+          if-no-files-found: warn

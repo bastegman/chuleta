@@ -31,8 +31,11 @@
 # Solo para CI: -AutoCerrar N (o la variable NOTAS_INSTALADOR_AUTOCERRAR=N) cierra la ventana sola N segundos despues de
 # terminar, bien o mal; si termino bien, como si se hubiera pulsado "Abrir". NOTAS_INSTALADOR_SIMULAR_FALLO=pip ensaya la
 # pantalla de error sin tocar la red. Ninguna de las dos se usa en un PC normal.
+# -DesdeSetup: lo lanza Setup.exe (scripts/setup/tenca.iss) desde su carpeta temporal, que borra al terminar. Entonces
+# no se habla de "la carpeta descomprimida", nunca se instala en ella (sin carpeta libre en el perfil, falla) y, tambien
+# en modo ventana, sale con 1 si algo falla: Setup.exe lo devuelve como su codigo de salida.
 param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Tenca",
-      [switch]$Consola, [int]$AutoCerrar = 0, [string]$Destino = "")
+      [switch]$Consola, [int]$AutoCerrar = 0, [string]$Destino = "", [switch]$DesdeSetup)
 
 $ErrorActionPreference = "Continue"
 if ($AutoCerrar -le 0 -and $env:NOTAS_INSTALADOR_AUTOCERRAR) { try { $AutoCerrar = [int]$env:NOTAS_INSTALADOR_AUTOCERRAR } catch {} }
@@ -49,7 +52,7 @@ function Log-File($text) {
 }
 trap {
     # error inesperado (no un Fail): en modo ventana se ensena ahi, porque la consola esta escondida; en consola se propaga
-    if ($script:ui -and -not $script:ui.done) { Finish-Ui $false "Error inesperado: $($_.Exception.Message)"; exit 0 }
+    if ($script:ui -and -not $script:ui.done) { Finish-Ui $false "Error inesperado: $($_.Exception.Message)"; exit $(if ($DesdeSetup) { 1 } else { 0 }) }
     break
 }
 $app = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -141,7 +144,8 @@ function Fail($text) {
     Write-Host ""
     Write-Host "  X  $text" -ForegroundColor Red
     Log-File "X $text"
-    if ($script:ui) { Finish-Ui $false $text; exit 0 }  # el error ya se ha visto en la ventana: el .bat no tiene que parar
+    # el error ya se ha visto en la ventana: el .bat no tiene que parar (Setup.exe si necesita saberlo)
+    if ($script:ui) { Finish-Ui $false $text; exit $(if ($DesdeSetup) { 1 } else { 0 }) }
     exit 1
 }
 function Hide-Console {
@@ -881,7 +885,8 @@ if ($yaInstalada) {
     } else { Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..." }
     Say "    Encontrada por: $($prev.how)"
     Copy-AppFiles $app $root $old $oldRoot
-    if (Test-TieneReuniones $root $app) { Say "    Actualizada. Ojo: $root tiene grabaciones; no la borres sin revisarla." Yellow }
+    if ($DesdeSetup) { Say "    Actualizada." Green }  # la carpeta temporal de Setup.exe la borra el propio Setup
+    elseif (Test-TieneReuniones $root $app) { Say "    Actualizada. Ojo: $root tiene grabaciones; no la borres sin revisarla." Yellow }
     else { Say "    Actualizada. La carpeta que acabas de descomprimir ya no hace falta: puedes borrarla." Green }
     $origen = $root
     $app, $root = $old, $oldRoot
@@ -897,12 +902,15 @@ if ($yaInstalada) {
         }
     } elseif ($Sistema) {
         $dest = Get-CarpetaNueva
+        if (-not $dest -and $DesdeSetup) {  # aqui no: es la carpeta temporal de Setup.exe, que se borra al terminar
+            Fail "No encuentro una carpeta libre en $script:UserHome ($FolderName, $FolderName (2)... ya tienen otras cosas): descomprime el zip y ejecuta INSTALAR.bat -Destino <carpeta nueva>."
+        }
         if (-not $dest) { Say "    No encuentro una carpeta libre en $script:UserHome : se instala aquí ($root)." Yellow }
     }
     if ($dest -and -not (Same-Path $dest $root)) {
         Step "Instalando en $dest..."
         Copy-AppFiles $app $root (Join-Path $dest "_app") $dest
-        Say "    Copiada desde $root" Green
+        Say $(if ($DesdeSetup) { "    Copiada desde el instalador" } else { "    Copiada desde $root" }) Green
         $origen = $root
         $app, $root = (Join-Path $dest "_app"), $dest
     }
@@ -1009,7 +1017,7 @@ Say "  Instalada en $root" Green
 # instalada encima de la app con su nombre anterior: se dice que es la misma y que no se ha perdido nada
 $renombrada = $(if ($script:antes) { "$($script:antes) ahora se llama ${AppName}: tus reuniones, voces y ajustes siguen donde estaban." } else { "" })
 if ($renombrada) { Say "  $renombrada" Green }
-$borrable = $origen -and -not (Test-TieneReuniones $origen (Join-Path $origen "_app"))
+$borrable = -not $DesdeSetup -and $origen -and -not (Test-TieneReuniones $origen (Join-Path $origen "_app"))
 if ($borrable) { Say "  La carpeta que descomprimiste ($origen) ya no hace falta: puedes borrarla." Green }
 Say "  Si es la primera vez: Ajustes (rueda dentada) > Dónde se procesan tus reuniones: solo en este PC, con tu cuenta de Claude o con una API." Green
 Say "  Para apagar $AppName del todo: Ajustes > Apagar $AppName (cerrar la ventana la deja en segundo plano)." Green
