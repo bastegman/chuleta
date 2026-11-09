@@ -2425,7 +2425,16 @@ function openSettings(opts) {
       if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', openSettings);
       if (e.target.closest('#sVocabConectar') && typeof vocabConectar === 'function') vocabConectar(redrawVocab);
       if (vu && typeof vocabDesconectar === 'function') {
-        vocabDesconectar(vu.dataset.vunlink, () => { redrawVocab(); if (typeof perfilVocabRedraw === 'function') perfilVocabRedraw(d); });
+        vocabDesconectar(vu.dataset.vunlink, () => {
+          redrawVocab();
+          if (typeof perfilVocabRedraw !== 'function') return;
+          perfilVocabRedraw(d);
+          // lo guardado ha cambiado en el servidor (el tema, a automático): «inicial» y el borrador también, o un
+          // subdiálogo que reabra Ajustes devolvería el tema quitado y «Guardar» lo dejaría en «Sin vocabulario»
+          const g = S.config?.perfil?.vocab;
+          inicial.pfVocab = g == null ? PERFIL_AUTO : g;
+          marcar();
+        });
       }
       if (ed) openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit));
       if (nw) openVocabEditor(null, openSettings, nw.dataset.vnew);

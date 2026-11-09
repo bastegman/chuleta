@@ -217,8 +217,9 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
     def test_tambien_desde_el_plan(self):
         """Decidido (Claudia, 09/11/2026): un proyecto sin carpeta en el arbol usa la carpeta que se eligio a mano para
         el, tambien cuando se graba desde el plan («plan»: true, el dialogo nuevo de ux-grabar, cuyo rec_start no apunta
-        lo demas cuando viene del plan): una eleccion explicita manda. Al fusionar ux-grabar, el bloque sin_casa de
-        rec_start tiene que seguir corriendo con «plan»: true; este test lo fija. Reversible."""
+        lo demas cuando viene del plan): una eleccion explicita manda. En esta rama «plan» todavia no cambia nada; al
+        fusionar ux-grabar, el bloque sin_casa de rec_start tiene que seguir corriendo con «plan»: true, y este test es
+        el que lo comprueba. Reversible."""
         rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff", plan=True)
         self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B", "proyecto"))
         rec(self.a, self, folder="Cliente B 2", vocab=self.b["id"], name="Seguimiento", plan=True)  # otra a mano
