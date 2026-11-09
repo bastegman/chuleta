@@ -76,13 +76,14 @@ def sintetizar(dir_, minutos):
                                timeout=120).stdout.split("\n")
         voces = [v.strip() for v in voces if v.strip()][:3]
         print("voces:", voces, flush=True)
+        q = lambda t: t.replace("'", "''")  # noqa: E731 - comillas simples de PowerShell («let's»: run 42691646093)
         for i, frase in enumerate(FRASES):
             v, p = voces[i % len(voces)], os.path.join(dir_, f"t{i}.wav")
             ps = ("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                  f"$s.SelectVoice('{v}'); $f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, "
+                  f"$s.SelectVoice('{q(v)}'); $f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, "
                   "[System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, "
                   "[System.Speech.AudioFormat.AudioChannel]::Mono);"
-                  f" $s.SetOutputToWaveFile('{p}', $f); $s.Speak('{frase}'); $s.Dispose()")
+                  f" $s.SetOutputToWaveFile('{q(p)}', $f); $s.Speak('{q(frase)}'); $s.Dispose()")
             subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, timeout=120)
             turnos.append(p)
     else:
