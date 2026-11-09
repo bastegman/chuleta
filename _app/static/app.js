@@ -2059,10 +2059,18 @@ function openSettings(opts) {
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
     const inicial = foto();  // como viene de los ajustes guardados
     d.borradorAlAbrir = S.ajBorrador ? { ...S.ajBorrador } : null;  // ajustes.js: lo que no se pudo poner aún
+    // se repone lo escrito solo si lo guardado de lo que partía no ha cambiado entretanto (el asistente, «Probar
+    // conexión»…): si no, manda lo guardado (revisión 5 de B2: el asistente guardaba «API externa» o una clave y,
+    // al volver, el borrador lo deshacía). La clave no se ve pintada: la nube se compara entera, por su firma
+    const valor = x => x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value;
+    const firmaNube = () => JSON.stringify(S.config.cloud || {});
     const ponerBorrador = xs => {
       if (!S.ajBorrador) return;
+      const base = S.ajBorradorBase || {}, nubeIgual = base.nube === firmaNube();
       xs.forEach(x => {
         if (!(x.id in S.ajBorrador)) return;
+        if (base.campos && x.id in base.campos && valor(x) !== base.campos[x.id]) return;
+        if (!nubeIgual && x.closest('#procApi, #procApiAv')) return;
         if (x.type === 'checkbox' || x.type === 'radio') x.checked = S.ajBorrador[x.id]; else x.value = S.ajBorrador[x.id];
       });
     };
@@ -2078,6 +2086,9 @@ function openSettings(opts) {
       // por otro camino, como «Usarlo en» en la tarjeta)
       S.ajBorrador = cambios ? Object.fromEntries(Object.entries(ahora).filter(([k, v]) => v !== inicial[k])) : null;
       if (S.ajBorrador && procSinAplicar()) S.ajBorrador.__proc = $('input[name="proc"]:checked', d).value;  // y el modo
+      // y de qué se partía: si al volver lo guardado ya es otro, no se repone (ponerBorrador)
+      S.ajBorradorBase = cambios ? { campos: Object.fromEntries(Object.keys(S.ajBorrador).filter(k => k in inicial)
+        .map(k => [k, inicial[k]])), proc: S.config.procesado, nube: firmaNube() } : null;
       $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
     };
     d.ajMarcar = marcar;
@@ -2105,7 +2116,7 @@ function openSettings(opts) {
     // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
     function ajTarjeta() { const t = $('.cfg-estado', d); if (t && typeof cfgEstadoHtml === 'function') t.outerHTML = cfgEstadoHtml(); }
     // la confirmación ocupa el hueco de Ajustes, como un subdiálogo: con «Cancelar» se vuelve con lo no guardado
-    $('#sOff', d).onclick = () => { marcar(); confirmShutdown(); };
+    $('#sOff', d).onclick = () => { marcar(); confirmShutdown(true); };
     // «Arrancar con Windows» (la bandeja deja /api/inicio-windows): se aplica al marcarla, como en el menú del icono;
     // null = no se puede (fuera de Windows o una copia sin instalar)
     const ini = $('#sInicioWin', d);
@@ -2239,7 +2250,8 @@ function openSettings(opts) {
     tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
     ponerBorrador(tarde);
     // el modo marcado y sin aplicar, también (con su aviso y sus campos, que pinta su «change»)
-    const proc = S.ajBorrador?.__proc && $(`input[name="proc"][value="${S.ajBorrador.__proc}"]`, d);
+    const proc = S.ajBorrador?.__proc && S.ajBorradorBase?.proc === S.config.procesado
+      && $(`input[name="proc"][value="${S.ajBorrador.__proc}"]`, d);
     if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); }
     if (S.ajBorrador) marcar();
     const collect = () => {
@@ -2348,10 +2360,12 @@ function openSettings(opts) {
 $('#btnSettings').onclick = () => openSettings({ sec: 'algrabar' });
 
 /* ---------------------------------------------------------------- apagar */
-async function confirmShutdown() {
+async function confirmShutdown(desdeAjustes = false) {
   const busy = S.jobs.some(isActive);
   const ok = await ask(`Apagar ${APP_NAME}`, `<p>Se cierra la app del todo: la ventana y el motor que corre en segundo plano. El atajo Ctrl+Alt+R dejará de funcionar hasta que la vuelvas a abrir con el acceso directo.</p>${busy ? '<p><b>Hay transcripciones en marcha</b>: se cancelan (lo ya escrito se conserva) y podrás relanzarlas al volver.</p>' : ''}`, 'Apagar');
-  if (!ok) return openSettings();  // la confirmacion ocupa el hueco de Ajustes: al cancelar, se vuelve
+  // desde Ajustes, la confirmación ocupa su hueco: al cancelar, se vuelve allí (con lo escrito). Desde el aviso de
+  // cerrar la ventana, no: Ajustes no estaba abierto (revisión 5 de B2)
+  if (!ok) return desdeAjustes ? openSettings() : undefined;
   try { await api('/api/apagar', {}); shutdownScreen(); }
   catch (err) { toast(esc(err.message), 'err'); }
 }

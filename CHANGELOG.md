@@ -91,14 +91,16 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   los errores de las listas («Ese workstream ya no existe»).
 - Lo escrito y sin guardar en Ajustes vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el asistente,
   «Apagar» › «Cancelar» o Escape), y solo eso: lo cambiado, también el motor y el modo marcado sin aplicar, y «Guardar»
-  lo guarda. Abrir Ajustes de cualquier otra forma (⚙, la paleta, Inicio, la tarjeta de grabar, un error) lo abre de
-  nuevo, sin lo de antes. Antes un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto con
-  «Usarlo en»; y un motor repuesto se veía pero no se guardaba.
+  lo guarda; si entretanto se ha guardado otra cosa en ese campo (el asistente guarda el modo, el motor o la clave),
+  manda lo guardado. Abrir Ajustes de cualquier otra forma (⚙, la paleta, Inicio, la tarjeta de grabar, un error, el
+  aviso de cerrar la ventana) lo abre de nuevo, sin lo de antes. Desde el asistente abierto en Ajustes, «Revisar en
+  Ajustes» e «Ir a Avanzado» vuelven con lo escrito, y a esa sección. Antes un borrador abandonado volvía después y
+  «Guardar» deshacía lo guardado entretanto con «Usarlo en»; y un motor repuesto se veía pero no se guardaba.
 - La carpeta de las reuniones sin proyecto que no se encuentra no tira el resto de lo escrito en el plan (el contexto),
   y el plan dice por qué graba en otra («No se encuentra la carpeta de las reuniones sin proyecto (…): se guarda
   aquí»). Un proyecto sin carpeta propia (con sus listas en una carpeta conectada) lo dice en su línea, con dónde
   asignársela («Ajustes › Proyectos o, al grabar, con «Cambiar» y «Todas las de …»»). Estos avisos salen en Ajustes, en
-  la tarjeta de grabar y en el aviso de Windows de Ctrl+Alt+R.
+  la tarjeta de grabar y, delante y sin repetirse, en el aviso de Windows de Ctrl+Alt+R.
 - «Proyecto al grabar» fijo cambia también el proyecto del plan de arriba, para que se vea su efecto.
 - En la fila que se edita en Proyectos, la carpeta va con su ruta («Alfa › Reuniones»): cerrado, el desplegable decía
   solo «Reuniones».

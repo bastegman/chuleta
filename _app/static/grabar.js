@@ -152,8 +152,6 @@ function grPintar() {
   grPintarFilas();
 }
 
-/* la lista de micrófonos y salidas no ha llegado (sin grabadora, o Windows no contesta): una frase, y el detalle del
-   servidor (la cola del error de la grabadora) solo al pasar el ratón. También lo usa Ajustes › Al grabar */
 /* los asistentes, como los une el servidor (plan.unir_participantes / calendario.join_participants): con «; » si algún
    nombre lleva coma («Apellido, Nombre», el directorio de Outlook de una empresa) y si no con «, » */
 function grPartes(texto) {
@@ -161,6 +159,8 @@ function grPartes(texto) {
   return t.split(sep).map(x => x.trim()).filter(Boolean);
 }
 function grSep(nombres) { return nombres.some(n => n.includes(',')) ? '; ' : ', '; }
+/* la lista de micrófonos y salidas no ha llegado (sin grabadora, o Windows no contesta): una frase, y el detalle del
+   servidor (la cola del error de la grabadora) solo al pasar el ratón. También lo usa Ajustes › Al grabar */
 function grDevsAviso(msg, resto = '') {
   return `<span class="gr-aviso" title="${esc(msg || '')}">No se ha podido leer la lista de micrófonos y salidas de audio${resto}.</span>`;
 }

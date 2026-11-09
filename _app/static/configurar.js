@@ -488,10 +488,13 @@ async function wzAccion(tipo, b) {
   if (tipo === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(b.dataset.url, '_blank'));
   // con Claude, el modelo se elige en Ajustes › Procesado (el paso 2 no lo tiene); con la API, la clave y la dirección,
   // en el paso 2
-  if (tipo === 'procesado' && W.modo === 'agente') { closeModal(false); return openSettings({ sec: 'procesado' }); }
+  // a una sección de Ajustes: si el asistente se abrió desde Ajustes, es una vuelta (con lo escrito allí) y su cierre
+  // ya no programa la vuelta a Procesado (que acababa ganando a «Avanzado»)
+  const aAjustes = sec => { const v = !!W.volver; W.volver = null; closeModal(false); return openSettings({ sec, volver: v }); };
+  if (tipo === 'procesado' && W.modo === 'agente') return aAjustes('procesado');
   if (tipo === 'asistente' || tipo === 'procesado') { W.paso = 2; return wzPintar(); }
   if (tipo === 'reintentar_descarga') { await wzBajar(); return wzProbar(); }
-  if (tipo === 'avanzado') { closeModal(false); return openSettings({ sec: 'avanzado' }); }
+  if (tipo === 'avanzado') return aAjustes('avanzado');
   if (tipo === 'diagnostico') { try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (err) { toast(esc(err.message), 'err'); } }
 }
 document.addEventListener('change', e => {

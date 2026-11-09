@@ -108,7 +108,10 @@ def unir_participantes(nombres):
     """Los participantes de la reunión en una línea, como calendario.join_participants (revisión de la integración del
     08/11/2026): con «; » si algún nombre lleva coma (el directorio de una empresa en Outlook: «Apellido, Nombre») y,
     si no, con «, ». Con «, », «Stegmaier, Bernardo, García, Ana» eran cuatro personas para quien lo lee y para la pista
-    de quién habla. tests/test_plan.py comprueba que da lo mismo que la de calendario, si existe."""
+    de quién habla. Con la rama fix-calendario, la suya (una sola regla); sin ella, la misma aquí."""
+    import calendario  # aquí y no arriba: plan.py sigue sin depender de calendario para lo demás
+    if hasattr(calendario, "join_participants"):
+        return calendario.join_participants(nombres)
     nombres = [n for n in (nombres or []) if n]
     return ("; " if any("," in n for n in nombres) else ", ").join(nombres)
 
@@ -262,13 +265,13 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     # con «API externa» y sin su clave, lo que va a la nube no se podrá hacer: se dice en su línea, no al terminar
     sin_clave = motores.get("procesado") == "api" and motores.get("sin_clave")
     falta = {"aviso": "Falta la API key: ponla en Ajustes › Procesado."} if sin_clave else {}
+    en_nube = (p_tx or {}).get("engine") == "cloud"  # transcribe en la nube: el aviso va ahí, y no otra vez en Resume
     lineas.append(_linea("transcribe", "Transcribe", transcribe_txt(live, p_tx or {}, motores),
-                         t_origen, t_txt, live=live, preset=preset,
-                         **(falta if (p_tx or {}).get("engine") == "cloud" else {})))
+                         t_origen, t_txt, live=live, preset=preset, **(falta if en_nube else {})))
 
     # --- resume: lo decide Ajustes › Procesado (no hay cambio por reunión)
     lineas.append(_linea("resume", "Resume", resume_txt(p_tx or {}, motores), "procesado", "Ajustes › Procesado",
-                         **falta))
+                         **({} if en_nube else falta)))
 
     # --- audio: micrófono y audio del PC
     mic = str(cambios["mic"]) if "mic" in cambios else (st.get("rec_mic") or "default")

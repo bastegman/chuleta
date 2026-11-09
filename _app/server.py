@@ -3452,9 +3452,10 @@ class App:
                     body.update(participantes=b["participantes"], sugerido=b.get("sugerido") or sug.get("source") or "")
                 cue("start")  # antes de empezar: asi el pitido no queda grabado
                 r = self.rec_start(body)
-                # lo que avisa el plan (la carpeta, un proyecto sin carpeta propia, la API key), también aquí
-                del_plan = "".join(f" · {x['aviso']}" for x in p["lineas"] if x.get("aviso"))
-                notify(f"● Grabando en {APP_NAME}", p["resumen"] + " · Ctrl+Alt+R para parar" + del_plan
+                # lo que avisa el plan (la carpeta, un proyecto sin carpeta propia, la API key), también aquí y
+                # delante: el aviso de Windows corta lo que no cabe
+                del_plan = "".join(f"{a} · " for a in dict.fromkeys(x["aviso"] for x in p["lineas"] if x.get("aviso")))
+                notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + " · Ctrl+Alt+R para parar"
                        + (f" · {r['aviso']}" if r.get("aviso") else ""))
                 return dict(r, recording=True, plan=p)
             except ApiError as e:
