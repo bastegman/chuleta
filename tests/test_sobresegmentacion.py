@@ -184,7 +184,10 @@ class CountParticipantsTests(unittest.TestCase):
                         # en mayusculas, sin nombre, con parentesis o con dos comas (RF6)
                         ("PÉREZ, ANA Y LUIS; GARCÍA, PEDRO", 3), ("Smith, John And Jane; Doe, Mary", 3),
                         ("Pérez,; García, Pedro", 2), ("Pérez, Luis (Ventas, Madrid); García, Ana", 2),
-                        ("Smith, John, Jr.; Doe, Mary", 2)):
+                        ("Smith, John, Jr.; Doe, Mary", 2),
+                        # homonimos que solo distingue el parentesis, y dos nombres tras la coma (RF7)
+                        ("García, Ana (Madrid); García, Ana (Barcelona)", 2), ("López, Ana; López, Ana (Madrid)", 2),
+                        ("Ana López (Ventas), Ana López (RRHH)", 2), ("García, Ana, Luis; Pérez, Juan", 3)):
             self.assertEqual(voices.count_participants(text, sugeridos=True), n, text)
 
     def test_editado_a_mano_nunca_de_menos(self):
