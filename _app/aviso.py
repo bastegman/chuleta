@@ -25,7 +25,6 @@ from common import TOKEN_HEADER, local_opener, read_token
 
 WINDOWS = sys.platform == "win32"
 ANCHO, ALTO = 340, 64  # px a 96 ppp; se escala con el monitor
-# la paleta de app.css (tema oscuro): neutros cálidos, texto claro y el acento burdeos de la app en «Grabar»
 # la paleta oscura de la marca (hoja 01b): panel grafito y el botón principal en Boldo claro con texto oscuro (9:1); el
 # punto rojo dice «grabar», como en la app
 C = {"fondo": "#18201c", "texto": "#e8ede9", "suave": "#a2aca5", "boton": "#7cc7a6", "boton_hover": "#a3dcc2",

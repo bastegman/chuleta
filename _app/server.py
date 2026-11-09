@@ -69,8 +69,8 @@ MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": 
         ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aac": "audio/aac",
         ".webm": "audio/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".wma": "audio/x-ms-wma",
         ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-        ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
-        ".woff2": "font/woff2"}  # las tipografías de la marca (static/*.woff2)
+        ".woff2": "font/woff2",  # las tipografías de la marca (static/*.woff2)
+        ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 # Atributos de OneDrive "solo en linea": leer el archivo dispararia la descarga
 CLOUD_ONLY = 0x400000 | 0x1000
 LIVE_PRESETS = tuple(p["id"] for p in engines.PRESETS)  # en directo: por lotes y beam 1, cambia el modelo
@@ -81,11 +81,12 @@ VERSION_FILE = os.path.join(APP_DIR, "version.txt")  # lo escribe scripts/build_
 REPO_URL = "https://github.com/bastegman/chuleta"
 # Acerca de > «invitar al autor a un café»: la pagina de donaciones de PayPal del autor (abre el navegador del sistema)
 DONAR_URL = "https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR"
+PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Chuleta/INSTALAR.bat, Chuleta/_app/...)
+
 # Acerca de > el tributo a la tenca (Mimus thenca): «Historia natural y biologia reproductiva de la Tenca (Mimus thenca)
 # en Chile central», Boletin del Museo Nacional de Historia Natural de Chile 61: 43-53 (2012). El DOI es del Museo
 # (prefijo 10.54830 en Crossref) y sobrevive a un cambio de su web
 TENCA_URL = "https://doi.org/10.54830/bmnhn.v61.2012.161"
-PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Chuleta/INSTALAR.bat, Chuleta/_app/...)
 
 
 def code_mtime():

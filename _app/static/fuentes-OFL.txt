@@ -5,8 +5,8 @@ La app lleva dos tipografías con licencia SIL Open Font License 1.1 (OFL). El t
 Ninguna de las dos declara nombres reservados (Reserved Font Name).
 
 - fraunces.woff2: Fraunces, de Undercase Type, Phaedra Charles y Flavia Zimbardi.
-  Versión modificada para la app: ejes SOFT y WONK fijos en 0, peso de 400 a 800, solo caracteres latinos y en
-  formato WOFF2. El nombre y el aviso de licencia de la fuente no cambian.
+  Versión modificada para la app: ejes SOFT y WONK fijos en 0, peso de 400 a 800 y en formato WOFF2. El nombre y el
+  aviso de licencia de la fuente no cambian.
 - manrope.woff2: Manrope, de Mikhail Sharanda. Pasada a WOFF2, sin otros cambios.
 
 Origen: github.com/google/fonts (ofl/fraunces y ofl/manrope), 9 de noviembre de 2026.

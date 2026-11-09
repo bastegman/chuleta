@@ -10,12 +10,15 @@ Genera las dos tipografías de la app (licencia SIL OFL 1.1) a partir de los fic
 y escribe _app/static/fraunces.woff2 y _app/static/manrope.woff2. El aviso de copyright y la licencia van en
 _app/static/fuentes-OFL.txt (y en la tabla «name» de cada fuente, que no se toca).
 
-- Fraunces (títulos y marca): SOFT y WONK fijos en 0, como en la hoja de marca; tamaño óptico (opsz) entero, para que
-  el navegador lo ajuste solo; peso de 400 a 800; solo latín (básico, Latin-1, Latin Extended-A y puntuación).
+- Fraunces (títulos, marca y nombre de la reunión): SOFT y WONK fijos en 0, como en la hoja de marca; tamaño óptico
+  (opsz) entero, para que el navegador lo ajuste solo; peso de 400 a 800; todos sus caracteres (un título en rumano,
+  alemán o vietnamita no mezcla letras de otra fuente).
 - Manrope (interfaz y texto): entera, solo pasada a WOFF2.
 
 Lo que no tengan (símbolos, emojis, otros alfabetos) sale de las fuentes del sistema, como antes. Herramienta de
-desarrollo: no viaja en el zip. Necesita fontTools y brotli (pip install fonttools brotli).
+desarrollo: no viaja en el zip. Necesita fontTools y brotli (pip install fonttools brotli). Con las mismas versiones
+de los dos da el mismo fichero byte a byte (los de la app salen de fontTools 4.68.0 y brotli 1.2.1); con otras, las
+mismas tablas con otro orden o compresión.
 
     R="repos/google/fonts/contents/ofl"; A="Accept: application/vnd.github.raw"
     gh api -H "$A" "$R/fraunces/Fraunces[SOFT,WONK,opsz,wght].ttf" > fraunces.ttf
@@ -35,8 +38,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.join(ROOT, "_app", "static")
 SHA = {"fraunces": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
        "manrope": "3ae11c49db0455a3cc33e37d380f20fdb8c7f8b41dc07625c177e3d87a9d6ae6"}
-LATIN = ("U+0000-00FF,U+0100-017F,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+20AC,U+2122,"
-         "U+2190-2199,U+2212,U+2215,U+FEFF,U+FFFD")
 
 
 def woff2(font, out, unicodes=None):
@@ -71,7 +72,7 @@ def main(fraunces, manrope, out_dir=STATIC):
     buf = io.BytesIO()  # recortar la instancia sin pasar por disco falla (gvar perezoso de fontTools): se relee
     fr.save(buf)  # (TTFont.save no toca head.modified si la fuente se abrió con recalcTimestamp=False)
     buf.seek(0)
-    woff2(TTFont(buf, recalcTimestamp=False), os.path.join(out_dir, "fraunces.woff2"), LATIN)
+    woff2(TTFont(buf, recalcTimestamp=False), os.path.join(out_dir, "fraunces.woff2"))
     woff2(TTFont(manrope, recalcTimestamp=False), os.path.join(out_dir, "manrope.woff2"))
 
 

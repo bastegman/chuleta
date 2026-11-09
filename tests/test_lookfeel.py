@@ -318,7 +318,10 @@ class ServidorHttpTests(unittest.TestCase):
         ajustes = app[ini:fin]
         self.assertEqual(ajustes.count("api('/api/acerca/abrir', { que: 'donar' })"), 2)  # el pie y Acerca de
         self.assertIn('<a class="aj-cafe" id="ajCafe" href="${esc(ac.donar)}"', ajustes)
-        self.assertLess(ajustes.index('id="ajCafe"'), ajustes.index("</nav>"))  # al pie de la columna, no en otra parte
+        # al pie de la columna de secciones, fuera de <nav> (no es una sección) y antes del contenido
+        self.assertLess(ajustes.index('<div class="aj-side"><nav class="aj-nav"'), ajustes.index("</nav>"))
+        self.assertLess(ajustes.index("</nav>"), ajustes.index('id="ajCafe"'))
+        self.assertLess(ajustes.index('id="ajCafe"'), ajustes.index('<div class="aj-main">'))
         self.assertNotIn("toast(", app.split('id="aDonar"')[1].split("</fieldset>")[0])
         for n in os.listdir(STATIC):  # ni en los demás scripts: nada de avisos ni recordatorios
             if n.endswith(".js") and n != "app.js":

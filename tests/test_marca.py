@@ -58,8 +58,25 @@ class FuentesTests(unittest.TestCase):
                   "fraunces.woff2", "manrope.woff2", "design/fuentes.py"):
             self.assertIn(s, txt)
 
+    def test_fraunces_lleva_todos_sus_caracteres(self):
+        """Fraunces sale en títulos y en el nombre de la reunión: rumano, alemán y vietnamita, sin letras de otra
+        fuente."""
+        with open(os.path.join(STATIC, "fraunces.woff2"), "rb") as f:
+            data = f.read()
+        try:
+            from fontTools.ttLib import TTFont
+        except ImportError:  # la CI no instala fontTools: basta con que no sea el recorte a latín (~77 KB)
+            self.assertGreater(len(data), 90_000)
+            return
+        import io
+        cmap = TTFont(io.BytesIO(data)).getBestCmap()
+        for ch in "șțẞệơ«»€":
+            self.assertIn(ord(ch), cmap, ch)
+
     def test_se_sirven_como_font_woff2(self):
         self.assertEqual(server.MIME[".woff2"], "font/woff2")
+        # la última línea del diccionario no cambia: scripts/lookfeel_spike.py la busca para añadir .webmanifest
+        self.assertIn('".png": "image/png", ".ico": "image/x-icon"}', read(APP, "server.py"))
         srv = server.Server(("127.0.0.1", 0), server.Handler)
         port = srv.server_address[1]
         saved = (server.PORT, server.URL, server.Handler.app, getattr(server.Handler, "token", None))
@@ -160,6 +177,20 @@ def mix(a, b, p):
     return "#" + "".join(f"{round(int(a[i:i + 2], 16) * p + int(b[i:i + 2], 16) * (1 - p)):02x}" for i in (1, 3, 5))
 
 
+def lab(h):
+    def f(t):
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+    r, g, b = ((c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4) for c in
+               (int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)))
+    x, y, z = ((r * .4124 + g * .3576 + b * .1805) / .95047, r * .2126 + g * .7152 + b * .0722,
+               (r * .0193 + g * .1192 + b * .9505) / 1.08883)
+    return 116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))
+
+
+def delta_e(a, b):
+    return sum((p - q) ** 2 for p, q in zip(lab(a), lab(b))) ** 0.5
+
+
 def tokens(block):
     return dict(re.findall(r"--([a-z0-9-]+): (#[0-9a-f]{6})", block))
 
@@ -196,6 +227,11 @@ class ContrasteTests(unittest.TestCase):
             for fg, bg in self.ICONOS:
                 self.assertGreaterEqual(ratio(t[fg], t[bg]), 3.0, f"{modo}: {fg} sobre {bg}")
 
+    def test_tu_y_la_persona_1_se_distinguen(self):
+        """La etiqueta «tú» (--ok) y la persona 1 (Boldo) son las dos verdes: que se vean distintas (ΔE76 ≥ 35)."""
+        for modo, t in self.modos.items():
+            self.assertGreaterEqual(delta_e(t["ok"], t["accent"]), 35, modo)
+
     def test_etiquetas_de_voces_aa(self):
         """Cada persona tiene su color (c1 = Boldo) sobre un fondo del 9 % de ese color: el nombre se lee en AA."""
         rx = r"\.spk\.(c\d) \{ --spk: (#[0-9a-f]{6}); \}"
@@ -211,6 +247,11 @@ class ContrasteTests(unittest.TestCase):
 
 
 class TributoTests(unittest.TestCase):
+    def test_solo_cuando_la_app_se_llama_tenca(self):
+        """«El nombre viene de la tenca» solo es verdad con el renombrado: si esta parte saliera antes, no se dice."""
+        app = read(STATIC, "app.js")
+        self.assertIn("${ac.tenca && /^tenca$/i.test(APP_NAME) ? `<p class=\"ac-tenca\">", app)
+
     def test_enlace_oficial_a_la_tenca(self):
         """Acerca de enlaza el artículo del Museo Nacional de Historia Natural de Chile sobre la tenca (Mimus thenca)
         por su DOI (prefijo 10.54830, el del Museo en Crossref), que no cambia aunque cambie su web."""
