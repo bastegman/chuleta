@@ -2126,7 +2126,10 @@ function openSettings(opts) {
       const v = $('input[name="proc"]:checked', d)?.value;
       return !!v && v !== (S.config.procesado || 'local');
     };
-    const hayCambios = () => { const ahora = foto(); return Object.keys(inicial).some(k => ahora[k] !== inicial[k]) || procSinAplicar(); };
+    // solo lo que está en las dos fotos: un campo que deja de contar (pasa a guardarse solo, como Outlook al activarlo)
+    // no es un cambio, y uno que aparece después ya tiene su valor de partida («tarde»). (En la fusión con el
+    // calendario, Outlook activado daba «Hay cambios sin guardar» sin haber cambiado nada.)
+    const hayCambios = () => { const ahora = foto(); return Object.keys(inicial).some(k => k in ahora && ahora[k] !== inicial[k]) || procSinAplicar(); };
     const marcar = () => { $('.aj-pend', d).textContent = hayCambios() ? 'Hay cambios sin guardar' : ''; };
     d.ajMarcar = marcar;
     // antes de salir de Ajustes a un subdiálogo (una lista, el asistente) con cambios sin guardar: encima, «Guardar y
