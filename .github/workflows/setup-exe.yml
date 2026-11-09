@@ -46,7 +46,9 @@ jobs:
         shell: powershell
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (Test-Path -LiteralPath $iscc) { & $iscc 2>&1 | Select-Object -First 2 | ForEach-Object { Write-Host "$_" } }
+          # la versión de Inno instalada en el runner (su entrada de Aplicaciones instaladas; la cabecera de ISCC no la dice)
+          $inno = @(Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1", "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1" -ErrorAction SilentlyContinue)
+          Write-Host ("Inno Setup " + $(if ($inno.Count) { $inno[0].DisplayVersion } else { "(sin entrada en el registro)" }) + " · ISCC " + (Get-Item -LiteralPath $iscc -ErrorAction SilentlyContinue).VersionInfo.FileVersion)
           python scripts\build_setup.py "$env:GITHUB_WORKSPACE\dist\Tenca - Setup.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: E2E del Setup.exe (PowerShell 5.1)

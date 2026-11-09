@@ -80,11 +80,12 @@ SetupWindowTitle=Instalar %1
 WelcomeLabel1=Instalar Tenca
 ; lo que se ve del asistente, de tú como la app (Spanish.isl va de usted): la frase de debajo de la bienvenida (decía
 ; «Haga clic en Siguiente» con el botón «Instalar»), la página de instalar, la de cancelar y la del segundo doble clic
+; (SetupMutex usa SetupAppRunningError; SetupAlreadyRunning no lo usa Inno: Shared.SetupMessageIDs.pas, «not used»)
 ClickNext=Pulsa «Instalar» para seguir o «Cancelar» para salir.
 InstallingLabel=Espera mientras se instala [name]: los pasos van en la ventana del instalador.
 ExitSetupTitle=Cancelar la instalación
 ExitSetupMessage=Tenca no se ha instalado. Puedes volver a abrir el Setup cuando quieras.%n%n¿Cancelar la instalación?
-SetupAlreadyRunning=El instalador de Tenca ya está abierto.
+SetupAppRunningError=El instalador de Tenca ya está abierto.%n%nCiérralo y pulsa «Aceptar» para seguir, o «Cancelar» para salir.
 WelcomeLabel2=Tenca graba, transcribe y resume tus reuniones en este PC.%n%nSe instala solo para tu usuario, sin permisos de administrador. Si ya tenías Tenca o Chuleta, se actualiza en su carpeta: tus reuniones, voces y ajustes no se tocan.%n%nAl pulsar «Instalar» se abre la ventana del instalador con los pasos. La primera vez tarda unos minutos: descarga Python y las librerías.%n%nVersión {#Version}
 
 [Files]
@@ -93,6 +94,7 @@ Source: "{#Fuente}\Tenca\*"; DestDir: "{tmp}\Tenca"; Flags: recursesubdirs creat
 [Code]
 var
   Resultado: Integer;
+  ExecFallo: Boolean;
   ErrorExec: String;
 
 // sin la página «Listo para instalar» (DisableReadyPage), el botón de la bienvenida tiene que decir «Instalar»: Inno
@@ -116,7 +118,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Params: String;
-  Mostrar: Integer;
+  Mostrar, CodigoExec: Integer;
 begin
   if CurStep <> ssPostInstall then
     Exit;
@@ -132,21 +134,26 @@ begin
   else
     WizardForm.StatusLabel.Caption := 'Instalando Tenca: los pasos van en la ventana del instalador...';
   Log('instalar.ps1: ' + PowerShellExe + ' ' + Params);
-  ErrorExec := '';
-  if not Exec(PowerShellExe, Params, ExpandConstant('{tmp}\Tenca'), Mostrar, ewWaitUntilTerminated, Resultado) then
+  ExecFallo := not Exec(PowerShellExe, Params, ExpandConstant('{tmp}\Tenca'), Mostrar, ewWaitUntilTerminated,
+    Resultado);
+  if ExecFallo then
   begin
-    ErrorExec := SysErrorMessage(Resultado);
-    Log('instalar.ps1 no se ha podido ejecutar: ' + ErrorExec);
+    // SysErrorMessage viene sin el punto final (y puede venir vacío)
+    CodigoExec := Resultado;
+    ErrorExec := SysErrorMessage(CodigoExec);
+    Log('instalar.ps1 no se ha podido ejecutar: ' + IntToStr(CodigoExec) + ' ' + ErrorExec);
     Resultado := -1;
   end
   else
     Log('instalar.ps1 ha terminado con el código ' + IntToStr(Resultado));
-  // si PowerShell ni arranca no hay ventana del instalador que lo explique: se dice aquí
+  // si PowerShell ni arranca no hay ventana del instalador que lo explique: se dice aquí. El zip tampoco serviría
+  // (INSTALAR.bat también lo usa)
   if not WizardSilent then
   begin
-    if ErrorExec <> '' then
-      SuppressibleMsgBox('No se ha podido abrir el instalador (PowerShell): ' + ErrorExec +
-        ' Prueba con el zip de Tenca y su INSTALAR.bat.', mbError, MB_OK, IDOK)
+    if ExecFallo then
+      SuppressibleMsgBox('No se ha podido arrancar PowerShell, que es lo que instala Tenca (código ' +
+        IntToStr(CodigoExec) + ': ' + ErrorExec + '). Sin PowerShell no se puede instalar: pide ayuda a IT.',
+        mbError, MB_OK, IDOK)
     else if Resultado <> 0 then
       SuppressibleMsgBox('No se ha podido instalar Tenca. El motivo está en la ventana del instalador y en ' +
         ExpandConstant('{localappdata}') + '\AudiosApp\instalar.log.', mbError, MB_OK, IDOK);

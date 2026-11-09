@@ -167,7 +167,10 @@ class IssTests(unittest.TestCase):
         # la frase de debajo, de Spanish.isl, decía «Siguiente» (el botón dice «Instalar») y de usted (captura del
         # E2E en Windows, 09/11/2026)
         self.assertIn("ClickNext=Pulsa «Instalar» para seguir o «Cancelar» para salir.", msgs)
-        for clave in ("InstallingLabel=", "ExitSetupMessage=", "SetupAlreadyRunning="):  # de tú, como la app
+        # de tú, como la app. El del segundo doble clic (SetupMutex) es SetupAppRunningError: SetupAlreadyRunning no lo
+        # usa Inno (2.ª revisión del Setup)
+        self.assertNotIn("SetupAlreadyRunning=", msgs)
+        for clave in ("InstallingLabel=", "ExitSetupMessage=", "SetupAppRunningError=El instalador de Tenca ya está"):
             self.assertIn(clave, msgs)
         self.assertNotRegex(msgs, r"(?m)^[A-Za-z]+=.*\b(Haga|haga|espere|desea|cancela ahora)\b")
         self.assertEqual(self.d.get("SetupMutex"), "Tenca.Setup")  # un segundo doble clic no lanza otro instalar.ps1
