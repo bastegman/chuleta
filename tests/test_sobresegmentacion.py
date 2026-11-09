@@ -295,11 +295,10 @@ class PistaDeParticipantesTests(Reunion):
 
     def test_con_origen_pero_editado_fuera(self):
         """Con la nota «sugeridos por…» pero un texto que la app no escribio (el .md editado fuera): texto libre."""
-        with mock.patch.object(server, "TEXTOS_SUGERIDOS", {"García, Ana; Luis Pérez"}):
-            for texto, real in (("García, Ana; Luis Pérez, Pedro", 3), ("Ana; Luis y Pedro", 3),
-                                ("Ana, Luis y Pedro", 3)):
-                self.tearDown()
-                self.setUp()
+        for texto, real in (("García, Ana; Luis Pérez, Pedro", 3), ("Ana; Luis y Pedro", 3), ("Ana, Luis y Pedro", 3)):
+            self.tearDown()
+            self.setUp()  # y despues el set de la app: TempTree lo vacia al entrar (RF5)
+            with mock.patch.object(server, "TEXTOS_SUGERIDOS", {"García, Ana; Luis Pérez", "Ana; Luis"}):
                 self.assertGreaterEqual(self.correr({"participantes": texto, "participantes_origen": "outlook"}), real,
                                         texto)
 
@@ -346,6 +345,26 @@ class PistaDeParticipantesTests(Reunion):
                     sugerido="outlook")
             self.assertEqual(len(r["participantes"]), 500)
         self.assertEqual(vistos, {texto})
+
+    def test_el_dialogo_con_el_vigilante_de_verdad(self):
+        """El dialogo leyo la sugerencia y, antes de pulsar Grabar, el vigilante la olvido (sin llamada) o la releyo
+        sin Outlook: el texto se apunta igual (lecturas de la ultima hora, Vigia.participantes_recientes; RF5)."""
+        from test_carpetas import make_app, rec
+        os.makedirs(os.path.join(self.root, "Alfa"))
+        a, nombres = make_app(self), ["Stegmaier, Bernardo", "García López, Ana"]
+        texto = server.calendario.join_participants(nombres)
+        a.vigia = server.calendario.Vigia()
+        a.vigia.recordar({"sugerencia": {"source": "outlook", "participants": nombres}})  # /api/reunion/actual
+        a.vigia.tic(None, False, {}, lambda: {}, 0, self.app_dir)  # sin llamada: olvida la lectura
+        self.assertIsNone(a.vigia.ultimo)
+        a.vigia.recordar({"sugerencia": {"source": "teams", "participants": []}})  # relectura, solo Teams
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos:
+            rec(a, self, participantes=texto, sugerido="outlook")
+        self.assertEqual(vistos, {texto})
+        a.vigia.historial = [(t - 7200, p) for t, p in a.vigia.historial]  # de hace dos horas: ya no
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos:
+            rec(a, self, participantes=texto, sugerido="outlook", name="Otra")
+        self.assertEqual(vistos, set())
 
     def test_de_grabar_a_confirmar(self):
         """La cadena entera: grabar con la sugerencia de Outlook → el .md → «Confirmar» (el mismo texto, como

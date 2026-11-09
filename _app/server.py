@@ -4343,11 +4343,14 @@ class App:
                     origen = str(b.get("sugerido") or "").strip().lower()
                     if origen in PARTICIPANTES_ORIGENES:
                         props["participantes_origen"] = origen
-                        # para la pista de quien habla: solo si es, entero, el texto que la app escribe con la ultima
-                        # sugerencia (dialogo, Ctrl+Alt+R, aviso); lo que traiga otro programa, o cortado, no
-                        ult = (getattr(getattr(self, "vigia", None), "ultimo", None) or {}).get("sugerencia") or {}
-                        if completo == " ".join(calendario.join_participants(ult.get("participants")).split()) \
-                                and len(completo) <= 500:
+                        # para la pista de quien habla: solo si es, entero, el texto que la app escribe con una
+                        # sugerencia reciente (dialogo, Ctrl+Alt+R, aviso); lo que traiga otro programa, o cortado, no
+                        vigia = getattr(self, "vigia", None)
+                        ult = (getattr(vigia, "ultimo", None) or {}).get("sugerencia") or {}
+                        recientes = getattr(vigia, "participantes_recientes", None)
+                        listas = [ult.get("participants")] + (recientes() if callable(recientes) else [])
+                        if len(completo) <= 500 and any(
+                                completo == " ".join(calendario.join_participants(p).split()) for p in listas if p):
                             if len(TEXTOS_SUGERIDOS) > 500:
                                 TEXTOS_SUGERIDOS.clear()
                             TEXTOS_SUGERIDOS.add(completo)

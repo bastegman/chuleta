@@ -1121,11 +1121,22 @@ class Vigia:
     def __init__(self):
         self.ultimo, self.ultimo_at, self.proc, self.avisado = None, 0.0, None, None
         self.lock = threading.Lock()
+        self.historial = []  # [(hora, participantes)] de las ultimas lecturas: participantes_recientes
 
     def recordar(self, r):
         with self.lock:
             self.ultimo, self.ultimo_at = r, time.time()
+            p = ((r or {}).get("sugerencia") or {}).get("participants") or []
+            if p:
+                self.historial = (self.historial + [(self.ultimo_at, list(p))])[-20:]
         return r
+
+    def participantes_recientes(self, max_age=3600):
+        """Las listas de participantes de las lecturas de la ultima hora. La que leyo el dialogo Grabar puede no ser ya
+        la ultima: el vigilante relee cada minuto durante la llamada y olvida la lectura al colgar (tic)."""
+        ahora = time.time()
+        with self.lock:
+            return [list(p) for t, p in self.historial if ahora - t <= max_age]
 
     def sugerencia(self, leer, max_age=90):
         """La sugerencia de la última lectura si es reciente; si no, `leer()` (rápida: solo Teams)."""
