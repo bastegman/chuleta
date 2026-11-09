@@ -29,12 +29,27 @@ class RedTests(unittest.TestCase):
                          {"ok": False, "motivo": "publica", "red": "Hotel"})
         self.assertEqual(movil.elegir_red([{"nombre": "corp.example", "categoria": "DomainAuthenticated",
                                             "ips": ["172.20.1.9"]}])["motivo"], "empresa")
-        # una privada sin IPv4 de red local (solo la autoasignada, o la de bucle) no vale
-        for ips in (["169.254.1.1"], ["127.0.0.1"], ["8.8.8.8"], [], None, ["no es una ip"]):
+        # una privada sin IPv4 de red local (solo la autoasignada, la de bucle, 0.0.0.0 o una VPN 100.64) no vale
+        for ips in (["169.254.1.1"], ["127.0.0.1"], ["8.8.8.8"], [], None, ["no es una ip"], ["0.0.0.0"],
+                    ["100.101.1.2"]):
             with self.subTest(ips=ips):
                 self.assertEqual(movil.elegir_red([{"nombre": "X", "categoria": "Private", "ips": ips}])["motivo"],
                                  "sin_red")
         self.assertEqual(movil.elegir_red("raro")["motivo"], "sin_red")
+
+    def test_la_red_con_ruta_a_internet_manda(self):
+        """Un adaptador virtual (Hyper-V, WSL) marcado como privado y sin ruta no se elige: el móvil no llegaría."""
+        wsl = {"nombre": "vEthernet (WSL)", "categoria": "Private", "ips": ["172.24.80.1"], "ruta": False,
+               "metrica": 9999}
+        casa = {"nombre": "Casa", "categoria": "Private", "ips": ["192.168.1.34"], "ruta": True, "metrica": 35}
+        hotel = {"nombre": "Hotel", "categoria": "Public", "ips": ["10.0.0.5"], "ruta": True, "metrica": 25}
+        vpn = {"nombre": "corp.example", "categoria": "DomainAuthenticated", "ips": ["10.8.0.2"], "ruta": True,
+               "metrica": 1}
+        self.assertEqual(movil.elegir_red([wsl, casa])["ip"], "192.168.1.34")
+        self.assertEqual(movil.elegir_red([wsl, hotel]), {"ok": False, "motivo": "publica", "red": "Hotel"})
+        self.assertEqual(movil.elegir_red([vpn, casa])["ip"], "192.168.1.34")  # la de casa, aunque la VPN pese menos
+        self.assertEqual(movil.elegir_red([vpn, wsl])["motivo"], "empresa")
+        self.assertEqual(movil.elegir_red([wsl])["ip"], "172.24.80.1")  # sin ninguna ruta: como antes
 
     def test_textos_y_fuera_de_windows(self):
         self.assertIn("(«Hotel»)", movil.motivo_texto({"motivo": "publica", "red": "Hotel"}))
@@ -46,7 +61,8 @@ class RedTests(unittest.TestCase):
             self.assertEqual(movil.red_para_movil(), {"ok": True, "ip": "127.0.0.1", "red": "pruebas"})
 
     def test_lee_los_perfiles_de_windows(self):
-        salida = json.dumps({"nombre": "Casa", "categoria": "Private", "alias": "Wi-Fi", "ips": ["192.168.0.12"]})
+        salida = json.dumps({"nombre": "Casa", "categoria": "Private", "alias": "Wi-Fi", "ruta": True, "metrica": 0,
+                             "ips": ["192.168.0.12"]})
         r = mock.Mock(stdout=salida)  # (UTF-8: un nombre de red con «ñ» no rompe la lectura)
         with mock.patch.dict(os.environ, {movil.ENV_RED: ""}), mock.patch.object(movil, "WINDOWS", True), \
                 mock.patch.object(movil.subprocess, "run", return_value=r) as run:
@@ -61,8 +77,8 @@ class RedTests(unittest.TestCase):
     def test_powershell_de_verdad(self):
         """En el Windows de la CI: el script de PowerShell corre y se entiende (el resultado depende de la red del
         runner; lo que no puede ser es «error»)."""
-        with mock.patch.dict(os.environ, {movil.ENV_RED: ""}):
-            r = movil.red_para_movil()
+        with mock.patch.dict(os.environ, {movil.ENV_RED: ""}), mock.patch.object(movil, "PS_TIEMPO", 120):
+            r = movil.red_para_movil()  # (en la CI, PowerShell en frío ha tardado más de 15 s: aquí, margen)
         self.assertIn(r.get("motivo", "ok"), ("ok", "publica", "empresa", "sin_red"), r)
 
 
@@ -128,7 +144,7 @@ class ServidorWifiTests(unittest.TestCase):
         self.assertEqual(r.status, 200)
         galleta = r.getheader("Set-Cookie")
         self.assertRegex(galleta, rf"^tenca_movil_{self.rec.puerto}=[^;]+; Path=/m/{re.escape(self.rec.token)}; "
-                                  r"HttpOnly; SameSite=Strict$")
+                                  r"Max-Age=(6[0-5][0-9]); HttpOnly; SameSite=Strict$")
         return galleta.split(";")[0], datos.decode("utf-8")
 
     def test_la_pagina_y_un_solo_movil(self):
@@ -146,6 +162,13 @@ class ServidorWifiTests(unittest.TestCase):
         self.assertIn("Este código ya lo usa otro móvil", datos.decode("utf-8"))
         r, _ = self.p.pedir("GET", self.ruta, cookie=f"tenca_movil_{self.rec.puerto}=otra")
         self.assertEqual(r.status, 409)
+
+    def test_estado_no_ata_al_movil(self):
+        """Solo abrir la página ata el código a un móvil: algo que pida /estado antes no deja fuera al de verdad."""
+        r, _ = self.p.pedir("GET", f"{self.ruta}/estado")
+        self.assertEqual(r.status, 409)
+        self.assertIsNone(self.rec.dispositivo)
+        self.abrir()
 
     def test_solo_lo_suyo(self):
         cookie, _ = self.abrir()
@@ -169,6 +192,11 @@ class ServidorWifiTests(unittest.TestCase):
         r, datos = self.p.pedir("POST", f"{self.ruta}/subir?{q}", body=b"audio" * 1000, cookie=cookie)
         self.assertEqual(r.status, 200, datos)
         self.assertEqual(json.loads(datos), {"ok": True, "estado": "en_cola", "aviso": None})
+        # un nombre larguísimo se corta sin perder la extensión
+        largo = "x" * 300 + ".m4a"
+        r, _ = self.p.pedir("POST", f"{self.ruta}/subir?archivo={largo}", body=b"a", cookie=cookie)
+        self.assertEqual(r.status, 200)
+        self.assertEqual((len(self.subidos[1][0]["archivo"]), self.subidos[1][0]["archivo"][-4:]), (200, ".m4a"))
         q0, cuerpo = self.subidos[0]
         self.assertEqual(cuerpo, b"audio" * 1000)
         # lo elegido en el PC manda: del móvil solo el archivo, su nombre y su fecha (no la carpeta ni el modelo)
@@ -176,8 +204,8 @@ class ServidorWifiTests(unittest.TestCase):
                               "contexto": "", "preset": "rapido", "archivo": "Nota 12.m4a", "name": "Nota 12",
                               "fecha": "1762680000000"})
         pub = self.rec.publico()
-        self.assertEqual([(x["archivo"], x["estado"], x["pct"], x["path"]) for x in pub["recibidos"]],
-                         [("Nota 12.m4a", "en_cola", 100, "Proyecto/2026-11-09 10-00-00 - Nota.m4a")])
+        self.assertEqual([(x["archivo"], x["estado"], x["pct"], x["path"]) for x in pub["recibidos"]][0],
+                         ("Nota 12.m4a", "en_cola", 100, "Proyecto/2026-11-09 10-00-00 - Nota.m4a"))
         self.assertTrue(pub["movil"])
         # un fallo: al móvil con su frase y al PC en la lista
         with mock.patch.object(movil, "log"):
@@ -224,6 +252,8 @@ class ApiTests(TempTree):
         self._log = mock.patch.object(movil, "log")
         self._log.start()
         self.addCleanup(self._log.stop)
+        self.addCleanup(setattr, server.App, "_movil_ultima", None)
+        self.addCleanup(setattr, server.App, "_movil_red", (0.0, None))
 
     def test_abrir_estado_datos_y_cerrar(self):
         with mock.patch.dict(os.environ, {movil.ENV_RED: "127.0.0.1"}):
@@ -244,9 +274,25 @@ class ApiTests(TempTree):
         self.assertFalse(rec.vigente())
         out = self.app.movil_cerrar({})
         self.assertFalse(out["activa"])
-        self.assertEqual(self.app.movil_estado({}), {"activa": False, "recibidos": []})
+        # cerrado, la tarjeta sigue viendo lo que recibió (y lo que estaba llegando, al terminar)
+        e = self.app.movil_estado({})
+        self.assertEqual((e["activa"], e["recibidos"], e["url"]), (False, [], r2["url"]))
+        self.assertIsNone(server.App._movil_rec)
         with self.assertRaises(ApiError):
             self.app.movil_datos({"folder": ""})
+
+    def test_la_red_de_hace_un_momento_vale(self):
+        """«Mostrar el código» justo después de abrir la tarjeta no vuelve a lanzar PowerShell (puede tardar); una red
+        mala no se guarda: tras cambiarla en Windows, se vuelve a mirar."""
+        buena = {"ok": True, "ip": "127.0.0.1", "red": "Casa"}
+        with mock.patch.object(movil, "red_para_movil", return_value=buena) as m:
+            self.app.movil_red({})
+            self.app.movil_abrir({"folder": ""})
+        self.assertEqual(m.call_count, 1)
+        server.App._movil_red = (0.0, None)
+        with mock.patch.object(movil, "red_para_movil", return_value={"ok": False, "motivo": "publica", "red": ""}):
+            self.app.movil_red({})
+        self.assertEqual(server.App._movil_red, (0.0, None))
 
     def test_sin_red_privada_no_hay_codigo(self):
         with mock.patch.object(movil, "red_para_movil", return_value={"ok": False, "motivo": "publica", "red": "Bar"}):

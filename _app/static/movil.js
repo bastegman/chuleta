@@ -6,7 +6,7 @@
 (function () {
   const $ = (s, el = document) => el.querySelector(s);
   const b = document.body, base = b.dataset.base, app = b.dataset.app || 'Tenca';
-  const exts = (b.dataset.exts || '').split(',').filter(Boolean);
+  const exts = (b.dataset.exts || '').split(',').filter(Boolean), max = Number(b.dataset.max || 0);
   // la hora del PC manda (el móvil puede ir adelantado o atrasado): el desfase, al cargar
   const desfase = Date.now() - Number(b.dataset.ahora || Date.now());
   const caduca = Number(b.dataset.caduca || 0) + desfase;
@@ -16,7 +16,7 @@
   if (exts.length) input.accept = ['audio/*', 'video/mp4', 'video/quicktime', ...exts].join(',');
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const tam = n => n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1).replace('.', ',')} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
+  const tam = n => n >= 1e9 ? `${(n / 1e9).toFixed(1).replace('.', ',')} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1).replace('.', ',')} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
   const ext = n => { const m = /\.[^.\\/]+$/.exec(n || ''); return m ? m[0].toLowerCase() : ''; };
 
   function cerrar(texto) {
@@ -90,6 +90,8 @@
         continue;
       }
       if (!f.size) { pintar(li, 'mal', 'Está vacío.'); continue; }
+      // demasiado grande: se dice aquí (el PC lo rechazaría antes de leerlo y el móvil solo vería «No llega al PC»)
+      if (max && f.size > max) { pintar(li, 'mal', `Es demasiado grande para mandarlo desde el móvil (${tam(f.size)}; como mucho, ${tam(max)}).`); continue; }
       pintar(li, 'espera', 'En espera…');
       cola = cola.then(() => enviar(f, li));  // de uno en uno: con la wifi de casa, mejor que todos a la vez
     }

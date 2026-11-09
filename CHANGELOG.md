@@ -28,6 +28,20 @@ La lámina que validó Bernardo con sus cuatro decisiones por defecto (msg 1390:
   sus comprobaciones. Solo en una red que Windows tiene como privada (`Get-NetConnectionProfile`); en una pública o en
   la de la empresa, la tarjeta dice por qué y cómo cambiarlo (decisión 3).
 - `_app/qrcodegen.py`: la librería de QR de Project Nayuki (MIT), copiada sin cambios con su licencia.
+- Revisión de contexto fresco (0 P0, 3 P1, 9 P2), arreglada con tests:
+  - «Dejar de recibir» ya no vacía la lista: lo recibido se sigue viendo, y lo que estaba llegando también, al
+    terminar.
+  - Soltar audios en la ventana con el código en pantalla ya no rompe la tarjeta: dice que hay que cerrarla antes.
+  - «Cambiar» › «Nuevo proyecto…» (o «Editar») y de vuelta ya no pierde el código.
+  - Esc mientras se abría el código ya no lo deja escuchando.
+  - Desde que un móvil abre el código, el PC lo dice y ofrece «Mostrar otro código», por si no era el tuyo o lo
+    abriste en otra app. Solo abrir la página ata el código; la cookie dura lo que el código.
+  - La red elegida es la que tiene la ruta a internet: un adaptador de Hyper-V o WSL marcado como privado ya no da un
+    QR al que el móvil no llega. Solo cuentan IPs de red local (RFC 1918).
+  - Cambiar de código es atómico, y uno nuevo empieza su lista desde cero.
+  - El nombre de un archivo largo se corta sin perder la extensión.
+  - El móvil avisa él mismo si un audio pasa de 2 GB.
+  - Nueva nota de ayuda para cuando se pulsó «Cancelar» en el aviso del cortafuegos.
 - Tests: `tests/test_movil.py` (la red, el QR y el servidor de la wifi) y `tests/test_ui_movil.py` (de punta a punta
   con un iPhone emulado y un audio de WhatsApp de verdad, en ui-smoke).
 

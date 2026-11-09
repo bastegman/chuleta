@@ -92,6 +92,10 @@ class DesdeElMovilTests(unittest.TestCase):
         self.captura(movil, "04_movil_enviado")
         pc.wait_for_selector(".mv-item.en_cola", timeout=10000)
         self.assertIn("whatsapp.opus", pc.locator(".mv-item").text_content())
+        # el PC sabe que un móvil lo ha abierto, y ofrece otro código por si no era el tuyo
+        self.assertIn("Un móvil ya ha abierto el código", pc.locator(".mv-conectado").text_content())
+        # con el código en pantalla, soltar audios en la ventana no rompe la tarjeta: se dice por qué no
+        self.assertIn("cierra antes la tarjeta del móvil", pc.evaluate("sbNoSePuedeSoltar()"))
         self.captura(pc, "05_recibido", ".dialog.mvd")
         estado = self.s.get("/api/movil/estado")
         self.assertEqual(len(estado["recibidos"]), 1)
@@ -112,6 +116,9 @@ class DesdeElMovilTests(unittest.TestCase):
         pc.wait_for_selector(".mv-fin", timeout=5000)
         self.assertIn("Ya no se reciben audios", pc.locator(".mv-fin").text_content())
         self.assertFalse(self.s.get("/api/movil/estado")["activa"])
+        pc.wait_for_timeout(1500)  # un sondeo después: lo recibido sigue ahí (antes, «Aún nada»)
+        self.assertIn("whatsapp.opus", pc.locator(".mv-rec").text_content())
+        self.assertNotIn("Aún nada", pc.locator(".mv-rec").text_content())
         self.captura(pc, "06_parado", ".dialog.mvd")
         movil.set_input_files("#mArchivos", [os.path.join(FIX, "whatsapp.opus")])
         movil.wait_for_selector(".m-item.mal >> nth=0", timeout=15000)
@@ -138,12 +145,32 @@ class DesdeElMovilTests(unittest.TestCase):
         pc.keyboard.press("Enter")
         self.assertIn("Volver al código", pc.locator("#rGo").text_content())
         self.assertTrue(pc.locator(".gr-plan").is_visible())
+        pc.wait_for_timeout(1300)  # el sondeo sigue: «Dejar de recibir» no vuelve a salir en el plan
+        self.assertTrue(pc.locator("[data-mv='parar']").is_hidden())
+        # «Nuevo proyecto…» o «Editar» y de vuelta (grVolver rehace la tarjeta): el código sigue
+        pc.evaluate("() => grVolver()")
+        pc.wait_for_function("() => document.querySelector('#rGo span')?.textContent === 'Volver al código'",
+                             timeout=10000)
+        self.assertTrue(self.s.get("/api/movil/estado")["activa"])
         pc.click("#rGo")
         pc.wait_for_selector(".mv-qrimg svg", timeout=10000)
         self.assertEqual(pc.locator(".mv-url code").text_content(), url)
         pc.keyboard.press("Escape")
         pc.wait_for_function("() => document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
         pc.wait_for_timeout(500)
+        self.assertFalse(self.s.get("/api/movil/estado")["activa"])
+        self.sin_errores(pc)
+
+    def test_cerrar_mientras_se_abre(self):
+        """Esc mientras «Mostrar el código» espera al servidor (PowerShell puede tardar): no se queda abierto."""
+        pc = self.pc()
+        pc.evaluate("""() => { const orig = api; window.api = (u, b) => u === '/api/movil/abrir'
+            ? new Promise(r => setTimeout(r, 800)).then(() => orig(u, b)) : orig(u, b); }""")
+        pc.evaluate("() => abrirSubir(null, {movil: true})")
+        pc.wait_for_selector(".dialog.mvd #rGo:not([disabled])", timeout=10000)
+        pc.click("#rGo")
+        pc.keyboard.press("Escape")
+        pc.wait_for_timeout(1800)
         self.assertFalse(self.s.get("/api/movil/estado")["activa"])
         self.sin_errores(pc)
 

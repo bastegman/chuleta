@@ -20,7 +20,9 @@ import ipaddress
 import json
 import os
 import secrets
+import socketserver
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,41 +44,54 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'
 CSP_AVISO = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 # los perfiles de red de Windows con sus IPv4 (una línea JSON). NetworkCategory: Public, Private o DomainAuthenticated
+# PowerShell en frío (con el antivirus mirando) tarda: 2 s en un Windows normal, más de 15 s medidos en la CI
+PS_TIEMPO = 45
 PS_REDES = (
     "$ErrorActionPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
     "$o=@(Get-NetConnectionProfile | ForEach-Object {"
     "$i=$_.InterfaceIndex;"
+    "$r=@(Get-NetRoute -InterfaceIndex $i -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric)[0];"
     "[pscustomobject]@{nombre=[string]$_.Name; categoria=[string]$_.NetworkCategory; alias=[string]$_.InterfaceAlias;"
+    "ruta=($null -ne $r); metrica=$(if ($r) { [int]$r.RouteMetric } else { 9999 });"
     "ips=@(Get-NetIPAddress -InterfaceIndex $i -AddressFamily IPv4 | ForEach-Object { [string]$_.IPAddress })}});"
     "ConvertTo-Json -InputObject $o -Compress -Depth 3")
 
 
 # ----------------------------------------------------------------------------- la red
 
+RED_LOCAL = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+
+
 def _ip_de_red_local(ip):
-    """Una IPv4 de red local de verdad: privada, y no la de bucle ni una autoasignada (169.254, sin router)."""
+    """Una IPv4 de red local de verdad (RFC 1918): ni la de bucle, ni una autoasignada (169.254, sin router), ni
+    0.0.0.0, ni la de una VPN de tipo Tailscale (100.64/10)."""
     try:
         a = ipaddress.ip_address(str(ip).strip())
     except ValueError:
         return False
-    return a.version == 4 and a.is_private and not a.is_loopback and not a.is_link_local
+    return a.version == 4 and any(a in n for n in RED_LOCAL)
 
 
 def elegir_red(perfiles):
-    """De los perfiles de red de Windows ([{nombre, categoria, ips}]) la primera privada con una IPv4 de red local:
-    {"ok": True, "ip", "red"}. Si no hay ninguna: {"ok": False, "motivo": "publica"|"empresa"|"sin_red", "red"}."""
-    otras = []
+    """De los perfiles de red de Windows ([{nombre, categoria, ips, ruta, metrica}]) la privada con una IPv4 de red
+    local: {"ok": True, "ip", "red"}. Si alguna tiene la ruta a internet, solo cuentan esas (la de menor métrica
+    primero): un adaptador virtual (Hyper-V, WSL, VirtualBox) marcado como privado no tiene ruta, y un QR con su IP no
+    lo abriría el móvil. Si no hay ninguna privada: {"ok": False, "motivo": "publica"|"empresa"|"sin_red", "red"}."""
+    validas = []
     for p in perfiles if isinstance(perfiles, list) else []:
         if not isinstance(p, dict):
             continue
-        ips = [ip for ip in (p.get("ips") or []) if _ip_de_red_local(ip)]
-        if not ips:
-            continue
+        ips = [str(ip).strip() for ip in (p.get("ips") or []) if _ip_de_red_local(ip)]
+        if ips:
+            validas.append((p, ips))
+    con_ruta = [x for x in validas if x[0].get("ruta") is True]
+    if con_ruta:
+        validas = sorted(con_ruta, key=lambda x: x[0].get("metrica") if isinstance(x[0].get("metrica"), int) else 9999)
+    for p, ips in validas:
         if p.get("categoria") == "Private":
-            return {"ok": True, "ip": str(ips[0]).strip(), "red": str(p.get("nombre") or "")}
-        otras.append(p)
-    if otras:
-        p = otras[0]
+            return {"ok": True, "ip": ips[0], "red": str(p.get("nombre") or "")}
+    if validas:
+        p = validas[0][0]
         motivo = "empresa" if p.get("categoria") == "DomainAuthenticated" else "publica"
         return {"ok": False, "motivo": motivo, "red": str(p.get("nombre") or "")}
     return {"ok": False, "motivo": "sin_red", "red": ""}
@@ -91,7 +106,7 @@ def red_para_movil():
         return {"ok": False, "motivo": "no_windows", "red": ""}
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", PS_REDES],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=PS_TIEMPO,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         datos = json.loads(r.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError) as e:
@@ -134,6 +149,20 @@ def qr_svg(texto):
 
 # ----------------------------------------------------------------------------- la recepción
 
+class _Servidor(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = False  # como el de la app: en Windows, SO_REUSEADDR deja a otro escuchar en el mismo puerto
+
+    def server_bind(self):
+        # sin el getfqdn de HTTPServer: una búsqueda de DNS inversa de la IP de la wifi puede tardar segundos
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], ConnectionError):  # el móvil cierra conexiones (o pierde la wifi)
+            super().handle_error(request, client_address)
+
+
 class Recepcion:
     """Un código: el servidor de la wifi, lo que se ha elegido en el PC (`datos`: carpeta, tema, idioma, contexto y
     modelo, como en /api/subir) y lo que va llegando. `subir(handler, q)` es App.subir."""
@@ -147,8 +176,7 @@ class Recepcion:
         self.dispositivo = None  # la cookie del móvil que abrió el código primero
         self.recibidos, self.lock = [], threading.Lock()
         self.activa = False
-        self.servidor = ThreadingHTTPServer((ip, puerto), MovilHandler)
-        self.servidor.daemon_threads = True
+        self.servidor = _Servidor((ip, puerto), MovilHandler)
         self.servidor.recepcion = self
         self.puerto = self.servidor.server_address[1]
         self._timer = None
@@ -291,16 +319,18 @@ class MovilHandler(BaseHTTPRequestHandler):
         if resto not in ("", "estado"):
             return self._send(404, "No encontrado", "text/plain; charset=utf-8")
         cookie, extra = self._cookie(), {}
-        with rec.lock:  # el primer móvil que lo abre se queda con el código
-            if rec.dispositivo is None:
+        with rec.lock:  # el primer móvil que abre la página se queda con el código (/estado no: no ata a nadie)
+            if rec.dispositivo is None and resto == "":
                 rec.dispositivo = secrets.token_urlsafe(16)
                 cookie = rec.dispositivo
-                extra["Set-Cookie"] = (f"tenca_movil_{rec.puerto}={cookie}; Path=/m/{rec.token}; HttpOnly; "
-                                       "SameSite=Strict")
+                vida = max(60, int(rec.caduca - time.time()) + 60)
+                extra["Set-Cookie"] = (f"tenca_movil_{rec.puerto}={cookie}; Path=/m/{rec.token}; Max-Age={vida}; "
+                                       "HttpOnly; SameSite=Strict")
                 log("📱 un móvil ha abierto el código")
         if not rec.es_el_movil(cookie):
             return self._aviso(409, "Este código ya lo usa otro móvil", "Cada código es para un solo móvil. Si eres tú "
-                               f"desde otro navegador, pide uno nuevo en {APP_NAME}.")
+                               f"desde otro navegador o desde otra app, en {APP_NAME} pulsa «Mostrar otro código» y "
+                               "escanéalo de nuevo.")
         if resto == "estado":
             return self._json(dict(rec.publico(), url=None))
         return self._send(200, pagina_movil(rec), "text/html; charset=utf-8", extra)
@@ -336,7 +366,7 @@ class MovilHandler(BaseHTTPRequestHandler):
         if total > MAX_BYTES:
             return self._json({"error": "Es demasiado grande para mandarlo desde el móvil (más de 2 GB)."}, 413)
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query, keep_blank_values=True).items()}
-        archivo = os.path.basename(str(q.get("archivo") or "").replace("\\", "/"))[:200] or "audio"
+        archivo = _recortar(os.path.basename(str(q.get("archivo") or "").replace("\\", "/"))) or "audio"
         r = rec.nuevo(archivo, total)
         # lo elegido en el PC manda; del móvil, solo el archivo, su nombre propuesto y su fecha
         pedido = dict(rec.datos, archivo=archivo, name=str(q.get("nombre") or "")[:120],
@@ -379,6 +409,15 @@ def _cabeza(titulo, rec=None):
             f'<meta name="color-scheme" content="light dark"><title>{_esc(titulo)}</title>{css}</head>')
 
 
+def _recortar(nombre, tope=200):
+    """El nombre del archivo, como mucho `tope` caracteres, sin perder la extensión (sin ella no se reconoce)."""
+    if len(nombre) <= tope:
+        return nombre
+    base, ext = os.path.splitext(nombre)
+    ext = ext[:16]
+    return base[:tope - len(ext)] + ext
+
+
 def pagina_aviso(titulo, texto):
     """Una página sin nada más que un aviso (código caducado o de otro móvil); sin ficheros: sin el código no se
     pueden pedir."""
@@ -394,7 +433,7 @@ def pagina_movil(rec):
     en movil.js; los datos que necesita, en atributos del <body>."""
     base = f"/m/{quote(rec.token)}/"
     return (_cabeza(f"Enviar a {APP_NAME}", rec)
-            + f'<body data-base="{_esc(base)}" data-caduca="{int(rec.caduca * 1000)}"'
+            + f'<body data-base="{_esc(base)}" data-max="{MAX_BYTES}" data-caduca="{int(rec.caduca * 1000)}"'
             f' data-ahora="{int(time.time() * 1000)}" data-exts="{_esc(rec.exts)}" data-app="{_esc(APP_NAME)}">'
             f'<main class="m"><header class="m-cab"><img src="{base}logo.svg" alt="" class="m-logo"><h1>Enviar a '
             f'{_esc(APP_NAME)}</h1></header>'

@@ -867,7 +867,7 @@ function viewFolder(f) {
       <h1 class="ptitle static">${esc(nfc(f.name))}</h1><button class="pfav${isFav('f', f.path) ? ' on' : ''}" data-act="fav" data-kind="f" data-path="${esc(f.path)}">${isFav('f', f.path) ? I.starOn : I.star}</button></div>
     <div class="meta"><span><b>${f.total}</b> audio${f.total === 1 ? '' : 's'}</span><span><b>${fmtDur(f.secs)}</b> de audio</span><span><b>${f.done}</b> transcritos</span></div>
     <div class="actions">
-      <button class="btn" data-act="subir" data-path="${esc(f.path)}" title="Un audio que ya tengas (del móvil, de WhatsApp…): se guarda en esta carpeta y se transcribe">${I.upload}Subir audio aquí</button>
+      <button class="btn" data-act="subir" data-path="${esc(f.path)}" aria-haspopup="menu" aria-expanded="false" title="Un audio que ya tengas, desde este PC o desde el móvil: se guarda en esta carpeta y se transcribe">${I.upload}Subir audio aquí</button>
       <button class="btn" data-act="new-folder" data-path="${esc(f.path)}">${I.plus}Subcarpeta</button>
       <button class="btn" data-act="rename-folder" data-path="${esc(f.path)}">${I.edit}Renombrar</button>
       <button class="btn" data-act="reveal" data-path="${esc(f.path)}">${I.ext}Abrir en el Explorador</button>

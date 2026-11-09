@@ -5163,6 +5163,8 @@ class App:
     # --- «Subir audio › Desde el móvil» (movil.py): un código QR que el móvil abre por la wifi
     _movil_lock = threading.Lock()
     _movil_rec = None
+    _movil_ultima = None  # el último código cerrado, para que la tarjeta siga enseñando lo que recibió
+    _movil_red = (0.0, None)  # la última red buena y cuándo: «Mostrar el código» no vuelve a lanzar PowerShell
 
     def _movil_datos(self, b):
         """Lo elegido en el PC para lo que mande el móvil (lo que da /api/grabar/plan con subir, como en /api/subir):
@@ -5176,6 +5178,8 @@ class App:
     def _movil_parar(self):
         with self._movil_lock:
             rec, App._movil_rec = App._movil_rec, None
+            if rec:
+                App._movil_ultima = rec  # lo recibido se sigue viendo en la tarjeta (y lo que llegaba, al terminar)
         if rec:
             rec.parar()
 
@@ -5183,24 +5187,29 @@ class App:
         """GET /api/movil/red: si se puede recibir del móvil en la red de ahora ({ok, ip, red} o {ok: False, motivo,
         texto}). Mira los perfiles de red de Windows (PowerShell, ~1 s)."""
         red = movil.red_para_movil()
+        if red["ok"]:
+            App._movil_red = (time.time(), red)
         return red if red["ok"] else dict(red, texto=movil.motivo_texto(red))
 
     def movil_abrir(self, b):
         """POST /api/movil/abrir {folder, vocab, language, contexto, preset}: un código nuevo (el anterior deja de
         valer). Solo en una red privada de Windows (decisión 3 de la lámina, msg 1390)."""
         datos = self._movil_datos(b)
-        red = movil.red_para_movil()
+        cuando, red = App._movil_red
+        if not red or time.time() - cuando > 120:  # la de hace un momento (al abrir la tarjeta) vale; una mala, no
+            red = movil.red_para_movil()
         if not red["ok"]:
             return dict(red, texto=movil.motivo_texto(red))
-        self._movil_parar()
         try:
             rec = movil.Recepcion(red["ip"], datos, self.subir, STATIC_DIR, AUDIO_EXT)
         except OSError as e:
             raise ApiError(f"No se puede recibir en la wifi ({e.strerror or e.__class__.__name__}). Vuelve a probar en "
                            "un momento.")
-        with self._movil_lock:
-            App._movil_rec = rec
-        rec.empezar()
+        with self._movil_lock:  # el cambio, de una vez: dos «Mostrar el código» a la vez no dejan uno suelto
+            viejo, App._movil_rec, App._movil_ultima = App._movil_rec, rec, None
+            rec.empezar()
+        if viejo:
+            viejo.parar()
         return dict(rec.publico(), ok=True, red=red.get("red") or "", qr=movil.qr_svg(rec.url))
 
     def movil_datos(self, b):
@@ -5214,7 +5223,7 @@ class App:
 
     def movil_estado(self, q):
         """GET /api/movil/estado: el código abierto y lo que va llegando, para el PC."""
-        rec = App._movil_rec
+        rec = App._movil_rec or App._movil_ultima
         return rec.publico() if rec else {"activa": False, "recibidos": []}
 
     def movil_cerrar(self, b):

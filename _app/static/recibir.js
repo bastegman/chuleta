@@ -95,6 +95,8 @@ async function mvMontar(d) {
   const g = G;
   // la red, a la vez que el plan: si no es una red privada de Windows, se dice aquí y no se enseña el código
   const red = api('/api/movil/red').catch(err => ({ ok: false, texto: err.message }));
+  const etiqueta = $('#rGo span', d);
+  etiqueta.textContent = 'Mirando la wifi…';  // PowerShell, en frío, puede tardar unos segundos
   await voc0();
   if (G !== g) return;
   await grPedir({ recientes: true });
@@ -102,6 +104,7 @@ async function mvMontar(d) {
   const r = await red;
   if (G !== g) return;
   g.subir.red = r;
+  etiqueta.textContent = 'Mostrar el código';
   const b = $('#rGo', d);
   if (!r.ok) {
     mvError(r.texto || 'No se pueden recibir audios del móvil ahora.');
@@ -112,6 +115,13 @@ async function mvMontar(d) {
   }
   b.disabled = false;
   b.focus();
+  // de vuelta de «Nuevo proyecto…» o «Editar» con un código abierto: cómo está ahora, y «Volver al código»
+  if (g.subir.sesion) {
+    try { mvPintar(g, await api('/api/movil/estado')); } catch { }
+    if (G !== g) return;
+    mvVer(g, false);
+    if (g.subir.activa) mvSondear(g);
+  }
 }
 
 function mvError(texto) {
@@ -134,11 +144,14 @@ async function mvMostrar() {
     contexto: p.rec.contexto || '', preset: p.rec.preset || '' };
   const sub = g.subir;
   try {
-    const r = sub.sesion && sub.activa ? await api('/api/movil/datos', datos) : await api('/api/movil/abrir', datos);
-    if (G !== g) return;
+    const nuevo = !(sub.sesion && sub.activa);
+    const r = nuevo ? await api('/api/movil/abrir', datos) : await api('/api/movil/datos', datos);
+    // cerrada (Esc) mientras se abría: ese código no lo va a ver nadie, fuera
+    if (sub.cerrada || G !== g) { if (nuevo && r.activa) api('/api/movil/cerrar', {}).catch(() => { }); return; }
     if (r.ok === false) { mvError(r.texto); b.disabled = false; return; }
     mvError('');
     if (r.qr) sub.qr = r.qr;
+    if (nuevo) sub.vistos = new Set();  // los del código nuevo empiezan otra vez en 1
     sub.sesion = true;
     sub.destino = mvDestino(p);
     mvVer(g, true);
@@ -198,17 +211,19 @@ function mvPintar(g, r) {
         <div class="mv-der">
           <ol class="mv-pasos"><li>Abre la cámara del móvil y apunta al código.</li><li>Toca el aviso que sale: se abre una página de ${esc(APP_NAME)}.</li><li>Elige las grabaciones. Entran aquí solas y se transcriben.</li></ol>
           <div class="mv-destino">${I.folder}<span>Se guardan en <b>${esc(sub.destino || '')}</b></span><button type="button" class="gr-cambiar" data-mv="cambiar">Cambiar</button></div>
-          <div class="mv-url">¿Sin cámara? Escribe en el navegador del móvil <code>${esc(r.url || '')}</code></div>
+          ${r.movil ? `<div class="mv-conectado">${I.check}<span>Un móvil ya ha abierto el código. ¿No es el tuyo, o lo abriste en otra app? <button type="button" class="gr-cambiar" data-mv="otro">Mostrar otro código</button></span></div>`
+            : `<div class="mv-url">¿Sin cámara? Escribe en el navegador del móvil <code>${esc(r.url || '')}</code></div>`}
         </div></div>`;
   const notas = `<div class="mv-notas"><p>${MV_I.wifi}<span>Solo con el móvil en tu misma wifi. El audio va directo del móvil a este PC: no pasa por internet.</span></p>
-      <p>${MV_I.escudo}<span>La primera vez, Windows preguntará si dejas usar la red (puede decir «Python»: es el motor de ${esc(APP_NAME)}). Marca <b>Redes privadas</b> y pulsa <b>Permitir</b>.</span></p></div>`;
+      <p>${MV_I.escudo}<span>La primera vez, Windows preguntará si dejas usar la red (puede decir «Python»: es el motor de ${esc(APP_NAME)}). Marca <b>Redes privadas</b> y pulsa <b>Permitir</b>.</span></p>
+      <p>${I.info}<span>¿El móvil no abre la página? Si alguna vez pulsaste «Cancelar» en ese aviso, Windows ya no lo vuelve a enseñar: busca en Inicio «Permitir una aplicación a través del Firewall de Windows», pulsa «Cambiar la configuración» y marca «Privada» en Python.</span></p></div>`;
   const html = `${cabeza}<div class="mv-rec"><div class="mv-h">Recibidos</div>${lista}</div>${r.activa ? notas : ''}`;
   // solo si cambia algo más que la cuenta atrás: repintar cada segundo le quitaba el foco a «Cambiar» o a «Mostrar
   // otro código» a quien va con el teclado
   if (panel._html !== html) { panel.innerHTML = html; panel._html = html; }
   const reloj = $('[data-mv-reloj]', panel);
   if (reloj) reloj.textContent = mvReloj(r.restante);
-  $('[data-mv="parar"]', g.d).hidden = !r.activa;
+  $('[data-mv="parar"]', g.d).hidden = !r.activa || !g.d.classList.contains('mv-on');
   // lo que acaba de entrar, al árbol y a la cola (una vez cada uno)
   sub.vistos ||= new Set();
   const nuevos = rs.filter(x => x.path && !sub.vistos.has(x.id));
@@ -240,10 +255,12 @@ document.addEventListener('click', async e => {
   if (q === 'listo') return closeModal(true);
   if (q === 'cambiar') return mvVer(g, false);
   if (q === 'parar') {
+    clearTimeout(g.subir.sondeo);  // un sondeo ya pedido no pinta «Aún nada» encima de lo recibido
     try {
       const r = await api('/api/movil/cerrar', {});
       g.subir.parada = true; g.subir.sesion = false;
       mvPintar(g, r);
+      if ((r.recibidos || []).some(x => x.estado === 'llegando')) mvSondear(g);  // lo que llegaba termina y se ve
       $('[data-mv="otro"]', g.d)?.focus();
     } catch (err) { toast(esc(err.message), 'err'); }
     return;
