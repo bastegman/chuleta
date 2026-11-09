@@ -172,6 +172,9 @@ Lo que vio: «a una persona la cataloga como 10 personas distintas a lo largo de
   acababa cada nombre. La pista cuenta así solo el texto que escribió la app (también si lo confirmas sin cambiarlo);
   editado a mano, o si la app se ha reiniciado entretanto, lo cuenta como texto libre, del lado que une menos voces
   (revisión de la integración del 08/11/2026).
+- «Fusionar» dos personas (Ajustes › Voces) ya no se queda a medias si una reunión está abierta en OneDrive o en otro
+  programa: lo dice, las dos personas siguen ahí y se puede repetir (antes la reunión se quedaba con una persona
+  borrada).
 
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).
