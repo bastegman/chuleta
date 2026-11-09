@@ -13,6 +13,7 @@ dos veces, una como «No se pudo transcribir» con la transcripción hecha.
 import io
 import os
 import sys
+import time
 import types
 import unittest
 from unittest import mock
@@ -230,6 +231,16 @@ class DecodeTopesTests(unittest.TestCase):
         self.assertEqual(n, len(y))
         self.assertTrue(np.array_equal(np.frombuffer(f.getvalue(), "<i2"), y))
 
+    def test_disco_lleno_es_un_error_claro(self):
+        class Lleno:
+            def write(self, b):
+                raise OSError(28, "No space left on device")
+
+        with mock.patch.dict(sys.modules, {"av": fake_av([True, True])}):
+            with self.assertRaises(engines.EngineError) as cm:  # antes de esto, «WAV cortado»: se seguía a medias
+                engines.decode_16k("x.m4a", destino=Lleno())
+        self.assertIn("libera espacio", str(cm.exception))
+
     def test_a_float32_bit_a_bit(self):
         y = (np.random.default_rng(1).integers(-32768, 32768, 10000)).astype(np.int16)
         a, b = engines.a_float32(y), y.astype(np.float32) / 32768.0
@@ -256,17 +267,39 @@ class VocesEnDiscoTests(TempTree):
                 f.write(b"\0\0" * SR)
             return np.memmap(en_disco, dtype="<i2", mode="r")
 
+        def falla(samples, *a, **k):  # funciones, no Mock: un Mock se queda con el memmap en call_args
+            assert len(samples) == SR
+            raise voices.VoicesError("x")
+
+        def bien(samples, *a, **k):
+            assert len(samples) == SR
+            return {"tramos": [], "hablantes": {}, "huellas": {}, "duracion_s": 1.0}
+
         out = os.path.join(self.tmp, "r.hablantes.json")
-        for diarize in (mock.Mock(side_effect=voices.VoicesError("x")),
-                        mock.Mock(return_value={"tramos": [], "hablantes": {}, "huellas": {}, "duracion_s": 1.0})):
+        for diarize, rc in ((falla, 1), (bien, 0)):
             with mock.patch.object(voices, "load_audio_16k", load), \
                     mock.patch.object(voices, "diarize", diarize), \
                     mock.patch.object(os, "dup2"), mock.patch.object(os, "fdopen", return_value=io.BytesIO()):
-                voices.main(["--diarize", "x.m4a", "--out", out, "--data", self.data_dir])
+                self.assertEqual(voices.main(["--diarize", "x.m4a", "--out", out, "--data", self.data_dir]), rc)
         self.assertEqual(len(creados), 2)
         for p in creados:
             self.assertEqual(os.path.dirname(p), os.path.join(self.data_dir, "tmp"))  # la que vacía el servidor
             self.assertFalse(os.path.exists(p), p)
+
+    def test_los_de_otras_ejecuciones_viejos_se_borran_y_los_recientes_no(self):
+        d = os.path.join(self.data_dir, "tmp")
+        os.makedirs(d)
+        viejo, reciente, otro = (os.path.join(d, n) for n in ("voces-1-a.pcm", "voces-2-b.pcm", "trozo.flac"))
+        for p in (viejo, reciente, otro):
+            with open(p, "wb") as f:
+                f.write(b"x")
+        hace = time.time() - voices.TMP_VIEJO_S - 60
+        os.utime(viejo, (hace, hace))
+        os.utime(otro, (hace, hace))
+        voices._borrar_tmp(os.path.join(d, "voces-3-c.pcm"))
+        self.assertFalse(os.path.exists(viejo))
+        self.assertTrue(os.path.exists(reciente))  # puede ser de un «Recalcular huella» en marcha
+        self.assertTrue(os.path.exists(otro))  # lo de la nube no es suyo
 
 
 # ----------------------------------------------------------------------------- espectrograma por bloques

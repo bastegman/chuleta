@@ -1146,6 +1146,37 @@ def export_text(segs, who, data, names, usuario=None):
 
 # ----------------------------------------------------------------------------- CLI (subproceso)
 
+TMP_VIEJO_S = 6 * 3600  # un voces-*.pcm de hace más de esto ya no es de ningún subproceso vivo
+
+
+def _borrar_tmp(path):
+    """Borra el audio decodificado de esta ejecución y los que hayan quedado de otras de hace más de TMP_VIEJO_S (un
+    subproceso que se cancela muere sin llegar aquí). En Windows, un archivo que sigue mapeado no se puede borrar: si
+    algo (una excepción con sus marcos) aún lo tiene, se recoge la basura y se prueba otra vez; si tampoco, lo borra
+    CloudEngine.purge_tmp al arrancar o cerrar la app."""
+    for intento in range(2):
+        try:
+            os.remove(path)
+            break
+        except FileNotFoundError:
+            break
+        except OSError:
+            if intento == 0:
+                import gc
+                gc.collect()
+    d = os.path.dirname(path)
+    try:
+        viejos = [e.path for e in os.scandir(d) if e.name.startswith("voces-") and e.name.endswith(".pcm")
+                  and e.path != path and time.time() - e.stat().st_mtime > TMP_VIEJO_S]
+    except OSError:
+        return
+    for v in viejos:
+        try:
+            os.remove(v)
+        except OSError:
+            pass
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Diarizacion en local (subproceso de la app)")
     ap.add_argument("--diarize", required=True, metavar="AUDIO")
@@ -1213,10 +1244,7 @@ def main(argv=None):
         return 1
     finally:
         del samples  # suelta el memmap: en Windows un archivo mapeado no se puede borrar
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        _borrar_tmp(tmp)
 
 
 if __name__ == "__main__":

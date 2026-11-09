@@ -420,11 +420,15 @@ def decode_16k(path, start=0.0, cancelled=lambda: False, destino=None):
             cut = min(skip, len(a))
             a, skip = a[cut:], skip - cut
         if len(a):
-            escritas += len(a)
             if destino is not None:
-                destino.write(np.ascontiguousarray(a, "<i2").tobytes())
+                try:  # disco lleno: un error claro, no «WAV cortado» con un archivo a medias
+                    destino.write(np.ascontiguousarray(a, "<i2").tobytes())
+                except OSError as e:
+                    raise EngineError(f"No se pudo guardar el audio en el disco para leerlo ({e.strerror or e}): "
+                                      "libera espacio y vuelve a probar.")
             else:
                 parts.append(a)
+            escritas += len(a)
 
     try:
         with av.open(path) as c:
