@@ -16,6 +16,10 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
   aquí» en cada carpeta, o arrastrarlo a la ventana. Se guarda como una reunión más, con su proyecto, su fecha y su
   carpeta, y se pone a transcribir. Lee m4a (también el «sin pérdida» del iPhone), opus y ogg de WhatsApp, mp3, wav,
   aac, webm, flac, amr y el sonido de un vídeo mp4 o mov; si un archivo no se puede leer, lo dice y no guarda nada.
+  **Desde el móvil**, sin instalar nada en él: «Subir audio › Desde el móvil» enseña un código QR; lo escaneas, eliges
+  las grabaciones en la página que se abre y entran solas, con lo que hayas elegido en el PC. El audio va directo del
+  móvil al PC por tu wifi (no pasa por internet); cada código vale 10 minutos y para un solo móvil, y solo funciona en
+  una red que Windows tiene como privada (la de casa).
 - **Transcribir** mientras se habla o al terminar: en tu PC (faster-whisper) o en la nube (Groq, OpenAI, Azure OpenAI
   o cualquier API compatible con OpenAI). En la nube el directo va casi en streaming: trozos de 3–6 s cortados en las
   pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de respaldo de otras cuentas
@@ -391,4 +395,5 @@ Ajustes › Ayuda › Acerca de; no hay ventanas emergentes ni recordatorios.
 MIT. Ver `LICENSE`.
 
 Las tipografías de `_app/static` (Fraunces y Manrope) van con la SIL Open Font License 1.1, no con la MIT: avisos y
-licencia en `_app/static/fuentes-OFL.txt`.
+licencia en `_app/static/fuentes-OFL.txt`. `_app/qrcodegen.py` es la librería de códigos QR de Project Nayuki, MIT, con
+su aviso de copyright y su licencia en la cabecera del propio archivo.

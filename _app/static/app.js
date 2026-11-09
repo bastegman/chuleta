@@ -452,7 +452,10 @@ $('#btnRec').onclick = openRec;
    de archivos y, con lo elegido, la tarjeta de subir (grabar.js); desde una carpeta, sube ahí */
 $('#btnSubir').onclick = () => {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  if (typeof elegirAudios === 'function') return elegirAudios({ carpeta: S.route.kind === 'f' ? S.route.path : null });
+  const carpeta = S.route.kind === 'f' ? S.route.path : null;
+  // «Desde este PC» o «Desde el móvil» (recibir.js); sin él, el selector de archivos como antes
+  if (typeof subirMenu === 'function') return S.sbMenu ? cerrarSubirMenu() : subirMenu($('#btnSubir'), { carpeta });
+  if (typeof elegirAudios === 'function') return elegirAudios({ carpeta });
   toast('No se ha podido cargar «Subir audio»: recarga la página (Ctrl+R).', 'err');
 };
 

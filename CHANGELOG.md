@@ -10,6 +10,27 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Subir audio desde el móvil con un código QR (09/11/2026)
+
+La lámina que validó Bernardo con sus cuatro decisiones por defecto (msg 1390: «1. Si»). Hecho por Steve en la rama
+`qr-movil`.
+
+- «Subir audio» abre un menú: «Desde este PC» (como antes) y «Desde el móvil». Con el móvil, la tarjeta de subir sin
+  archivos: eliges proyecto, carpeta e idioma (decisión 1) y «Mostrar el código» enseña un QR, cuánto le queda, lo que
+  va llegando («Llegando · 46 %», «En la cola») y cómo dejarlo («Dejar de recibir», «Listo»). «Cambiar» vuelve al plan
+  sin perder el código. Cerrar la tarjeta lo cierra; lo que esté llegando se guarda.
+- El móvil, sin instalar nada: una página «Enviar a Tenca» con «Elegir grabaciones», ayuda para iPhone y Android, y
+  cada audio con su progreso. Lleva el nombre y la fecha que propone el archivo, como al subirlo desde el PC
+  (`nombres-audio.js`, ahora compartido).
+- `movil.py`: mientras el código está en pantalla, un servidor aparte escucha solo en la IP de la wifi y solo sabe
+  servir esa página y recibir audios. Código de 128 bits en la ruta, un solo móvil (el primero que lo abre, por
+  cookie), 10 minutos, 2 GB por audio y nada de la API de la app (decisión 2). Lo recibido entra por `App.subir`, con
+  sus comprobaciones. Solo en una red que Windows tiene como privada (`Get-NetConnectionProfile`); en una pública o en
+  la de la empresa, la tarjeta dice por qué y cómo cambiarlo (decisión 3).
+- `_app/qrcodegen.py`: la librería de QR de Project Nayuki (MIT), copiada sin cambios con su licencia.
+- Tests: `tests/test_movil.py` (la red, el QR y el servidor de la wifi) y `tests/test_ui_movil.py` (de punta a punta
+  con un iPhone emulado y un audio de WhatsApp de verdad, en ui-smoke).
+
 ### Idioma y traducción en pleno directo; oculta al compartir pantalla (09/11/2026)
 
 Ítems 12, 13a y 18 del backlog (msgs 1150-1152 y 1242). Rama `idioma-directo`.

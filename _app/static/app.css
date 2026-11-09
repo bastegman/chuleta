@@ -1008,3 +1008,53 @@ fieldset.ct-opciones { margin-top: 16px; }
   .ct-fila { grid-template-columns: 90px auto minmax(0, 1fr); }
   .ct-acc { grid-column: 3; }
 }
+
+/* ---------- «Subir audio»: el menú y «Recibir del móvil» (recibir.js) ---------- */
+.sb-menu { position: fixed; z-index: 70; min-width: 260px; padding: 6px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); animation: tin .14s ease-out; }
+.sb-menu button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--ink); text-align: left; cursor: pointer; }
+.sb-menu button:hover, .sb-menu button:focus-visible { background: var(--hover); outline: none; }
+.sb-menu svg { width: 20px; height: 20px; color: var(--accent); flex: none; }
+.sb-menu b { display: block; font-weight: 650; font-size: 14px; }
+.sb-menu small { display: block; color: var(--muted); font-size: 12.5px; }
+.gr-kicker > svg { width: 15px; height: 15px; }
+.mv-cod { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: start; }
+.mv-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.mv-qrimg { width: 196px; height: 196px; border-radius: 6px; overflow: hidden; background: #fff; }
+.mv-qrimg svg { display: block; width: 100%; height: 100%; stroke: none; vertical-align: top; }  /* sin el trazo de los iconos */
+.mv-caduca { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--warn); }
+.mv-caduca b { font-variant-numeric: tabular-nums; }
+.mv-caduca svg { width: 15px; height: 15px; }
+.mv-pasos { list-style: none; counter-reset: p; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.mv-pasos li { counter-increment: p; display: flex; gap: 10px; align-items: baseline; font-size: 14.5px; color: var(--ink); line-height: 1.45; }
+.mv-pasos li::before { content: counter(p); flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 12.5px; font-weight: 700; transform: translateY(-1px); }
+.mv-destino { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 9px 12px; border-radius: var(--radius-sm); background: var(--panel-2); border: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+.mv-destino > span { flex: 1; min-width: 0; overflow-wrap: break-word; }
+.mv-destino > svg { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.mv-url { margin-top: 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.mv-url code { font-size: 11.5px; }
+.mv-rec { margin-top: 16px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.mv-h { padding: 7px 12px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--panel-2); border-bottom: 1px solid var(--line); }
+.mv-vacio { padding: 12px; font-size: 13px; color: var(--muted); }
+.mv-lista { list-style: none; margin: 0; padding: 0; }
+.mv-item { display: grid; grid-template-columns: 20px 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.mv-item:first-child { border-top: 0; }
+.mv-ic svg { width: 16px; height: 16px; color: var(--ok); }
+.mv-item.llegando .mv-ic svg { color: var(--accent); }
+.mv-item.error .mv-ic svg { color: var(--err); }
+.mv-nom { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-est { font-size: 12.5px; font-weight: 600; color: var(--ok); text-align: right; }
+.mv-item.llegando .mv-est { color: var(--accent); font-variant-numeric: tabular-nums; }
+.mv-item.error .mv-est { color: var(--err); font-weight: 500; white-space: normal; }
+.mv-item.error { grid-template-columns: 20px 1fr; }
+.mv-item.error .mv-est { grid-column: 2; text-align: left; }
+.mv-barra { grid-column: 2 / -1; height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.mv-barra i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.mv-notas { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+.mv-notas p { display: flex; gap: 8px; margin: 4px 0; align-items: flex-start; }
+.mv-notas svg { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--muted); }
+.mv-fin { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius); background: var(--panel-2); border: 1px solid var(--line); font-size: 13.5px; }
+.mv-fin > div { flex: 1; }
+.mv-fin > svg { width: 22px; height: 22px; color: var(--muted); flex: none; }
+@media (max-width: 700px) { .mv-cod { grid-template-columns: 1fr; } .mv-qr { justify-self: center; } }
+@media (prefers-reduced-motion: reduce) { .sb-menu { animation: none; } .mv-barra i { transition: none; } }
+.dialog.mvd [hidden] { display: none !important; }  /* .btn, .gr-top… tienen su display: hidden tiene que ganar */

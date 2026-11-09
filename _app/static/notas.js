@@ -101,6 +101,7 @@ main.addEventListener('click', async e => {
   else if (a === 'fav') toggleFav(act.dataset.kind, p);
   else if (a === 'tag-del') { const au = curAudio(); if (au) saveProps(au, { etiquetas: ((au.props || {}).etiquetas || []).filter(t => t !== act.dataset.tag) }).then(() => renderAudioHead(au, true)); }
   else if (a === 'delete') deleteItem(p);
+  else if (a === 'subir' && typeof subirMenu === 'function') { if (S.sbMenu) cerrarSubirMenu(); else subirMenu(act, { carpeta: p || null }); }
   else if (a === 'subir' && typeof elegirAudios === 'function') elegirAudios({ carpeta: p || null });
   else if (a === 'consent') copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
   else if (a === 'palette') { e.preventDefault(); openPalette(); }
