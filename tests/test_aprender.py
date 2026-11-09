@@ -92,6 +92,10 @@ class PropuestasTests(unittest.TestCase):
                          ["Ana", "Pedro"])
         self.assertEqual(terminos(A.propuestas(segs("el banco del norte de chile"),
                                                segs("el Banco del Norte de Chile"))), ["Banco del Norte de Chile"])
+        # más largo que MAX_NUEVO: se corta en dos nombres, no se pierde (revisión 3)
+        self.assertEqual(terminos(A.propuestas(segs("la universidad de los andes de santiago de chile"),
+                                               segs("la Universidad de los Andes de Santiago de Chile"))),
+                         ["Universidad de los Andes", "Santiago de Chile"])
 
     def test_la_mayuscula_de_la_frase_no_es_un_nombre(self):
         """Revisión 2: «efectivamente» → «Efectivamente» al empezar frase es la mayúscula de la frase."""
@@ -611,7 +615,7 @@ class ServidorTests(TempTree):
         self.reunion(rel2, ["con tesa"], proyecto="Cliente Alfa", workstream="Marketing")
         self.corregir(rel2, ["con TSA"])
         r2 = self.app.aprender_get({"path": rel2})
-        self.assertEqual((r2["lista"], r2.get("falta")), ("", None))
+        self.assertEqual((r2["lista"], r2.get("falta"), r2["proyecto_reunion"]), ("", None, "Cliente Alfa"))
         with self.assertRaises(server.ApiError) as cm:
             self.app.aprender_anadir({"path": rel, "termino": "TSA", "lista": lid, "reglas": []})
         self.assertIn("No encuentro tu carpeta de listas «Listas»: ¿sin conexión", cm.exception.msg)
@@ -686,7 +690,10 @@ class ServidorTests(TempTree):
         self.corregir(rel, ["con orbalia, dijo"])  # la copia del original ya existe (corrección a mano)
         self.write("Cliente Alfa/r1.srt", srt_text([(0.0, 4.0, "con orbalia, dijo"), (5.0, 9.0, "y orbalia")]))
         bdir = server.backup_dir(rel)
-        antes = {f: open(os.path.join(bdir, f), "rb").read() for f in os.listdir(bdir)}
+        antes = {}
+        for f in os.listdir(bdir):
+            with open(os.path.join(bdir, f), "rb") as g:
+                antes[f] = g.read()
         with open(b + ".wav", "rb") as f:
             audio = f.read()
         self.reglas(REGLA)
@@ -713,6 +720,7 @@ class ServidorTests(TempTree):
                                        "a": "Orvalia SA", "proyecto": ""})
         self.assertEqual(out["reglas"], [{"de": "orbalía", "a": "Orvalia SA", "proyecto": ""}])
         for b, msg in (({"de": "el", "a": "Él"}, "muy corriente"), ({"de": "plan", "a": "Plan"}, "tocaría frases"),
+                       ({"de": "kp", "a": "KPI"}, "al menos 3 letras"), ({"de": "jose", "a": "José"}, "las tildes"),
                        ({"de": "x", "a": "x"}, "son iguales"), ({"de": "a, b", "a": "c"}, "sin comas"),
                        ({"de": "tesa", "a": "TSA", "proyecto": "No existe"}, "ya no existe"),
                        ({"de": "orbalía", "a": "Otra", "proyecto": ""}, "Ya tienes «orbalía»")):
@@ -725,7 +733,7 @@ class ServidorTests(TempTree):
         self.assertIn("ya no está", cm.exception.msg)
         # una nueva (sin «antes»), en un proyecto que existe
         out = self.app.aprender_regla({"de": "tesa", "a": "TSA", "proyecto": "cliente alfa"})
-        self.assertIn({"de": "tesa", "a": "TSA", "proyecto": "cliente alfa"}, out["reglas"])
+        self.assertIn({"de": "tesa", "a": "TSA", "proyecto": "Cliente Alfa"}, out["reglas"])  # como se llama
 
     def test_restaurar_el_original_se_lleva_lo_de_tenca(self):
         rel = "Cliente Alfa/r1.wav"

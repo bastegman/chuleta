@@ -197,7 +197,8 @@ def _juntar_nombres(ops, ta, tb):
     out, juntos = [], set()
     for o in ops:
         if (len(out) >= 2 and solo_forma(o) and (out[-2] in juntos or solo_forma(out[-2]))
-                and enlaces(out[-1])):  # y otra vez: «Banco del Norte de Chile»
+                and enlaces(out[-1]) and o[4] - out[-2][3] <= MAX_NUEVO):  # y otra vez: «Banco del Norte de Chile»,
+            # sin pasar de MAX_NUEVO: «Universidad de los Andes» y «Santiago de Chile», no ninguno de los dos
             a = out[-2]
             out[-2:] = [("replace", a[1], o[2], a[3], o[4])]
             juntos.add(out[-1])

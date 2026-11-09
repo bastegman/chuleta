@@ -186,8 +186,8 @@ USO DIARIO
     a tu diccionario personal: en las próximas reuniones de ese proyecto cambia sola lo que escribió
     Whisper, solo en frases que nadie ha tocado, subrayado en el texto y con "Deshacer" en cada
     reunión (desmarca la casilla si no lo quieres). El diccionario está en Ajustes > Proyectos, con
-    "cambiar" y "quitar". Nada se aprende sin tu clic, el audio y el texto original no se tocan, y
-    nada sale del PC.
+    "cambiar" y "quitar". Nada se aprende sin tu clic, el audio no se toca (lo que escribió Whisper
+    se guarda aparte: "Restaurar original") y nada sale del PC.
 
 
 QUIÉN HABLA (opcional)

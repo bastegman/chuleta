@@ -93,7 +93,7 @@ function aprCardHtml() {
     }
     const reglas = q.reglas.map(x => `«${esc(x.texto)}»`);
     const regla = q.reglas.length ? (q.anadir
-      ? `<label class="apr-regla"><input type="checkbox" data-apr-regla="${k}"${S.aprCasillas[aprNorm(p.termino)] !== false ? ' checked' : ''}> Y en las próximas reuniones ${proy}, cambiar ${aprY(reglas)} por «${esc(p.termino)}» (se guarda en tu diccionario)</label>`
+      ? `<label class="apr-regla"><input type="checkbox" data-apr-regla="${k}"${(S.aprCasillas[aprNorm(p.termino)] ?? !(lista === '' && ap.data.proyecto_reunion)) ? ' checked' : ''}> Y en las próximas reuniones ${proy}, cambiar ${aprY(reglas)} por «${esc(p.termino)}» (se guarda en tu diccionario)</label>`
       : '') : '';
     const que = q.anadir ? `Whisper escribió ${aprY(antes)}`
       : `Ya está en la lista, pero Whisper escribió ${aprY(antes)}`;
@@ -307,7 +307,8 @@ async function aprAjustes(d) {
     box.reglas = reglas; box.no = no;
     box.innerHTML = (reglas.length ? `<label>Tu diccionario personal <span class="muted" style="font-weight:400">· lo que ${esc(APP_NAME)} corrige al transcribir</span></label>
       <table class="vtable apr-dic">${reglas.map(fila).join('')}</table>
-      <div class="help">Cada entrada cambia lo que escribió Whisper por lo correcto en las próximas reuniones de ese proyecto, solo en frases que nadie ha tocado. Lo cambiado va subrayado y cada reunión tiene su «Deshacer». El audio y el texto original no se tocan nunca, y quitar o cambiar una entrada no deshace lo ya cambiado.</div>` : '')
+      <div class="help">Cada entrada cambia lo que escribió Whisper por lo correcto en las próximas reuniones de ese proyecto, solo en frases que nadie ha tocado. Lo cambiado va subrayado y cada reunión tiene su «Deshacer». El audio no se toca, y lo que escribió Whisper se guarda aparte («Restaurar original»). Quitar o cambiar una entrada no deshace lo ya cambiado.</div>`
+      : `<label>Tu diccionario personal</label><div class="help" style="margin-top:0">Aún está vacío. Se llena cuando corriges un nombre o una sigla en una transcripción y le dices que sí: desde entonces, ${esc(APP_NAME)} lo cambia solo en las próximas reuniones de ese proyecto, y aquí podrás cambiarlo o quitarlo.</div>`)
       + (no.length ? `<div class="help apr-no-lista">No te propone añadir: ${no.map((x, i) => `<span class="apr-r">«${esc(x)}» <button class="lnk" type="button" data-apr-sino="${i}" title="Que vuelva a proponerlo si lo corriges">quitar</button></span>`).join('<span class="muted"> · </span>')}</div>` : '');
   };
   try { pintar(await api('/api/aprender/reglas')); } catch { box.innerHTML = ''; }

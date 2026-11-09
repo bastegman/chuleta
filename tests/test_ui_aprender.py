@@ -284,7 +284,11 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         pg.keyboard.press("Enter")  # Intro guarda
         pg.wait_for_selector("#sAprendido tr:has-text('«orbalia» → Orvalia SA')", timeout=5000)
         self.assertIn(("orbalia", "Orvalia SA", "Cliente Alfa"), self.reglas())
-        self.assertFalse(pg.locator("#modal").is_hidden())  # Escape o Intro en la fila no cierran Ajustes
+        self.assertFalse(pg.locator("#modal").is_hidden())  # Intro en la fila no cierra Ajustes
+        pg.locator("#sAprendido tr", has_text="«orbalia» → Orvalia SA").locator("[data-apr-editar]").click()
+        pg.keyboard.press("Escape")  # Escape cancela la fila, y Ajustes sigue abierto
+        pg.wait_for_function("() => !document.querySelector('#aprDicDe')", timeout=5000)
+        self.assertFalse(pg.locator("#modal").is_hidden())
         fila = pg.locator("#sAprendido tr", has_text="«orbalia» → Orvalia SA")
         fila.locator("[data-apr-olvidar]").click()
         pg.wait_for_function("() => !document.querySelector('#sAprendido').textContent.includes('orbalia')",
@@ -308,6 +312,10 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.abrir(pg, rel)
         self.corregir(pg, ("dpo", "DPO"))
         self.assertEqual(pg.locator(".apr-card .apr-regla").count(), 0)
+        # al vocabulario general, la regla valdría para las reuniones sin proyecto, no para Cliente Alfa: sin marcar
+        pg.select_option("#aprLista", "")
+        self.assertIn("en las próximas reuniones sin proyecto", pg.locator(".apr-card .apr-regla").text_content())
+        self.assertFalse(pg.locator(".apr-card .apr-regla input").is_checked())
         legal = pg.evaluate("S.apr.data.listas.find(l => l.name === 'Legal').id")
         pg.select_option("#aprLista", legal)
         card = pg.locator(".apr-card")
@@ -357,11 +365,15 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
             self.assertTrue(card.locator("[data-act='apr-si']").is_disabled())
             self.assertEqual(pg.input_value("#aprLista"), "-")
             self.captura(pg, "08_sin_conexion", ".apr-card")
-            pg.select_option("#aprLista", FIN)
-            self.assertTrue(card.locator("[data-act='apr-si']").is_enabled())
-            self.assertEqual(card.locator(".apr-tit").text_content(), "¿Añadir «GDPR» al vocabulario de Finanzas?")
         finally:
             os.rename(fuera, self.ext)
+        # vuelve la conexión: al recargar, su lista otra vez, sin tener que elegirla
+        pg.evaluate("p => aprCargar(S.audios.get(p))", rel)
+        pg.wait_for_function("() => document.querySelector('#aprLista').value.endsWith('/Legal.txt')", timeout=5000)
+        self.assertTrue(card.locator("[data-act='apr-si']").is_enabled())
+        self.assertEqual(card.locator(".apr-falta").count(), 0)
+        pg.select_option("#aprLista", FIN)
+        self.assertEqual(card.locator(".apr-tit").text_content(), "¿Añadir «GDPR» al vocabulario de Finanzas?")
         self.sin_errores()
 
     def test_ahora_no_teclado_y_ventana_estrecha(self):

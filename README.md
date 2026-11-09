@@ -38,7 +38,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
   dice por qué). Las erratas y los cambios de redacción no cuentan. Lo que confirmas va también a tu **diccionario
   personal**: en las próximas reuniones de ese proyecto cambia lo que escribió Whisper, solo en frases que nadie ha
   tocado, subrayado y con «Deshacer» en cada reunión. El diccionario se ve, se cambia y se quita en Ajustes →
-  Proyectos. Nada se aprende sin tu clic, el audio y el texto original no se tocan, y nada sale del PC.
+  Proyectos. Nada se aprende sin tu clic, el audio no se toca (lo que escribió Whisper se guarda aparte: «Restaurar
+  original») y nada sale del PC.
 - **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin
   asignar, la del proyecto: la que tiene su `Vocabulario`; si sus listas vienen de una carpeta conectada, la que le
   asignes en Ajustes → Proyectos o con «Usarlo en» al grabar). Lo grabado antes se queda donde está. En pleno directo,

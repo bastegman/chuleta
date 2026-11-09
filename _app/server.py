@@ -6398,7 +6398,10 @@ class App:
                 kd = aprender.normal(x["texto"])
                 x["reglas_en"] = [r["proyecto"] for r in apr["reglas"]
                                   if aprender.normal(r["de"]) == kd and aprender.normal(r["a"]) == k]
+        # el proyecto de la reunion (aunque su lista no este): si la propuesta va al vocabulario general, la casilla
+        # de la regla viene sin marcar, porque valdria para las reuniones sin proyecto y no para las de este
         out = {"propuestas": ps, "lista": v["id"] if v else "", "proyecto": v["project"] if v else "",
+               "proyecto_reunion": proyecto_de_reunion(abs_path, props),
                "listas": [{"id": l["id"], "project": l["project"], "name": l["name"],
                            "conectada": bool(l.get("conectada"))} for l in listas]}
         guardada = temas().get(rel) or ""
@@ -6538,12 +6541,18 @@ class App:
         if de == a:
             raise ApiError("Lo que pone Whisper y lo correcto son iguales: no habría nada que cambiar.")
         toks = [t for t, _, _ in aprender.tokens(de)]
-        if not toks or len(toks) > aprender.MAX_REGLA or len(aprender.letras(de)) < 2:
+        if not toks or len(toks) > aprender.MAX_REGLA:
             raise ApiError("Lo que pone Whisper tiene que ser una palabra, o como mucho tres.")
         if all(aprender.fold(t) in aprender.COMUNES or aprender.fold(t) in aprender.ENLACES for t in toks):
             raise ApiError(f"«{de}» es una palabra muy corriente: cambiaría muchas frases que están bien. Pon algo más "
                            "concreto.")
-        if not aprender.regla_valida(de, a):  # solo mayúsculas en una palabra corriente («plan» → «Plan»), o muy corta
+        if len(aprender.letras(de)) < 3:
+            raise ApiError("Lo que pone Whisper tiene que tener al menos 3 letras: algo más corto saldría en muchas "
+                           "frases que están bien.")
+        if not aprender.regla_valida(de, a):  # solo mayúsculas o tildes en una palabra corriente («plan» → «Plan»)
+            if de.lower() != a.lower():  # cambian tildes (y quizá mayúsculas), no solo mayúsculas
+                raise ApiError(f"Solo cambian las tildes de «{de}»: no hace falta en el diccionario, y cambiaría "
+                               "frases que están bien.")
             raise ApiError(f"Cambiar «{de}» por «{a}» tocaría frases que están bien: si solo cambian las mayúsculas, "
                            "vale para siglas (KPI) o nombres como iPhone. Pon algo más concreto.")
         proyecto = str(b.get("proyecto") or "")
@@ -6553,6 +6562,7 @@ class App:
             conocidos.add(str(antes.get("proyecto") or ""))
         if not any(mismo_proyecto(proyecto, p) for p in conocidos):
             raise ApiError("Ese proyecto ya no existe. Elige otro.")
+        proyecto = next((p for p in sorted(conocidos) if mismo_proyecto(proyecto, p)), proyecto)  # como se llama
         k, ka = aprender.normal(de), aprender.normal(str((antes or {}).get("de") or ""))
         pa = str((antes or {}).get("proyecto") or "")
         err = []
