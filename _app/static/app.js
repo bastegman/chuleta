@@ -2303,13 +2303,16 @@ function openSettings(opts) {
     // tras guardar una parte desde aquí («Aplicar ahora», «Probar conexión»), lo guardado es el nuevo punto de partida
     // de esos campos (revisión 12: seguía «Hay cambios sin guardar» con todo guardado, y editar una lista preguntaba).
     // Los motores, con lo que pinta motoresRefrescar como guardado (dataset.ini): si se habían cambiado aquí, siguen
-    // contando
-    const ponerAlDia = ids => {
+    // contando. Lo demás, con lo que se mandó (de, una foto de antes de guardar): lo escrito mientras se guardaba no se
+    // da por guardado (revisión 13)
+    const ponerAlDia = (ids, de = null) => {
       ids.forEach(id => {
         const el = $('#' + id, d);
-        if (el) inicial[id] = 'ini' in el.dataset ? el.dataset.ini : el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+        if (!el) return;
+        inicial[id] = 'ini' in el.dataset ? el.dataset.ini : de && id in de ? de[id]
+          : el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
       });
-      if (ids.includes('__claves')) inicial.__claves = otros().__claves;
+      if (ids.includes('__claves')) inicial.__claves = de ? de.__claves : otros().__claves;
     };
     // quitar o añadir un destino o una clave es un clic, no un «change»: el aviso se mira después de cada clic (de
     // cualquiera: el de quitar una fila la saca del DOM antes de llegar aquí, revisión 12)
@@ -2355,19 +2358,19 @@ function openSettings(opts) {
       try {
         // guarda el modo elegido y la nube (para probar con la clave escrita), no el resto del formulario: «Cancelar»
         // no deshace un guardado, y el resto sigue siendo «cambios sin guardar» (revisión del 07/11/2026)
-        const x = collect();
+        const x = collect(), enviado = foto();  // lo que se manda (si se guarda, el nuevo punto de partida)
         setConfig(await api('/api/settings', { procesado: x.procesado, cloud: x.cloud }));
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
         procPintar();  // «Probar conexión» guarda: el modo elegido ya está aplicado
         ajTarjeta();
         // la nube que se acaba de guardar ya no es «sin guardar»; la clave, guardada, se enseña como tal
         const k = $('#cKey', d);
-        if (k && k.value) {
+        if (k && k.value && k.value === enviado.cKey) {  // (si se ha vuelto a escribir mientras, se queda)
           k.value = '';
           if (S.config.cloud?.has_key) k.placeholder = `Guardada: ${S.config.cloud.api_key || ''} (escribe para cambiarla)`;
         }
         ponerAlDia(['cProv', 'cModel', 'cBase', 'cAzEp', 'cAzDep', 'cAzVer', 'cLiveModel', 'cLiveModelCustom', 'cChunk',
-          'cPar', 'lPreset', 'pfPreset', '__claves']);
+          'cPar', 'lPreset', 'pfPreset', '__claves'], enviado);
         marcar();
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;

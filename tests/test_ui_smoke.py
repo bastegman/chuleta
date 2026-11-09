@@ -913,63 +913,126 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(red, [], red)
 
     def test_ajustes_guardar_una_parte(self):
-        """Revisión 12 de B2: «Aplicar ahora» y «Probar conexión» guardan una parte de Ajustes; lo guardado pasa a ser
-        su punto de partida: no queda «Hay cambios sin guardar» (ni la pregunta al editar una lista) con todo guardado,
-        y la clave guardada se enseña como «Guardada: …». Lo demás escrito sigue contando."""
+        """Revisiones 12 y 13 de B2: «Aplicar ahora» y «Probar conexión» guardan una parte de Ajustes, y lo guardado
+        pasa a ser su punto de partida: no queda «Hay cambios sin guardar» por lo que acaban de guardar (proveedor,
+        modelo, clave, claves adicionales, motores), y la clave guardada se enseña como «Guardada: …». Lo demás sigue
+        contando: lo escrito antes y que no se manda, un motor cambiado a mano, lo que se escribe mientras se guarda y
+        todo si el guardado falla."""
         pg, errores, red = self.pagina()
-        self.addCleanup(lambda: pg.unroute_all(behavior="ignoreErrors"))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         cfg = pg.evaluate("api('/api/config')")
-        antes = {k: cfg[k] for k in ("procesado", "preset", "live_preset")}
+        antes = {k: cfg[k] for k in ("procesado", "preset", "live_preset", "prompt")}
         self.addCleanup(pg.evaluate, "b => api('/api/settings', b)", antes)
-        pregunta = "#modalSobre:not(.hidden) .dialog"
+        # (antes que restaurar lo de antes: si un caso falla con una ruta que retiene, que no se quede esperando)
+        self.addCleanup(lambda: pg.unroute_all(behavior="ignoreErrors"))
+        pend = "document.querySelector('.aj-pend').innerText"
 
-        def sin_preguntar():  # editar una lista no pregunta: no hay nada sin guardar
-            pg.wait_for_selector("#sVocab [data-vedit]", state="attached", timeout=10000)
-            pg.evaluate("document.querySelector('#sVocab [data-vedit]').click()")
-            pg.wait_for_selector("#modal #veName", timeout=5000)
-            self.assertFalse(pg.evaluate(f"!!document.querySelector('{pregunta}')"))
-            pg.click("#modal [data-m='no']")
-            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
-        # «Aplicar ahora» de «API externa» (motores en la nube) a «Solo en este PC»: el servidor pone los del PC
-        pg.evaluate("api('/api/settings', { procesado: 'api', preset: 'nube', live_preset: 'nube' }).then(setConfig)")
+        def aviso(hay, por):
+            pg.wait_for_timeout(100)
+            self.assertEqual("sin guardar" in pg.evaluate(pend), hay, por)
+
+        def poner(sel, valor):  # aunque esté en otra sección
+            pg.evaluate("([s, v]) => { const e = document.querySelector(s); e.value = v; e.dispatchEvent("
+                        "new Event(e.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }", [sel, valor])
+        # qué motores pone el servidor al pasar de la nube a este PC
+        nube = {"procesado": "api", "preset": "nube", "live_preset": "nube"}
+        pg.evaluate("b => api('/api/settings', b)", nube)
+        local = pg.evaluate("api('/api/settings', { procesado: 'local' })")
+        a_mano = next(x["id"] for x in local["presets"] if x["engine"] == "local" and x["id"] != local["preset"])
+        pg.evaluate("b => api('/api/settings', b).then(setConfig)", nube)
+        # 1. «Aplicar ahora» (de la nube a este PC): los motores nuevos no cuentan; lo escrito antes y un motor
+        # cambiado a mano, sí
         pg.click("#btnSettings")
         pg.click(".aj-nav [data-sec='procesado']")
-        self.assertEqual(pg.input_value("#lPreset"), "nube")
+        poner("#sPrompt", "escrito antes de aplicar")
+        poner("#pfPreset", a_mano)
         pg.check("#modal input[name='proc'][value='local']")
         pg.click("#procAplicar")
         pg.wait_for_selector("#procGuardado .ok-aplicado", timeout=5000)
-        self.assertNotEqual(pg.input_value("#lPreset"), "nube")  # los del PC, ya guardados
-        self.assertEqual(pg.inner_text(".aj-pend"), "")
-        sin_preguntar()
+        self.assertEqual((pg.input_value("#lPreset"), pg.input_value("#pfPreset")), (local["live_preset"], a_mano))
+        aviso(True, "lo escrito antes y el motor a mano")
+        poner("#sPrompt", cfg["prompt"])
+        aviso(True, "el motor a mano")
+        poner("#pfPreset", local["preset"])
+        aviso(False, "con todo como lo guardado")
         pg.keyboard.press("Escape")
-        # «Probar conexión» con una clave escrita (simulado: ni se guarda de verdad ni se llama al proveedor)
-        pg.evaluate("api('/api/settings', { procesado: 'api' }).then(setConfig)")
-        guardada = pg.evaluate("api('/api/config')")
-        guardada["cloud"].update(has_key=True, api_key="gsk_…r12")
-        pg.route("**/api/settings", lambda r: r.fulfill(json=guardada))
+        # «Probar conexión», simulado: ni se guarda de verdad ni se llama al proveedor
+        pg.evaluate("b => api('/api/settings', b).then(setConfig)", nube)
+        base = pg.evaluate("api('/api/config')")
+        otro = next(p for p in base["providers"] if p not in (base["cloud"]["provider"], "azure", "custom"))
+        retenidas = []
+
+        def guardada(modelo):
+            c = {**base, "cloud": {**base["cloud"], "provider": otro, "model": modelo, "has_key": True,
+                                   "api_key": "gsk_…r13"}}
+            return c
         pg.route("**/api/cloud/test", lambda r: r.fulfill(json={"seconds": 0.4}))
-        pg.click("#btnSettings")
-        pg.click(".aj-nav [data-sec='procesado']")
-        pg.fill("#cKey", "gsk_escrita_r12")
-        modelo = pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
-                             ".find(v => v !== document.querySelector('#cModel').value)")
-        pg.select_option("#cModel", modelo)  # y otro modelo: también se guarda al probar
-        guardada["cloud"]["model"] = modelo
-        pg.click("#cTest")
+
+        def probar(modelo, *, falla=False, retener=False):
+            if retener:
+                pg.route("**/api/settings", lambda r: retenidas.append(r))
+            elif falla:
+                pg.route("**/api/settings", lambda r: r.fulfill(status=400, json={"error": "Prueba: no se guarda"}))
+            else:
+                pg.route("**/api/settings", lambda r: r.fulfill(json=guardada(modelo)))
+            pg.click("#cTest")
+
+        def abrir_nube():
+            pg.click("#btnSettings")
+            pg.click(".aj-nav [data-sec='procesado']")
+            poner("#cProv", otro)
+            modelo = pg.evaluate("document.querySelector('#cModel').value")
+            pg.fill("#cKey", "gsk_escrita_r13")
+            return modelo
+        # 2. todo lo que se manda: el proveedor, el modelo, la clave y una clave adicional; queda sin aviso
+        modelo = abrir_nube()
+        pg.evaluate("document.querySelector('#dkAdd').click()")
+        poner("#dkRows [data-xkey]:last-of-type", "gsk_adicional_r13")
+        aviso(True, "antes de probar")
+        probar(modelo)
         pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
         self.assertEqual(pg.input_value("#cKey"), "")
-        self.assertIn("Guardada: gsk_…r12", pg.get_attribute("#cKey", "placeholder"))
-        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        self.assertIn("Guardada: gsk_…r13", pg.get_attribute("#cKey", "placeholder"))
+        aviso(False, "con todo lo que se ha mandado")
         pg.unroute("**/api/settings")
-        pg.unroute("**/api/cloud/test")
-        # lo demás escrito sigue contando
-        pg.click(".aj-nav [data-sec='resumen']")
-        pg.fill("#sExtra", "escrito tras probar")
-        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
         pg.keyboard.press("Escape")
-        err, red = self.limpiar(errores, red)
+        # 3. lo escrito antes y que no se manda (el resumen) sigue contando, y editar una lista pregunta
+        modelo = abrir_nube()
+        poner("#sExtra", "escrito antes de probar")
+        probar(modelo)
+        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+        aviso(True, "el resumen escrito antes")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        # 4. lo que se escribe mientras se guarda tampoco se da por guardado
+        modelo = abrir_nube()
+        probar(modelo, retener=True)
+        for _ in range(100):
+            if retenidas:
+                break
+            pg.wait_for_timeout(50)
+        self.assertTrue(retenidas)
+        otro_modelo = pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
+                                  ".find(v => v !== document.querySelector('#cModel').value)")
+        poner("#cModel", otro_modelo)
+        retenidas.pop().fulfill(json=guardada(modelo))
+        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+        aviso(True, "el modelo cambiado mientras se guardaba")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        # 5. si el guardado falla, nada se da por guardado (aquí, solo el modelo cambiado)
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='procesado']")
+        otro_modelo = pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
+                                  ".find(v => v !== document.querySelector('#cModel').value)")
+        poner("#cModel", otro_modelo)
+        probar(None, falla=True)
+        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('no se guarda')", timeout=5000)
+        aviso(True, "el guardado falló")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, [r for r in red if not (r.startswith("400") and r.endswith("/api/settings"))])
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)
 
