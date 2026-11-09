@@ -20,6 +20,9 @@ from unittest import mock
 from support import APP, REPO, server
 
 STATIC = os.path.join(APP, "static")
+# el icono por su extensión, no por su nombre (chuleta.ico en esta rama, tenca.ico tras el renombrado)
+ICO = next(n for n in sorted(os.listdir(STATIC)) if n.endswith(".ico"))
+PNG = os.path.splitext(ICO)[0] + ".png"
 FUENTES = ("manrope.woff2", "fraunces.woff2")
 LICENCIA = "fuentes-OFL.txt"
 
@@ -50,7 +53,7 @@ class FuentesTests(unittest.TestCase):
             self.assertIn(f'<link rel="preload" href="/{n}" as="font" type="font/woff2" crossorigin>', html)
 
     def test_licencia_ofl_con_los_avisos(self):
-        """OFL 1.1: cada copia lleva el aviso de copyright y la licencia (también la versión recortada de Fraunces)."""
+        """OFL 1.1: cada copia lleva el aviso de copyright y la licencia (también la versión modificada de Fraunces)."""
         txt = read(STATIC, LICENCIA)
         for s in ("SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007",
                   "Copyright 2018 The Fraunces Project Authors (https://github.com/undercasetype/Fraunces)",
@@ -101,7 +104,7 @@ class FuentesTests(unittest.TestCase):
         with zipfile.ZipFile(dest) as z:
             names = set(z.namelist())
             lic = z.read(f"{server.PKG_ROOT}/_app/static/{LICENCIA}").decode("utf-8-sig")
-        for n in FUENTES + (LICENCIA, "logo.svg", "chuleta.ico", "chuleta.png"):
+        for n in FUENTES + (LICENCIA, "logo.svg", ICO, PNG):
             self.assertIn(f"{server.PKG_ROOT}/_app/static/{n}", names)
         self.assertIn("SIL OPEN FONT LICENSE", lic)
 
@@ -129,14 +132,14 @@ def ico_entries(path):
 
 class IconoTests(unittest.TestCase):
     def test_nueve_tamanos_en_bmp(self):
-        _, e = ico_entries(os.path.join(STATIC, "chuleta.ico"))
+        _, e = ico_entries(os.path.join(STATIC, ICO))
         self.assertEqual(sorted(x[0] for x in e), [16, 20, 24, 32, 40, 48, 64, 128, 256])
         self.assertTrue(all(x[1] == 32 and x[2] == "bmp" for x in e), e)
 
     def test_es_el_azulejo_boldo(self):
         """El píxel de la izquierda a media altura (fondo del azulejo, fuera de los renglones) es Boldo #1E5A46 en los
         tamaños de la barra de tareas y la bandeja."""
-        b, e = ico_entries(os.path.join(STATIC, "chuleta.ico"))
+        b, e = ico_entries(os.path.join(STATIC, ICO))
         for side, _, _, off in e:
             if side not in (16, 24, 32, 48):
                 continue
@@ -200,6 +203,7 @@ class ContrasteTests(unittest.TestCase):
     TEXTO = [(fg, bg) for fg in ("ink", "ink-2", "muted") for bg in ("bg", "panel", "panel-2", "hover", "accent-soft")]
     TEXTO += [("accent", bg) for bg in ("bg", "panel", "panel-2", "hover", "accent-soft")]
     TEXTO += [("accent-ink", "accent"), ("accent-ink", "accent-strong"), ("ok", "panel"), ("ok", "ok-soft"),
+              ("ok-on-ink", "ink"),
               ("warn", "panel"), ("warn", "warn-soft"), ("err", "panel"), ("err", "err-soft"), ("err-ink", "err"),
               ("cloud", "panel"), ("cloud", "cloud-soft"), ("ink", "mark")]
     ICONOS = [("star", "panel"), ("star", "bg"), ("accent", "panel")]
@@ -242,7 +246,7 @@ class ContrasteTests(unittest.TestCase):
         self.assertEqual(set(oscuro), {"c2", "c3", "c4", "c5"})
         for modo, cols in (("claro", claro), ("oscuro", oscuro)):
             panel = self.modos[modo]["panel"]
-            for c, col in list(cols.items()) + [("c1", self.modos[modo]["accent"])]:
+            for c, col in list(cols.items()) + [("c1", self.modos[modo]["accent"]), ("tú", self.modos[modo]["ok"])]:
                 self.assertGreaterEqual(ratio(col, mix(col, panel, .09)), 4.5, f"{modo}: voz {c}")
 
 

@@ -28,7 +28,7 @@ ANCHO, ALTO = 340, 64  # px a 96 ppp; se escala con el monitor
 # la paleta oscura de la marca (hoja 01b): panel grafito y el botón principal en Boldo claro con texto oscuro (9:1); el
 # punto rojo dice «grabar», como en la app
 C = {"fondo": "#18201c", "texto": "#e8ede9", "suave": "#a2aca5", "boton": "#7cc7a6", "boton_hover": "#a3dcc2",
-     "boton_texto": "#0d1a14", "rojo": "#f87171", "ok": "#6fd08c", "err": "#f87171"}
+     "boton_texto": "#0d1a14", "rojo": "#f87171", "ok": "#9fdc5c", "err": "#f87171"}
 
 
 def limpiar_texto(s, limite=200):

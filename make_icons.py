@@ -2,7 +2,7 @@
 """
 Genera los iconos de la app a partir de los SVG:
 
-    design/icono.svg         maestro (el azulejo de la app, tamaños >= 24 px)
+    design/icono.svg         maestro (el azulejo de la app; 40 px y más)
     design/logo-small.svg    variante simplificada para 16 px (sin ojo, dos renglones en pixeles enteros)
     design/icono-20.svg, icono-24.svg, icono-32.svg   el mismo dibujo en la rejilla de 20, 24 y 32 px
 
@@ -31,7 +31,7 @@ BROWSERS = [p for p in ("/Applications/Google Chrome.app/Contents/MacOS/Google C
                         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
                         r"C:\Program Files\Google\Chrome\Application\chrome.exe") if os.path.exists(p)]
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
-SMALL = {16, 20}  # tamaños que usan la variante simplificada
+SMALL = {16, 20}  # tamaños que usan la variante simplificada (a 20 px manda icono-20.svg, en PIXEL)
 # versiones dibujadas en la rejilla de su tamaño (bordes en pixeles enteros: a 20, 24 y 32 px el maestro escalado
 # deja los renglones en medio pixel y se ven borrosos en la barra de tareas); si existen junto al SVG que toca,
 # mandan sobre él

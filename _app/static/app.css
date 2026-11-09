@@ -9,7 +9,7 @@
   --bg: #f4f1e8; --panel: #ffffff; --panel-2: #faf8f2; --ink: #18211d; --ink-2: #38443e; --muted: #56615a;
   --line: #e2ddd0; --line-2: #ccc5b5; --hover: #f0ece2;
   --accent: #1e5a46; --accent-strong: #164534; --accent-2: #4f9a7b; --accent-ink: #ffffff; --accent-soft: #e3eee8; --accent-line: #b5d2c4;
-  --ok: #3b6f00; --ok-soft: #e6f2e3; --warn: #a3490a; --warn-soft: #fdf3e6; --err: #c9281c; --err-soft: #fdecea; --err-ink: #ffffff;
+  --ok: #3b6f00; --ok-soft: #e6f2e3; --ok-on-ink: #9fdc5c; --warn: #a3490a; --warn-soft: #fdf3e6; --err: #c9281c; --err-soft: #fdecea; --err-ink: #ffffff;
   --cloud: #0369a1; --cloud-soft: #e5f2fa; --mark: #f3d98f; --star: #9c5a08;
   --shadow: 0 1px 2px rgba(24, 33, 29, .06), 0 10px 28px rgba(24, 33, 29, .12);
   --shadow-sm: 0 1px 2px rgba(24, 33, 29, .06);
@@ -26,7 +26,7 @@
     --bg: #101613; --panel: #18201c; --panel-2: #141b17; --ink: #e8ede9; --ink-2: #c9d1cb; --muted: #a2aca5;
     --line: #2a332e; --line-2: #3a453f; --hover: #222b26;
     --accent: #7cc7a6; --accent-strong: #a3dcc2; --accent-2: #2f8a66; --accent-ink: #0d1a14; --accent-soft: #1c3329; --accent-line: #2f5a47;
-    --ok: #9fdc5c; --ok-soft: #15291d; --warn: #fbbf24; --warn-soft: #2e2310; --err: #f87171; --err-soft: #321718; --err-ink: #2a0b0b;
+    --ok: #9fdc5c; --ok-soft: #15291d; --ok-on-ink: #3b6f00; --warn: #fbbf24; --warn-soft: #2e2310; --err: #f87171; --err-soft: #321718; --err-ink: #2a0b0b;
     --cloud: #38bdf8; --cloud-soft: #0f2633; --mark: #6b5310; --star: #e8a94a;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .5);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
@@ -430,7 +430,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .toast { min-width: 260px; max-width: 420px; padding: 11px 14px; border-radius: var(--radius); background: var(--ink); color: var(--panel); box-shadow: var(--shadow); font-size: 13.5px; animation: tin .18s ease-out; cursor: pointer; }
 .toast svg { width: 15px; height: 15px; vertical-align: -3px; margin-right: 4px; }
 .toast.err { background: var(--err); color: var(--err-ink); }
-.toast.ok b { color: var(--ok); }
+.toast.ok b { color: var(--ok-on-ink); }  /* el aviso va sobre --ink: el verde del modo contrario */
 @keyframes tin { from { transform: translateY(8px); opacity: 0 } }
 
 @media (max-width: 1100px) {
