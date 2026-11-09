@@ -260,7 +260,7 @@ $rca = Run-Setup "a" @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") 30
 $loga = Last-Run-Log
 $loga | Set-Content -LiteralPath (Join-Path $Out "instalar-a.log") -Encoding UTF8
 Check "a.exitcode_0" ($rca -eq 0) $rca
-Check "a.desde_setup" ($loga -match "instalar\.ps1 desde .*\\Tenca\\_app" -and $loga -match "modo: consola") (($loga -split "`n" | Select-Object -First 3) -join " | ")
+Check "a.desde_setup" ($loga -match "instalar\.ps1 desde .*\\is-[^\\]+\.tmp\\Tenca\\_app" -and $loga -match "modo: consola") (($loga -split "`n" | Select-Object -First 3) -join " | ")
 Check "a.carpeta_propia" (Test-Path -LiteralPath (Join-Path $inst "_app\server.py")) $inst
 $faltan = @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR TENCA.bat", "_app\desinstalar.ps1", "_app\instalar.ps1", "_app\version.txt", "_app\Tenca.bat", "_app\static\tenca.ico", "_app\static\manrope.woff2", "_app\static\fraunces.woff2", "_app\static\fuentes-OFL.txt", "_app\static\logo.svg") | Where-Object { -not (Test-Path -LiteralPath (Join-Path $inst $_)) }
 Check "a.copiados" (@($faltan).Count -eq 0) ("faltan: " + ($faltan -join ", "))
@@ -332,7 +332,8 @@ $cfgw = Wait-Http "$Base/api/config" 150
 Check "w.abre_la_app" ($cfgw -and $cfgw.root -ieq $inst) "root=$($cfgw.root)"
 $null = Capture-Screen (Join-Path $Out "capturas\w3-app.png")
 Check "w.reunion_intacta" ((Get-Reunion $reu) -eq $reunion0) ""
-Check "w.una_entrada" (@(Get-Paquetes).Count -eq 1) ((Get-Paquetes) -join "; ")
+$pkw = @(Get-Paquetes)
+Check "w.una_entrada" ($pkw.Count -eq 1 -and "$($pkw[0])" -like "$App *") ($pkw -join "; ")
 Check "w.nada_de_inno" (@(Inno-Restos).Count -eq 0) ((Inno-Restos) -join ", ")
 Check "w.sin_mensaje_de_error" (-not ((Setup-Log "w") -match "No se ha podido instalar")) ""
 Apagar-App "w"
@@ -424,6 +425,8 @@ $logg | Set-Content -LiteralPath (Join-Path $Out "instalar-g.log") -Encoding UTF
 Check "g.exitcode_1" ($rcg -eq 1) $rcg
 Check "g.log_del_fallo" ($logg -match "X ") (($logg -split "`n" | Select-String "^X " | Select-Object -First 1) -join "")
 Check "g.setup_lo_registra" ((Setup-Log "g") -match "instalar\.ps1 ha terminado con el c.digo 1") ""
+# desde el Setup no se manda a «volver a abrir INSTALAR.bat» (no lo tiene a mano): al Setup
+Check "g.reabrir_el_setup" ($logg -match "vuelve a abrir el Setup de $App" -and -not ($logg -match "(?m)^X .*vuelve a abrir INSTALAR\.bat")) (($logg -split "`n" | Select-String "^X " | Select-Object -First 1) -join "")
 
 # ---- h) cierre
 $lish = @(Get-Listener)

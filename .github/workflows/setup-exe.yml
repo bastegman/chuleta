@@ -54,8 +54,9 @@ jobs:
         run: |
           & "$env:GITHUB_WORKSPACE\scripts\e2e\setup_e2e.ps1" -Setup "$env:GITHUB_WORKSPACE\dist\Tenca - Setup.exe" -Repo "$env:GITHUB_WORKSPACE" -Out "$env:GITHUB_WORKSPACE\setup-e2e-out" -Chuleta "2242e6332ea03285ede8e7f5d1b82e36aa5c0175"
           exit $LASTEXITCODE
+      # el Setup.exe solo si ha pasado el E2E (un artefacto se descarga y se reparte); los registros, siempre
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: always()
+        if: success()
         with:
           name: Tenca-Setup
           path: dist/Tenca - Setup.exe

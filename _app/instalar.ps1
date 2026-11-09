@@ -141,6 +141,8 @@ function Finish-Ui($ok, $text) {
     }
 }
 function Fail($text) {
+    # desde Setup.exe no hay un INSTALAR.bat a mano: lo que se vuelve a abrir es el Setup (revision del Setup.exe)
+    if ($DesdeSetup) { $text = "$text" -replace "vuelve a abrir INSTALAR\.bat", "vuelve a abrir el Setup de $AppName" }
     Write-Host ""
     Write-Host "  X  $text" -ForegroundColor Red
     Log-File "X $text"
@@ -904,7 +906,7 @@ if ($yaInstalada) {
     } elseif ($Sistema) {
         $dest = Get-CarpetaNueva
         if (-not $dest -and $DesdeSetup) {  # aqui no: es la carpeta temporal de Setup.exe, que se borra al terminar
-            Fail "No encuentro una carpeta libre en $script:UserHome ($FolderName, $FolderName (2)... ya tienen otras cosas): descomprime el zip y ejecuta INSTALAR.bat -Destino <carpeta nueva>."
+            Fail "No encuentro una carpeta libre en $script:UserHome ($FolderName, $FolderName (2)... ya tienen otras cosas). El Setup no deja elegir otra: usa el zip de $AppName, descomprímelo y ejecuta INSTALAR.bat -Destino <carpeta nueva>."
         }
         if (-not $dest) { Say "    No encuentro una carpeta libre en $script:UserHome : se instala aquí ($root)." Yellow }
     }
@@ -929,6 +931,11 @@ if (-not $py) {
         $py = Find-Python
     }
     if (-not $py) {
+        # con -NoLaunch (en silencio: Setup.exe /VERYSILENT, CI) no se abre el navegador: se dice la direccion
+        if ($NoLaunch) {
+            Fail ("No he podido instalar Python automáticamente. Instala la última versión desde " +
+                  "https://www.python.org/downloads/windows/ (marca 'Add python.exe to PATH') y vuelve a abrir INSTALAR.bat.")
+        }
         Start-Process "https://www.python.org/downloads/windows/"
         Fail ("No he podido instalar Python automáticamente. Instala la última versión desde la página que se acaba de abrir " +
               "(marca 'Add python.exe to PATH') y vuelve a abrir INSTALAR.bat.")

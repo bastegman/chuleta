@@ -167,6 +167,10 @@ class IssTests(unittest.TestCase):
         # la frase de debajo, de Spanish.isl, decía «Siguiente» (el botón dice «Instalar») y de usted (captura del
         # E2E en Windows, 09/11/2026)
         self.assertIn("ClickNext=Pulsa «Instalar» para seguir o «Cancelar» para salir.", msgs)
+        for clave in ("InstallingLabel=", "ExitSetupMessage=", "SetupAlreadyRunning="):  # de tú, como la app
+            self.assertIn(clave, msgs)
+        self.assertNotRegex(msgs, r"(?m)^[A-Za-z]+=.*\b(Haga|haga|espere|desea|cancela ahora)\b")
+        self.assertEqual(self.d.get("SetupMutex"), "Tenca.Setup")  # un segundo doble clic no lanza otro instalar.ps1
         self.assertIn("sin permisos de administrador", msgs)
         self.assertIn("tus reuniones, voces y ajustes no se tocan", msgs)
         self.assertIn("{#Version}", msgs)
@@ -218,6 +222,39 @@ class DesdeSetupTests(unittest.TestCase):
         self.assertEqual(rc(True, False), (1, False))
 
 
+class ReabrirTests(unittest.TestCase):
+    """Revisión del Setup.exe (P1): desde el Setup no hay INSTALAR.bat a mano; los errores mandan a volver a abrir el
+    Setup. Sin -DesdeSetup, el texto de siempre."""
+
+    @unittest.skipUnless(powershell(), "sin PowerShell (CHULETA_PWSH, powershell.exe o pwsh)")
+    def test_fail_manda_al_setup(self):
+        def salida(desde):
+            script = ("$ast = [System.Management.Automation.Language.Parser]::ParseFile('" + INSTALAR.replace("'", "''")
+                      + "', [ref]$null, [ref]$null); foreach ($d in $ast.FindAll({ param($a) $a -is "
+                      "[System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { "
+                      "if ($d.Name -eq 'Fail') { . ([scriptblock]::Create($d.Extent.Text)) } }; "
+                      "function Log-File($t) { Write-Output ('LOG=' + $t) }; $AppName = 'Tenca'; $script:ui = $null; "
+                      f"$DesdeSetup = ${'true' if desde else 'false'}; "
+                      "Fail 'Tenca está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat.'")
+            r = subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+            return r.stdout
+        self.assertIn("LOG=X Tenca está grabando ahora mismo. Para la grabación y vuelve a abrir el Setup de Tenca.",
+                      salida(True))
+        self.assertIn("LOG=X Tenca está grabando ahora mismo. Para la grabación y vuelve a abrir INSTALAR.bat.",
+                      salida(False))
+
+    def test_sin_navegador_en_silencio(self):
+        ps1 = ps_text(INSTALAR)
+        i = ps1.index("if (-not $py) {")
+        bloque = ps1[i:i + 900]
+        self.assertLess(bloque.index("if ($NoLaunch) {"), bloque.index('Start-Process "https://www.python.org'))
+        self.assertIn("https://www.python.org/downloads/windows/ (marca", bloque)
+
+    def test_sin_carpeta_libre_manda_al_zip(self):
+        self.assertIn("El Setup no deja elegir otra: usa el zip de $AppName", ps_text(INSTALAR))
+
+
 class FlujoTests(unittest.TestCase):
     def test_workflow(self):
         with open(os.path.join(REPO, ".github", "workflows", "setup-exe.yml"), encoding="utf-8") as f:
@@ -225,6 +262,8 @@ class FlujoTests(unittest.TestCase):
         self.assertIn("python scripts\\build_setup.py", wf)
         self.assertIn("scripts\\e2e\\setup_e2e.ps1", wf)
         self.assertIn("name: Tenca-Setup", wf)
+        sube = wf[wf.index("name: Tenca-Setup") - 200:wf.index("name: Tenca-Setup")]
+        self.assertIn("if: success()", sube)  # solo un Setup.exe que ha pasado el E2E
         self.assertIn("shell: powershell", wf)  # 5.1, como en el PC del usuario
         self.assertRegex(wf, r"-Chuleta \"[0-9a-f]{40}\"")
 

@@ -114,9 +114,10 @@ reuniones. No lleva listas de vocabulario (se compila en la CI y es público). E
   acumula reputación. En un PC con Smart App Control activado (Windows 11 doméstico, no los de empresa) un ejecutable
   sin firma se bloquea sin botón para seguir: ahí, el zip.
 - **En silencio** (para TI): `"Tenca - Setup.exe" /VERYSILENT /SUPPRESSMSGBOXES` instala sin preguntas ni ventanas y
-  sin abrir la app; sale con código 1 si la instalación no terminó (el motivo, en
+  sin abrir la app (si falta Python y no hay winget, tampoco abre el navegador: lo dice en el registro); sale con
+  código 1 si la instalación no terminó (el motivo, en
   `%LOCALAPPDATA%\AudiosApp\instalar.log`).
-- Lo genera `python scripts/build_setup.py` en Windows con Inno Setup 6 (ver «Generar el Setup.exe»); la CI lo
+- Lo genera `python scripts/build_setup.py` en Windows con Inno Setup 6.7 (ver «Generar el Setup.exe»); la CI lo
   compila y lo prueba en cada push a main que lo toque (`setup-exe`, artefacto `Tenca-Setup`).
 
 ### Red y proxy de empresa
@@ -350,7 +351,7 @@ llevan nombres de personas y empresas, así que ese zip es solo para gente del m
 ### Generar el Setup.exe
 
 ```
-python scripts/build_setup.py                        # Windows con Inno Setup 6: dist/Tenca - Setup.exe (sin vocabulario)
+python scripts/build_setup.py                        # Windows, Inno Setup 6.7: dist/Tenca - Setup.exe (sin vocabulario)
 python3 scripts/build_setup.py --preparar CARPETA    # cualquier sistema: solo el contenido y la orden de ISCC
 ```
 
