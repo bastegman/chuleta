@@ -128,7 +128,9 @@ function openSpeakerPop(h, anchor) {
     const target = $('#spMerge', pop).value;
     if (!target) return;
     const [url, body] = spkPickBody(a, h, i, target, s.creado);
-    await api(url, body);
+    // si falla (una reunión abierta en otro programa), se repinta igual: parte puede haber cambiado, y así se puede
+    // volver a elegir la misma persona
+    try { await api(url, body); } catch (err) { await refresh(); throw err; }
     await refresh(url.endsWith('fusionar') ? 'Personas fusionadas: las reuniones anteriores ya muestran el nombre único' : 'Hablante asignado');
   });
   const join = $('#spJoin', pop);

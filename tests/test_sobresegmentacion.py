@@ -187,7 +187,9 @@ class CountParticipantsTests(unittest.TestCase):
                         ("Smith, John, Jr.; Doe, Mary", 2),
                         # homonimos que solo distingue el parentesis, y dos nombres tras la coma (RF7)
                         ("García, Ana (Madrid); García, Ana (Barcelona)", 2), ("López, Ana; López, Ana (Madrid)", 2),
-                        ("Ana López (Ventas), Ana López (RRHH)", 2), ("García, Ana, Luis; Pérez, Juan", 3)):
+                        ("Ana López (Ventas), Ana López (RRHH)", 2), ("García, Ana, Luis; Pérez, Juan", 3),
+                        # lo de dentro del parentesis no son nombres (departamento, ciudad)
+                        ("Pérez, Luis (Ventas y Marketing); García, Ana", 2)):
             self.assertEqual(voices.count_participants(text, sugeridos=True), n, text)
 
     def test_editado_a_mano_nunca_de_menos(self):
@@ -195,7 +197,7 @@ class CountParticipantsTests(unittest.TestCase):
         for text, real in (("García, Ana; Luis Pérez, Pedro", 3), ("García, Ana; luis@cliente.com, Pedro", 3),
                            ("García, Ana; Pérez, Luis; Pedro, Marta", 4), ("Ana; Luis, Pedro", 3),
                            ("Ana, Luis; Pedro", 3), ("García, Ana; Pérez, Luis, Pedro", 3),
-                           ("Ana; Luis, Pedro y Marta", 4)):
+                           ("Ana; Luis, Pedro y Marta", 4), ("ANA Y LUIS", 2), ("Ana AND Luis", 2)):
             self.assertGreaterEqual(voices.count_participants(text), real, text)
 
 
@@ -383,6 +385,16 @@ class PistaDeParticipantesTests(Reunion):
         for _ in range(30):
             vg.recordar({"sugerencia": {"participants": ["García, Luis"]}})
         self.assertEqual(vg.participantes_recientes(), [["Pérez, Ana"], ["García, Luis"]])
+
+    def test_releer_renueva_la_hora(self):
+        """Una lista vista hace casi una hora y releida ahora sigue valiendo otra hora (RF7)."""
+        vg, ahora = server.calendario.Vigia(), [1000.0]
+        with mock.patch.object(server.calendario.time, "time", lambda: ahora[0]):
+            vg.recordar({"sugerencia": {"participants": ["Pérez, Ana"]}})
+            ahora[0] += 3500
+            vg.recordar({"sugerencia": {"participants": ["Pérez, Ana"]}})
+            ahora[0] += 200
+            self.assertEqual(vg.participantes_recientes(), [["Pérez, Ana"]])
 
     def test_de_grabar_a_confirmar(self):
         """La cadena entera: grabar con la sugerencia de Outlook → el .md → «Confirmar» (el mismo texto, como
@@ -721,7 +733,7 @@ class CorregirMientrasSeMueveTests(Reunion):
         self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
 
     def test_fusionar_personas_con_el_movimiento_primero(self):
-        """Ajustes › Voces, «Fusionar»: la reunion donde sale la persona que desaparece se esta moviendo."""
+        """«Fusionar con…»: la reunion donde sale la persona que desaparece se esta moviendo."""
         def con_luis(ana):
             self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": self.v.create("Luis")["id"]})
 
@@ -792,9 +804,9 @@ class CorregirMientrasSeMueveTests(Reunion):
 
 
 class FusionarPersonasTests(Reunion):
-    """«Fusionar» (Ajustes › Voces) con una reunion cuyo sidecar no se puede escribir (OneDrive, el antivirus): no borra
-    a la persona hasta haber reescrito todas, dice cuantas faltan y se puede repetir (revision de la integracion del
-    08/11/2026: antes la borraba primero y esas reuniones se quedaban con un id que ya no existia)."""
+    """«Fusionar con…» (el cuadro de un hablante) con una reunion cuyo sidecar no se puede escribir (OneDrive, el
+    antivirus): no borra a la persona hasta haber reescrito todas, dice cuantas faltan y se puede repetir (revision de
+    la integracion del 08/11/2026: antes la borraba primero y esas reuniones se quedaban con un id que no existia)."""
 
     def test_una_reunion_bloqueada_y_luego_libre(self):
         self.identificar(micro_en=None)
@@ -847,6 +859,16 @@ class FusionarPersonasMasTests(Reunion):
                 self.app.voices_merge({"id_a": ana, "id_b": luis})
         self.assertIsNotNone(self.v.find(luis))
         self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], luis)
+
+    def test_repara_las_que_ya_quedaron_huerfanas(self):
+        """Una reunion que cita a una persona ya borrada (la version anterior, al fallar a medias): «Fusionar con…» la
+        pasa a la que se elige (RF7)."""
+        luis, ana = self.preparar()
+        self.v.forget(luis)  # como la dejaba la version anterior
+        with mock.patch.object(server, "log"):
+            r = self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertEqual(r["reuniones"], 1)
+        self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], ana)
 
     def test_falla_al_final_y_se_deshace(self):
         luis, ana = self.preparar()

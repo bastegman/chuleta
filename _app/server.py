@@ -6736,9 +6736,10 @@ class App:
         v = self.jobs.voices
         keep, other = b.get("id_a"), b.get("id_b")
         a_, b_ = v.find(keep), v.find(other)
-        if keep != other and (not a_ or not b_):
+        if keep != other and (not a_ or not (b_ or other)):
             raise ApiError("Alguna de las dos personas ya no existe.")
-        if keep != other and (a_.get("es_usuario") or b_.get("es_usuario")):
+        # other ya borrada (lo dejaba asi la version anterior al fallar a medias): se reparan sus reuniones igual
+        if keep != other and (a_.get("es_usuario") or (b_ or {}).get("es_usuario")):
             raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
                            "«No soy yo»; si eres tú, «Soy yo».")
         n, fallidas, hechas = 0, [], []
@@ -6780,6 +6781,9 @@ class App:
             raise ApiError(f"{len(fallidas)} {'reunión no se ha' if len(fallidas) == 1 else 'reuniones no se han'} "
                            "podido actualizar (¿abiertas en OneDrive o en otro programa?). Las dos personas siguen "
                            "ahí: ciérralas y vuelve a fusionar.")
+        if b_ is None and keep != other:
+            log(f"🗣 reuniones de una persona ya borrada, pasadas a {a_['nombre']} ({n})")
+            return {"id": keep, "reuniones": n, "personas": v.public()}
         try:
             v.merge(keep, other)
         except (KeyError, ValueError) as e:  # cambio entretanto (otra pestaña): se deshace lo reescrito y se dice
