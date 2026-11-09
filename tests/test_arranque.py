@@ -415,7 +415,8 @@ class InterfazNoMudaTests(unittest.TestCase):
 
     def test_los_botones_esperan_a_la_configuracion(self):
         js = read_static("app.js")
-        self.assertEqual(js.count("if (!S.config) return toast('La app aún está arrancando"), 2)  # ⚙ y ● Grabar
+        # ⚙, ● Grabar y «Subir audio» (09/11/2026)
+        self.assertEqual(js.count("if (!S.config) return toast('La app aún está arrancando"), 3)
         i = js.index("function route() {")
         self.assertIn("if (!S.config) return;", js[i:i + 200])
 

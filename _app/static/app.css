@@ -126,6 +126,15 @@ h3 .recdot, legend .recdot { width: 9px; height: 9px; margin-right: 8px; vertica
 .rec-btn.on { background: var(--err); border-color: var(--err); color: var(--err-ink); }
 .rec-btn.on .recdot { background: var(--err-ink); border-radius: 2px; }
 .rec-btn + .live-chip + .tb-btn, .rec-btn + .tb-btn { margin-left: 0; }
+/* «Subir audio», junto a Grabar (09/11/2026): la misma forma, sin el color de grabar, para que Grabar siga mandando */
+.subir-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink-2); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.subir-btn svg { width: 17px; height: 17px; }
+.subir-btn:hover { background: var(--hover); color: var(--ink); border-color: var(--accent-line); }
+.subir-btn + .rec-btn, .meet-chip:not(.hidden) + .subir-btn { margin-left: 0; }
+@media (max-width: 1000px) {  /* ventana estrecha: solo el icono (aria-label y title dicen qué es) */
+  .subir-btn { width: 36px; padding: 0; justify-content: center; }
+  .subir-btn span { display: none; }
+}
 .rec-go { background: var(--accent) !important; border-color: var(--accent) !important; color: var(--accent-ink) !important; }
 .rec-go .recdot { background: var(--accent-ink); animation: none; }
 .rec-stop { color: var(--err-ink); background: var(--err); border-color: var(--err); }
@@ -616,6 +625,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 /* soltar archivos para importar */
 .drop-ov { position: fixed; inset: 0; z-index: 80; background: color-mix(in srgb, var(--accent) 12%, transparent); border: 3px dashed var(--accent); display: flex; align-items: center; justify-content: center; pointer-events: none; }
 .drop-ov div { background: var(--panel); padding: 22px 30px; border-radius: var(--radius-lg); box-shadow: var(--shadow); font-size: 16px; text-align: center; }
+.drop-ov svg { width: 20px; height: 20px; margin-right: 8px; vertical-align: -4px; color: var(--accent); }
 /* reunion detectada */
 .meet-chip { margin-left: auto; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid color-mix(in srgb, var(--cloud) 50%, var(--line)); background: var(--cloud-soft); color: var(--cloud); cursor: pointer; font-size: 13px; animation: pulse 2s infinite; display: inline-flex; align-items: center; gap: 6px; }
 .meet-chip svg { width: 15px; height: 15px; }
@@ -902,6 +912,21 @@ body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen «Guardar�
 .gr-anadir:hover { text-decoration: underline; }
 .gr-atajo { font-size: 12.5px; color: var(--muted); margin: 10px 0 6px; }
 .gr-atajo svg { width: 15px; height: 15px; margin-right: 6px; vertical-align: -3px; }
+/* la tarjeta de subir un audio (grabar.js, «Subir audio»): el archivo, la fecha y el motivo si no se puede */
+.gr-kicker svg { width: 15px; height: 15px; }
+.sb-archivo { display: flex; align-items: center; gap: 10px; margin: 6px 0 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); font-size: 13.5px; min-width: 0; }
+.sb-archivo > svg, .sb-item > svg { width: 17px; height: 17px; color: var(--accent); flex: none; }
+.sb-nom { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-archivo .muted { white-space: nowrap; font-size: 12.5px; }
+.sb-archivo .gr-cambiar { margin-left: auto; white-space: nowrap; }
+.sb-lista { margin: -6px 0 12px; max-height: 148px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.sb-item { display: flex; align-items: center; gap: 10px; padding: 6px 12px; font-size: 13px; border-bottom: 1px solid var(--line); }
+.sb-item:last-child { border-bottom: 0; }
+.sb-item .muted { margin-left: auto; white-space: nowrap; font-size: 12px; }
+.sb-fecha { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sb-fecha .input { width: auto; height: 34px; }
+.sb-error { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--err-soft); color: var(--err); font-size: 13px; line-height: 1.5; }
+@media (max-width: 720px) { .sb-fecha { grid-column: 1; } }
 .dialog.gr .btns.gr-pie { margin: 0; padding: 12px 24px 16px; border-top: 1px solid var(--line); align-items: center; flex: none; background: var(--panel); }
 .gr-pie .gr-hueco { flex: 1; }
 .gr-pie .muted { font-weight: 400; font-size: 12px; }

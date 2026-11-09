@@ -39,6 +39,7 @@ const I = {
   check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>',
   edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  upload: '<svg viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>',
   spark: '<svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/><path d="M19 17v4M17 19h4"/></svg>',
   text: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   /* iconos de linea (monocromos, currentColor) que sustituyen a los emojis de la interfaz */
@@ -444,6 +445,13 @@ function openRec() {
   toast('No se ha podido cargar la tarjeta de grabar: recarga la página (Ctrl+R) o usa Ctrl+Alt+R.', 'err');
 }
 $('#btnRec').onclick = openRec;
+/* «Subir audio» (09/11/2026, msg 1296): junto a Grabar, donde se busca cómo meter una reunión en la app. Abre el selector
+   de archivos y, con lo elegido, la tarjeta de subir (grabar.js); desde una carpeta, sube ahí */
+$('#btnSubir').onclick = () => {
+  if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
+  if (typeof elegirAudios === 'function') return elegirAudios({ carpeta: S.route.kind === 'f' ? S.route.path : null });
+  toast('No se ha podido cargar «Subir audio»: recarga la página (Ctrl+R).', 'err');
+};
 
 /* ---------------------------------------------------------------- router */
 function parseHash() {
@@ -853,6 +861,7 @@ function viewFolder(f) {
       <h1 class="ptitle static">${esc(nfc(f.name))}</h1><button class="pfav${isFav('f', f.path) ? ' on' : ''}" data-act="fav" data-kind="f" data-path="${esc(f.path)}">${isFav('f', f.path) ? I.starOn : I.star}</button></div>
     <div class="meta"><span><b>${f.total}</b> audio${f.total === 1 ? '' : 's'}</span><span><b>${fmtDur(f.secs)}</b> de audio</span><span><b>${f.done}</b> transcritos</span></div>
     <div class="actions">
+      <button class="btn" data-act="subir" data-path="${esc(f.path)}" title="Un audio que ya tengas (del móvil, de WhatsApp…): se guarda en esta carpeta y se transcribe">${I.upload}Subir audio aquí</button>
       <button class="btn" data-act="new-folder" data-path="${esc(f.path)}">${I.plus}Subcarpeta</button>
       <button class="btn" data-act="rename-folder" data-path="${esc(f.path)}">${I.edit}Renombrar</button>
       <button class="btn" data-act="reveal" data-path="${esc(f.path)}">${I.ext}Abrir en el Explorador</button>

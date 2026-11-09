@@ -81,13 +81,13 @@ function welcomeCard(all) {
       <div style="margin:4px 0 12px">${elegir ? 'Antes de tu primera reunión, elige dónde se transcriben y se resumen. Son tres pasos y al final lo pruebas todo.'
     : `Elegiste «Con una API externa», pero aún no hay clave: sin ella no se transcribe nada. Son tres pasos y al final lo pruebas todo.`}</div>
       <button class="btn sm primary" data-act="cfg-abrir">${I.gear}Configurar ${esc(APP_NAME)}</button>
-      ${all.length ? '' : '<div class="help" style="margin-top:10px">También puedes arrastrar aquí audios que ya tengas.</div>'}</div></div>`;
+      ${all.length ? '' : '<div class="help" style="margin-top:10px">¿Ya tienes el audio (del móvil, de WhatsApp…)? Pulsa <b>Subir audio</b>, arriba, o arrástralo aquí.</div>'}</div></div>`;
   }
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
     <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Procesado: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
     ${elegir ? '<li><b>Elige dónde se procesan tus reuniones</b> en ⚙ Ajustes: solo en este PC (como ahora), con tu cuenta de Claude o con una API externa. Las dos últimas resumen con IA y avisan de lo que sale del PC.</li>' : ''}
-    ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). También puedes arrastrar aquí audios que ya tengas, o guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
+    ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). Si ya tienes el audio (del móvil, de WhatsApp…), pulsa <b>Subir audio</b> o arrástralo aquí. También puedes guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
     ${key && !elegir ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
 }
 
@@ -101,6 +101,7 @@ main.addEventListener('click', async e => {
   else if (a === 'fav') toggleFav(act.dataset.kind, p);
   else if (a === 'tag-del') { const au = curAudio(); if (au) saveProps(au, { etiquetas: ((au.props || {}).etiquetas || []).filter(t => t !== act.dataset.tag) }).then(() => renderAudioHead(au, true)); }
   else if (a === 'delete') deleteItem(p);
+  else if (a === 'subir' && typeof elegirAudios === 'function') elegirAudios({ carpeta: p || null });
   else if (a === 'consent') copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
   else if (a === 'palette') { e.preventDefault(); openPalette(); }
   else if (a === 'seg-to-notes') addSegToNotes();
@@ -979,17 +980,23 @@ let dropTimer = null;
 function showDrop(on) {
   let ov = $('#dropOv');
   if (on && !ov) { ov = document.createElement('div'); ov.id = 'dropOv'; ov.className = 'drop-ov'; document.body.append(ov); }
-  if (ov) { ov.classList.toggle('hidden', !on); ov.innerHTML = `<div>⤓ Suelta aquí para añadir a <b>${esc(folderName(dropFolder()))}</b><br><small>Audios (wav, mp3, m4a…) o textos (.txt, .md)</small></div>`; }
+  if (ov) { ov.classList.toggle('hidden', !on); ov.innerHTML = `<div>${I.upload}Suelta aquí para subirlo<br><small>Los audios (m4a, mp3, opus, wav…) se transcriben; los textos (.txt, .md), a <b>${esc(folderName(dropFolder()))}</b></small></div>`; }
 }
 addEventListener('dragover', e => {
   if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
   e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
   showDrop(true); clearTimeout(dropTimer); dropTimer = setTimeout(() => showDrop(false), 400);
 });
+/* soltar archivos: los audios abren la tarjeta de subir (grabar.js), como «Subir audio», para elegir proyecto y
+   transcribirlos; los textos se añaden a la carpeta como siempre (09/11/2026) */
 addEventListener('drop', e => {
   if (!e.dataTransfer || !e.dataTransfer.files.length) return;
   e.preventDefault(); showDrop(false);
-  importFiles([...e.dataTransfer.files], dropFolder());
+  const fs = [...e.dataTransfer.files];
+  const audios = typeof esAudio === 'function' && typeof abrirSubir === 'function' ? fs.filter(esAudio) : [];
+  const resto = fs.filter(f => !audios.includes(f));
+  if (resto.length) importFiles(resto, dropFolder());
+  if (audios.length) abrirSubir(audios, { carpeta: S.route.kind === 'f' ? S.route.path : null, anadir: true });
 });
 async function importFiles(files, folder) {
   let last = null;

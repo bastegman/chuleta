@@ -139,13 +139,22 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     st: ajustes. listas: [{id, project, name, n}] (n = términos). sug: la reunión en curso (calendario.suggest:
     name, vocab, source, participants). historial: historial_de(). pedido: lo que trae la tarjeta, {nombre?, vocab?,
     participantes?, cambios: {carpeta?, idioma?, contexto?, mic?, sys?, live?, preset?}}; una clave presente es
-    «elegido para esta reunión». carpeta_de(v): la carpeta donde se guarda (rec_folder_for, sin la de la reunión).
+    «elegido para esta reunión». Con subir (un audio que ya existe, «Subir audio» del 09/11/2026), el plan de subirlo:
+    sin la línea de audio, la transcripción es la de la cola (preset de Ajustes › Procesado) y `archivo` es el nombre
+    del archivo sin extensión (si el nombre es ese, su origen es «del archivo»); con varios, la carpeta se enseña sin la
+    de la reunión, porque cada audio lleva la suya. carpeta_de(v): la carpeta donde se guarda (rec_folder_for, sin la
+    de la reunión).
     carpeta_origen(v, rel): (origen, texto) de esa carpeta. sugerir_titulo(nombre): calendario.suggest sobre un
     nombre escrito. motores: {presets: {id: {...}}, procesado, agente, proveedor, resumen_auto, resumen_local}.
     links: id -> nombre de las carpetas vinculadas. carpeta_reunion(base, nombre): la carpeta de la reunión dentro
     de la base, o None (rama de carpetas; sin ella, la grabación va en la base).
     """
     st, sug, pedido = st or {}, dict(sug or {}), dict(pedido or {})
+    subir = bool(pedido.get("subir"))
+    if subir:
+        sug = {}  # un audio que ya existe no es la reunión de Teams en curso
+    # «cambiado para esta reunión»; al subir varios audios a la vez, para todos ellos
+    esta = "estas reuniones" if subir and pedido.get("varios") else "esta reunión"
     cambios = {k: v for k, v in (pedido.get("cambios") or {}).items() if k in CLAVES_CAMBIOS}
     por_id = {v["id"]: v for v in listas or []}
     historial = historial or []
@@ -161,7 +170,10 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         nombre, n_origen = " ".join(str(sug["name"]).split())[:120], sug.get("source") or "teams"
     else:
         nombre, n_origen = "", ""
-    n_txt = {"teams": "de Teams", "outlook": "de Outlook", "elegido": "escrito por ti"}.get(n_origen, "")
+    if subir and nombre and norm_titulo(nombre) == norm_titulo(pedido.get("archivo")):
+        n_origen = "archivo"
+    n_txt = {"teams": "de Teams", "outlook": "de Outlook", "elegido": "escrito por ti",
+             "archivo": "del nombre del archivo"}.get(n_origen, "")
     if n_origen == "elegido" and any(norm_titulo(h["titulo"]) == norm_titulo(nombre) for h in historial):
         n_origen, n_txt = "historial", "de tus reuniones"
 
@@ -209,19 +221,21 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     # --- carpeta: esta reunión › rec_folder_for (workstream › proyecto › Ajustes › la última usada)
     if "carpeta" in cambios:
         base = str(cambios["carpeta"] or "").replace("\\", "/").strip("/")
-        c_origen, c_txt = "reunion", "cambiada para esta reunión"
+        c_origen, c_txt = "reunion", f"cambiada para {esta}"
     else:
         base = carpeta_de(v) if carpeta_de else ""
         c_origen, c_txt = carpeta_origen(v, base) if carpeta_origen else ("ajustes", "Ajustes › Al grabar")
     sub = carpeta_reunion(base, nombre) if carpeta_reunion else None
-    lineas.append(_linea("carpeta", "Se guarda en", ruta_txt(sub if sub is not None else base, links), c_origen, c_txt,
-                         rel=base, sub=sub))
+    valor = ruta_txt(sub if sub is not None else base, links)
+    if subir and pedido.get("varios") and sub is not None:  # varios audios: cada uno en su carpeta «fecha nombre»
+        valor = ruta_txt(base, links) + " · cada audio en su carpeta"
+    lineas.append(_linea("carpeta", "Se guarda en", valor, c_origen, c_txt, rel=base, sub=sub))
 
     # --- idioma: esta reunión › workstream › proyecto › Ajustes
     if "idioma" in cambios and not IDIOMA_RE.match(str(cambios["idioma"] or "auto").strip().lower()):
         cambios.pop("idioma")  # uno que no vale (rec_start lo dejaría en «detectar»): no se enseña como si se usara
     if "idioma" in cambios:
-        lang, l_origen, l_txt = str(cambios["idioma"] or "").strip().lower(), "reunion", "cambiado para esta reunión"
+        lang, l_origen, l_txt = str(cambios["idioma"] or "").strip().lower(), "reunion", f"cambiado para {esta}"
     elif v and v["id"] in (st.get("workstream_langs") or {}):
         lang, l_origen, l_txt = st["workstream_langs"][v["id"]], "workstream", "del workstream"
     elif v and v["project"] in (st.get("project_langs") or {}):
@@ -244,49 +258,52 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
 
     # --- contexto: esta reunión › Ajustes
     if "contexto" in cambios:
-        ctx, x_origen, x_txt = str(cambios["contexto"] or ""), "reunion", "cambiado para esta reunión"
+        ctx, x_origen, x_txt = str(cambios["contexto"] or ""), "reunion", f"cambiado para {esta}"
     else:
         ctx = str((st.get("perfil") or {}).get("context") or "")
         x_origen, x_txt = "ajustes", "Ajustes › Al grabar"
     ctx = " ".join(ctx.split())[:500]
     lineas.append(_linea("contexto", "Contexto", ctx, x_origen, x_txt))
 
-    # --- transcribe: en directo o solo grabar, con qué motor
+    # --- transcribe: en directo o solo grabar, con qué motor (al subir, la cola: el de Ajustes › Procesado)
     presets = motores.get("presets") or {}
-    live = bool(cambios["live"]) if "live" in cambios else st.get("rec_directo", True) is not False
-    preset = str(cambios.get("preset") or st.get("live_preset") or "medium")
+    live = (bool(cambios["live"]) if "live" in cambios else st.get("rec_directo", True) is not False) and not subir
+    por_defecto = (st.get("preset") or "rapido") if subir else (st.get("live_preset") or "medium")
+    preset = str(cambios.get("preset") or por_defecto)
     if preset not in presets and presets:
-        preset = "medium" if "medium" in presets else next(iter(presets))
+        sustituto = "rapido" if subir else "medium"
+        preset = sustituto if sustituto in presets else next(iter(presets))
     # el motor del directo se elige en Ajustes › Procesado (Motores); «Texto en directo» apagado (transcribir al
     # terminar), en Al grabar: el origen es el de lo que decide la línea
     if "live" in cambios or "preset" in cambios:
-        t_origen, t_txt = "reunion", "cambiado para esta reunión"
-    elif not live:
+        t_origen, t_txt = "reunion", f"cambiado para {esta}"
+    elif not live and not subir:
         t_origen, t_txt = "ajustes", "Ajustes › Al grabar"
     else:
         t_origen, t_txt = "procesado", "Ajustes › Procesado"
     # con «Solo grabar» transcribe la cola al terminar, con el motor de después (Ajustes › Procesado)
-    p_tx = presets.get(preset) if live else presets.get(st.get("preset") or "rapido")
+    p_tx = presets.get(preset) if live or subir else presets.get(st.get("preset") or "rapido")
     # con «API externa» y sin su clave, lo que va a la nube no se podrá hacer: se dice en su línea, no al terminar
     sin_clave = motores.get("procesado") == "api" and motores.get("sin_clave")
     falta = {"aviso": "Falta la API key: ponla en Ajustes › Procesado."} if sin_clave else {}
     en_nube = (p_tx or {}).get("engine") == "cloud"  # transcribe en la nube: el aviso va ahí, y no otra vez en Resume
-    lineas.append(_linea("transcribe", "Transcribe", transcribe_txt(live, p_tx or {}, motores),
+    lineas.append(_linea("transcribe", "Transcribe", transcribe_txt(live, p_tx or {}, motores, subir),
                          t_origen, t_txt, live=live, preset=preset, **(falta if en_nube else {})))
 
     # --- resume: lo decide Ajustes › Procesado (no hay cambio por reunión)
     lineas.append(_linea("resume", "Resume", resume_txt(p_tx or {}, motores), "procesado", "Ajustes › Procesado",
                          **({} if en_nube else falta)))
 
-    # --- audio: micrófono y audio del PC
+    # --- audio: micrófono y audio del PC (al subir no hay nada que grabar)
     mic = str(cambios["mic"]) if "mic" in cambios else (st.get("rec_mic") or "default")
     sys_dev = str(cambios["sys"]) if "sys" in cambios else (st.get("rec_sys") or "all")
     a_origen = "reunion" if ("mic" in cambios or "sys" in cambios) else "ajustes"
     extra = {"aviso": "Así no se graba nada: deja al menos el micrófono o el audio del PC."} \
         if mic == "none" and sys_dev == "none" else {}
-    lineas.append(_linea("audio", "Audio", audio_txt(mic, sys_dev), a_origen,
-                         "cambiado para esta reunión" if a_origen == "reunion" else "Ajustes › Al grabar",
-                         mic=mic, sys=sys_dev, **extra))
+    if not subir:
+        lineas.append(_linea("audio", "Audio", audio_txt(mic, sys_dev), a_origen,
+                             "cambiado para esta reunión" if a_origen == "reunion" else "Ajustes › Al grabar",
+                             mic=mic, sys=sys_dev, **extra))
 
     # --- participantes: los de la cita de Outlook (sin confirmar) salvo que la tarjeta los quite
     if "participantes" in pedido:
@@ -298,6 +315,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     rec = {"name": nombre, "vocab": vid, "folder": base, "language": lang, "contexto": ctx, "mic": mic,
            "sys": sys_dev, "live": live, "preset": preset, "participantes": part, "sugerido": sugerido, "plan": True,
            "recordar_carpeta": c_origen != "reunion"}
+    if subir:  # el cuerpo de /api/subir: lo de la reunión y con qué se transcribe, nada de la grabadora
+        rec = {k: rec[k] for k in ("name", "vocab", "folder", "language", "contexto", "preset", "plan")}
     proyecto = {"vocab": vid, "texto": proyecto_txt(v), "proyecto": v["project"] if v else "",
                 "workstream": v["name"] if v else "", "origen": p_origen, "motivo": motivo}
     plan = {"nombre": {"valor": nombre, "origen": n_origen, "texto": n_txt}, "proyecto": proyecto,
@@ -309,11 +328,12 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     return plan
 
 
-def transcribe_txt(live, p, motores):
+def transcribe_txt(live, p, motores, subir=False):
     nube = p.get("engine") == "cloud"
     donde = f"{motores.get('proveedor') or 'la nube'}" if nube else "Este PC"
     nombre = "" if nube else (p.get("live_label") or p.get("label") or "").split(" · ")[0]
-    return f"{donde}, {'en directo' if live else 'al terminar'}" + (f" · {nombre}" if nombre else "")
+    cuando = "nada más subirlo" if subir else "en directo" if live else "al terminar"
+    return f"{donde}, {cuando}" + (f" · {nombre}" if nombre else "")
 
 
 def resume_txt(p, motores):

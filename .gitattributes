@@ -6,3 +6,16 @@ LEEME.txt text eol=crlf
 *.ico binary
 *.png binary
 *.woff2 binary
+# los audios de prueba de «Subir audio» (tests/audio_formatos, los escribe generar.py): nunca se tocan sus bytes
+*.m4a binary
+*.opus binary
+*.ogg binary
+*.mp3 binary
+*.aac binary
+*.webm binary
+*.flac binary
+*.wma binary
+*.caf binary
+*.aiff binary
+*.mp4 binary
+*.3gp binary

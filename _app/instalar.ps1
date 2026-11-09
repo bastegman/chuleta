@@ -534,7 +534,8 @@ function Test-CarpetaLibre($dir) {
 
 function Test-TieneReuniones($rootDir, $appDir) {
     # grabaciones fuera de _app: una carpeta en uso, no un zip recien descomprimido (no se dice que se puede borrar)
-    $ext = @(".wav", ".m4a", ".mp3", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".wma", ".webm", ".mkv", ".mov")
+    $ext = @(".wav", ".m4a", ".mp3", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".wma", ".webm", ".mkv", ".mov",
+        ".oga", ".amr", ".3gp", ".3gpp", ".3ga", ".caf", ".qta", ".aif", ".aiff", ".waptt")
     return [bool](Get-ChildItem -LiteralPath $rootDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $ext -contains $_.Extension.ToLowerInvariant() -and $_.FullName -notlike "$appDir*" } | Select-Object -First 1)
 }
