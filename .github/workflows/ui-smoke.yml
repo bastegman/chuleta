@@ -9,6 +9,8 @@ name: ui-smoke
 # (B1b y B1c, msgs 1158 y 1198). PyAV: lo usa el directo para remuestrear.
 # test_subir_audio: «Subir audio» (msg 1296, 09/11/2026): los formatos del móvil y de WhatsApp leídos con PyAV (también
 # en Windows), cada uno subido y transcrito de punta a punta contra un Groq falso, y el botón, la tarjeta y soltar.
+# test_ui_aprender: aprender de tus correcciones (ítem 17, 09/11/2026): la propuesta al pulsar «Listo», añadir a una
+# lista (también conectada y de solo lectura) y la regla aplicada al transcribir con el Groq falso, subrayada y deshecha.
 on:
   push:
     paths: ["_app/**", "tests/**", "requirements.txt", ".github/workflows/ui-smoke.yml"]
@@ -43,9 +45,9 @@ jobs:
           NOTAS_ARTEFACTOS: ${{ github.workspace }}/artefactos
         run: |
           mkdir -p "$NOTAS_ARTEFACTOS"
-          python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas test_subir_audio 2>&1 | tee salida.txt
+          python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas test_subir_audio test_ui_aprender 2>&1 | tee salida.txt
           test ${PIPESTATUS[0]} -eq 0
-          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces, test_e2e_carpetas o test_subir_audio se ha saltado"; exit 1; fi
+          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces, test_e2e_carpetas, test_subir_audio o test_ui_aprender se ha saltado"; exit 1; fi
           grep -q "^Ran [1-9][0-9]* tests\?" salida.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()

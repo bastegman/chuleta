@@ -10,6 +10,27 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Aprender de tus correcciones (09/11/2026)
+
+Ítem 17 del backlog, de la research de competencia (Quill: «remembers the substitution»), aprobada por Bernardo en el
+msg 1242. Hecho por Steve en la rama `aprender-correcciones`.
+
+- Al terminar de corregir una transcripción («Listo»), encima del texto: «¿Añadir «Orvalia» al vocabulario de
+  Finanzas?». Solo nombres propios, siglas y términos (`aprender.py`: mayúsculas en mitad de frase, siglas, letras y
+  cifras, mayúsculas por dentro; parecido por letras o por cómo suena), nunca erratas, tildes ni cambios de redacción.
+  Sin ventanas ni foco robado: «Ahora no» la deja para otro día y «No» no la vuelve a proponer.
+- Con «Añadir», el término va al final de la lista de la reunión o de la que elijas, también de una carpeta de listas
+  conectada, con su misma codificación (UTF-8, UTF-16, la de Windows), sus saltos de línea y su estilo (comas o uno
+  por línea). Si no puede escribir (solo lectura, abierta en otro programa, sin conexión, solo en OneDrive), lo dice
+  en la propia fila. Si ya no le cabe a Whisper, también.
+- «Y cambiar «orbalia» por «Orvalia» en las próximas reuniones de <proyecto>»: solo se ofrece si es seguro (se parecen, no
+  son palabras corrientes y lo corregiste en toda la reunión). Se aplica al terminar cada transcripción del proyecto
+  (antes de los documentos, las voces y el resumen), solo en frases que nadie ha tocado; va subrayado, con una barra
+  para deshacerlo en esa reunión y la pregunta de si dejar de hacerlo. «Restaurar original» lo quita todo. Las reglas
+  están en Ajustes › Proyectos, con «quitar», y siguen al proyecto si se renombra.
+- Tests: `tests/test_aprender.py` y `tests/test_ui_aprender.py` (en ui-smoke, Ubuntu y Windows; la regla aplicada al
+  transcribir, contra el Groq falso).
+
 ### Subir audio (09/11/2026)
 
 Ítem 7 del backlog (Bernardo, msg 1296: «poder subir un audio, independiente de donde venga»). Hecho por Steve en la

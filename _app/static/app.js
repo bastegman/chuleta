@@ -884,6 +884,7 @@ function viewLive(a) {
     <div id="aTabs"></div><section class="sum hidden" id="aSum"></section><section class="tx live-feed" id="aTx"></section><section class="notes hidden" id="aNotes"></section></div>
     <button class="to-live hidden" id="toLive" data-act="to-live">↓ Ir al directo</button>`;
   S.tx = null; S.curIdx = -1; S.curEl = null; S.liveRev = undefined; S.seenSegs = 0;
+  if (typeof aprReset === 'function') aprReset();
   S.tq = S.route.params.get('q') || '';
   renderLiveHero(a);
   applyTab(a);  // en directo tambien se pueden ir tomando notas (como en Notion)
@@ -897,6 +898,7 @@ function viewAudio(a) {
     <div id="aHead"></div><div id="aJob"></div><div id="aVoz"></div><div id="aBox"></div>
     <div id="aTabs"></div><section class="sum hidden" id="aSum"></section><section class="tx" id="aTx"></section><section class="notes hidden" id="aNotes"></section></div>`;
   S.tx = null; S.curIdx = -1; S.curEl = null; S.liveRev = undefined;
+  if (typeof aprReset === 'function') aprReset();
   S.tq = S.route.params.get('q') || '';
   renderAudioHead(a); renderAudioJob(a);
   applyTab(a);
@@ -1000,7 +1002,9 @@ async function loadTranscript(a) {
   const st = main.scrollTop;
   const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 160;
   const typing = document.activeElement && document.activeElement.id === 'tq';
-  S.tx = { path: want, kind: t.kind, file: t.file, segs: t.segments, mtime: a.tx_mtime, starts: t.segments.map(s => s.start ?? 0), has_backup: !!t.has_backup };
+  S.tx = { path: want, kind: t.kind, file: t.file, segs: t.segments, mtime: a.tx_mtime, starts: t.segments.map(s => s.start ?? 0), has_backup: !!t.has_backup,
+    aprendido: t.aprendido || null };  // lo que cambió Tenca con lo que aprendió de tus correcciones (aprender.js)
+  if (typeof aprCargar === 'function') aprCargar(a);  // y lo que podría aprender de lo que has corregido
   if (keepScroll && typing) { renderTxBody(); main.scrollTop = st; return; }  // no robar el foco del buscador
   renderTxSection();
   const lj = jobFor(want);
@@ -1029,7 +1033,7 @@ function renderTxSection() {
     return;
   }
   const words = sum(tx.segs, s => s.text.split(/\s+/).length);
-  sec.innerHTML = `<div class="tx-tools">
+  sec.innerHTML = `<div id="aprBox"></div><div class="tx-tools">
       <div class="tx-search">${I.search}<input id="tq" placeholder="Buscar en esta transcripción  (Ctrl F)" value="${esc(S.tq)}" autocomplete="off" spellcheck="false">
         <span class="n" id="tqn"></span><button data-act="mark-prev" title="Anterior (Shift Enter)">${I.up}</button><button data-act="mark-next" title="Siguiente (Enter)">${I.down}</button></div>
       ${tx.kind === 'srt' ? `<div class="seg-toggle"><button data-mode="para" class="${S.mode === 'para' ? 'on' : ''}">Párrafos</button><button data-mode="lines" class="${S.mode === 'lines' ? 'on' : ''}">Con tiempos</button></div>
@@ -1051,6 +1055,7 @@ function renderTxSection() {
       <button class="btn sm ghost${tx.has_backup && !jobFor(tx.path) ? '' : ' hidden'}" data-act="tx-restore" title="Volver a lo que transcribió Whisper">${I.refresh}Restaurar original</button>
     </div>` : ''}
     <div class="tx-body${S.mode === 'lines' && tx.kind === 'srt' ? ' lines' : ''}${S.editing ? ' editing' : ''}" id="txBody"></div>`;
+  if (typeof aprPintar === 'function') aprPintar();
   renderTxBody();
 }
 
@@ -1192,6 +1197,8 @@ async function finishEdit() {
   S.tx.starts = S.tx.segs.map(s => s.start ?? 0);
   renderTxSection();
   toast('Cambios guardados en el .txt y el .srt');
+  const au = S.audios.get(tx.path);
+  if (au && typeof aprCargar === 'function') aprCargar(au, true);  // ¿algún nombre que Whisper no conocía? (sin interrumpir)
 }
 function replaceAll() {
   syncEdits();
@@ -1213,7 +1220,7 @@ function replaceAll() {
   toast(`${n} ${n === 1 ? 'cambio' : 'cambios'}: «${esc(find)}» → «${esc(rep)}»`);
 }
 async function restoreOriginal() {
-  if (!await ask('¿Restaurar el original?', 'Se descartan todas tus correcciones y vuelve el texto tal como lo transcribió Whisper.', 'Restaurar') || !S.tx) return;
+  if (!await ask('¿Restaurar el original?', `Se descartan todas tus correcciones${S.tx?.aprendido ? ` y lo que cambió ${esc(APP_NAME)} con lo que aprendió de ellas` : ''}, y vuelve el texto tal como lo transcribió Whisper.`, 'Restaurar') || !S.tx) return;
   const tx = S.tx, path = tx.path, unsaved = S.dirty || txPending.has(path);
   // lo corregido que aun no ha llegado al servidor se descarta: no se reintenta ni sale al cerrar o recargar la pagina
   // (pisaria el original restaurado), y lo que ya va en camino se espera, para que llegue antes que la restauracion
@@ -1255,7 +1262,8 @@ function renderTxBody(fromModel) {
   const live = S.viewMode === 'live';
   const fresh = live && S.seenSegs ? S.seenSegs : Infinity;  // lo recien llegado se resalta un momento
   const edit = S.editing ? ' contenteditable="plaintext-only" spellcheck="true"' : '';
-  const span = i => `<span class="s${i >= fresh ? ' fresh' : ''}" data-i="${i}"${edit}>${hlTerms(tx.segs[i].text, terms)}</span>`;
+  const hl = typeof aprHl === 'function' ? aprHl : (s, t) => hlTerms(s.text, t);  // aprHl: y lo que cambió Tenca, subrayado
+  const span = i => `<span class="s${i >= fresh ? ' fresh' : ''}" data-i="${i}"${edit}>${hl(tx.segs[i], terms)}</span>`;
   // quien habla (voces.js): etiqueta al cambiar de hablante, parrafo nuevo por turno
   const who = whoFor(tx);
   const chip = i => who && (i === 0 || who[i] !== who[i - 1]) ? spkChip(who[i]) : '';
@@ -2057,6 +2065,7 @@ function openSettings(opts) {
       <label for="sPrompt">Vocabulario de las reuniones sin proyecto</label>
       <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
       <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
+      <div id="sAprendido"></div>
     </fieldset>
     <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
       <div id="sLinks"></div>
@@ -2474,6 +2483,7 @@ function openSettings(opts) {
     };
     d.ajPintarListas = drawVocab;
     loadVocab(S.config.language ?? 'es-en').then(drawVocab);
+    if (typeof aprAjustes === 'function') aprAjustes(d);  // lo que Tenca corrige solo (aprender.js)
     const redrawVocab = () => loadVocab(S.config.language ?? 'es-en').then(drawVocab);
     d.addEventListener('click', e => {
       const ed = e.target.closest('[data-vedit]'), nw = e.target.closest('[data-vnew]'), r = e.target.closest('[data-vdir]');

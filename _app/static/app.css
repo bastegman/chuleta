@@ -1007,3 +1007,50 @@ fieldset.ct-opciones { margin-top: 16px; }
   .ct-fila { grid-template-columns: 90px auto minmax(0, 1fr); }
   .ct-acc { grid-column: 3; }
 }
+
+/* ---------- aprender de tus correcciones (aprender.js) ---------- */
+/* La tarjeta sale encima del texto al terminar de corregir: no tapa nada ni roba el foco. Lo que cambió Tenca va con
+   un subrayado de puntos (no con color de fondo, que es el de la búsqueda) y una barra para deshacerlo */
+.apr-card { margin: 0 0 12px; padding: 14px 16px 12px; border-color: var(--accent-line); box-shadow: var(--shadow-sm); animation: apr-in .2s ease-out; container-type: inline-size; }
+@keyframes apr-in { from { transform: translateY(-4px); opacity: 0 } }
+.apr-head { display: flex; align-items: flex-start; gap: 10px; }
+.apr-ico { color: var(--accent); font-size: 15px; line-height: 22px; flex: none; }
+.apr-hd { flex: 1; min-width: 0; }
+.apr-tit { font-weight: 650; font-size: 15px; line-height: 1.4; color: var(--ink); overflow-wrap: break-word; }
+.apr-sub { font-size: 13px; color: var(--muted); margin-top: 1px; }
+.apr-x { flex: none; margin: -4px -6px 0 0; color: var(--muted); }
+.apr-filas { list-style: none; margin: 10px 0 0; padding: 0; }
+.apr-fila { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.apr-txt { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.5; color: var(--ink-2); overflow-wrap: break-word; }
+.apr-term { font-size: 14.5px; font-weight: 650; color: var(--ink); margin-right: 4px; }
+.apr-regla { display: flex; align-items: flex-start; gap: 8px; margin: 7px 0 0; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.apr-regla input { accent-color: var(--accent); width: 15px; height: 15px; margin: 2px 0 0; flex: none; cursor: pointer; }
+.apr-acc { display: flex; gap: 6px; flex: none; }
+.apr-err { margin-top: 6px; font-size: 12.5px; color: var(--err); }
+.apr-aviso { color: var(--warn); }
+.apr-fila.hecha { align-items: center; }
+.apr-ok { color: var(--ok); flex: none; display: inline-flex; }
+.apr-ok svg { width: 17px; height: 17px; }
+.apr-dest { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.apr-dest label { color: var(--muted); font-weight: 600; }
+.apr-dest select { height: 30px; font-size: 13px; max-width: 100%; }
+.apr-bar { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; padding: 9px 12px; border-radius: var(--radius-sm); background: var(--panel); border: 1px solid var(--line); font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+.apr-bar > span:not(.apr-ico) { flex: 1; min-width: 0; }
+.apr-bar .apr-x { margin: -4px -6px -4px 0; align-self: center; }
+.apr-r { white-space: nowrap; }
+.tx-body .apr-w { text-decoration: underline dotted var(--accent); text-decoration-thickness: 2px; text-underline-offset: 4px; text-decoration-skip-ink: none; }
+.lnk { border: 0; padding: 0 2px; background: none; font: inherit; font-weight: 600; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; border-radius: 3px; }
+.lnk:hover { color: var(--accent-strong); }
+/* tarjeta estrecha (ventana a media pantalla, o con la barra lateral ancha): los botones bajan debajo del texto */
+@container (max-width: 520px) {
+  .apr-fila { flex-wrap: wrap; gap: 8px; }
+  .apr-acc { width: 100%; }
+  .apr-dest select { flex: 1; min-width: 0; }
+}
+@container (max-width: 380px) {  /* muy estrecha: «Ahora no» baja bajo el título, que así no parte las palabras */
+  .apr-head { flex-wrap: wrap; }
+  .apr-hd { flex-basis: calc(100% - 25px); }
+  .apr-x { margin: 2px 0 0 19px; }
+}
+@media (max-width: 760px) { .apr-r { white-space: normal; } }
+@media (prefers-reduced-motion: reduce) { .apr-card { animation: none; } }
