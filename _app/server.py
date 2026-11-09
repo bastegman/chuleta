@@ -35,9 +35,11 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import aprender
 import calendario
 import engines
 import explicar
@@ -431,7 +433,7 @@ class Store:
     # esta apagada, con su marca de migracion) tambien: no hay donde volver a ponerlas en la interfaz (revision de la
     # integracion del 08/11/2026)
     RESCUE = (("links",), ("vocab_links",), ("perfil", "outputs"), ("project_folders",), ("workstream_folders",),
-              ("carpeta_por_reunion",), ("carpetas_v",), ("nombre_v",))
+              ("carpeta_por_reunion",), ("carpetas_v",), ("nombre_v",), ("aprendido",))
 
     @classmethod
     def _rescue(cls, raw):
@@ -459,6 +461,8 @@ class Store:
                     ok = isinstance(v, int) and not isinstance(v, bool) and v >= 1
                 elif keys == ("nombre_v",):  # la del nombre de la app (migrate_app_name), tampoco
                     ok = isinstance(v, str) and bool(v)
+                elif keys == ("aprendido",):  # lo que aprendiste a corregir: no hay de donde volver a sacarlo
+                    ok = isinstance(v, dict) and any(aprendido_de({"aprendido": v}).values())
                 else:  # links, vocab_links y outputs: listas de {"path": …}
                     ok = isinstance(v, list) and bool(v) and all(isinstance(x, dict) and isinstance(x.get("path"), str)
                                                                  for x in v)
@@ -551,6 +555,9 @@ DEFAULT_SETTINGS = {
     # el agente del PC: {"tipo": "claude", "modelo": "sonnet"} en cuanto se guarda desde Ajustes; None por defecto (asi
     # un "agente": null escrito a mano no da el fichero por roto: agente_de lo resuelve)
     "agente": None,
+    # aprender de tus correcciones (aprender.py): reglas «lo que escribio Whisper → lo correcto» que aceptaste, por
+    # proyecto, y lo que dijiste que no (aprendido_de lo valida)
+    "aprendido": {"reglas": [], "no": [], "no_reglas": []},
     "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
     # perfil de reunion por defecto (Ajustes › Al grabar, y «Usarlo en: todas» en la tarjeta de grabar).
     # None en folder/vocab = automatico, como siempre: la ultima carpeta usada (o la del proyecto del tema) y el tema
@@ -2519,6 +2526,10 @@ def settings_moved(d, old, new, folder=False, project=None):
             k, m = moved_rel(vid, old, new, folder), moved_rel(rel, old, new, folder)
             wf[vid if k is None else k] = rel if m is None else m
         d["workstream_folders"] = wf
+    if project and isinstance(d.get("aprendido"), dict):  # las reglas aprendidas son de un proyecto, por su nombre
+        for r in d["aprendido"].get("reglas") or []:
+            if isinstance(r, dict) and isinstance(r.get("proyecto"), str) and fold(r["proyecto"]) == fold(project[0]):
+                r["proyecto"] = project[1]
     _idiomas_moved(d, old, new, folder, project)
 
 
@@ -2703,6 +2714,286 @@ def save_original(rel, segs):
     write_outputs(os.path.join(bdir, "original.wav"), segs)
     with open(os.path.join(bdir, "meta.json"), "w", encoding="utf-8") as f:
         json.dump({"path": rel, "at": time.time()}, f, ensure_ascii=False)
+
+
+def copia_original(rel, base, auto=False):
+    """La copia de lo que transcribio Whisper (si aun no hay): la hacen la primera correccion a mano y el primer cambio
+    que Tenca aprende de ti (auto). Devuelve si la ha hecho ahora."""
+    bdir = backup_dir(rel)
+    if os.path.isdir(bdir):
+        return False
+    os.makedirs(bdir)
+    for ext in (".srt", ".txt"):
+        if os.path.isfile(base + ext):
+            shutil.copyfile(base + ext, os.path.join(bdir, "original" + ext))
+    with open(os.path.join(bdir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(dict({"path": rel, "at": time.time()}, **({"auto": True} if auto else {})), f, ensure_ascii=False)
+    return True
+
+
+# ----------------------------------------------------------------------------- aprender de tus correcciones
+# (aprender.py, item 17, 09/11/2026). En los ajustes ("aprendido"): las reglas que aceptaste, {"de", "a",
+# "proyecto", "at"}, que se aplican al terminar cada transcripcion de ese proyecto ("" = las reuniones sin proyecto), y
+# lo que dijiste que no ("no": terminos; "no_reglas": [de, a], en aprender.normal). Lo que Tenca cambio en cada reunion
+# va en su copia del original (originales/<md5>/aprendido.json): se mueve, se restaura y se borra con ella.
+APRENDIDO_FILE = "aprendido.json"
+
+
+def aprendido_de(st):
+    """El ajuste "aprendido", validado (uno escrito a mano o de otra version no rompe nada: lo que no vale se
+    ignora)."""
+    a = st.get("aprendido") if isinstance(st.get("aprendido"), dict) else {}
+    txt = lambda x: isinstance(x, str) and bool(x.strip())  # noqa: E731
+    reglas = [dict(r, proyecto=r.get("proyecto") if isinstance(r.get("proyecto"), str) else "")
+              for r in a.get("reglas") or [] if isinstance(r, dict) and txt(r.get("de")) and txt(r.get("a"))]
+    no = [x for x in a.get("no") or [] if txt(x)]  # como se escribió (se comparan con aprender.normal)
+    no_reglas = [list(x) for x in a.get("no_reglas") or [] if isinstance(x, list) and len(x) == 2 and all(map(txt, x))]
+    return {"reglas": reglas, "no": no, "no_reglas": no_reglas}
+
+
+def mismo_proyecto(a, b):
+    """Dos nombres del mismo proyecto: iguales sin tildes ni mayusculas, o los dos de la raiz (root_names)."""
+    return fold(a or "") == fold(b or "") or (bool(a) and bool(b) and _is_app_name(a) and _is_app_name(b))
+
+
+def lista_de_reunion(abs_audio, props=None):
+    """La lista del tema de la reunion (una de list_vocab) o None: sin tema, Whisper recibe el vocabulario general."""
+    props = md_props(abs_audio) if props is None else props
+    if not props.get("workstream"):
+        return None
+    try:
+        vid = temas().get(rel_of(abs_audio))
+        return find_vocab(props.get("proyecto"), props.get("workstream"), vid, near=abs_audio)
+    except OSError:
+        return None
+
+
+def proyecto_de_reunion(abs_audio, props=None):
+    """El proyecto de la reunion para las reglas aprendidas: el de su lista o, si ya no esta, el de su cabecera ("" =
+    sin proyecto)."""
+    props = md_props(abs_audio) if props is None else props
+    v = lista_de_reunion(abs_audio, props)
+    return v["project"] if v else (props.get("proyecto") or "")
+
+
+def original_de(rel):
+    """Lo que escribio Whisper (la copia de originales) como [{"start", "text"}], o None si no hay copia."""
+    bdir = backup_dir(rel)
+    for ext in (".srt", ".txt"):
+        p = os.path.join(bdir, "original" + ext)
+        if os.path.isfile(p):
+            text = read_text(p)
+            if ext == ".srt":
+                return parse_srt(text)
+            return [{"start": None, "end": None, "text": l.strip()} for l in text.splitlines() if l.strip()]
+    return None
+
+
+def registro_aprendido(rel):
+    """Lo que Tenca ha cambiado en esta reunion: {"cambios": [{"start", "de", "a", "pos", "texto"}], "deshechas":
+    [normal(de)], "respondidas": [normal(termino)]} (las reglas que deshiciste aqui no se vuelven a aplicar en ella, y
+    lo que ya anadiste desde ella no se vuelve a proponer en ella, aunque fuera a otra lista)."""
+    try:
+        with open(os.path.join(backup_dir(rel), APRENDIDO_FILE), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)  # noqa: E731
+    cambios = [c for c in data.get("cambios") or [] if isinstance(c, dict) and num(c.get("start"))
+               and isinstance(c.get("de"), str) and isinstance(c.get("a"), str) and c["a"]
+               and (c.get("pos") is None or (isinstance(c["pos"], int) and c["pos"] >= 0))
+               and (c.get("texto") is None or isinstance(c["texto"], str))]
+    return {"cambios": cambios, "deshechas": [x for x in data.get("deshechas") or [] if isinstance(x, str)],
+            "respondidas": [x for x in data.get("respondidas") or [] if isinstance(x, str)]}
+
+
+def guardar_registro(rel, reg):
+    p = os.path.join(backup_dir(rel), APRENDIDO_FILE)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(reg, f, ensure_ascii=False)
+    os.replace(tmp, p)
+
+
+def _escribir_bloques(base, bloques):
+    """El .srt (con sus tiempos tal cual) y el .txt de una transcripcion cambiada por aprender.py."""
+    save_text(base + ".srt", aprender.srt_texto(bloques), "utf-8")
+    save_text(base + ".txt", "\n".join(b["text"] for b in bloques) + "\n", "utf-8-sig")
+
+
+def aplicar_aprendido(rel, st):
+    """Al terminar una transcripcion (Jobs._after_transcribe, antes de los destinos, las voces y el resumen): las reglas
+    que aceptaste para el proyecto de la reunion, solo en las frases que nadie ha tocado (las que siguen como las
+    escribio Whisper, o las nuevas de una transcripcion que continua) y nunca las que deshiciste en esta reunion. La
+    primera vez se guarda lo de Whisper (Restaurar original) y cada cambio queda apuntado para marcarlo y deshacerlo.
+    Devuelve cuantos cambios ha hecho."""
+    todas = aprendido_de(st)["reglas"]
+    if not todas:
+        return 0
+    with App._tx_save_lock:  # no a la vez que una correccion a mano o un «Deshacer» de esta u otra reunion
+        return _aplicar_aprendido(rel, todas)
+
+
+def _aplicar_aprendido(rel, todas):
+    abs_path = safe(rel, "file")
+    proyecto = proyecto_de_reunion(abs_path)
+    # las de su proyecto y que sigan siendo seguras (una escrita a mano en settings.json o de una version anterior,
+    # como «plan» → «Plan», no se aplica)
+    reglas = [r for r in todas if mismo_proyecto(r["proyecto"], proyecto) and aprender.regla_valida(r["de"], r["a"])]
+    base = os.path.splitext(abs_path)[0]
+    if not reglas or not os.path.isfile(base + ".srt"):
+        return 0
+    bloques = aprender.srt_bloques(read_text(base + ".srt"))
+    orig = original_de(rel)
+    antes = {aprender.clave(s["start"]): s["text"] for s in orig or [] if s.get("start") is not None}
+    reg = registro_aprendido(rel)
+    deshechas, nuevos = set(reg["deshechas"]), []
+    repes = aprender.repetidos(bloques)  # dos frases con el mismo inicio: no se sabria marcar ni deshacer cada una
+    for b in bloques:
+        o = antes.get(b["start"])
+        if (o is not None and o != b["text"]) or b["start"] in repes:
+            continue  # una frase que has corregido tu (o que ya cambio Tenca): no se toca
+        texto, hechos = aprender.aplicar(b["text"], reglas, deshechas)
+        if hechos:
+            b["text"] = texto
+            nuevos += [dict(h, start=b["start"], texto=texto) for h in hechos]
+    if not nuevos:
+        return 0
+    copia_original(rel, base, auto=True)
+    reg["cambios"] += nuevos
+    guardar_registro(rel, reg)  # antes que el texto: si esto falla, no queda ningun cambio sin su marca
+    _escribir_bloques(base, bloques)
+    n = len(nuevos)
+    log(f"✦ {os.path.basename(abs_path)}: {n} cambio{'s' if n != 1 else ''} con lo aprendido de tus correcciones")
+    return n
+
+
+def _por_inicio(cambios):
+    out = {}
+    for c in cambios:
+        out.setdefault(aprender.clave(c["start"]), []).append(c)
+    return out
+
+
+def aprendido_publico(rel, segments):
+    """Para la transcripcion en la interfaz: lo que cambio Tenca, {"marcas": [{"start", "pos", "len", "de", "a"}] (las
+    que aun se encuentran en el texto) y "reglas": [{"de", "a", "veces"}] (para «Deshacer»)}, o None si nada."""
+    reg = registro_aprendido(rel)
+    if not reg["cambios"]:
+        return None
+    textos = {aprender.clave(s["start"]): s["text"] for s in segments if s.get("start") is not None}
+    orig = {aprender.clave(s["start"]): s["text"] for s in original_de(rel) or [] if s.get("start") is not None}
+    marcas, reglas = [], {}
+    for start, es in _por_inicio(reg["cambios"]).items():
+        texto = textos.get(start)
+        pos = aprender.posiciones(texto, es, orig.get(start)) if texto is not None else [None] * len(es)
+        for e, p in zip(es, pos):
+            if p is None:
+                continue
+            # en unidades UTF-16, como cuenta JavaScript (un emoji delante movia el subrayado)
+            marcas.append({"start": e["start"], "pos": _utf16(texto[:p]), "len": _utf16(e["a"]), "de": e["de"],
+                           "a": e["a"]})
+            r = reglas.setdefault((aprender.normal(e["de"]), e["a"]), {"formas": Counter(), "a": e["a"], "veces": 0})
+            r["formas"][e["de"]] += 1
+            r["veces"] += 1
+    if not marcas:
+        return None
+    return {"marcas": marcas, "reglas": [{"de": r["formas"].most_common(1)[0][0], "a": r["a"], "veces": r["veces"]}
+                                         for r in reglas.values()]}
+
+
+def _utf16(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def deshacer_aprendido(rel, de, a):
+    """«Deshacer» de una regla en una reunion: vuelve a poner lo que escribio Whisper donde Tenca puso `a` en lugar de
+    `de` (las frases que has cambiado despues y ya no se sabe donde esta, no) y no la vuelve a aplicar en esta
+    reunion. Devuelve (deshechos, no deshechos)."""
+    abs_path = safe(rel, "file")
+    base = os.path.splitext(abs_path)[0]
+    reg = registro_aprendido(rel)
+    k = aprender.normal(de)
+
+    def quitar(e):
+        return aprender.normal(e["de"]) == k and e["a"] == a
+    if not k or not any(quitar(e) for e in reg["cambios"]):
+        raise ApiError("Ese cambio ya no está en esta transcripción.")
+    if not os.path.isfile(base + ".srt"):
+        raise ApiError("No se encuentra la transcripción (.srt) de esta reunión.")
+    bloques = aprender.srt_bloques(read_text(base + ".srt"))
+    por_inicio = {b["start"]: b for b in bloques}
+    orig = {aprender.clave(s["start"]): s["text"] for s in original_de(rel) or [] if s.get("start") is not None}
+    hechos = saltados = 0
+    quedan = []
+    for start, es in _por_inicio(reg["cambios"]).items():
+        b = por_inicio.get(start)
+        if not any(quitar(e) for e in es):
+            quedan += es
+            continue
+        if b is None:  # la frase ya no esta (la borraste)
+            saltados += sum(1 for e in es if quitar(e))
+            quedan += [e for e in es if not quitar(e)]
+            continue
+        texto, q, n, s = aprender.deshacer(b["text"], es, quitar, orig.get(start))
+        b["text"], hechos, saltados = texto, hechos + n, saltados + s
+        quedan += q
+    if hechos:
+        _escribir_bloques(base, bloques)
+    reg["cambios"] = quedan
+    if k not in reg["deshechas"]:
+        reg["deshechas"].append(k)
+    guardar_registro(rel, reg)
+    log(f"↺ {os.path.basename(abs_path)}: {hechos} cambio{'s' if hechos != 1 else ''} aprendido"
+        f"{'s' if hechos != 1 else ''} deshecho{'s' if hechos != 1 else ''}")
+    return hechos, saltados
+
+
+def _nombre_lista(v):
+    return os.path.basename(v["_abs"])
+
+
+def motivo_lista(e, v):
+    """Por que no se ha podido escribir en una lista, en una frase y con que hacer."""
+    nombre, carpeta = _nombre_lista(v), os.path.dirname(v["_abs"])
+    if isinstance(e, FileNotFoundError) or not os.path.isdir(carpeta):
+        return (f"No encuentro la carpeta de «{nombre}»: ¿sin conexión o con el disco desconectado? Vuelve a probar "
+                "cuando esté, o elige otra lista.")
+    if isinstance(e, PermissionError):
+        if getattr(e, "winerror", None) in (32, 33):
+            return f"«{nombre}» está abierta en otro programa. Ciérrala y vuelve a probar."
+        return (f"No puedo escribir en «{nombre}»: es de solo lectura (quizá es una carpeta compartida). Añádelo tú en "
+                "el archivo, o elige otra lista.")
+    return f"No se ha podido escribir en «{nombre}» ({e.__class__.__name__}). Vuelve a probar, o elige otra lista."
+
+
+def anadir_a_lista(v, termino):
+    """Añade `termino` al final de la lista `v` (una de list_vocab, tambien de una carpeta conectada) sin tocarle nada
+    mas (aprender.anadir_termino). Devuelve si ya estaba. ApiError con el motivo si no se puede."""
+    path = v["_abs"]
+    try:
+        if aprender.normal(termino) in {aprender.normal(t) for t in read_vocab(path)[1]}:
+            return True
+        info = os.stat(path)
+        if getattr(info, "st_file_attributes", 0) & CLOUD_ONLY:
+            raise ApiError(f"«{_nombre_lista(v)}» solo está en OneDrive, no en este PC: ábrela una vez para que se "
+                           "descargue y vuelve a probar.")
+        if info.st_size > VOCAB_MAX_BYTES:
+            raise ApiError(f"«{_nombre_lista(v)}» es demasiado grande para ser una lista. Elige otra.")
+        if not os.access(path, os.W_OK):
+            raise PermissionError(errno.EACCES, "solo lectura", path)
+        with open(path, "rb") as f:
+            raw = f.read()
+        nuevo = aprender.anadir_termino(raw, termino)
+        write_bytes(path, nuevo)
+    except aprender.NoSePuede:
+        raise ApiError(f"«{_nombre_lista(v)}» está guardada en un formato que no sé tocar sin estropearla. Añádelo tú "
+                       "en el archivo, o elige otra lista.")
+    except OSError as e:
+        raise ApiError(motivo_lista(e, v))
+    return False
 
 
 def srt_block(i, a, b, t):
@@ -3524,10 +3815,19 @@ class Jobs:
 
     def _after_transcribe(self, rel):
         """Transcripcion terminada: primero las voces (si estan activas) y el resumen al acabar estas, para que
-        lleve los nombres; si no, el resumen directamente. Antes, el documento en los destinos de salida."""
+        lleve los nombres; si no, el resumen directamente. Antes, el documento en los destinos de salida y, antes de
+        todo, lo que aprendiste a corregir (aplicar_aprendido): asi el resumen y los documentos ya lo llevan bien."""
+        self._aprendido(rel)
         self.write_outputs(rel)
         if not self.auto_voices(rel):
             self.auto_summary(rel)
+
+    def _aprendido(self, rel):
+        """aplicar_aprendido, nunca a costa de lo demas: si falla, la reunion sigue con sus destinos y su resumen."""
+        try:
+            aplicar_aprendido(rel, self.settings.get())
+        except Exception:
+            log_exc()
 
     # --- destinos de salida (salidas.py): la reunion como documento en otras carpetas
     def document_for(self, rel):
@@ -4114,6 +4414,7 @@ class Jobs:
             if not isinstance(e, (engines.EngineError, ApiError)):
                 log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
+                self._aprendido(job.path)  # como en _after_transcribe, antes de soltar la reunion (_final_pass_over)
                 self._final_pass_over(job.path)
                 log("   se mantiene el texto del directo")
                 self.write_outputs(job.path)
@@ -4223,6 +4524,11 @@ DIAG_LINES = (
     "   {k}: el proyecto de la raíz se llamaba «{t}»; pasa a «{t}», el nombre de su carpeta",  # migrate_app_name
     "   carpeta principal de {t}⟦ (workstream)⟧: {t}",
     "↺ {t}: transcripción original restaurada",
+    "✦ {t}: {n} cambio⟦s⟧ con lo aprendido de tus correcciones",
+    "↺ {t}: {n} cambio⟦s⟧ aprendido⟦s⟧ deshecho⟦s⟧",
+    "✦ aprendido: {t} en {t} ({n} regla⟦s⟧)",
+    "✦ regla olvidada: {t}",
+    "✦ diccionario: {t}",
     "🔗 carpeta vinculada: {t}",
     "🔗 carpeta desvinculada (no se ha tocado nada): {t}",
     "🔤 vocabulario guardado: {t} ({n} términos)",
@@ -5331,6 +5637,11 @@ class App:
         else:
             out = public_transcript(self.transcripts.load(os.path.splitext(abs_path)[0]))
         out["has_backup"] = os.path.isdir(backup_dir(rel_of(abs_path)))
+        if out["has_backup"] and out["kind"] == "srt":  # lo que cambio Tenca con lo que aprendio (marcas y Deshacer)
+            try:
+                out["aprendido"] = aprendido_publico(rel_of(abs_path), out["segments"])
+            except OSError:
+                log_exc()
         return out
 
     # --- resumen con IA
@@ -6148,14 +6459,7 @@ class App:
                            if job.final_pass else "Se está transcribiendo; podrás editar cuando termine.")
         if not segs:
             raise ApiError("La transcripción no puede quedar vacía.")
-        bdir = backup_dir(rel)
-        if not os.path.isdir(bdir):
-            os.makedirs(bdir)
-            for ext in (".srt", ".txt"):
-                if os.path.isfile(base + ext):
-                    shutil.copyfile(base + ext, os.path.join(bdir, "original" + ext))
-            with open(os.path.join(bdir, "meta.json"), "w", encoding="utf-8") as f:
-                json.dump({"path": rel, "at": time.time()}, f, ensure_ascii=False)
+        copia_original(rel, base)
         if os.path.isfile(base + ".srt") and all(a is not None and e is not None for a, e, _ in segs):
             write_outputs(abs_path, [(float(a), float(e), t) for a, e, t in segs])
         else:  # transcripcion solo en .txt (sin tiempos)
@@ -6224,6 +6528,247 @@ class App:
         self.jobs.schedule_outputs(rel)  # destinos de salida: el documento vuelve a la transcripcion original
         log(f"↺ {rel}: transcripción original restaurada")
         return {"ok": True}
+
+    # --- aprender de tus correcciones (aprender.py)
+    def _propuestas(self, abs_path):
+        """Lo que se puede aprender de lo que corregiste en esta reunion (aprender.propuestas), con las listas donde ya
+        esta cada termino, la lista de la reunion (la que recibe Whisper; "" = el vocabulario general) y todas las
+        listas para elegir otra. Nada mientras se transcribe ni sin copia del original."""
+        rel = rel_of(abs_path)
+        vacio = {"propuestas": [], "lista": "", "proyecto": "", "listas": []}
+        if self.jobs.active_for(rel):
+            return vacio
+        orig = original_de(rel)
+        data = self.transcripts.load(os.path.splitext(abs_path)[0]) if orig else None
+        if not orig or not data:
+            return vacio
+        apr = aprendido_de(self.settings.get())
+        reg = registro_aprendido(rel)
+        hechos = {(aprender.normal(c["de"]), aprender.normal(c["a"])) for c in reg["cambios"]}
+        no = {aprender.normal(x) for x in apr["no"]} | set(reg["respondidas"])
+        ps = aprender.propuestas(orig, data["segments"], hechos, no, [tuple(x) for x in apr["no_reglas"]])
+        if not ps:
+            return vacio
+        props = md_props(abs_path)
+        v = lista_de_reunion(abs_path, props)
+        listas = self._vocab_terms()
+        general = {aprender.normal(t) for t in engines.split_terms(self.settings.get().get("prompt") or "")}
+        for p in ps:
+            k = aprender.normal(p["termino"])
+            p["en"] = [l["id"] for l in listas if k in {aprender.normal(t) for t in l["terms"]}]
+            p["en_general"] = k in general
+            for x in p["antes"]:  # la regla que ya tienes, en que proyectos (la interfaz no la ofrece otra vez alli)
+                kd = aprender.normal(x["texto"])
+                x["reglas_en"] = [r["proyecto"] for r in apr["reglas"]
+                                  if aprender.normal(r["de"]) == kd and aprender.normal(r["a"]) == k]
+        # el proyecto de la reunion (aunque su lista no este): si la propuesta va al vocabulario general, la casilla
+        # de la regla viene sin marcar, porque valdria para las reuniones sin proyecto y no para las de este
+        out = {"propuestas": ps, "lista": v["id"] if v else "", "proyecto": v["project"] if v else "",
+               "proyecto_reunion": proyecto_de_reunion(abs_path, props),
+               "listas": [{"id": l["id"], "project": l["project"], "name": l["name"],
+                           "conectada": bool(l.get("conectada"))} for l in listas]}
+        guardada = temas().get(rel) or ""
+        lid = guardada[len(VLINK):].split("/")[0] if guardada.startswith(VLINK) else ""
+        sin_carpeta = [k for k, l in list(VOCAB_LINKS.items()) if not os.path.isdir(l["path"])
+                       and (k == lid or fold(l["name"]) == fold(props.get("proyecto") or ""))]
+        if not v and props.get("workstream") and sin_carpeta:
+            # su lista esta en una carpeta conectada que ahora no se encuentra (VPN, red, disco): no se elige otra por
+            # el; si nunca tuvo lista o se borro, como siempre: el vocabulario general, que es el que uso Whisper
+            out["lista"] = None
+            out["falta"] = {"proyecto": props.get("proyecto") or "", "workstream": props["workstream"]}
+        return out
+
+    def aprender_get(self, q):
+        """GET /api/aprender?path=: las propuestas de esa reunion (ver _propuestas)."""
+        return self._propuestas(safe(q.get("path"), "file"))
+
+    def aprender_anadir(self, b):
+        """POST /api/aprender/anadir {path, termino, lista ("" = vocabulario general), reglas: [lo que escribio
+        Whisper]}: tu sí. El termino va al final de la lista elegida (tambien en una carpeta conectada, sin tocarle nada
+        mas) y, de las reglas seguras de esa propuesta, las que marcaste se aplican desde la siguiente transcripcion del
+        proyecto de esa lista; las que desmarcaste no se vuelven a proponer. Solo vale lo que se esta proponiendo ahora
+        en esa reunion: nada se aprende que no hayas visto."""
+        abs_path = safe(b.get("path"), "file")
+        termino = aprender.termino_valido(b.get("termino"))
+        p = next((x for x in self._propuestas(abs_path)["propuestas"]
+                  if termino and aprender.normal(x["termino"]) == aprender.normal(termino)), None)
+        if not p:
+            raise ApiError("Esa propuesta ya no está: puede que hayas vuelto a cambiar el texto. Recarga la reunión.")
+        termino = p["termino"]
+        quiere = {aprender.normal(x) for x in b.get("reglas") or [] if isinstance(x, str)}
+        seguras = [x for x in p["antes"] if x["regla"]]
+        reglas = [x for x in seguras if aprender.normal(x["texto"]) in quiere]
+        if len(reglas) != len(quiere):
+            raise ApiError("Esa corrección ya no se puede aprender. Recarga la reunión.")
+        lista = str(b.get("lista") or "")
+        v = find_vocab(None, None, lista) if lista else None
+        if lista and not v:
+            vid = lista[len(VLINK):].split("/")[0] if lista.startswith(VLINK) else ""
+            if vid in VOCAB_LINKS and not os.path.isdir(VOCAB_LINKS[vid]["path"]):
+                raise ApiError(f"No encuentro tu carpeta de listas «{VOCAB_LINKS[vid]['name']}»: ¿sin conexión o con "
+                               "el disco desconectado? Vuelve a probar cuando esté, o elige otra lista.")
+            raise ApiError("Esa lista ya no existe. Elige otra.")
+        lang = self.settings.get().get("language") or ""
+        if v:
+            ya = anadir_a_lista(v, termino)
+            try:
+                cabe = termino not in vocab_info(v, lang)["dropped"]
+            except OSError:
+                cabe = True
+        else:
+            general = self.settings.get().get("prompt") or ""
+            ya = aprender.normal(termino) in {aprender.normal(t) for t in engines.split_terms(general)}
+            if not ya:
+                general = aprender.anadir_texto(general, termino)
+                self.settings.update(lambda d: d.update(prompt=general))
+            cabe = termino not in vocab_fit(general, lang)["dropped"]
+        proyecto, ahora = v["project"] if v else "", time.time()
+        try:  # desde esta reunion ya no se vuelve a proponer (aunque haya ido a otra lista que la de la reunion)
+            with self._tx_save_lock:
+                reg = registro_aprendido(rel_of(abs_path))
+                k = aprender.normal(termino)
+                if k not in reg["respondidas"] and os.path.isdir(backup_dir(rel_of(abs_path))):
+                    reg["respondidas"].append(k)
+                    guardar_registro(rel_of(abs_path), reg)
+        except OSError:
+            log_exc()
+        if reglas:
+            def upd(d):
+                a = aprendido_de(d)
+                for x in reglas:  # una por lo que escribio Whisper y proyecto: la nueva sustituye a la vieja
+                    kd = aprender.normal(x["texto"])
+                    a["reglas"] = [r for r in a["reglas"] if not (aprender.normal(r["de"]) == kd
+                                                                  and mismo_proyecto(r["proyecto"], proyecto))]
+                    a["reglas"].append({"de": x["texto"], "a": termino, "proyecto": proyecto, "at": ahora})
+                d["aprendido"] = a
+            # la casilla desmarcada no se apunta como un «no» para siempre (no se veria en ningun sitio): en esta
+            # reunion ya no se pregunta (respondidas) y, si lo vuelves a corregir en otra, se vuelve a ofrecer
+            self.settings.update(upd)
+        self.library.at = 0
+        n = len(reglas)
+        log(f"✦ aprendido: {termino} en {(v['project'] + ' · ' + v['name']) if v else 'el vocabulario general'} "
+            f"({n} regla{'s' if n != 1 else ''})")
+        return {"ya_estaba": ya, "cabe": cabe, "reglas": n,
+                "lista": {k: v[k] for k in ("id", "project", "name")} if v else None,
+                "prompt": None if v else self.settings.get().get("prompt") or ""}
+
+    def aprender_no(self, b):
+        """POST /api/aprender/no {termino}: «No»: ese termino no se vuelve a proponer (en ninguna reunion)."""
+        termino = aprender.termino_valido(b.get("termino"))
+        if not termino:
+            raise ApiError("Falta el término.")
+        k = aprender.normal(termino)
+
+        def upd(d):
+            a = aprendido_de(d)
+            if k not in {aprender.normal(x) for x in a["no"]}:
+                a["no"].append(termino)
+            d["aprendido"] = a
+        self.settings.update(upd)
+        return {"ok": True}
+
+    def aprender_deshacer(self, b):
+        """POST /api/aprender/deshacer {path, de, a}: «Deshacer» de lo que cambio Tenca en esa reunion
+        (deshacer_aprendido). Con el candado de las correcciones a mano, como Restaurar original."""
+        with self._tx_save_lock:
+            abs_path = safe(b.get("path"), "file")
+            rel = rel_of(abs_path)
+            if self.jobs.active_for(rel):
+                raise ApiError("Se está transcribiendo; espera a que termine.")
+            de = str(b.get("de") or "")
+            hechos, saltados = deshacer_aprendido(rel, de, str(b.get("a") or ""))
+        self.library.at = 0
+        if hechos:
+            self.jobs.schedule_outputs(rel)  # destinos de salida: el documento vuelve a lo que escribio Whisper
+        # la regla sigue para las proximas reuniones: la interfaz ofrece olvidarla (su proyecto, para aprender_olvidar)
+        proyecto = proyecto_de_reunion(abs_path)
+        r = next((r for r in aprendido_de(self.settings.get())["reglas"] if aprender.normal(r["de"]) ==
+                  aprender.normal(de) and mismo_proyecto(r["proyecto"], proyecto)), None)
+        return {"deshechos": hechos, "no_deshechos": saltados, "regla": {"proyecto": r["proyecto"]} if r else None}
+
+    def _reglas_publicas(self):
+        return [{k: r[k] for k in ("de", "a", "proyecto")} for r in aprendido_de(self.settings.get())["reglas"]]
+
+    def aprender_reglas(self, q):
+        """GET /api/aprender/reglas: las reglas aprendidas y lo que dijiste que no se propusiera (Ajustes ›
+        Proyectos)."""
+        return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
+
+    def aprender_regla(self, b):
+        """POST /api/aprender/regla {antes: {de, proyecto} | null, de, a, proyecto}: cambiar una entrada del diccionario
+        personal desde Ajustes (lo que escribio Whisper, lo correcto o el proyecto). Lo ya cambiado en reuniones
+        anteriores no se toca: cada una sigue con su «Deshacer»."""
+        de, a = aprender.termino_valido(b.get("de")), aprender.termino_valido(b.get("a"))
+        if not de or not a:
+            raise ApiError("Escribe lo que pone Whisper y lo correcto (sin comas ni punto y coma).")
+        if de == a:
+            raise ApiError("Lo que pone Whisper y lo correcto son iguales: no habría nada que cambiar.")
+        toks = [t for t, _, _ in aprender.tokens(de)]
+        if not toks or len(toks) > aprender.MAX_REGLA:
+            raise ApiError("Lo que pone Whisper tiene que ser una palabra, o como mucho tres.")
+        if all(aprender.fold(t) in aprender.COMUNES or aprender.fold(t) in aprender.ENLACES for t in toks):
+            raise ApiError(f"«{de}» es una palabra muy corriente: cambiaría muchas frases que están bien. Pon algo más "
+                           "concreto.")
+        if len(aprender.letras(de)) < 3:
+            raise ApiError("Lo que pone Whisper tiene que tener al menos 3 letras: algo más corto saldría en muchas "
+                           "frases que están bien.")
+        if not aprender.regla_valida(de, a):  # solo mayúsculas o tildes en una palabra corriente («plan» → «Plan»)
+            if de.lower() != a.lower():  # cambian tildes (y quizá mayúsculas), no solo mayúsculas
+                raise ApiError(f"Solo cambian las tildes de «{de}»: no hace falta en el diccionario, y cambiaría "
+                               "frases que están bien.")
+            raise ApiError(f"Cambiar «{de}» por «{a}» tocaría frases que están bien: si solo cambian las mayúsculas, "
+                           "vale para siglas (KPI) o nombres como iPhone. Pon algo más concreto.")
+        proyecto = str(b.get("proyecto") or "")
+        antes = b.get("antes") if isinstance(b.get("antes"), dict) else None
+        conocidos = {v["project"] for v in list_vocab()} | {""}
+        if antes:
+            conocidos.add(str(antes.get("proyecto") or ""))
+        if not any(mismo_proyecto(proyecto, p) for p in conocidos):
+            raise ApiError("Ese proyecto ya no existe. Elige otro.")
+        proyecto = next((p for p in sorted(conocidos) if mismo_proyecto(proyecto, p)), proyecto)  # como se llama
+        k, ka = aprender.normal(de), aprender.normal(str((antes or {}).get("de") or ""))
+        pa = str((antes or {}).get("proyecto") or "")
+        err = []
+
+        def upd(d):
+            ap = aprendido_de(d)
+            es_la = lambda r: antes and aprender.normal(r["de"]) == ka and mismo_proyecto(r["proyecto"], pa)  # noqa
+            if any(not es_la(r) and aprender.normal(r["de"]) == k and mismo_proyecto(r["proyecto"], proyecto)
+                   for r in ap["reglas"]):
+                err.append(f"Ya tienes «{de}» en tu diccionario para ese proyecto.")
+                return
+            if antes and not any(es_la(r) for r in ap["reglas"]):
+                err.append("Esa entrada ya no está en tu diccionario.")
+                return
+            ap["reglas"] = [r for r in ap["reglas"] if not es_la(r)]
+            ap["reglas"].append({"de": de, "a": a, "proyecto": proyecto, "at": time.time()})
+            d["aprendido"] = ap
+        self.settings.update(upd)
+        if err:
+            raise ApiError(err[0])
+        log(f"✦ diccionario: {de} → {a}")
+        return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
+
+    def aprender_olvidar(self, b):
+        """POST /api/aprender/olvidar {de, proyecto}: la regla deja de aplicarse en las proximas reuniones (lo ya
+        cambiado se queda, con su Deshacer). {no: termino}: ese termino se puede volver a proponer."""
+        k, proyecto = aprender.normal(str(b.get("de") or "")), str(b.get("proyecto") or "")
+        kno = aprender.normal(str(b.get("no") or ""))  # {"no": termino}: que se pueda volver a proponer
+        quitadas = []
+
+        def upd(d):
+            a = aprendido_de(d)
+            if kno:
+                a["no"] = [x for x in a["no"] if aprender.normal(x) != kno]
+            else:
+                quitadas[:] = [r for r in a["reglas"] if aprender.normal(r["de"]) == k
+                               and mismo_proyecto(r["proyecto"], proyecto)]
+                a["reglas"] = [r for r in a["reglas"] if r not in quitadas]
+            d["aprendido"] = a
+        self.settings.update(upd)
+        if quitadas:
+            log(f"✦ regla olvidada: {quitadas[0]['de']} → {quitadas[0]['a']}")
+        return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
 
     def doc(self, q):
         abs_path = safe(q.get("path"), "file")
@@ -7928,6 +8473,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/perfil": a.perfil_get,
                   "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
                   "/api/agente/estado": a.agente_estado,
+                  "/api/aprender": a.aprender_get, "/api/aprender/reglas": a.aprender_reglas,
                   "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()},
                   "/api/ocultar-captura": lambda q: captura_estado(a.settings.get())}
         try:
@@ -7972,6 +8518,9 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/summarize": a.summarize,
                   "/api/favorite": a.favorite, "/api/folder-icon": a.folder_icon, "/api/delete": a.delete,
                   "/api/transcript/save": a.save_transcript, "/api/transcript/restore": a.restore_transcript,
+                  "/api/aprender/anadir": a.aprender_anadir, "/api/aprender/no": a.aprender_no,
+                  "/api/aprender/deshacer": a.aprender_deshacer, "/api/aprender/olvidar": a.aprender_olvidar,
+                  "/api/aprender/regla": a.aprender_regla,
                   "/api/export": a.export_package, "/api/link/pick": a.link_pick, "/api/link/add": a.link_add,
                   "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
                   "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check,

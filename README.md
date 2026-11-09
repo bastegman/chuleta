@@ -35,6 +35,13 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
 - **Vocabulario** por proyecto y workstream para que Whisper escriba bien nombres y siglas. Las listas se escriben en
   la app o se leen de una carpeta tuya («Usar las listas de una carpeta…»: cada `.txt` es un workstream y se lee en
   vivo, sin copiarlo); «Copiar listas de otra carpeta…» las copia a la de la app.
+- **Aprende de tus correcciones**: si corriges un nombre o una sigla en una transcripción, al pulsar «Listo» te propone
+  añadirlo al vocabulario de esa reunión (o a otra lista, también a una carpeta conectada; si no puede escribir allí,
+  dice por qué). Las erratas y los cambios de redacción no cuentan. Lo que confirmas va también a tu **diccionario
+  personal**: en las próximas reuniones de ese proyecto cambia lo que escribió Whisper, solo en frases que nadie ha
+  tocado, subrayado y con «Deshacer» en cada reunión. El diccionario se ve, se cambia y se quita en Ajustes →
+  Proyectos. Nada se aprende sin tu clic, el audio no se toca (lo que escribió Whisper se guarda aparte: «Restaurar
+  original») y nada sale del PC.
 - **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin
   asignar, la del proyecto: la que tiene su `Vocabulario`; si sus listas vienen de una carpeta conectada, la que le
   asignes en Ajustes → Proyectos o con «Usarlo en» al grabar). Lo grabado antes se queda donde está. En pleno directo,

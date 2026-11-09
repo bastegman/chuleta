@@ -80,6 +80,33 @@ sin memoria y la app enseñó la traza de ONNX dos veces, una como «No se pudo 
   WebView2: la marca y capturas con y sin ella, en windows-real) y el aviso real con la marca en
   `test_reunion_windows.py`; en `test_ui_smoke.py`, la nota de la tarjeta y el interruptor de Ajustes.
 
+### Aprender de tus correcciones (09/11/2026)
+
+Ítem 17 del backlog, de la research de competencia (Quill: «remembers the substitution»), aprobada por Bernardo en el
+msg 1242; las sustituciones, también en las reuniones futuras y en un diccionario personal reversible (msg 1390). Hecho
+por Steve en la rama `aprender-correcciones`, con tres revisiones de contexto fresco.
+
+- Al terminar de corregir una transcripción («Listo»), encima del texto: «¿Añadir «Orvalia» al vocabulario de
+  Finanzas?». Solo nombres propios, siglas y términos (`aprender.py`: mayúsculas en mitad de frase, siglas, letras y
+  cifras, mayúsculas por dentro; parecido por letras o por cómo suena), nunca erratas, tildes ni cambios de redacción.
+  Sin ventanas ni foco robado: «Ahora no» la deja hasta la próxima vez que abras Tenca, y «No» no la vuelve a
+  proponer (se puede deshacer en Ajustes › Proyectos). Lo ya contestado en una reunión no se pregunta otra vez en ella.
+  Si la lista de la reunión no se encuentra (carpeta conectada sin conexión), lo dice y no elige otra por ti.
+- Con «Añadir», el término va al final de la lista de la reunión o de la que elijas, también de una carpeta de listas
+  conectada, con su misma codificación (UTF-8, UTF-16, la de Windows), sus saltos de línea y su estilo (comas o uno
+  por línea). Si no puede escribir (solo lectura, abierta en otro programa, sin conexión, solo en OneDrive), lo dice
+  en la propia fila. Si ya no le cabe a Whisper, también.
+- **Diccionario personal**: «Y en las próximas reuniones de <proyecto>, cambiar «orbalia» por «Orvalia» (se guarda en
+  tu diccionario)», una casilla marcada que se puede desmarcar. Solo se ofrece si es seguro (se parecen, no son
+  palabras corrientes, lo corregiste en toda la reunión y, si solo cambian mayúsculas, es una sigla o una palabra como
+  «iPhone», nunca «plan» → «Plan»). Se aplica al terminar cada transcripción del proyecto (antes de los documentos, las
+  voces y el resumen), solo en frases que nadie ha tocado; va subrayado, con una barra para deshacerlo en esa reunión
+  y la pregunta de si quitarlo también del diccionario. Nunca toca el audio ni la copia del original; «Restaurar
+  original» lo quita todo. El diccionario está en Ajustes › Proyectos: se ve, se cambia en la propia fila y se quita;
+  sigue al proyecto si se renombra.
+- Tests: `tests/test_aprender.py` y `tests/test_ui_aprender.py` (en ui-smoke, Ubuntu y Windows; la regla aplicada al
+  transcribir, contra el Groq falso).
+
 ### Subir audio (09/11/2026)
 
 Ítem 7 del backlog (Bernardo, msg 1296: «poder subir un audio, independiente de donde venga»). Hecho por Steve en la

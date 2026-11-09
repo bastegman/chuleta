@@ -192,6 +192,15 @@ USO DIARIO
     salta con aviso: clic derecho > "Mantener siempre en este dispositivo". Para las listas
     de un compañero o de otra copia, "Copiar listas de otra carpeta…" las copia sin pisar
     las tuyas.
+  - Aprende de tus correcciones: si corriges un nombre o una sigla en una transcripción
+    («orbalia» → «Orvalia»), al pulsar "Listo" te propone, encima del texto, añadirlo al vocabulario
+    de esa reunión o a otra lista (también a tu carpeta de listas; si no puede escribir en ella,
+    te dice por qué). Las erratas y los cambios de redacción no cuentan. Lo que confirmas va también
+    a tu diccionario personal: en las próximas reuniones de ese proyecto cambia sola lo que escribió
+    Whisper, solo en frases que nadie ha tocado, subrayado en el texto y con "Deshacer" en cada
+    reunión (desmarca la casilla si no lo quieres). El diccionario está en Ajustes > Proyectos, con
+    "cambiar" y "quitar". Nada se aprende sin tu clic, el audio no se toca (lo que escribió Whisper
+    se guarda aparte: "Restaurar original") y nada sale del PC.
 
 
 QUIÉN HABLA (opcional)
