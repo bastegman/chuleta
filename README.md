@@ -56,8 +56,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    «Chuleta» en el escritorio y en el menú Inicio y la añade a **Aplicaciones instaladas**
    (`HKCU\…\Uninstall\Chuleta`, sin administrador). Al terminar dice dónde ha quedado; la carpeta descomprimida ya se
    puede borrar.
-3. Se abre Chuleta. Lo primero, «Configurar Chuleta» (en la portada; luego, en ⚙ Ajustes → Procesado): eliges una de
-   las tres opciones y al final lo pruebas:
+3. Se abre Chuleta. Lo primero, «Configurar Chuleta», en la portada (más tarde está en ⚙ Ajustes → Procesado): eliges
+   una de las tres opciones y al final lo pruebas todo:
    **Solo en este PC** (Whisper transcribe en tu ordenador, nada sale de él, sin resumen con IA), **Con tu cuenta de
    Claude** (transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de Claude
    Code: la app te guía paso a paso, «Abrir PowerShell», instalar, escribir `claude` y entrar con tu cuenta en el

@@ -438,7 +438,7 @@ DEFAULT_SETTINGS = {
     # un "agente": null escrito a mano no da el fichero por roto: agente_de lo resuelve)
     "agente": None,
     "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
-    # perfil de reunion por defecto (Ajustes > Perfil de reunion y «Guardar como perfil por defecto» al grabar).
+    # perfil de reunion por defecto (Ajustes › Al grabar, y «Usarlo en: todas» en la tarjeta de grabar).
     # None en folder/vocab = automatico, como siempre: la ultima carpeta usada (o la del proyecto del tema) y el tema
     # que sugiera la reunion en curso o el ultimo elegido. El idioma por defecto sigue siendo "language".
     "perfil": {"folder": None,    # carpeta de destino fija (ruta interna, "" = la raiz) o None
@@ -1492,23 +1492,27 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     return dict(out, origen=origen)
 
 
-def check_perfil(b, known=None):
+def check_perfil(b, known=None, actual=None):
     """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado. `known`: los destinos
-    de salida ya guardados (se aceptan aunque ahora no esten disponibles; los nuevos tienen que existir)."""
-    out = {}
+    de salida ya guardados (se aceptan aunque ahora no esten disponibles; los nuevos tienen que existir). `actual`: el
+    perfil guardado; su carpeta y su lista, sin cambiar, se aceptan aunque ahora no se encuentren (una vinculada
+    desconectada, OneDrive sin conexion): Ajustes las devuelve tal cual con cualquier «Guardar» y no deben perderse ni
+    impedir guardar lo demas (revision 2 de B2, P1-3)."""
+    out, actual = {}, actual or {}
     if "folder" in b:
         rel = b["folder"]
         if rel is not None:
             rel = str(rel).replace("\\", "/").strip("/")
-            folder = safe(rel, "dir")
-            if in_app_dir(folder):
-                raise ApiError("No se puede grabar ahí")
+            if rel != actual.get("folder"):
+                folder = safe(rel, "dir")
+                if in_app_dir(folder):
+                    raise ApiError("No se puede grabar ahí")
         out["folder"] = rel
     if "vocab" in b:
         vid = b["vocab"]
         if vid is not None:
             vid = str(vid).strip()
-            if vid and not find_vocab(None, None, vid):
+            if vid and vid != actual.get("vocab") and not find_vocab(None, None, vid):
                 raise ApiError("Ese tema de vocabulario ya no existe.")
         out["vocab"] = vid
     if "context" in b:
@@ -1555,6 +1559,8 @@ def ajustes_previstos(st, a):
         st["live_preset"] = a["live_preset"]
     if a.get("preset") in engines.PRESETS_BY_ID:  # Procesado › Motores: el de después («Solo grabar»)
         st["preset"] = a["preset"]
+    if a.get("procesado") in PROCESADOS:  # la opción marcada en Procesado, aplicada o no: «Guardar» también la aplica
+        st["procesado"] = a["procesado"]
     s = a.get("summary") if isinstance(a.get("summary"), dict) else {}
     for k, clave in (("auto", "summary_auto"), ("local", "summary_auto_local")):
         if k in s:
@@ -4331,7 +4337,8 @@ class App:
         normalizados, sin guardar nada: asi la interfaz rechaza al momento una carpeta que no vale."""
         if b.get("comprobar"):
             return {"outputs": check_perfil({"outputs": b.get("outputs") or []})["outputs"]}
-        cambios = check_perfil(b, perfil_de(self.settings.get())["outputs"])
+        actual = perfil_de(self.settings.get())
+        cambios = check_perfil(b, actual["outputs"], actual)
         self.settings.update(lambda d: update_perfil(d, cambios))
         log("   perfil de reunión guardado: " + ", ".join(sorted(cambios)))
         return {"perfil": perfil_de(self.settings.get())}
@@ -4509,8 +4516,11 @@ class App:
     def reunion_actual(self, q):
         """GET /api/reunion/actual: ventana de Teams, cita de Outlook (si está activado, o ?outlook=1 para probar)
         y la sugerencia de nombre, tema y participantes. Lo usan el botón «Probar» y el diálogo Grabar."""
-        return self.vigia.recordar(calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
-                                                             outlook=True if q.get("outlook") else None))
+        # ?outlook=0 (la línea de Teams en Ajustes): solo Teams, sin despertar a Outlook por COM, y sin guardarlo como
+        # la última lectura (la tarjeta y Ctrl+Alt+R usarían una sin la cita)
+        outlook = {"1": True, "0": False}.get(str(q.get("outlook") or ""))
+        r = calendario.reunion_actual(self.settings.get(), self._vocab_terms(), outlook=outlook)
+        return r if outlook is False else self.vigia.recordar(r)
 
     # --- edicion de transcripciones
     _tx_save_lock = threading.Lock()
@@ -4907,7 +4917,8 @@ class App:
         return {"ok": True}
 
     def save_settings(self, b):
-        perfil = (check_perfil(b["perfil"], perfil_de(self.settings.get())["outputs"])  # valida antes de guardar
+        actual = perfil_de(self.settings.get())
+        perfil = (check_perfil(b["perfil"], actual["outputs"], actual)  # valida antes de guardar
                   if isinstance(b.get("perfil"), dict) else {})
         antes = procesado_de(self.settings.get())
         cur = self.settings.get()

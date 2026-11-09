@@ -48,7 +48,7 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - «Al grabar» cabe en una pantalla a 1500×920 (antes 828 px para 655): las pistas de cada regla van bajo su nombre,
   «¿Cómo funciona?» en la línea de arriba y sin la línea del pie, que repetía el enlace a Proyectos.
 - En la tabla de Proyectos, editar una fila ya no cambia los anchos de la tabla ni corta los desplegables por la
-  mitad; «Guardar» y «Cancelar», uno encima del otro.
+  mitad.
 - Un nombre de reunión escrito con signos que no admite un archivo (`\ / : * ? " < > |`, p. ej. «Comité: Q4») ya no
   hace fallar «Empezar a grabar» con «Nombre no válido»: se graba sin esos signos y la tarjeta dice antes cómo se
   guardará («se guarda como «Comité Q4»»). Ctrl+Alt+R, igual.

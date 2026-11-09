@@ -85,7 +85,7 @@ function welcomeCard(all) {
   }
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
-    <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Transcripción en la nube: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
+    <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Procesado: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
     ${elegir ? '<li><b>Elige dónde se procesan tus reuniones</b> en ⚙ Ajustes: solo en este PC (como ahora), con tu cuenta de Claude o con una API externa. Las dos últimas resumen con IA y avisan de lo que sale del PC.</li>' : ''}
     ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). También puedes arrastrar aquí audios que ya tengas, o guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
     ${key && !elegir ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
@@ -133,9 +133,14 @@ S.vocab = [];
 async function loadVocab(language) {
   try {
     const r = await api('/api/vocab' + (language != null ? '?language=' + enc(language) : ''));
-    S.vocab = r.items; S.vocabLast = r.last;
+    S.vocab = r.items; S.vocabLast = r.last; S.vocabCarpetas = r.carpetas || [];  // carpetas de listas conectadas
+    S.vocabError = null;
     return r;
-  } catch { return { items: S.vocab, last: S.vocabLast || '' }; }
+  } catch (err) {
+    // se sigue con las de antes (o ninguna) y se apunta: Ajustes no confunde «no se han podido leer» con «no hay»
+    S.vocabError = err.message || 'error';
+    return { items: S.vocab, last: S.vocabLast || '', carpetas: S.vocabCarpetas || [] };
+  }
 }
 function vocabOf(a) {
   const p = a.props || {};

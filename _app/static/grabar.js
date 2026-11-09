@@ -140,12 +140,12 @@ function grPintar() {
   $('#grMotivo', d).textContent = p.proyecto.motivo || '';
   $('#grLlamada', d).classList.toggle('hidden', !S.rec.meeting && p.fuente !== 'teams');
   // asistentes de la cita de Outlook: a las notas como sugeridos, sin salir del PC hasta que los confirmes
-  const part = (p.rec.participantes || '').split(',').map(x => x.trim()).filter(Boolean);
+  const part = grPartes(p.rec.participantes);
   $('#grAsistL', d).classList.toggle('hidden', !part.length);
   $('#grAsist', d).classList.toggle('hidden', !part.length);
   if (part.length) {
-    const nombres = part.slice(0, 4).join(', ') + (part.length > 4 ? ` y ${part.length - 4} más` : '');
-    $('#grAsist', d).innerHTML = `<span title="${esc(part.join(', '))}"><b>${esc(nombres)}</b> · de ${p.rec.sugerido === 'outlook' ? 'Outlook' : 'Teams'}</span>`
+    const sep = grSep(part), nombres = part.slice(0, 4).join(sep) + (part.length > 4 ? ` y ${part.length - 4} más` : '');
+    $('#grAsist', d).innerHTML = `<span title="${esc(part.join(sep))}"><b>${esc(nombres)}</b> · de ${p.rec.sugerido === 'outlook' ? 'Outlook' : 'Teams'}</span>`
       + ` <span class="muted">Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a las copias en otras carpetas hasta que los confirmes.</span>`
       + ` <a href="#" data-gr-sin-asist>Quitar</a>`;
   }
@@ -154,6 +154,13 @@ function grPintar() {
 
 /* la lista de micrófonos y salidas no ha llegado (sin grabadora, o Windows no contesta): una frase, y el detalle del
    servidor (la cola del error de la grabadora) solo al pasar el ratón. También lo usa Ajustes › Al grabar */
+/* los asistentes, como los une el servidor (plan.unir_participantes / calendario.join_participants): con «; » si algún
+   nombre lleva coma («Apellido, Nombre», el directorio de Outlook de una empresa) y si no con «, » */
+function grPartes(texto) {
+  const t = String(texto || ''), sep = t.includes(';') ? ';' : ',';
+  return t.split(sep).map(x => x.trim()).filter(Boolean);
+}
+function grSep(nombres) { return nombres.some(n => n.includes(',')) ? '; ' : ', '; }
 function grDevsAviso(msg, resto = '') {
   return `<span class="gr-aviso" title="${esc(msg || '')}">No se ha podido leer la lista de micrófonos y salidas de audio${resto}.</span>`;
 }

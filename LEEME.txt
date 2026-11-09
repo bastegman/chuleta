@@ -132,9 +132,9 @@ USO DIARIO
     los usa desde el siguiente trozo. El resumen también tiene en cuenta el contexto.
   - Ajustes > Proyectos: una tabla con la carpeta y el idioma de cada proyecto y workstream, los
     que se usarán al grabar. En gris, lo que no has elegido tú: sin carpeta asignada, la del
-    proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. "Editar" lo
-    cambia en la propia fila. Debajo, las listas de vocabulario, las carpetas fuera de Chuleta y
-    las copias en otras carpetas.
+    proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. Con "Editar", lo
+    que cambies en la fila se guarda al momento (también la carpeta de cada workstream). Debajo,
+    las listas de vocabulario, las carpetas fuera de Chuleta y las copias en otras carpetas.
   - Copias en otras carpetas (en Ajustes > Proyectos): carpetas donde cada reunión se guarda además como
     documento (.md con propiedades, resumen, notas y transcripción; .txt; o Word .docx), por
     ejemplo un vault de Obsidian o la carpeta de documentos del proyecto en OneDrive, con

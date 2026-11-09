@@ -68,6 +68,10 @@ class ExplicarTests(unittest.TestCase):
             ("Tu organización no deja usar Claude Code con esta cuenta (Your organization has disabled API key "
              "authentication): no admite API keys; en PowerShell escribe claude y luego /login, entra con tu cuenta de "
              "Claude (la de la empresa) y vuelve a probar.", "abrir_powershell"),
+            # con la copia de VS Code se entra en su panel: PowerShell no sirve (revisión 2 de B2, P2-1)
+            ("Tu organización no deja usar Claude Code con esta cuenta (Your organization has disabled API key "
+             "authentication): no admite API keys; abre VS Code y, en el panel de Claude Code, vuelve a iniciar sesión "
+             "con tu cuenta de Claude (la de la empresa) y vuelve a probar.", "reintentar"),
             ("La sesión de Claude Code ha caducado (Login expired): en PowerShell escribe claude y luego /login, entra "
              "con tu cuenta (la de tu empresa, si es la que usas) y vuelve a probar.", "abrir_powershell"),
             ("La sesión de Claude Code ha caducado (Login expired): abre VS Code y, en el panel de Claude Code, vuelve "
@@ -79,9 +83,11 @@ class ExplicarTests(unittest.TestCase):
              "elige otro modelo en Ajustes o pide a tu IT que lo active, y vuelve a probar.", "procesado"),
             ("Claude Code está renovando tu sesión en otra ventana (por ejemplo, en VS Code): espera un minuto y "
              "vuelve a probar.", "reintentar"),
-            # la de esta rama antes de fusionar: propone primero entrar con otra cuenta en PowerShell (revisión de B2)
-            (str(engines.ClaudeCode()._why(1, "Your organization has disabled Claude Code for this account.")),
-             "abrir_powershell"))
+            # la de engines antes de claude-empresa, tal cual: propone primero entrar con otra cuenta en PowerShell
+            # (revisión de B2). Literal, para que valga también con el engines de esa rama fusionado
+            ("Tu organización no deja usar Claude Code con esta cuenta (Your organization has disabled Claude Code for "
+             "this account.): entra con tu cuenta personal (en PowerShell escribe claude y luego /login) o pide acceso "
+             "a tu IT, y vuelve a probar.", "abrir_powershell"))
         for frase, accion in casos:
             r = explicar.explicar(frase)
             self.assertEqual(r["frase"], frase)  # la frase de engines se queda
@@ -148,6 +154,36 @@ class AppJsTests(unittest.TestCase):
                 src = fh.read()
             self.assertNotRegex(src, r"\b(const|let|var)\s+api\b", f)
             self.assertNotRegex(src, r"\(\s*api\s*[,)=]", f)  # ni como parámetro
+
+    def test_ningun_texto_manda_a_una_seccion_que_no_existe(self):
+        """Ajustes por lo que se hace (rediseño B2, 07/11/2026): Grabar, Vocabulario, Carpetas, Reuniones, Perfil de
+        reunión y Transcripción ya no son secciones. Ningún texto de la app ni de README/LEEME manda allí, y ningún
+        test ni script entra por un `data-sec` o un `sec:` que no esté en AJ_SECS (revisión 2 de B2: P0-3 y P1-6, que
+        solo aparecían al fusionar con vocab-carpeta). El CHANGELOG cuenta lo que hubo, y se queda."""
+        import re
+        with open(os.path.join(APP, "static", "app.js"), encoding="utf-8") as fh:
+            m = re.search(r"const AJ_SECS = (\[.*?\]\]);", fh.read(), re.S)
+        secs = dict(json.loads(m.group(1).replace("'", '"')))
+        muertas = re.compile(r"Ajustes\s*(?:›|→|>|&gt;)\s*(?:<b>)?«?(Grabar|Vocabulario|Carpetas|Reuniones|Perfil de "
+                             r"reuni[oó]n|Transcripci[oó]n|Destinos de salida)\b")
+        sec = re.compile(r"""data-sec(?:-ir)?=\\?["']([\w-]+)|\bsec: ?["']([\w-]+)["']""")
+        malos = []
+        textos = [os.path.join(REPO, f)
+                  for f in ("README.md", "LEEME.txt", os.path.join("_app", "export", "LEEME.txt"))]
+        for base, dirs, files in os.walk(APP):
+            dirs[:] = [x for x in dirs if x not in ("__pycache__", "vendor")]
+            textos += [os.path.join(base, f) for f in files if f.endswith((".py", ".js", ".html", ".ps1", ".bat"))]
+        pruebas = [os.path.join(REPO, "tests", f) for f in os.listdir(os.path.join(REPO, "tests")) if f.endswith(".py")]
+        for p in textos + pruebas:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+            rel = os.path.relpath(p, REPO)
+            if p in textos:
+                malos += [f"{rel}: {x.group(0)}" for x in muertas.finditer(src)]
+            if p.endswith((".js", ".py")):
+                malos += [f"{rel}: {x.group(0)}" for x in sec.finditer(src)
+                          if (x.group(1) or x.group(2)) not in secs and "${" not in x.group(0)]
+        self.assertEqual(malos, [], f"secciones de Ajustes: {sorted(secs)}")
 
 
 @unittest.skipUnless(NODE, "node no está instalado")
@@ -291,7 +327,7 @@ class ProbarTests(unittest.TestCase):
     def test_voz_sin_texto_avisa_del_idioma(self):
         r, _ = self.correr("local", transcribir=lambda w, rep, c: "  ")
         self.assertEqual(r["pasos"][2]["estado"], "aviso")
-        self.assertIn("revisa el idioma en Ajustes → Grabar", r["pasos"][2]["detalle"])
+        self.assertIn("revisa el idioma en Ajustes › Al grabar", r["pasos"][2]["detalle"])
 
     def test_el_primer_fallo_para_con_su_frase_y_su_boton(self):
         def roto(w, rep, c):

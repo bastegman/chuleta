@@ -86,13 +86,42 @@ function perfilSavedText(prop, live, transcribed) {
    idioma y las instrucciones del resumen a «Resumen» y los destinos de salida a «Proyectos». Los ids no cambian (los
    lee collect() de app.js y collectPerfilSettings). */
 const perfilOpt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
-/* Al grabar: reuniones sin proyecto, idioma por defecto, proyecto si no se elige y contexto. Filas de una línea. */
+/* Opciones de «Reuniones sin proyecto» y de «Proyecto al grabar», con lo guardado aunque ahora no salga. */
+function perfilFolderOpts(sel) {
+  const hay = sel === PERFIL_AUTO || flatFolders().some(f => f.path === sel);
+  return perfilOpt(PERFIL_AUTO, 'Automática · la última usada', sel)
+    + (hay ? '' : `<option value="${esc(sel)}" selected>${esc(perfilCarpetaTxt(sel))}${S.tree ? ' (no se encuentra)' : ''}</option>`)
+    + folderOpts(sel);
+}
+function perfilVocabOpts(sel) {
+  const vocab = S.vocab || [], hay = sel === PERFIL_AUTO || sel === '' || vocab.some(v => v.id === sel);
+  const falta = S.vocabError ? 'no se han podido leer las listas' : 'no se encuentra';
+  return perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', sel) + perfilOpt('', 'Sin proyecto', sel)
+    + (hay ? '' : `<option value="${esc(sel)}" selected>${esc(perfilListaTxt(sel))} (${falta})</option>`)
+    + perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, sel)).join('')}</optgroup>`).join('');
+}
+/* Una carpeta guardada, en palabras: la vinculada por su nombre y el resto de la ruta con «\». */
+function perfilCarpetaTxt(rel) {
+  const l = (S.config?.links || []).find(x => rel === x.rel || rel.startsWith(x.rel + '/'));
+  const resto = l ? rel.slice(l.rel.length) : rel;
+  return (l ? nfc(l.name) : '') + resto.replace(/\//g, '\\');
+}
+/* Una lista guardada que ya no sale entre las listas, en palabras: «Proyecto › Workstream». */
+function perfilListaTxt(id) {
+  const partes = String(id).replace(/^:v[^/]*\//, '').split('/');
+  const n = (partes.pop() || '').replace(/\.txt$/i, '');
+  return partes.length ? `${partes[0]} › ${n}` : n;
+}
+/* Al grabar: reuniones sin proyecto, idioma por defecto, proyecto si no se elige y contexto. Filas de una línea.
+   Una carpeta o una lista guardadas que ahora no salen (una vinculada desconectada, OneDrive sin conexión, las listas
+   sin poder leerse) se enseñan tal cual y elegidas: si no, el desplegable enseñaba «Automática» y cualquier «Guardar»
+   las borraba sin avisar (revisión 2 de B2, P1-3). */
 function perfilReglasHtml() {
-  const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [];
+  const c = S.config || {}, p = c.perfil || {};
   const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
-  return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto<small class="ag-sub">y de proyectos sin carpeta propia</small></label><div><select id="pfFolder">${perfilOpt(PERFIL_AUTO, 'Automática · la última usada', folderSel)}${folderOpts(folderSel)}</select></div></div>
+  return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto<small class="ag-sub">y de proyectos sin carpeta propia</small></label><div><select id="pfFolder">${perfilFolderOpts(folderSel)}</select></div></div>
     <div class="ag-regla"><label for="sLang">Idioma por defecto<small class="ag-sub">si el proyecto no tiene el suyo</small></label><div>${langSelect('sLang', c.language ?? 'es-en')}</div></div>
-    <div class="ag-regla"><label for="pfVocab">Proyecto al grabar<small class="ag-sub">la reunión, su título o la última</small></label><div><select id="pfVocab">${perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', vocabSel)}${perfilOpt('', 'Sin proyecto', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, vocabSel)).join('')}</optgroup>`).join('')}</select></div></div>
+    <div class="ag-regla"><label for="pfVocab">Proyecto al grabar<small class="ag-sub">la reunión, su título o la última</small></label><div><select id="pfVocab">${perfilVocabOpts(vocabSel)}</select></div></div>
     <div class="ag-regla"><label for="pfContext">Contexto</label><div><input class="input" id="pfContext" maxlength="500" value="${esc(p.context || '')}" placeholder="Opcional: de qué van tus reuniones y quién participa" autocomplete="off"></div></div>`;
 }
 /* Procesado: con qué motor empieza el directo y con cuál se transcribe después. */

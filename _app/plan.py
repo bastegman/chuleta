@@ -104,6 +104,15 @@ def recientes(historial, listas_por_id, limite=40):
     return out[:limite]
 
 
+def unir_participantes(nombres):
+    """Los participantes de la reunión en una línea, como calendario.join_participants (revisión de la integración del
+    08/11/2026): con «; » si algún nombre lleva coma (el directorio de una empresa en Outlook: «Apellido, Nombre») y,
+    si no, con «, ». Con «, », «Stegmaier, Bernardo, García, Ana» eran cuatro personas para quien lo lee y para la pista
+    de quién habla. tests/test_plan.py comprueba que da lo mismo que la de calendario, si existe."""
+    nombres = [n for n in (nombres or []) if n]
+    return ("; " if any("," in n for n in nombres) else ", ").join(nombres)
+
+
 def proyecto_txt(v):
     return f"{v['project']} › {v['name']}" if v else "Sin proyecto"
 
@@ -240,9 +249,14 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     preset = str(cambios.get("preset") or st.get("live_preset") or "medium")
     if preset not in presets and presets:
         preset = "medium" if "medium" in presets else next(iter(presets))
-    # el motor se elige en Ajustes › Procesado (Motores); «Texto en directo», en Al grabar, que lo dice debajo
-    t_origen = "reunion" if ("live" in cambios or "preset" in cambios) else "procesado"
-    t_txt = "cambiado para esta reunión" if t_origen == "reunion" else "Ajustes › Procesado"
+    # el motor del directo se elige en Ajustes › Procesado (Motores); «Texto en directo» apagado (transcribir al
+    # terminar), en Al grabar: el origen es el de lo que decide la línea
+    if "live" in cambios or "preset" in cambios:
+        t_origen, t_txt = "reunion", "cambiado para esta reunión"
+    elif not live:
+        t_origen, t_txt = "ajustes", "Ajustes › Al grabar"
+    else:
+        t_origen, t_txt = "procesado", "Ajustes › Procesado"
     # con «Solo grabar» transcribe la cola al terminar, con el motor de después (Ajustes › Procesado)
     p_tx = presets.get(preset) if live else presets.get(st.get("preset") or "rapido")
     lineas.append(_linea("transcribe", "Transcribe", transcribe_txt(live, p_tx or {}, motores),
@@ -265,7 +279,7 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     if "participantes" in pedido:
         part, sugerido = " ".join(str(pedido.get("participantes") or "").split()), ""
     else:
-        part = ", ".join(sug.get("participants") or []) if n_origen in ("teams", "outlook") else ""
+        part = unir_participantes(sug.get("participants")) if n_origen in ("teams", "outlook") else ""
         sugerido = (sug.get("source") or "") if part else ""
 
     rec = {"name": nombre, "vocab": vid, "folder": base, "language": lang, "contexto": ctx, "mic": mic,

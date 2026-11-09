@@ -87,7 +87,7 @@ const presetIcon = p => !p ? '' : PRESET_ICONS[p.id] ? I[PRESET_ICONS[p.id]] : (
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const DIA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const LANGS = [['es-en', 'Español + inglés (spanglish)'], ['', 'Detectar (cualquier idioma)'], ['es', 'Solo español'], ['en', 'Solo inglés'],
-  ['pt', 'Português'], ['fr', 'Français'], ['it', 'Italiano'], ['de', 'Deutsch'], ['ca', 'Català'],
+  ['pt', 'Portugués'], ['fr', 'Francés'], ['it', 'Italiano'], ['de', 'Alemán'], ['ca', 'Catalán'],
   ['es-pt', 'Español + portugués (mezcla)'], ['en-pt', 'Inglés + portugués (mezcla)']];
 const langSelect = (id, sel) => `<select id="${id}" title="Idioma de la reunión">${LANGS.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -1916,7 +1916,7 @@ function procesadoFieldsetHtml() {
   </fieldset>`;
 }
 
-/* la ayuda del directo en Ajustes › Grabar: con la API, la nube y su cupo; sin ella, solo el PC */
+/* la ayuda del directo en Ajustes › Avanzado (OBS): con la API, la nube y su cupo; sin ella, solo el PC */
 const lAyuda = api => 'El motor con el que empieza cada directo se elige en Procesado › Motores y se puede cambiar en mitad de la grabación desde la propia pantalla. '
   + (api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.'
     : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.');
@@ -2045,25 +2045,33 @@ function openSettings(opts) {
     // «Hay cambios sin guardar» de verdad: se compara con cómo se abrió. Lo que se guarda solo (Voces, personas) o no
     // es de «Guardar» (el vocabulario del instalador) no cuenta. Si un subdiálogo (Voces, vocabulario, carpeta,
     // Apagar, el asistente) reabre Ajustes, lo escrito y sin guardar vuelve (S.ajBorrador).
-    const NO_CUENTA = new Set(['vzOn', 'xVocab', 'agProy']);  // agProy: solo elige qué plan enseñar
+    // agProy: solo elige qué plan enseñar; data-se-guarda-solo: lo que guarda al momento (Outlook con su estado)
+    const NO_CUENTA = new Set(['vzOn', 'xVocab', 'agProy']);
     const campos = () => $$('.aj-main input[id], .aj-main select[id], .aj-main textarea[id]', d)
-      .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && x.type !== 'file' && x.type !== 'button');
+      .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && !('seGuardaSolo' in x.dataset) && x.type !== 'file'
+        && x.type !== 'button');
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
     const inicial = foto();  // como viene de los ajustes guardados
     d.borradorAlAbrir = S.ajBorrador ? { ...S.ajBorrador } : null;  // ajustes.js: lo que no se pudo poner aún
-    if (S.ajBorrador) {
-      campos().forEach(x => {
+    const ponerBorrador = xs => {
+      if (!S.ajBorrador) return;
+      xs.forEach(x => {
         if (!(x.id in S.ajBorrador)) return;
         if (x.type === 'checkbox' || x.type === 'radio') x.checked = S.ajBorrador[x.id]; else x.value = S.ajBorrador[x.id];
       });
-    }
+    };
+    ponerBorrador(campos());
+    // «Dónde se procesan» marcado y sin aplicar también lo es: «Guardar» lo aplica (revisión 2 de B2, P1-2)
+    const procSinAplicar = () => {
+      const v = $('input[name="proc"]:checked', d)?.value;
+      return !!v && v !== (S.config.procesado || 'local');
+    };
     const marcar = () => {
-      const ahora = foto(), cambios = Object.keys(ahora).some(k => ahora[k] !== inicial[k]);
+      const ahora = foto(), cambios = Object.keys(ahora).some(k => ahora[k] !== inicial[k]) || procSinAplicar();
       S.ajBorrador = cambios ? ahora : null;
       $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
     };
     d.ajMarcar = marcar;
-    if (S.ajBorrador) marcar();
     document.body.classList.add('aj-abierto');
     setTimeout(() => $('.aj-nav [data-sec].on', d)?.focus(), 0);  // el foco, dentro del diálogo (no en ⚙)
     d.addEventListener('click', e => {
@@ -2072,7 +2080,7 @@ function openSettings(opts) {
       e.preventDefault();
       irSec(x.dataset.sec || x.dataset.secIr);
     });
-    const pendiente = e => { if (e.target.closest('.aj-main') && e.target.name !== 'proc' && !NO_CUENTA.has(e.target.id)) marcar(); };
+    const pendiente = e => { if (e.target.closest('.aj-main') && !NO_CUENTA.has(e.target.id)) marcar(); };
     d.addEventListener('input', pendiente);
     d.addEventListener('change', pendiente);
     d.addEventListener('click', e => {  // la tarjeta de estado (configurar.js): «Probar» y «Cambiar…» abren el asistente
@@ -2145,6 +2153,7 @@ function openSettings(opts) {
         d.modelosPoll?.();
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);
         ajTarjeta();
+        marcar();  // el modo ya está aplicado: deja de ser «sin guardar»
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ No se ha podido aplicar: ${esc(err.message)}</span>`; }
     });
     S.modalCleanup = () => {  // al cerrar Ajustes (Cancelar, Esc, fuera) con el cambio sin aplicar: que se sepa
@@ -2210,6 +2219,13 @@ function openSettings(opts) {
     if (typeof bindAjAlGrabar === 'function') bindAjAlGrabar(d);  // ajustes.js: el plan arriba, las reglas debajo
     if (typeof bindAjProyectos === 'function') bindAjProyectos(d);
     if (typeof bindAjCalendario === 'function') bindAjCalendario(d);
+    // los campos que se pintan después de la foto (los de la nube, según el proveedor): su valor de ahora es el de
+    // partida, y el borrador también vale para ellos. Antes contaban siempre: deshacer un cambio seguía diciendo «Hay
+    // cambios sin guardar» (revisión 2 de B2)
+    const tarde = campos().filter(x => !(x.id in inicial));
+    tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
+    ponerBorrador(tarde);
+    if (S.ajBorrador) marcar();
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -2247,6 +2263,7 @@ function openSettings(opts) {
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
         procPintar();  // «Probar conexión» guarda: el modo elegido ya está aplicado
         ajTarjeta();
+        marcar();
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }

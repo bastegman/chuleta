@@ -99,6 +99,35 @@ class CapasTests(unittest.TestCase):
         api = dict(MOTORES, procesado="api", resumen_local=False)
         b = lineas(plan.resolver({}, LISTAS, {}, [], {}, motores=api))
         self.assertEqual(b["resume"]["valor"], "Groq, cuando lo pidas")  # transcrito en el PC: sin consentimiento
+        # «Texto en directo» apagado en Al grabar: «al terminar» lo decide esa regla, no Procesado (revisión 2, P2-7)
+        b = lineas(resolver(dict(st, rec_directo=False), pedido={"vocab": A}))
+        self.assertEqual((b["transcribe"]["valor"], b["transcribe"]["origen"], b["transcribe"]["origen_txt"]),
+                         ("Este PC, al terminar · Rápido", "ajustes", "Ajustes › Al grabar"))
+
+    def test_participantes_con_coma_en_el_nombre(self):
+        """Outlook de empresa: «Apellido, Nombre». Se unen con «; » para no contar el doble, como
+        calendario.join_participants (rama fix-calendario); y dan lo mismo que ella, si está."""
+        sug = {"name": "Comité", "source": "outlook", "vocab": "",
+               "participants": ["Stegmaier, Bernardo", "García, Ana"]}
+        self.assertEqual(resolver(sug=sug, pedido={})["rec"]["participantes"], "Stegmaier, Bernardo; García, Ana")
+        sug["participants"] = ["Ana", "", "Luis"]
+        self.assertEqual(resolver(sug=sug, pedido={})["rec"]["participantes"], "Ana, Luis")
+        import calendario
+        unir = getattr(calendario, "join_participants", None)
+        for nombres in (["Stegmaier, Bernardo", "García, Ana"], ["Ana", "Luis"], ["Ana", ""], [], None):
+            if unir:
+                self.assertEqual(plan.unir_participantes(nombres), unir(nombres), nombres)
+
+    def test_los_idiomas_se_llaman_igual_que_en_los_desplegables(self):
+        """«Portugués» en el plan y «Português» en el desplegable eran dos nombres del mismo idioma (revisión 2,
+        P2-5): los de un solo idioma, iguales que en app.js (LANGS)."""
+        import json
+        import re
+        with open(os.path.join(os.path.dirname(plan.__file__), "static", "app.js"), encoding="utf-8") as fh:
+            m = re.search(r"^const LANGS = (\[.*?\]\]);$", fh.read(), re.S | re.M)
+        langs = dict(json.loads(m.group(1).replace("'", '"')))
+        for code in ("pt", "fr", "it", "de", "ca"):
+            self.assertEqual(plan.IDIOMAS[code], langs[code], code)
 
     def test_un_motor_que_no_se_ofrece_no_se_promete(self):
         p = resolver({"live_preset": "nube"}, pedido={})
@@ -505,6 +534,32 @@ class ServidorPlanTests(TempTree):
         self.assertEqual(a.settings.get(), antes)  # no se ha guardado nada
         p = a.grabar_plan_api({"vocab": "", "ajustes": {"language": "xx-yy-zz", "perfil": {"folder": "No/Existe"}}})
         self.assertEqual(lineas(p)["idioma"]["code"], "es")  # lo que no vale se ignora
+
+    def test_el_modo_marcado_en_procesado_aunque_no_se_haya_aplicado(self):
+        """Revisión 2 de B2, P1-2: «Guardar» aplica la opción marcada en «Dónde se procesan»; el plan la enseña ya."""
+        a = self.app(procesado="local", summary_auto=True)
+
+        def resume(aj):
+            return lineas(a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": aj}))["resume"]["valor"]
+        self.assertEqual(resume({}), "No se resume: todo se queda en este PC")
+        self.assertEqual(resume({"procesado": "agente"}), "Claude con tu cuenta, al terminar")
+        self.assertEqual(resume({"procesado": "nada"}), "No se resume: todo se queda en este PC")  # no vale: se ignora
+        self.assertEqual(a.settings.get()["procesado"], "local")
+
+    def test_perfil_guardado_que_ahora_no_se_encuentra(self):
+        """Revisión 2 de B2, P1-3: la carpeta o la lista del perfil que ahora no se encuentran (una vinculada
+        desconectada, OneDrive sin conexión) vuelven tal cual con cualquier «Guardar»: ni se pierden ni impiden guardar
+        lo demás. Una nueva que no existe, sí se rechaza."""
+        actual = {"folder": "Fuera/Clientes", "vocab": "Omega/Vocabulario/Gen.txt"}
+        self.assertEqual(server.check_perfil(dict(actual), actual=actual), actual)
+        nuevas = (({"folder": "Otra/No"}, "No existe la carpeta"),
+                  ({"vocab": "Omega/Vocabulario/X.txt"}, "ya no existe"))
+        for b, msg in nuevas:
+            with self.assertRaises(server.ApiError) as e:
+                server.check_perfil(b, actual=actual)
+            self.assertIn(msg, e.exception.msg)
+        self.assertEqual(server.check_perfil({"folder": None, "vocab": None}, actual=actual),
+                         {"folder": None, "vocab": None})
 
     def test_renombrar_un_tema_o_un_proyecto_conserva_su_idioma(self):
         d = {"workstream_langs": {"Alfa/Vocabulario/General.txt": "pt"}, "project_langs": {"Alfa": "en"}}

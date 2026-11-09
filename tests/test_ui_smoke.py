@@ -273,7 +273,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertTrue(0 <= b[0] and b[1] <= b[2], b)  # «Empezar a grabar» a la vista en 900×600
         # el autocompletado: Intro elige la reunión y trae su proyecto, pero no empieza a grabar (revisión de B1)
         pg.fill("#grNombre", "")
-        pg.type("#grNombre", "Comit")
+        # «Comité de pr»: con «Comit», otra reunión de la suite (la de «Copiar para correo», más reciente) iba primero
+        pg.type("#grNombre", "Comité de pr")
         pg.wait_for_selector("#grSug:not(.hidden) [data-sug-titulo]", timeout=5000)
         pg.keyboard.press("ArrowDown")
         pg.keyboard.press("Enter")
@@ -322,6 +323,18 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         escrito aunque no se haya guardado; «Proyectos» guarda el idioma de un proyecto en su fila y lo dice como suyo;
         «Calendario y Teams» dice el estado de Teams en una frase."""
         pg, errores, red = self.pagina()
+        # con la rama fix-calendario: el Outlook clásico instalado y apagado (aquí no lo hay), y «Activar» que responde
+        apagado = {"nivel": 1, "estado": "apagado", "frase": "Tienes el Outlook clásico: activa el calendario.",
+                   "accion": {"id": "activar", "texto": "Activar"}, "activado": False}
+        activados = []
+
+        def activar(route):
+            b = json.loads(route.request.post_data)
+            activados.append(b)
+            route.fulfill(json=dict(apagado, estado="conectado", frase="Outlook clásico: conectado", accion=None,
+                                    activado=True) if b.get("activar") else apagado)
+        pg.route("**/api/calendario/estado*", lambda r: r.fulfill(json=apagado))
+        pg.route("**/api/calendario/activar", activar)
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.click("#btnSettings")
@@ -355,7 +368,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertIn("Sin asignar (su carpeta", pg.inner_text("#pjTabla [data-pj-f]"))
         pg.select_option("#pjTabla [data-pj-l]", "en")
         # se guarda al momento, sin ningún «Guardar» (revisión de B2: el de abajo lo perdía)
-        pg.wait_for_function("document.querySelector('#pjTabla .pj-estado')?.textContent === 'Guardado'", timeout=5000)
+        pg.wait_for_function("document.querySelector('#pjTabla .pj-estado')?.textContent === 'Idioma guardado'",
+                             timeout=5000)
         self.assertEqual(pg.evaluate("api('/api/config')")["project_langs"], {"Proyecto": "en"})
         pg.click("#pjTabla [data-pj-no]")  # «Listo»
         fila_p = "document.querySelector('#pjTabla tr[data-pj=\"Proyecto\"]')?.innerText"
@@ -366,23 +380,47 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_function(f"{origen} === 'de Proyecto'", timeout=5000)
         pg.click(".aj-nav [data-sec='calendario']")
         self.assertTrue(pg.inner_text("#ctTeamsEstado").strip())
-        # Outlook una sola vez. Con fix-calendario, su estado lo pinta reunion.js (#rnEstado) y la fila de aquí se
-        # retira; sin ella, la fila con su estado, «Activar» y «Desactivar» (la casilla de reunion.js no se enseña dos
-        # veces) y «Probar» en la fila. La ayuda larga, plegada
+        # Outlook una sola vez, en su fila: la casilla de reunion.js no se enseña y solo hay un «Activar» o un
+        # «Desactivar» a la vista (revisión 2, P1-5). Con fix-calendario la frase es su #rnEstado y guardan al momento
+        # (aquí, con su estado simulado: en este PC no hay Outlook clásico); sin ella, con «Guardar», y se dice
+        self.assertFalse(pg.is_visible("#rnOutlook"))
+        self.assertTrue(pg.is_visible("#ctOutFila"))
+        botones = ("[...document.querySelectorAll('#ctOutAcc button, #rnEstado button, label:has(#rnOutlook)')]"
+                   ".filter(b => b.offsetParent && /Activar|Desactivar|Leer mi calendario/.test(b.textContent))"
+                   ".map(b => b.textContent.trim())")
+        acc = "document.querySelector('#ctOutAcc').innerText"
         if pg.evaluate("!!document.querySelector('#rnEstado')"):
-            self.assertFalse(pg.is_visible("#ctOutFila"))
-            self.assertTrue(pg.is_visible("#rnEstado"))
-        else:
-            self.assertFalse(pg.is_visible("#rnOutlook"))
+            pg.wait_for_function(f"{acc}.includes('Activar')", timeout=5000)
+            self.assertEqual(pg.evaluate(botones), ["Activar"])
+            self.assertEqual(pg.inner_text("#ctOutEstado"), "Apagado")
+            self.assertTrue(pg.is_visible("#ctOutFila #rnEstado"))
+            pg.click("#ctOutAcc [data-ct-outlook='1']")
+            pg.wait_for_function(f"{acc}.includes('Desactivar')", timeout=5000)
+            self.assertEqual(pg.evaluate(botones), ["Desactivar"])
+            self.assertTrue(pg.is_checked("#rnOutlook"))
+            self.assertEqual(pg.inner_text("#ctOutEstado"), "Activado")
+            self.assertNotIn("sin guardar", pg.inner_text(".aj-pend"))  # ya está guardado
+            pg.click("#ctOutAcc [data-ct-outlook='0']")
+            pg.wait_for_function(f"{acc}.includes('Activar')", timeout=5000)
+            self.assertFalse(pg.is_checked("#rnOutlook"))
+            self.assertEqual([c["activar"] for c in activados], [True, False])
+        elif pg.evaluate("/win/i.test(navigator.platform)"):
             self.assertEqual(pg.inner_text("#ctOutEstado"), "No conectado")
+            self.assertEqual(pg.evaluate(botones), ["Activar"])
             self.assertFalse(pg.is_visible("#rnProbar"))  # «Probar» es de Outlook: con Outlook activado, en su fila
             pg.click("#ctOutAcc [data-ct-outlook='1']")
             self.assertTrue(pg.is_checked("#rnOutlook"))
             self.assertEqual(pg.inner_text("#ctOutEstado"), "Activado")
+            self.assertEqual(pg.evaluate(botones), ["Desactivar"])
             self.assertTrue(pg.is_visible("#ctOutFila #rnProbar"))
             self.assertIn("Se activa al pulsar Guardar", pg.inner_text("#ctOutFrase"))
             pg.click("#ctOutAcc [data-ct-outlook='0']")
             self.assertFalse(pg.is_checked("#rnOutlook"))
+        else:  # fuera de Windows no se ofrece activar algo que no funcionaría (revisión 2, P2-11)
+            self.assertEqual(pg.inner_text("#ctOutEstado"), "Solo en Windows")
+            self.assertEqual(pg.evaluate(botones), [])
+            self.assertIn("solo se lee en Windows", pg.inner_text("#ctOutFrase"))
+            self.assertFalse(pg.is_visible("#rnProbar"))
         ayuda = "[data-secc='calendario'] fieldset details.ag-como .help"
         self.assertTrue(pg.evaluate(f"!!document.querySelector(\"{ayuda}\")"))  # la ayuda larga existe, plegada
         self.assertFalse(pg.is_visible(ayuda))
@@ -424,16 +462,134 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click(f"#pjTabla [data-pjw-editar='{ws}']")
         self.assertIn("La del proyecto", pg.inner_text("#pjTabla tr.pj-ed [data-pj-f] option"))
         pg.select_option("#pjTabla tr.pj-ed [data-pj-f]", "Proyecto")
-        pg.wait_for_function("document.querySelector('#pjTabla .pj-estado')?.textContent === 'Guardado'", timeout=5000)
+        pg.wait_for_function("document.querySelector('#pjTabla .pj-estado')?.textContent === 'Carpeta guardada'",
+                             timeout=5000)
         self.assertEqual(pg.evaluate("api('/api/config')")["workstream_folders"], {ws: "Proyecto"})
         pg.click("#pjTabla [data-pj-no]")
         celda = f"document.querySelector('#pjTabla tr[data-pjw=\"{ws}\"] td:nth-child(2)').innerText"
         pg.wait_for_function(f"!{celda}.includes('la del proyecto')", timeout=5000)
+        # dos cambios seguidos en la misma fila y enseguida otra fila: no se pierde ninguno (revisión 2, P1-1)
+        pg.click("#pjTabla [data-pj-editar='Proyecto']")
+        pg.select_option("#pjTabla tr.pj-ed [data-pj-f]", "Proyecto")
+        pg.select_option("#pjTabla tr.pj-ed [data-pj-l]", "de")  # enseguida, el otro desplegable
+        pg.click(f"#pjTabla [data-pjw-editar='{ws}']")  # y enseguida otra fila
+        pg.select_option("#pjTabla tr.pj-ed [data-pj-l]", "fr")
+        pg.click("#pjTabla [data-pj-no]")
+        todo = ("api('/api/config').then(c => (c.project_folders_asignadas || c.project_folders)?.Proyecto"
+                " === 'Proyecto'"
+                f" && c.project_langs?.Proyecto === 'de' && c.workstream_langs?.['{ws}'] === 'fr')")
+        pg.wait_for_function(todo, timeout=5000)
         for body in ({"clave": "idioma", "valor": None, "alcance": "proyecto", "vocab": ws},
+                     {"clave": "idioma", "valor": None, "alcance": "workstream", "vocab": ws},
+                     {"clave": "carpeta", "valor": None, "alcance": "proyecto", "vocab": ws},
                      {"clave": "carpeta", "valor": None, "alcance": "workstream", "vocab": ws}):
             pg.evaluate("b => api('/api/grabar/recordar', b)", body)  # deja los ajustes como estaban
-        self.assertEqual(pg.evaluate("api('/api/config')")["workstream_folders"], {})
+        cfg = pg.evaluate("api('/api/config')")
+        self.assertEqual((cfg["workstream_folders"], cfg["workstream_langs"], cfg["project_langs"]), ({}, {}, {}))
         pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_modo_sin_aplicar_y_filas_que_no_cambian(self):
+        """Revisión 2 de B2: la opción marcada en «Dónde se procesan» y sin aplicar llega al plan y es «sin guardar»,
+        porque «Guardar» la aplica (P1-2); y al recalcular, solo cambian las filas del plan que cambian: un lector de
+        pantalla no vuelve a leer el plan entero (P2-4)."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila[data-fila='resume']", timeout=10000)
+        self.assertIsNone(pg.get_attribute(".ag-plan", "aria-live"))
+        self.assertEqual(pg.get_attribute("#agFilas", "aria-live"), "polite")
+        antes = pg.evaluate("api('/api/config')")["procesado"]
+        otro = "agente" if antes != "agente" else "local"
+        resume = "document.querySelector('#agFilas [data-fila=resume] .gr-v').textContent"
+        r0 = pg.evaluate(resume)
+        pg.evaluate("window.__audio = document.querySelector('#agFilas [data-fila=audio]')")
+        pg.click(".aj-nav [data-sec='procesado']")
+        pg.check(f"#modal input[name='proc'][value='{otro}']")
+        self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
+        pg.click(".aj-nav [data-sec='algrabar']")
+        pg.wait_for_function(f"{resume} !== {json.dumps(r0)}", timeout=5000)
+        self.assertIn("Claude" if otro == "agente" else "No se resume", pg.evaluate(resume))
+        self.assertTrue(pg.evaluate("window.__audio === document.querySelector('#agFilas [data-fila=audio]')"))
+        self.assertEqual(pg.evaluate("api('/api/config')")["procesado"], antes)  # aún no
+        pg.click(".aj-nav [data-sec='procesado']")
+        pg.check(f"#modal input[name='proc'][value='{antes}']")
+        self.assertNotIn("sin guardar", pg.inner_text(".aj-pend"))
+        pg.click(".aj-nav [data-sec='algrabar']")
+        pg.wait_for_function(f"{resume} === {json.dumps(r0)}", timeout=5000)
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_sin_poder_leer_las_listas(self):
+        """Revisión 2 de B2, P1-4: si /api/vocab falla, Proyectos no dice «Todavía no hay proyectos» (invitaba a
+        crearlos otra vez): una frase con «Probar otra vez», también en las listas y en Al grabar."""
+        pg, errores, red = self.pagina()
+        pg.route("**/api/vocab*", lambda r: r.fulfill(status=500, json={"error": "OneDrive no responde"}))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("[data-secc='algrabar'] .ag-sin-listas", timeout=10000)
+        self.assertIn("solo se puede comprobar «Sin proyecto»", pg.inner_text("[data-secc='algrabar'] .ag-sin-listas"))
+        pg.click(".aj-nav [data-sec='proyectos']")
+        pg.wait_for_selector("#pjTabla .ag-sin-listas", timeout=10000)
+        self.assertIn("No se han podido leer las listas de vocabulario", pg.inner_text("#pjTabla"))
+        self.assertNotIn("Todavía no hay", pg.inner_text("#pjTabla"))
+        pg.wait_for_selector("#sVocab .ag-sin-listas", timeout=10000)
+        self.assertNotIn("Todavía no hay listas", pg.inner_text("#sVocab"))
+        self.assertNotIn("OneDrive no responde", pg.inner_text("#modal"))  # sin el texto técnico
+        pg.unroute("**/api/vocab*")
+        pg.click("#pjTabla [data-aj-listas-otra]")  # Ajustes otra vez, en Proyectos
+        pg.wait_for_selector("#modal [data-secc='proyectos']:not([hidden]) #pjTabla [data-pj-editar='Proyecto']",
+                             timeout=10000)
+        self.assertEqual(pg.locator(".ag-sin-listas").count(), 0)
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, [r for r in red if "/api/vocab" not in r])
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_lo_guardado_que_ahora_no_se_encuentra(self):
+        """Revisión 2 de B2, P1-3: la carpeta de las reuniones sin proyecto y el proyecto al grabar guardados, si ahora
+        no se encuentran (una vinculada desconectada, una lista que no se lee), se ven tal cual y cualquier «Guardar»
+        los conserva. Antes el desplegable enseñaba «Automática» y el «Guardar» de otra sección los borraba."""
+        pg, errores, red = self.pagina()
+        omega, fuera = os.path.join(self.root, "Omega"), os.path.join(self.tmp, "Omega fuera")
+        os.makedirs(os.path.join(omega, "Vocabulario"))
+        os.makedirs(os.path.join(omega, "Clientes"))
+        with open(os.path.join(omega, "Vocabulario", "Gen.txt"), "w", encoding="utf-8") as f:
+            f.write("alfa, beta\n")
+        self.addCleanup(shutil.rmtree, omega, True)
+        self.addCleanup(shutil.rmtree, fuera, True)
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        perfil = {"folder": "Omega/Clientes", "vocab": "Omega/Vocabulario/Gen.txt"}
+        pg.evaluate("p => api('/api/settings', {perfil: p})", perfil)
+        # al terminar, como estaba (antes de cerrar la página: las limpiezas van al revés)
+        self.addCleanup(pg.evaluate, "api('/api/settings', {perfil: {folder: null, vocab: null},"
+                                     " summary: {extra: ''}})")
+        os.rename(omega, fuera)  # ahora no se encuentran
+        pg.reload(wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        # el árbol del servidor se lee como mucho cada segundo: hasta que ya no tenga la carpeta
+        pg.wait_for_function("refreshTree(true).then(() => !S.folders.has('Omega/Clientes'))", polling=500,
+                             timeout=10000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila", timeout=10000)
+        elegido = "(id => { const s = document.querySelector(id); return s.options[s.selectedIndex].textContent; })"
+        pg.wait_for_function(f"{elegido}('#pfVocab').includes('no se encuentra')", timeout=5000)
+        self.assertEqual(pg.evaluate(f"{elegido}('#pfVocab')"), "Omega › Gen (no se encuentra)")
+        self.assertEqual(pg.evaluate(f"{elegido}('#pfFolder')"), "Omega\\Clientes (no se encuentra)")
+        self.assertNotIn("sin guardar", pg.inner_text(".aj-pend"))
+        pg.click(".aj-nav [data-sec='resumen']")
+        pg.fill("#sExtra", "Céntrate en fechas")
+        pg.click("#modal [data-m='ok']")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        c = pg.evaluate("api('/api/config')")
+        self.assertEqual(({k: c["perfil"][k] for k in perfil}, c["summary"]["extra"]), (perfil, "Céntrate en fechas"))
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)
@@ -444,6 +600,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         sale de allí; sin micrófono y sin audio del PC lo avisa y no deja guardarlo; si el plan falla, una frase con
         «Probar otra vez» (en Al grabar y en Proyectos), sin el texto técnico."""
         pg, errores, red = self.pagina()
+        # un PC con micrófono y altavoces (sin grabadora aquí, la lista no llega y su aviso ocupa una línea más)
+        devs = {"mics": [{"id": "m1", "name": "Micrófono (Realtek)", "default": True}], "mic": "default", "sys": "all",
+                "outputs": [{"id": "o1", "name": "Altavoces (Realtek)", "default": True}]}
+        pg.route("**/api/rec/devices*", lambda r: r.fulfill(json=devs))
         pg.set_viewport_size({"width": 900, "height": 600})
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)

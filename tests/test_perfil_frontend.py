@@ -94,7 +94,7 @@ console.log(perfilLangOf({props: {idioma: 'auto'}}) === '', perfilLangOf({props:
   perfilLangOf({props: {}}));""")
         lines = out.splitlines()
         self.assertEqual(lines[0], "A:2,B:1")
-        self.assertTrue(lines[1].startswith('<option value="" selected>Por defecto · Português</option>'))
+        self.assertTrue(lines[1].startswith('<option value="" selected>Por defecto · Portugués</option>'))
         self.assertNotIn('<option value="">Detectar', lines[1])  # detectar es «auto», no vacío
         self.assertEqual(lines[2:], ["true", "true", "true en pt"])
 

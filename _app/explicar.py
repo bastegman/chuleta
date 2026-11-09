@@ -77,8 +77,12 @@ def explicar(err, proveedor=None):
     # las tres de engines.ClaudeCode._why (07/11/2026, fix-claude-windows): ya vienen hechas, solo llevan su botón
     if "no deja usar claude code con esta cuenta" in low:
         # «pide acceso a … (IT)» no se arregla en PowerShell: el diagnóstico, para mandárselo a IT. Entrar con otra
-        # cuenta (o con el inicio de sesión de la empresa si no admite API keys) sí: claude y /login
-        out["accion"] = _accion("diagnostico" if "pide acceso a quien gestiona" in low else "abrir_powershell")
+        # cuenta (o con el inicio de sesión de la empresa si no admite API keys) sí: claude y /login en PowerShell o,
+        # con la copia de VS Code, en su panel; luego, «Probar otra vez»
+        if "pide acceso a quien gestiona" in low:
+            out["accion"] = _accion("diagnostico")
+        else:
+            out["accion"] = _accion("abrir_powershell" if "en powershell" in low else "reintentar")
         return out
     # rama claude-empresa (08/11/2026): con el programa suelto se entra otra vez en PowerShell; con la copia de VS Code,
     # en su panel (allí no hay `claude`): entonces, «Probar otra vez»
