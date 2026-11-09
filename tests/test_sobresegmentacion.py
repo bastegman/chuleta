@@ -216,7 +216,7 @@ class ParticipantesDeOutlookTests(unittest.TestCase):
                     src = f.read()
                 malos += [f"{n}: {m.group(0)}"
                           for m in re.finditer(r"""["'][,;] ?["']\.join\([^)\n]*participants""", src)]
-                buenos += src.count("calendario.join_participants(sug.get(\"participants\"))")
+                buenos += src.count("calendario.join_participants(")
         self.assertEqual(malos, [], "usar calendario.join_participants")
         self.assertGreaterEqual(buenos, 3)
 
@@ -230,8 +230,8 @@ class ParticipantesDeOutlookTests(unittest.TestCase):
                 with open(os.path.join(static, n), encoding="utf-8") as f:
                     src = f.read()
                 malos += [f"{n}: {m.group(0)}" for m in re.finditer(
-                    r"participants\b[^;\n]*\)\.join\(['\"], ?['\"]\)"
-                    r"|participantes\b[^;\n]*\.split\(['\"],['\"]\)", src)]
+                    r"participants\b[^;\n]*\.join\(\s*['\"], ?['\"]\s*\)"
+                    r"|participantes\b[^;\n]*\.split\(\s*(?:['\"], ?['\"]|/[^/\n]*,[^/\n]*/)", src)]
         self.assertEqual(malos, [], "separar con «; » si algún nombre lleva coma, como calendario.join_participants")
 
     @unittest.skipUnless(shutil.which("node"), "node no instalado")
@@ -618,6 +618,38 @@ class CorregirMientrasSeMueveTests(Reunion):
             return app.voices_merge({"id_a": ana, "id_b": self.v.by_name("Luis")["id"]})
         ana, side = self.movimiento_primero(fusionar, antes=con_luis)
         self.assertEqual(side["hablantes"]["h3"]["persona"], ana)
+
+    def test_la_respuesta_se_calcula_con_el_candado(self):
+        """La respuesta de unir y reasignar (speakers_get) sale con el candado cogido: fuera, un movimiento que
+        empezara justo al soltarlo la dejaba a medias (FileNotFoundError, un 500 aunque la correccion se guardo)."""
+        ana, cogido, real = self.preparar(), [], self.app.speakers_get
+
+        def espia(q):
+            cogido.append(self.app.notes_lock.locked())
+            return real(q)
+        with mock.patch.object(self.app, "speakers_get", espia), mock.patch.object(server, "log"):
+            self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": ana})
+            self.app.speakers_join({"path": "r.wav", "h": "h3", "con": "h1"})
+        self.assertEqual(cogido, [True, True])
+
+    def test_exportar_con_el_movimiento_primero(self):
+        """«Exportar» escribe .hablantes.txt junto al audio: con un movimiento en curso, espera y va a la nueva."""
+        self.movimiento_primero(lambda app, ana: app.voices_export({"path": "r.wav"}))
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "Dest", "r.hablantes.txt")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "r.hablantes.txt")))
+
+    def test_recordar_con_el_movimiento_en_medio(self):
+        """«Recordar» toma la huella con la ruta de ahora: la reunion se mueve justo despues de guardar el nombre."""
+        ana, res, real = self.preparar(), {}, self.app._not_the_user
+
+        def y_se_mueve(*a, **k):
+            self.mover(res)
+            return real(*a, **k)
+        with mock.patch.object(self.app, "_not_the_user", y_se_mueve), mock.patch.object(server, "log"):
+            r = self.app.voices_person({"path": "r.wav", "h": "h3", "nombre": "Ana", "recordar": True,
+                                        "consentimiento": True})
+        self.assertEqual(res.get("movida"), "Dest/r.wav")
+        self.assertEqual((r["id"], r["huellas"]), (ana, 1))
 
     def test_nombre_con_el_movimiento_en_medio(self):
         """Se mueve entera entre la comprobacion y la escritura (mientras se decide quien es): va a la ruta nueva."""

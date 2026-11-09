@@ -551,7 +551,7 @@ class ReescrituraTests(TempTree):
         person = src[src.index("    def voices_person"):src.index("    def voices_merge")]
         self.assertIn("self.jobs.outputs_for_persona(pid)", person)
         merge = src[src.index("    def voices_merge"):src.index("    def voices_forget")]
-        self.assertIn('self.jobs.schedule_outputs(a["path"])', merge)
+        self.assertIn("self.jobs.schedule_outputs(rel_of(abs_path))", merge)  # la ruta de ahora (alias_of)
         forget = src[src.index("    def voices_forget"):src.index("    def voices_reassign")]
         self.assertIn("self.jobs.outputs_for_persona(None)", forget)
         self.assertIn('self.jobs.outputs_for_persona(b.get("id"))', forget)

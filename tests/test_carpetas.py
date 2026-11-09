@@ -249,6 +249,15 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
         self.assertNotIn(True, cogido)
         self.assertEqual(self.a.settings.get()["project_folders"], {"Cliente B": "Cliente B"})
 
+    def test_un_fallo_al_mirarlo_no_para_la_grabacion(self):
+        """Con la grabadora ya en marcha, un fallo al leer las listas sale como aviso (como el resto de rec_start desde
+        el 02/11/2026), no como error con la grabadora grabando sin que nadie lo sepa."""
+        with mock.patch.object(server, "project_home", side_effect=OSError("sin red")), \
+                mock.patch.object(server, "log_exc"):
+            r = rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff")
+        self.assertIn("sin mirar la carpeta del proyecto (sin red)", r["aviso"])
+        self.assertEqual(self.a.settings.get()["rec_folder"], "Cliente B")  # lo demas se guarda igual
+
     def test_config_no_lee_las_carpetas_conectadas(self):
         """/api/config (project_folders_resolved) no recorre las carpetas conectadas: pueden estar en la red."""
         rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Kickoff")

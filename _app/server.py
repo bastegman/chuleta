@@ -4354,7 +4354,12 @@ class App:
 
                 # fuera de upd, que corre con el candado de los ajustes: project_home de una lista conectada lee las
                 # carpetas de listas (OneDrive, la red) y mientras tanto nadie podria leer los ajustes
-                sin_casa = bool(v) and not por_regla and project_home(v) is None
+                try:  # con la grabadora ya en marcha nada de esto la para (02/11/2026): un fallo, al log y aviso
+                    sin_casa = bool(v) and not por_regla and project_home(v) is None
+                except Exception as e:
+                    log_exc()
+                    sin_casa = False
+                    avisos.append(f"sin mirar la carpeta del proyecto ({e})")
 
                 def upd(d):
                     if "vocab" in b:
@@ -6782,14 +6787,15 @@ class App:
             return self.speakers_get({"path": rel})  # dentro: un movimiento que empezara ahora la dejaria a medias
 
     def voices_export(self, b):
-        abs_path = safe(b.get("path"), "file")
-        data = self.jobs.speakers_for(abs_path)
-        if not data or not data.get("_who"):
-            raise ApiError("Esta reunión no tiene hablantes identificados (o no tiene .srt).")
-        segs = Transcripts().load(os.path.splitext(abs_path)[0])["segments"]
-        out = os.path.splitext(abs_path)[0] + ".hablantes.txt"
-        save_text(out, voices.export_text(segs, data["_who"], data, self.jobs.voices.names(),
-                                          usuario=data.get("_usuario")), "utf-8-sig")
+        with self._voices_lock():  # escribe junto al audio: si la reunion se esta moviendo, espera y va a la nueva
+            abs_path = safe(alias_of(b.get("path")), "file")
+            data = self.jobs.speakers_for(abs_path)
+            if not data or not data.get("_who"):
+                raise ApiError("Esta reunión no tiene hablantes identificados (o no tiene .srt).")
+            segs = Transcripts().load(os.path.splitext(abs_path)[0])["segments"]
+            out = os.path.splitext(abs_path)[0] + ".hablantes.txt"
+            save_text(out, voices.export_text(segs, data["_who"], data, self.jobs.voices.names(),
+                                              usuario=data.get("_usuario")), "utf-8-sig")
         self.library.at = 0
         return {"path": rel_of(out), "ext": ".hablantes.txt"}
 
