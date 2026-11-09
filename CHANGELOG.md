@@ -42,6 +42,15 @@ La lámina que validó Bernardo con sus cuatro decisiones por defecto (msg 1390:
   - El nombre de un archivo largo se corta sin perder la extensión.
   - El móvil avisa él mismo si un audio pasa de 2 GB.
   - Nueva nota de ayuda para cuando se pulsó «Cancelar» en el aviso del cortafuegos.
+- Segunda revisión, solo del arreglo (0 P0, 0 P1, 6 P2), arreglada con tests:
+  - una red pública después de una privada ya no reutiliza la privada guardada;
+  - un doble clic en «Mostrar otro código» abre un solo código;
+  - un sondeo en vuelo ya no pinta el código anterior;
+  - cerrar la tarjeta mientras se abría cierra solo ese código;
+  - la métrica de la red es la efectiva de Windows (ruta + interfaz);
+  - el aviso al soltar audios es el correcto con otra ventana encima.
+- PowerShell en frío tardó más de 15 s en la CI windows-real (26 s con el tope nuevo): el tope es de 45 s, la red
+  buena se reutiliza 2 minutos y la tarjeta dice «Mirando la wifi…» mientras tanto.
 - Tests: `tests/test_movil.py` (la red, el QR y el servidor de la wifi) y `tests/test_ui_movil.py` (de punta a punta
   con un iPhone emulado y un audio de WhatsApp de verdad, en ui-smoke).
 
