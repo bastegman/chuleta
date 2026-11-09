@@ -860,15 +860,26 @@ class FusionarPersonasMasTests(Reunion):
         self.assertIsNotNone(self.v.find(luis))
         self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], luis)
 
-    def test_repara_las_que_ya_quedaron_huerfanas(self):
-        """Una reunion que cita a una persona ya borrada (la version anterior, al fallar a medias): «Fusionar con…» la
-        pasa a la que se elige (RF7)."""
+    def test_si_la_otra_desaparece_entretanto_no_se_deshace(self):
+        """Otra pestaña olvida a la que desaparece mientras se reescriben las reuniones: deshacer las dejaria con un id
+        que ya no existe; se quedan con la que se queda (RF8)."""
         luis, ana = self.preparar()
-        self.v.forget(luis)  # como la dejaba la version anterior
-        with mock.patch.object(server, "log"):
-            r = self.app.voices_merge({"id_a": ana, "id_b": luis})
-        self.assertEqual(r["reuniones"], 1)
+        real = self.v.merge
+
+        def olvidada_entretanto(keep, other):
+            self.v.forget(other)
+            return real(keep, other)
+        with mock.patch.object(self.v, "merge", olvidada_entretanto), mock.patch.object(server, "log"):
+            with self.assertRaises(server.ApiError) as e:
+                self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertIn("ya muestran a la que se queda", e.exception.msg)
         self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], ana)
+
+    def test_una_persona_ya_borrada_no_se_fusiona(self):
+        luis, ana = self.preparar()
+        self.v.forget(luis)
+        with self.assertRaises(server.ApiError):
+            self.app.voices_merge({"id_a": ana, "id_b": luis})
 
     def test_falla_al_final_y_se_deshace(self):
         luis, ana = self.preparar()
@@ -880,6 +891,23 @@ class FusionarPersonasMasTests(Reunion):
         hs = self.leer()["hablantes"]
         self.assertEqual((hs["h3"]["persona"], hs["h1"]["persona"]), (luis, ana))
         self.assertIsNotNone(self.v.find(luis))
+
+    def test_si_no_se_puede_deshacer_lo_dice(self):
+        luis, ana = self.preparar()
+        real = voices.write_sidecar
+        n = [0]
+
+        def segunda_falla(path, data):  # la primera escritura (fusionar) va; la del deshacer, no
+            n[0] += 1
+            if n[0] > 1:
+                raise PermissionError(13, "en uso")
+            return real(path, data)
+        with mock.patch.object(self.v, "merge", side_effect=ValueError("ahora es tu persona")), \
+                mock.patch.object(voices, "write_sidecar", segunda_falla), mock.patch.object(server, "log"), \
+                mock.patch.object(server, "log_exc"):
+            with self.assertRaises(server.ApiError) as e:
+                self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertIn("1 reunión(es) se han quedado con la persona elegida", e.exception.msg)
 
 
 class EvalScoreTests(unittest.TestCase):

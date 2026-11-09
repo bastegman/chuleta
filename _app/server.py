@@ -6736,10 +6736,9 @@ class App:
         v = self.jobs.voices
         keep, other = b.get("id_a"), b.get("id_b")
         a_, b_ = v.find(keep), v.find(other)
-        if keep != other and (not a_ or not (b_ or other)):
+        if keep != other and (not a_ or not b_):
             raise ApiError("Alguna de las dos personas ya no existe.")
-        # other ya borrada (lo dejaba asi la version anterior al fallar a medias): se reparan sus reuniones igual
-        if keep != other and (a_.get("es_usuario") or (b_ or {}).get("es_usuario")):
+        if keep != other and (a_.get("es_usuario") or b_.get("es_usuario")):
             raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
                            "«No soy yo»; si eres tú, «Soy yo».")
         n, fallidas, hechas = 0, [], []
@@ -6781,34 +6780,37 @@ class App:
             raise ApiError(f"{len(fallidas)} {'reunión no se ha' if len(fallidas) == 1 else 'reuniones no se han'} "
                            "podido actualizar (¿abiertas en OneDrive o en otro programa?). Las dos personas siguen "
                            "ahí: ciérralas y vuelve a fusionar.")
-        if b_ is None and keep != other:
-            log(f"🗣 reuniones de una persona ya borrada, pasadas a {a_['nombre']} ({n})")
-            return {"id": keep, "reuniones": n, "personas": v.public()}
         try:
             v.merge(keep, other)
-        except (KeyError, ValueError) as e:  # cambio entretanto (otra pestaña): se deshace lo reescrito y se dice
-            self._merge_deshacer(hechas, keep, other)
+        except (KeyError, ValueError) as e:  # cambio entretanto (otra pestaña)
+            if v.find(other) is None:  # other ya no esta (olvidada o fusionada con otra): deshacer la dejaria huerfana
+                raise ApiError("Alguna de las dos personas ya no existe. Sus reuniones ya muestran a la que se queda.")
+            sin_deshacer = self._merge_deshacer(hechas, keep, other)
             raise ApiError(("Alguna de las dos personas ya no existe." if isinstance(e, KeyError) else
                             "Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
-                            "«No soy yo»; si eres tú, «Soy yo».") + " No se ha cambiado ninguna reunión.")
+                            "«No soy yo»; si eres tú, «Soy yo».")
+                           + (f" {sin_deshacer} reunión(es) se han quedado con la persona elegida (¿abiertas en otro "
+                              "programa?)." if sin_deshacer else " No se ha cambiado ninguna reunión."))
         log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
         return {"id": keep, "reuniones": n, "personas": v.public()}
 
     def _merge_deshacer(self, hechas, keep, other):
         """Vuelve a poner `other` en los hablantes a los que voices_merge acababa de poner `keep` (hechas: [(rel,
-        [h…])]); los que ya eran de keep se quedan."""
+        [h…])]); los que ya eran de keep se quedan. Devuelve cuantas reuniones no se han podido deshacer."""
+        malas = 0
         for rel, hs in hechas:
             with self._voices_lock():
                 try:
                     side = voices.sidecar_path(safe(alias_of(rel), "file"))
-                    data = voices.read_sidecar(side)
-                    if data:
-                        for h in hs:
-                            if (data.get("hablantes") or {}).get(h, {}).get("persona") == keep:
-                                data["hablantes"][h]["persona"] = other
-                        voices.write_sidecar(side, data)
-                except (ApiError, OSError):
+                    data = json.loads(voices.read_text(side))
+                    for h in hs:
+                        if (data.get("hablantes") or {}).get(h, {}).get("persona") == keep:
+                            data["hablantes"][h]["persona"] = other
+                    voices.write_sidecar(side, data)
+                except (ApiError, OSError, ValueError, AttributeError):
                     log_exc()
+                    malas += 1
+        return malas
 
     def voices_forget(self, b):
         v = self.jobs.voices

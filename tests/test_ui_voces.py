@@ -184,6 +184,34 @@ class VocesEnNavegadorTests(unittest.TestCase):
         self.assertEqual(hs["h1"]["segundos"], 40.0)
         self.assertEqual(self.limpio(errores, red), ([], []))
 
+    def test_fusionar_que_falla_repinta(self):
+        """«Fusionar con…» que falla (una reunion abierta en otro programa): aviso de error, el cuadro se repinta (parte
+        de las reuniones puede haber cambiado) y se puede volver a elegir la misma persona (revision de la integracion
+        del 08/11/2026)."""
+        rel = self.reunion("R fusionar")
+        ana = self.api("/api/voces/persona", {"nombre": "Ana Fusión"})["id"]
+        luis = self.api("/api/voces/persona", {"nombre": "Luis Fusión"})["id"]
+        self.api("/api/voces/reasignar", {"path": rel, "h": "h1", "persona": luis})
+        pg, errores, red = self.abrir(rel)
+        pedidas = []
+
+        def falla(route):
+            pedidas.append(route.request.post_data)
+            route.fulfill(status=409, content_type="application/json",
+                          body=json.dumps({"error": "1 reunión no se ha podido actualizar"}))
+        pg.route("**/api/voces/fusionar", falla)
+        for _ in range(2):
+            pg.click("#txBody .spk[data-spk='h1']")
+            pg.wait_for_selector(".spk-pop #spMerge", timeout=5000)
+            self.assertIn("Fusionar con", pg.inner_text(".spk-pop #spMerge option:first-child"))
+            pg.select_option(".spk-pop #spMerge", ana)
+            pg.wait_for_function("!document.querySelector('.spk-pop')", timeout=5000)  # repintado: cuadro cerrado
+        self.assertEqual(len(pedidas), 2)
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('no se ha podido actualizar')",
+                             timeout=5000)
+        errores, red = self.limpio(errores, [r for r in red if "/api/voces/fusionar" not in r])
+        self.assertEqual((errores, red), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()
