@@ -164,6 +164,9 @@ class IssTests(unittest.TestCase):
     def test_textos_del_asistente(self):
         msgs = self.text.split("[Messages]", 1)[1].split("\n[", 1)[0]
         self.assertIn("SetupWindowTitle=Instalar %1", msgs)
+        # la frase de debajo, de Spanish.isl, decía «Siguiente» (el botón dice «Instalar») y de usted (captura del
+        # E2E en Windows, 09/11/2026)
+        self.assertIn("ClickNext=Pulsa «Instalar» para seguir o «Cancelar» para salir.", msgs)
         self.assertIn("sin permisos de administrador", msgs)
         self.assertIn("tus reuniones, voces y ajustes no se tocan", msgs)
         self.assertIn("{#Version}", msgs)
@@ -188,6 +191,9 @@ class DesdeSetupTests(unittest.TestCase):
         self.assertIn('if ($DesdeSetup) { Say "    Actualizada." Green }', self.ps1)
         self.assertIn("$borrable = -not $DesdeSetup -and $origen", self.ps1)
         self.assertIn('"    Copiada desde el instalador"', self.ps1)
+        # la carpeta temporal del Setup no se le enseña al usuario (queda en el log)
+        self.assertIn('if ($DesdeSetup) { Say "    Desde Setup.exe"; Log-File "    carpeta temporal: $root" }',
+                      self.ps1)
         i = self.ps1.index("if (-not $dest -and $DesdeSetup)")
         self.assertLess(i, self.ps1.index('se instala aquí ($root)."'))  # antes de instalarse en la carpeta temporal
         self.assertIn("Fail ", self.ps1[i:i + 300])

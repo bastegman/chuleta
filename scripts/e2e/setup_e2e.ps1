@@ -249,7 +249,7 @@ Note "entorno.interactivo" ([Environment]::UserInteractive)
 $setupInfo = Get-Item -LiteralPath $Setup
 Check "s.setup_existe" ($setupInfo -and $setupInfo.Length -gt 500000) "$($setupInfo.FullName) $($setupInfo.Length) bytes"
 Note "s.sha256" (Get-FileHash -LiteralPath $Setup -Algorithm SHA256).Hash
-$verSetup = "$($setupInfo.VersionInfo.ProductVersion)"
+$verSetup = "$($setupInfo.VersionInfo.ProductVersion)".Trim()  # el recurso de versión viene relleno de espacios
 Note "s.version_del_exe" "$verSetup · $($setupInfo.VersionInfo.FileVersion)"
 Check "s.sin_firma" ((Get-AuthenticodeSignature -LiteralPath $Setup).Status -ne "Valid") (Get-AuthenticodeSignature -LiteralPath $Setup).Status $false
 
@@ -268,7 +268,7 @@ $ver = $(if (Test-Path -LiteralPath (Join-Path $inst "_app\version.txt")) { (Get
 Check "a.version" ($ver -match "^\d{4}-\d{2}-\d{2} . [0-9a-f]{7,}$" -and $verSetup -eq $ver) "instalada=$ver setup=$verSetup"
 $reg = Get-Registro
 Check "a.registro" ($reg -and $reg["DisplayName"] -eq $App -and $reg["DisplayVersion"] -eq $ver -and $reg["InstallLocation"] -ieq $inst -and "$($reg['UninstallString'])" -like "*desinstalar.ps1*" -and "$($reg['DisplayIcon'])" -like "*tenca.ico*") $(if ($reg) { "$($reg['DisplayName']) · $($reg['DisplayVersion']) · $($reg['InstallLocation']) · $($reg['UninstallString'])" } else { "sin clave" })
-$pka = Get-Paquetes
+$pka = @(Get-Paquetes)  # con una sola, la función la devuelve suelta (y [0] seria su primera letra)
 Check "a.aplicaciones_instaladas_una" ($pka.Count -eq 1 -and "$($pka[0])" -like "$App *") ($pka -join "; ")
 $restos = Inno-Restos
 Check "a.nada_de_inno" (@($restos).Count -eq 0) ($restos -join ", ")
@@ -326,6 +326,7 @@ $logwp | Set-Content -LiteralPath (Join-Path $Out "instalar-w.log") -Encoding UT
 Check "w.modo_ventana" ($logwp -match "modo: ventana") (($logwp -split "`n" | Select-String "modo:") -join "")
 Check "w.actualiza_la_de_antes" ($logwp -match ("Ya ten.as $App en " + [regex]::Escape($inst))) (($logwp -split "`n" | Select-String "Ya ten" | Select-Object -First 1) -join "")
 Check "w.sin_carpeta_descomprimida" (-not ($logwp -match "descomprim")) (($logwp -split "`n" | Select-String "descomprim" | Select-Object -First 2) -join " | ")
+Check "w.sin_carpeta_temporal_a_la_vista" ($logwp -match "Desde Setup\.exe" -and -not ($logwp -match "Carpeta: .*\\is-[^\\]+\.tmp")) (($logwp -split "`n" | Select-String "Carpeta:|Desde Setup" | Select-Object -First 2) -join " | ")
 Check "w.sin_carpeta_2" (-not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "$App (2)"))) ""
 $cfgw = Wait-Http "$Base/api/config" 150
 Check "w.abre_la_app" ($cfgw -and $cfgw.root -ieq $inst) "root=$($cfgw.root)"
@@ -394,7 +395,7 @@ if (-not $Chuleta) {
     Check "v.no_instala_en_otra" (-not (Test-Path -LiteralPath (Join-Path $inst "_app"))) ""
     Check "v.sin_nombre_viejo" (-not (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $progLegacy) -and -not (Test-Path -LiteralPath $startupLegacy) -and -not (Test-Path -LiteralPath $LegacyKey) -and -not (Test-Path -LiteralPath (Join-Path $vInst "ABRIR CHULETA.bat"))) ""
     Check "v.accesos_tenca" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $prog) -and (Test-Path -LiteralPath $startup)) ""
-    $pkv = Get-Paquetes
+    $pkv = @(Get-Paquetes)
     Check "v.una_entrada" ($pkv.Count -eq 1 -and "$($pkv[0])" -like "$App *") ($pkv -join "; ")
     Check "v.nada_de_inno" (@(Inno-Restos).Count -eq 0) ((Inno-Restos) -join ", ")
     Check "v.reunion_intacta" ((Get-Reunion $vReu) -eq $vReunion0) ""

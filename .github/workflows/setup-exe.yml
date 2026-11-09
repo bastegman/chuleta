@@ -46,7 +46,7 @@ jobs:
         shell: powershell
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (Test-Path -LiteralPath $iscc) { Write-Host ("Inno Setup " + (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion) }
+          if (Test-Path -LiteralPath $iscc) { & $iscc 2>&1 | Select-Object -First 2 | ForEach-Object { Write-Host "$_" } }
           python scripts\build_setup.py "$env:GITHUB_WORKSPACE\dist\Tenca - Setup.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: E2E del Setup.exe (PowerShell 5.1)

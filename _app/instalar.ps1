@@ -807,7 +807,8 @@ Write-Host ""
 Write-Host "  ==========================================================" -ForegroundColor DarkCyan
 Write-Host "    $($AppName.ToUpper())  ·  grabar, transcribir y resumir reuniones" -ForegroundColor White
 Write-Host "  ==========================================================" -ForegroundColor DarkCyan
-Say "    Carpeta: $root"
+# desde Setup.exe, $root es su carpeta temporal: no se le ensena al usuario (queda en el log)
+if ($DesdeSetup) { Say "    Desde Setup.exe"; Log-File "    carpeta temporal: $root" } else { Say "    Carpeta: $root" }
 
 # el zip descargado de Teams/correo trae la marca de Internet: sin quitarla Windows pregunta cada vez al abrir sus
 # ficheros. Solo los del paquete: lo demas de la carpeta (las reuniones) conserva la suya

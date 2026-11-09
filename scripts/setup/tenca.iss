@@ -76,6 +76,8 @@ Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 [Messages]
 SetupWindowTitle=Instalar %1
 WelcomeLabel1=Instalar Tenca
+; en la bienvenida, debajo: la frase de Spanish.isl dice «Siguiente» y de usted
+ClickNext=Pulsa «Instalar» para seguir o «Cancelar» para salir.
 WelcomeLabel2=Tenca graba, transcribe y resume tus reuniones en este PC.%n%nSe instala solo para tu usuario, sin permisos de administrador. Si ya tenías Tenca o Chuleta, se actualiza en su carpeta: tus reuniones, voces y ajustes no se tocan.%n%nAl pulsar «Instalar» se abre la ventana del instalador con los pasos. La primera vez tarda unos minutos: descarga Python y las librerías.%n%nVersión {#Version}
 
 [Files]
