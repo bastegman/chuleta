@@ -148,6 +148,28 @@ class FormatosTests(unittest.TestCase):
         # lo pedido (msg 1296): m4a, opus/ogg, mp3, wav, aac, webm, flac y mp4, y más
         self.assertTrue({".m4a", ".opus", ".ogg", ".mp3", ".wav", ".aac", ".webm", ".flac", ".mp4"} <= vistos)
 
+    def test_amr_que_empieza_en_silencio_se_acepta(self):
+        """Un AMR con DTX empieza con segundos de tramas SID y NO_DATA que FFmpeg no decodifica: se acepta al subirlo,
+        porque la cola lo transcribe (revisión de f40e6b7: se rechazaba al contar 50 paquetes malos)."""
+        import random
+        rnd = random.Random(7)
+        voz = lambda: bytes([0x3C]) + bytes(rnd.randrange(256) for _ in range(31))  # noqa: E731
+        sid = lambda: bytes([0x44]) + bytes(rnd.randrange(256) for _ in range(5))  # noqa: E731
+        sin_datos = bytes([0x7C])  # FT 15, NO_DATA
+        for nombre, inicio, n in (("sid.amr", b"".join(sid() for _ in range(60)), 60),
+                                  ("dtx.amr", (sid() + sin_datos * 7) * 10, 80)):
+            p = os.path.join(self.tmp, nombre)
+            with open(p, "wb") as f:
+                f.write(b"#!AMR\n" + inicio + b"".join(voz() for _ in range(250)))
+            with self.subTest(nombre=nombre):
+                self.assertIsNotNone(engines.probar_audio(p))
+                self.assertAlmostEqual(len(engines.decode_16k(p)) / 16000, (n + 250) * 0.02, delta=0.1)
+        p = os.path.join(self.tmp, "solo_sid.amr")  # todo silencio de tramas: no hay nada que transcribir
+        with open(p, "wb") as f:
+            f.write(b"#!AMR\n" + b"".join(sid() for _ in range(100)))
+        with self.assertRaises(engines.EngineError):
+            engines.probar_audio(p)
+
     def test_amr_de_un_android_antiguo_entero(self):
         """Un AMR con tramas SID (FFmpeg no las implementa: «patches welcome»): antes el audio acababa en la primera.
         105 tramas de 20 ms = 2,1 s; con el generador de c.decode() salía 1,0 s."""
@@ -255,6 +277,40 @@ class PaquetesTests(unittest.TestCase):
         self.assertEqual(len(y), 4800)  # 0,1 s + 0,1 s de silencio + 0,1 s: el tercero sigue en su sitio
         self.assertEqual((y[0], y[1600], y[3200]), (1, 0, 3))
 
+    def test_una_duracion_rota_no_pide_horas_de_silencio(self):
+        class FFmpegError(Exception):
+            pass
+
+        class Stream:
+            type = "audio"
+            codec_context = types.SimpleNamespace(frame_size=0, sample_rate=16000)
+
+            def decode(self, pk):
+                if pk.malo:
+                    raise FFmpegError("x")
+                return [types.SimpleNamespace(to_ndarray=lambda: __import__("numpy").ones((1, 160), "int16"))]
+
+        class Container:
+            streams = [Stream()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def demux(self, s):  # un paquete malo que dice durar 10 horas
+                malo = types.SimpleNamespace(malo=True, duration=36000, time_base=1)
+                return iter([types.SimpleNamespace(malo=False), malo])
+
+        fake_av = types.SimpleNamespace(open=lambda path: Container(),
+                                        AudioResampler=lambda **kw: types.SimpleNamespace(
+                                            resample=lambda fr: [fr] if fr is not None else []),
+                                        error=types.SimpleNamespace(FFmpegError=FFmpegError))
+        with mock.patch.dict(sys.modules, {"av": fake_av}):
+            y = engines.decode_16k("x.m4a")
+        self.assertEqual(len(y), 160 + int(engines.SILENCIO_MAX_S * 16000))
+
     def test_si_no_se_puede_leer_nada_es_un_error_y_no_silencio(self):
         class FFmpegError(Exception):
             pass
@@ -346,7 +402,8 @@ class GitignoreFixturesTests(unittest.TestCase):
             self.assertFalse(self.ignorado(f"tests/audio_formatos/{n}"), n)
         for p in ("tests/audio_formatos/2026-11-08 10-15-32 - Comite.m4a", "tests/otra.m4a", "tests/nota.amr",
                   "tests/Proyecto/voz.3gp", "_app/static/voz.caf", "tests/x.waptt",
-                  "Proyecto/2026-11-08 Comite/2026-11-08 10-15-32 - Comite.opus", "nota.amr.txt"):
+                  "Proyecto/2026-11-08 Comite/2026-11-08 10-15-32 - Comite.opus", "nota.amr.txt",
+                  "tests/audio_formatos/.DS_Store", "tests/audio_formatos/x.hablantes.json"):
             self.assertTrue(self.ignorado(p), p)
 
 
@@ -361,6 +418,7 @@ class EtiquetaTests(unittest.TestCase):
                    "2026-11-08 10-15-32 - Recursos humanos.m4a": "Recursos humanos",
                    "2026-11-08 10-15-32 - Videollamada.mp4": "Videollamada",
                    "AUDIO_2026-11-08_10-15-32.m4a": "", "REC 2026-11-08 10-15-32.wav": "",
+                   "audio_2026-11-08_10-15-32.ogg": "", "Rec-2026-11-08-10-15-32.mp3": "",
                    "VID-2026-11-08-10-15-32 Comité.mp4": "Comité"}
         for n in nombres:
             open(os.path.join(tmp, n), "wb").close()
@@ -472,11 +530,10 @@ class SubirEndpointTests(unittest.TestCase):
         return [os.path.join(d, f) for d, _, fs in os.walk(self.s.root) for f in fs if f.startswith(".subiendo")]
 
     def test_un_audio_de_whatsapp_entra_como_una_reunion(self):
-        vocab = next(v for v in self.s.get("/api/vocab")["lists"] if v["project"] == "Proyecto")["id"] \
-            if "lists" in self.s.get("/api/vocab") else None
+        vocab = next(v for v in self.s.get("/api/vocab")["items"] if v["project"] == "Proyecto")["id"]
         cuando = time.mktime((2026, 11, 8, 10, 15, 32, 0, 0, -1))
         code, r, _ = self.s.subir(self.leer("whatsapp.opus"), folder="Proyecto", name="Llamada con Ana",
-                                  fecha=str(int(cuando * 1000)), vocab=vocab or "", language="es",
+                                  fecha=str(int(cuando * 1000)), vocab=vocab, language="es",
                                   contexto="Revisión del contrato", preset="rapido", archivo="PTT-20261108-WA0003.opus")
         self.assertEqual(code, 200, r)
         self.assertEqual(r["path"],
@@ -492,8 +549,8 @@ class SubirEndpointTests(unittest.TestCase):
             md = f.read()
         self.assertIn("idioma: es", md)
         self.assertIn("contexto: Revisión del contrato", md)
-        if vocab:
-            self.assertIn("proyecto: Proyecto", md)
+        self.assertIn("proyecto: Proyecto", md)
+        self.assertIn("workstream: General", md)
         jobs = self.s.get("/api/jobs")["jobs"]
         self.assertTrue(any(j["path"] == r["path"] and j["id"] == r["job"] for j in jobs), jobs)
         self.assertEqual(self.ocultos(), [])
@@ -521,6 +578,33 @@ class SubirEndpointTests(unittest.TestCase):
         self.assertEqual(self.ocultos(), [])
         # la conexión sigue sirviendo después de un rechazo
         self.assertEqual(self.s.get("/api/ping").get("app"), "audios")
+
+    def test_content_length_negativo(self):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.s.port, timeout=10)
+        self.addCleanup(c.close)
+        c.putrequest("POST", "/api/subir?folder=&archivo=a.mp3")
+        for k, v in self.s.cabeceras({"Content-Length": "-5"}).items():
+            c.putheader(k, v)
+        c.endheaders()
+        r = c.getresponse()
+        self.assertEqual(r.status, 400)
+        self.assertIn("Cuerpo no válido", json.loads(r.read())["error"])
+
+    def test_restos_viejos_de_una_subida_se_borran(self):
+        """Lo que quedó a medias (la app se cerró mientras llegaba) se borra al subir otro a esa carpeta, si es
+        viejo."""
+        carpeta = os.path.join(self.s.root, "Proyecto")
+        viejo, nuevo = os.path.join(carpeta, ".subiendo-viejo.m4a"), os.path.join(carpeta, ".subiendo-nuevo.m4a")
+        for p in (viejo, nuevo):
+            with open(p, "wb") as f:
+                f.write(b"x")
+        os.utime(viejo, (time.time() - 7 * 3600,) * 2)
+        self.addCleanup(lambda: os.path.exists(nuevo) and os.remove(nuevo))
+        code, r, _ = self.s.subir(self.leer("mp3.mp3"), folder="Proyecto", name="Restos", archivo="r.mp3")
+        self.assertEqual(code, 200, r)
+        self.assertFalse(os.path.exists(viejo))
+        self.assertTrue(os.path.exists(nuevo))  # el de otra subida en marcha, no
 
     def test_sin_origen_ni_token_no_entra(self):
         req = urllib.request.Request(self.s.base + "/api/subir?folder=&archivo=a.mp3", data=b"x", method="POST",
@@ -756,6 +840,100 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         self.assertTrue(pg.input_value("#sbFecha").startswith("2026-11-08T"))
         # el .txt va a la carpeta como siempre (sin tarjeta)
         pg.wait_for_function("document.querySelector('#toasts').innerText.includes('notas.txt')", timeout=10000)
+        self.sin_errores()
+
+    def test_nombres_y_fechas_que_propone_el_archivo(self):
+        pg = self.pagina()
+        casos = pg.evaluate("""() => {
+            const f = (n, t) => { const r = sbDesdeArchivo(new File([''], n, { lastModified: t || 0 }));
+                                  return [r.nombre, r.origen, new Date(r.fecha).toISOString().slice(0, 10)]; };
+            return { wa: f('WhatsApp Ptt 2026-11-08 at 10.15.32.ogg'), ptt: f('PTT-20261108-WA0003.opus', Date.now()),
+                     tenca: f('2026-10-30 10-00-00 - Comité de prueba.m4a'), audio: f('AUDIO_20231215_143022.m4a'),
+                     rec: f('REC_2026-11-08 10-15.mp3'), rec2: f('Recording 3.m4a', Date.now()),
+                     graba: f('Grabación 12.m4a', Date.now()), voice: f('Voice 001.m4a', Date.now()),
+                     nueva: f('Nueva grabación 12.m4a', Date.now()), calle: f('Calle Mayor 3.m4a', Date.now()) }; }""")
+        self.assertEqual(casos["wa"][:2], ["Mensaje de voz de WhatsApp", "nombre"])
+        self.assertEqual(casos["ptt"][:2], ["Mensaje de voz de WhatsApp", "nombre"])
+        self.assertEqual(casos["tenca"][:2], ["Comité de prueba", "nombre"])
+        for k in ("audio", "rec", "rec2", "graba", "voice"):  # lo que pone la grabadora: sin nombre
+            self.assertEqual(casos[k][0], "", k)
+        self.assertEqual(casos["audio"][2], "2023-12-15")
+        self.assertEqual(casos["nueva"][:2], ["Nueva grabación 12", "guardado"])
+        self.assertEqual(casos["calle"][0], "Calle Mayor 3")
+        self.sin_errores()
+
+    def test_cancelar_a_mitad_no_guarda_nada(self):
+        pg = self.pagina()
+        cdp = pg.context.new_cdp_session(pg)  # la subida, a 150 KB/s: da tiempo a cancelar
+        cdp.send("Network.enable")
+        cdp.send("Network.emulateNetworkConditions", {"offline": False, "latency": 0, "downloadThroughput": -1,
+                                                      "uploadThroughput": 150 * 1024})
+        grande = os.path.join(self.s.tmp, "Entrevista larga.wav")
+        wav24(grande, segundos=40)  # ~1,9 MB
+        self.elegir(pg, "#btnSubir", grande)
+        pg.click("#rGo")
+        pg.wait_for_function("/Subiendo… [1-9]/.test(document.querySelector('#rGo').innerText)", timeout=15000)
+        pg.click(".dialog.sb [data-m='no']")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('Subida cancelada')", timeout=5000)
+        time.sleep(2)
+        self.assertFalse(pg.evaluate("document.querySelector('#toasts').innerText.includes('Subido')"))
+        self.assertFalse(pg.evaluate("location.hash.startsWith('#/a/')"))
+        guardados = [f for _, _, fs in os.walk(self.s.root) for f in fs if "Entrevista larga" in f]
+        self.assertEqual(guardados, [])
+        fin = time.time() + 10  # el servidor borra lo que estaba recibiendo en cuanto ve la conexión cortada
+        while time.time() < fin and [f for _, _, fs in os.walk(self.s.root) for f in fs if f.startswith(".subiendo")]:
+            time.sleep(0.2)
+        self.assertEqual([f for _, _, fs in os.walk(self.s.root) for f in fs if f.startswith(".subiendo")], [])
+        self.sin_errores()
+
+    def test_si_uno_falla_la_tarjeta_sigue_con_ese(self):
+        pg = self.pagina()
+        bueno, roto = os.path.join(self.s.tmp, "bueno.mp3"), os.path.join(self.s.tmp, "roto.m4a")
+        shutil.copyfile(os.path.join(FIX, "mp3.mp3"), bueno)
+        with open(roto, "wb") as f:
+            f.write(os.urandom(30000))
+        self.elegir(pg, "#btnSubir", bueno, roto)
+        self.assertEqual(pg.evaluate("document.activeElement.id"), "rGo")  # varios: Intro sube
+        pg.keyboard.press("Enter")
+        pg.wait_for_selector("#sbError:not(.hidden)", timeout=15000)
+        self.assertIn("«roto.m4a» no parece un audio", pg.inner_text("#sbError"))
+        self.assertIn("roto.m4a", pg.inner_text(".dialog.sb .sb-archivo"))  # solo el que ha fallado
+        self.assertEqual(pg.locator(".dialog.sb .sb-item").count(), 0)
+        self.assertIn("Subido", pg.inner_text("#toasts"))
+        self.assertTrue(any(f.endswith(" - bueno.mp3") for _, _, fs in os.walk(self.s.root) for f in fs))
+        self.captura(pg, "fallo_parcial")
+        self.sin_errores()
+
+    def test_soltar_con_grabar_abierta_no_la_rompe(self):
+        pg = self.pagina()
+        pg.click("#btnRec")
+        pg.wait_for_selector("#modal:not(.hidden) .dialog.gr", timeout=5000)
+        pg.evaluate("""() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'nota.m4a'));
+            dispatchEvent(new DragEvent('drop', { dataTransfer: dt, cancelable: true })); }""")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('cierra antes esta ventana')",
+                             timeout=5000)
+        self.assertEqual(pg.locator("#modal .dialog.sb").count(), 0)
+        self.assertTrue(pg.evaluate("recDialog"))  # la tarjeta de grabar sigue con su limpieza
+        pg.keyboard.press("Escape")
+        pg.wait_for_function("!recDialog", timeout=5000)
+
+    def test_elegir_otro_conserva_el_proyecto(self):
+        pg = self.pagina()
+        a, b = os.path.join(self.s.tmp, "primero.mp3"), os.path.join(self.s.tmp, "segundo.m4a")
+        shutil.copyfile(os.path.join(FIX, "mp3.mp3"), a)
+        shutil.copyfile(os.path.join(FIX, "iphone_notas_de_voz.m4a"), b)
+        self.elegir(pg, "#btnSubir", a)
+        vocab = pg.eval_on_selector("#grProy", "s => [...s.options].find(o => o.textContent.includes('General')).value")
+        pg.select_option("#grProy", vocab)
+        pg.wait_for_function(f"document.querySelector('#grProy').value === {json.dumps(vocab)}", timeout=5000)
+        with pg.expect_file_chooser() as fc:
+            pg.click("[data-sb-otro]")
+        fc.value.set_files(b)
+        pg.wait_for_function("document.querySelector('.dialog.sb .sb-archivo').innerText.includes('segundo.m4a')",
+                             timeout=10000)
+        pg.wait_for_selector(".dialog.sb [data-fila='carpeta'] .gr-v code", timeout=10000)
+        self.assertEqual(pg.input_value("#grProy"), vocab)
+        self.assertEqual(pg.input_value("#grNombre"), "segundo")
         self.sin_errores()
 
     def test_ventana_estrecha_solo_el_icono(self):

@@ -371,6 +371,10 @@ def media_duration(path):
     return None
 
 
+SILENCIO_MAX_S = 2.0  # lo más que se rellena por un paquete que no se puede leer (uno de verdad dura milisegundos)
+PROBAR_TOPE_S = 120.0  # al subir, cuánto audio ilegible se recorre buscando el primer trozo que se lee
+
+
 def _paquetes(c, s, av):
     """Los fotogramas del audio, paquete a paquete. Un paquete que no se puede decodificar (danado, o de un tipo que
     FFmpeg no implementa, como algunos de los AMR de los moviles Android antiguos) se cambia por silencio de su
@@ -384,7 +388,9 @@ def _paquetes(c, s, av):
         try:
             frames = s.decode(pk)
         except av.error.FFmpegError:
-            yield float(pk.duration * pk.time_base) if pk.duration and pk.time_base else paso
+            seg = float(pk.duration * pk.time_base) if pk.duration and pk.time_base else paso
+            # con tope: una duración rota en el contenedor no puede pedir horas de silencio (ni toda la memoria)
+            yield min(max(seg, 0.0), SILENCIO_MAX_S)
             continue
         yield from frames
 
@@ -451,14 +457,17 @@ def probar_audio(path, segundos=3.0):
         if s is None:
             raise EngineError("no tiene sonido: es un vídeo sin pista de audio" if any(
                 x.type == "video" for x in c.streams) else NO_ES_AUDIO)
-        leidos, malos, ultimo = 0.0, 0, None
+        # hasta tener `segundos` leídos o haber recorrido PROBAR_TOPE_S ilegibles: un AMR de un Android antiguo
+        # puede empezar con segundos de tramas de silencio (SID y NO_DATA) que FFmpeg no decodifica y que la cola
+        # cambia por silencio (revisión de f40e6b7: se rechazaban por contar 50 paquetes malos)
+        leidos, malos, ultimo = 0.0, 0.0, None
         try:
             for fr in _paquetes(c, s, av):
                 if isinstance(fr, float):
-                    malos += 1
+                    malos += fr or 0.02
                 else:
                     leidos += fr.samples / (fr.sample_rate or 16000)
-                if leidos >= segundos or malos >= 50:
+                if leidos >= segundos or malos >= PROBAR_TOPE_S:
                     break
         except Exception as e:  # el contenedor se corta o se lee mal a mitad
             ultimo = e

@@ -686,10 +686,12 @@ def scan(dirs=None):
                 label = ""
                 if m:
                     label = (stem[:m.start()] + " " + stem[m.end():]).strip(" -_·")
-                    # el prefijo de los nombres de grabadoras y móviles (AUDIO_, VID-, REC …), en mayúsculas y
-                    # suelto: no la primera palabra de un nombre puesto a mano («Audio de WhatsApp» quedaba en «de
-                    # WhatsApp» y «Recursos humanos», en «ursos humanos»; visto al subir audios, 09/11/2026)
-                    label = re.sub(r"^(AUDIO|VID|REC)(?:[-_ ]+|$)", "", label)
+                    # el prefijo de los nombres de grabadoras y móviles (AUDIO_, VID-, REC …): solo, en cualquier
+                    # forma; delante de un nombre, solo en mayúsculas. Nunca la primera palabra de un nombre puesto a
+                    # mano («Audio de WhatsApp» quedaba en «de WhatsApp» y «Recursos humanos», en «ursos humanos»;
+                    # visto al subir audios, 09/11/2026)
+                    label = re.sub(r"^(AUDIO|VID|REC)[-_ ]*$", "", label, flags=re.I)  # solo eso: «audio_», «REC»
+                    label = re.sub(r"^(AUDIO|VID|REC)[-_ ]+", "", label)  # delante de un nombre, solo en mayúsculas
                     label = re.sub(r"^_?\d{2,6}$", "", label)
                 tx_mtime = 0
                 for t in (txt, srt):
@@ -2073,6 +2075,26 @@ def fecha_subida(v):
     if t is None or t != t or not (SUBIR_FECHA_MIN <= t <= ahora + 86400):
         return ahora
     return t
+
+
+SUBIENDO = ".subiendo-"  # lo que se está recibiendo en «Subir audio» (el árbol no enseña lo que empieza por punto)
+SUBIENDO_VIEJO_S = 6 * 3600
+
+
+def limpiar_subidas(folder):
+    """Borra de `folder` lo que quedó a medias de una subida de hace horas (la app se cerró o el PC se apagó mientras
+    llegaba): en Windows el punto no lo oculta del Explorador, y en OneDrive se sincronizaría."""
+    try:
+        viejo = time.time() - SUBIENDO_VIEJO_S
+        for e in os.scandir(folder):
+            if e.name.startswith(SUBIENDO) and e.is_file(follow_symlinks=False) and e.stat().st_mtime < viejo:
+                try:
+                    os.remove(e.path)
+                    log(f"   borrado un resto de subida: {rel_of(e.path)}")
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def own_meeting_dir(abs_audio):
@@ -5737,9 +5759,12 @@ class App:
         stem = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
         # se recibe en un archivo oculto de la carpeta principal (el árbol no enseña los que empiezan por punto) y con
         # su extensión, para que PyAV lo reconozca al comprobarlo
-        tmp = os.path.join(folder, f".subiendo-{secrets.token_hex(4)}{ext}")
         remaining = int(handler.headers.get("Content-Length") or 0)
-        total, guardado = remaining, False
+        if remaining < 0:
+            raise ApiError("Cuerpo no válido")
+        limpiar_subidas(folder)
+        tmp = os.path.join(folder, f"{SUBIENDO}{secrets.token_hex(4)}{ext}")
+        total, guardado, mdir_nueva = remaining, False, None
         try:  # lo recibido a medias (disco lleno, la ventana se cierra a mitad) no se queda en la carpeta
             with open(tmp, "wb") as f:
                 while remaining > 0:
@@ -5770,12 +5795,21 @@ class App:
             target = os.path.join(dest, base + ext)
             if mdir:
                 try:
-                    os.makedirs(mdir, exist_ok=True)
+                    if not os.path.isdir(mdir):
+                        os.makedirs(mdir)
+                        mdir_nueva = mdir
                 except OSError as e:
                     raise ApiError(f"No se puede crear la carpeta de la reunión en {display_rel(rel_of(folder))} "
                                    f"({e.__class__.__name__}).")
                 carpetas_reunion().add(rel_of(mdir))
-            os.replace(tmp, target)
+            for intento in range(20):  # Defender u OneDrive pueden tener el archivo abierto un instante (WinError 32)
+                try:
+                    os.replace(tmp, target)
+                    break
+                except PermissionError:
+                    if intento == 19:
+                        raise
+                    time.sleep(0.1)
             guardado = True
         except OSError as e:  # sin permiso de escritura, el disco lleno… (una ApiError no es OSError: pasa tal cual)
             raise ApiError(f"No se ha podido guardar en {display_rel(rel_of(folder))}: "
@@ -5786,6 +5820,12 @@ class App:
                     os.remove(tmp)
                 except OSError:
                     pass
+                if mdir_nueva:  # la carpeta de la reunión creada para él, si se ha quedado vacía
+                    try:
+                        os.rmdir(mdir_nueva)
+                        carpetas_reunion().discard(rel_of(mdir_nueva))
+                    except OSError:
+                        pass
         try:  # la fecha del audio también como la de modificación (la que enseña el Explorador)
             os.utime(target, (cuando, cuando))
         except OSError:

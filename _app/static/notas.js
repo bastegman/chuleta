@@ -996,7 +996,10 @@ addEventListener('drop', e => {
   const audios = typeof esAudio === 'function' && typeof abrirSubir === 'function' ? fs.filter(esAudio) : [];
   const resto = fs.filter(f => !audios.includes(f));
   if (resto.length) importFiles(resto, dropFolder());
-  if (audios.length) abrirSubir(audios, { carpeta: S.route.kind === 'f' ? S.route.path : null, anadir: true });
+  if (!audios.length) return;
+  const motivo = typeof sbNoSePuedeSoltar === 'function' ? sbNoSePuedeSoltar() : '';
+  if (motivo) return toast(motivo, 'err');
+  abrirSubir(audios, { carpeta: S.route.kind === 'f' ? S.route.path : null, anadir: true });
 });
 async function importFiles(files, folder) {
   let last = null;

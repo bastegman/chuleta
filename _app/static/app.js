@@ -1493,7 +1493,8 @@ audio.addEventListener('timeupdate', () => {
   if (Date.now() - lastSave > 5000) { lastSave = Date.now(); savePos(); }
 });
 audio.addEventListener('ended', () => { if (S.playing) localStorage.removeItem('pos:' + S.playing); });
-audio.addEventListener('error', () => { if (audio.getAttribute('src')) toast('El navegador no puede reproducir este formato de audio.', 'err'); });
+// algunos audios se transcriben pero la ventana no los reproduce (ALAC del iPhone «sin pérdida», AMR, CAF, AIFF, WMA)
+audio.addEventListener('error', () => { if (audio.getAttribute('src')) toast(`Este audio no se puede escuchar dentro de ${esc(APP_NAME)}, pero se transcribe igual. Para oírlo, «Mostrar en carpeta» y ábrelo con tu reproductor.`, 'err'); });
 function playBtns() {
   $$('[data-act="play"]').forEach(b => {
     const on = b.dataset.path === S.playing && !audio.paused;

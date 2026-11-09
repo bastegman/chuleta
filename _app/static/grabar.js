@@ -578,7 +578,8 @@ function sbDesdeArchivo(f) {
   if (!fecha) { fecha = new Date(f.lastModified || Date.now()); origen = f.lastModified ? 'guardado' : 'ahora'; }
   let nombre = /^(PTT|AUD)-\d{8}-WA\d+$/i.test(stem) || /^WhatsApp (Ptt|Audio)\b/i.test(stem) ? 'Mensaje de voz de WhatsApp'
     : resto.replace(/\s+/g, ' ').replace(/^[\s\-_·]+|[\s\-_·]+$/g, '');
-  if (/^(AUDIO|REC|VID|Recording|Grabaci[oó]n)?[\s_-]*\d*$/i.test(nombre)) nombre = nombre.replace(/[\s_-]*\d*$/, '') || '';
+  // lo que pone la grabadora sin decir nada («AUDIO_», «REC 12», «Recording», «Grabación 3», «Voice 001»): sin nombre
+  if (/^(AUDIO|REC|VID|Recording|Grabaci[oó]n|Voice|Voz)?[\s_-]*\d*$/i.test(nombre)) nombre = '';
   return { file: f, nombre: nombre.slice(0, 120), fecha: fecha.getTime(), origen };
 }
 const SB_FECHA_ORIGEN = { nombre: 'del nombre del archivo', guardado: 'de cuándo se guardó el archivo', ahora: 'de ahora', tuya: 'cambiada por ti' };
@@ -596,34 +597,37 @@ function sbFechaTxt(ms) {
 /* abrir la tarjeta con los archivos elegidos (files) o, con seguir, la que había (al volver de editar una lista) */
 async function abrirSubir(files, opts = {}) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  const previa = opts.seguir && G?.subir ? G : null;
-  // soltar más audios con la tarjeta de subir abierta: se añaden a los que había
-  const antes = !previa && opts.anadir && G?.subir && !G.enviando ? G : null;
-  let items = previa ? previa.subir.items : [], rechazados = previa ? previa.subir.rechazados : [];
+  // la tarjeta de subir abierta (y sin subir nada) sigue con lo elegido: al volver de editar una lista o tras un fallo
+  // (seguir), al soltar más audios (anadir: se suman) y con «Elegir otro» (reemplazar: los nuevos en su lugar)
+  const actual = G?.subir && !G.enviando ? G : null;
+  const base = actual && (opts.seguir || opts.anadir || opts.reemplazar) ? actual : null;
+  let items = base && !opts.reemplazar ? base.subir.items : [];
+  let rechazados = base && !opts.reemplazar ? base.subir.rechazados : [];
   if (files) {
-    const nuevos = files.filter(esAudio).map(sbDesdeArchivo);
-    rechazados = (antes ? antes.subir.rechazados : []).concat(files.filter(f => !esAudio(f)));
-    items = (antes ? antes.subir.items : []).concat(nuevos);
+    items = items.concat(files.filter(esAudio).map(sbDesdeArchivo));
+    rechazados = rechazados.concat(files.filter(f => !esAudio(f)));
   }
   if (!items.length) {
     if (rechazados.length) toast(sbNoAudio(rechazados[0]), 'err');
     return;
   }
-  const base = previa || antes;
   const varios = items.length > 1;
   const pedido = base ? base.pedido : { cambios: {} };
   pedido.subir = true;
   pedido.varios = varios;
   if (!base && opts.carpeta) pedido.cambios.carpeta = opts.carpeta;  // desde una carpeta: ahí
   if (opts.vocab != null) pedido.vocab = opts.vocab;
+  const tocado = base ? base.tocado : {};
+  // un audio nuevo (o el único que queda) trae su nombre y su fecha; lo escrito para otro no se le pone
+  const nuevoUno = !varios && (!base || !('nombre' in pedido) || opts.reemplazar);
   if (varios) { delete pedido.nombre; delete pedido.archivo; delete pedido.fecha; }
-  else if (!base || !('nombre' in pedido)) {
+  else if (nuevoUno) {
     const it = items[0];
     Object.assign(pedido, { nombre: it.nombre, archivo: it.nombre, fecha: it.fecha });
+    tocado.nombre = false;
   }
-  const tocado = base ? base.tocado : {};
   G = { pedido, plan: null, tocado, recientes: [], seq: 0, abierto: null, pendiente: null, timer: null, devs: null,
-    sugIdx: -1, subir: { items, rechazados, fechaOrigen: base?.subir?.fechaOrigen || items[0].origen } };
+    sugIdx: -1, subir: { items, rechazados, fechaOrigen: nuevoUno ? items[0].origen : base?.subir?.fechaOrigen || items[0].origen } };
   const uno = items[0], total = items.reduce((n, it) => n + (it.file.size || 0), 0);
   const lista = varios
     ? `<div class="sb-lista" role="list">${items.map(it => `<div class="sb-item" role="listitem">${I.wave}<span class="sb-nom" title="${esc(it.file.name)}">${esc(nfc(it.file.name))}</span>`
@@ -655,7 +659,24 @@ async function abrirSubir(files, opts = {}) {
     <div class="btns gr-pie"><span class="gr-hueco"></span>
       <button class="btn" data-m="no" type="button">Cancelar</button>
       <button class="btn primary" id="rGo" type="button" disabled>${I.upload}<span>${varios ? `Subir y transcribir los ${items.length}` : 'Subir y transcribir'}</span> <kbd>Intro</kbd></button></div>`, d => grMontar(d), 'gr sb');
-  S.modalCleanup = () => { G = null; };
+  // cerrarla (Cancelar, Esc o un clic fuera) a mitad de subida la cancela: lo que estaba llegando no se guarda. Si ya
+  // había llegado entero, el servidor lo está comprobando y se guarda igual: se dice
+  S.modalCleanup = () => {
+    const g = G;
+    G = null;
+    if (!g?.enviando) return;
+    g.cancelado = true;
+    if (g.xhr && !g.llegado) { g.xhr.abort(); toast('Subida cancelada: lo que estaba a medias no se ha guardado.'); }
+    else toast('Ese audio ya había llegado: se guarda y se transcribe igual.');
+  };
+}
+
+/* soltar audios en la ventana: con otra ventana abierta encima (Grabar, Ajustes…), o mientras se sube, no */
+function sbNoSePuedeSoltar() {
+  if (G?.subir && G.enviando) return 'Espera a que termine la subida que está en marcha.';
+  const m = $('#modal');
+  if (m && !m.classList.contains('hidden') && !$('.dialog.sb', m)) return 'Para subir audios, cierra antes esta ventana.';
+  return '';
 }
 
 async function sbMontar(d) {
@@ -674,15 +695,15 @@ async function sbMontar(d) {
       grPedirLuego();
     });
   }
-  // otro archivo: el selector otra vez; si lo cancelas, la tarjeta sigue como estaba
-  d.querySelector('[data-sb-otro]').onclick = () => elegirAudios({ carpeta: g.pedido.cambios.carpeta || null });
+  // otro archivo: el selector otra vez, con lo elegido aquí; si lo cancelas, la tarjeta sigue como estaba
+  d.querySelector('[data-sb-otro]').onclick = () => elegirAudios({ reemplazar: true });
   await voc0();
   if (G !== g) return;
   await grPedir({ recientes: true });
   if (G !== g) return;
   $('#rGo', d).disabled = false;
   const n = $('#grNombre', d);
-  if (n) { n.focus(); n.select(); }
+  if (n) { n.focus(); n.select(); } else $('#rGo', d).focus();  // varios: Intro sube
 }
 const voc0 = () => (typeof loadVocab === 'function' ? loadVocab(S.config.language ?? 'es-en') : Promise.resolve()).catch(() => { });
 
@@ -701,13 +722,17 @@ function sbProgreso(b, i, n, frac) {
   $('span', b).textContent = frac >= 1 ? 'Comprobando el audio…' : `Subiendo… ${pct} %` + (n > 1 ? ` (${i + 1} de ${n})` : '');
 }
 /* un archivo al servidor, con su progreso (fetch no da el de la subida) */
-function sbEnviar(url, file, onProg) {
+function sbEnviar(url, file, onProg, g) {
   return new Promise((ok, ko) => {
     const x = new XMLHttpRequest();
+    g.xhr = x;
+    g.llegado = false;
     x.open('POST', url);
     x.setRequestHeader('X-Audios', '1');
     x.upload.onprogress = e => { if (e.lengthComputable) onProg(e.loaded / e.total); };
-    x.upload.onload = () => onProg(1);
+    x.upload.onload = () => { g.llegado = true; onProg(1); };
+    x.onabort = () => ko(Object.assign(new Error('cancelada'), { cancelada: true }));
+    x.onloadend = () => { if (g.xhr === x) g.xhr = null; };
     x.onload = () => {
       let j;
       try { j = JSON.parse(x.responseText); } catch { j = { error: x.statusText || 'respuesta no válida' }; }
@@ -728,26 +753,41 @@ async function sbSubir() {
   const p = g.plan;
   if (!p || G !== g) { b.disabled = false; return; }
   g.enviando = true;
+  g.cancelado = false;
   $('#sbError', g.d).classList.add('hidden');
-  const items = g.subir.items, hechos = [], fallos = [];
+  const items = g.subir.items, hechos = [], fallidos = [];
   for (const [i, it] of items.entries()) {
+    if (g.cancelado) break;
     const uno = items.length === 1;
     const q = new URLSearchParams({
       folder: p.rec.folder || '', name: uno ? (p.rec.name || '') : it.nombre, fecha: String(uno ? g.pedido.fecha : it.fecha),
       vocab: p.rec.vocab || '', language: p.rec.language || '', contexto: p.rec.contexto || '', preset: p.rec.preset || '',
       archivo: it.file.name });
     try {
-      hechos.push(await sbEnviar(`/api/subir?${q}`, it.file, frac => { if (G === g) sbProgreso(b, i, items.length, frac); }));
-    } catch (err) { fallos.push(err.message); }
+      hechos.push(await sbEnviar(`/api/subir?${q}`, it.file, frac => { if (G === g) sbProgreso(b, i, items.length, frac); }, g));
+    } catch (err) {
+      if (err.cancelada) break;
+      fallidos.push({ it, msg: err.message });
+    }
   }
   g.enviando = false;
   const abierta = G === g;
-  if (!hechos.length && abierta) {  // ninguno: la tarjeta sigue abierta con el motivo, para elegir otro
-    const e = $('#sbError', g.d);
-    e.innerHTML = fallos.map(esc).join('<br>');
-    e.classList.remove('hidden');
+  if (g.cancelado || (fallidos.length && abierta)) {
+    // cancelada, o algún archivo no se ha podido subir: lo subido se dice y se queda; sin ir a ningún sitio
+    if (hechos.length) {
+      toast(`✓ ${hechos.length === 1 ? 'Subido' : `${hechos.length} subidos`}: ${hechos.map(r => esc(folderName(r.carpeta))).join(', ')}`);
+      hechos.filter(r => r.aviso).forEach(r => toast(esc(r.aviso), 'err'));
+      await refreshTree(true);
+      pollJobs(true);
+    }
+    if (g.cancelado || G !== g) return fallidos.forEach(f => toast(esc(f.msg), 'err'));
+    // la tarjeta sigue abierta con los que han fallado y su motivo, para elegir otro o cambiar algo
     $('span', b).textContent = etiqueta;
-    b.disabled = false;
+    g.subir.items = fallidos.map(f => f.it);
+    g.subir.rechazados = [];
+    abrirSubir(null, { seguir: true });
+    const e = $('#sbError');
+    if (e) { e.innerHTML = fallidos.map(f => esc(f.msg)).join('<br>'); e.classList.remove('hidden'); }
     return;
   }
   if (abierta) closeModal(true);
@@ -761,5 +801,5 @@ async function sbSubir() {
     pollJobs(true);
     go('a', ult.path);
   }
-  fallos.forEach(m => toast(esc(m), 'err'));
+  fallidos.forEach(f => toast(esc(f.msg), 'err'));
 }
