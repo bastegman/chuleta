@@ -91,11 +91,16 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   los errores de las listas («Ese workstream ya no existe»).
 - Lo escrito y sin guardar en Ajustes vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el asistente,
   «Apagar» › «Cancelar» o Escape), y solo eso: lo cambiado, también el motor y el modo marcado sin aplicar, y «Guardar»
-  lo guarda. Vuelve tal cual si la configuración no ha cambiado entretanto; si cambió (el asistente guardó, se quitó una
-  carpeta vinculada…), se descarta entero y se dice: «Los ajustes cambiaron en otra parte: tus cambios sin guardar se
-  han descartado». Para eso el servidor da `config_rev`, que sube con cada cambio de un ajuste y con cada guardado a
-  propósito. Si la opción escrita ya no existe al volver (una lista borrada en su editor), queda lo guardado; un
-  micrófono que aún espera la lista de dispositivos la sigue esperando. Abrir Ajustes de cualquier otra forma (⚙, la
+  lo guarda. Vuelve tal cual si mientras tanto no ha cambiado ningún ajuste; si cambió alguno (el asistente guardó otro
+  modo o proveedor, se quitó una carpeta vinculada, se renombró la lista de «Proyecto al grabar»…), se descarta entero
+  y se dice: «Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado». Para eso el servidor da
+  `config_rev`, que sube con cada cambio de verdad de lo que enseña Ajustes; guardar lo mismo («Probar» › «Terminar»)
+  no lo sube, ni lo que la app apunta sola (la velocidad medida al acabar una transcripción). Lo que Ajustes mismo
+  guardó antes de salir (una fila de Proyectos, «Aplicar ahora», una carpeta vinculada) no cuenta como de fuera, y
+  repintar Ajustes desde dentro («Probar otra vez», «Importar listas…») no es salir. Al volver, aunque no hubiera nada
+  escrito, Ajustes enseña lo de ahora (una lista renombrada, con su nombre nuevo). Si la opción escrita ya no existe
+  al volver (una lista borrada en su editor), queda lo guardado; un micrófono o una lista que aún no han llegado se
+  siguen esperando. Abrir Ajustes de cualquier otra forma (⚙, la
   paleta, Inicio, la tarjeta de grabar, un error, el aviso de cerrar la ventana) lo abre de nuevo, sin lo de antes.
   Desde el asistente abierto en Ajustes, «Revisar en Ajustes» e «Ir a Avanzado» vuelven con lo escrito, y a esa sección
   («Revisar en Ajustes» con «Con tu cuenta de Claude» marcada). Antes un borrador abandonado volvía después y «Guardar»
@@ -123,7 +128,11 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - Al abrir Ajustes, el foco va a la sección abierta: a 900×600 el plan ya no se queda fuera de la vista. El micrófono
   elegido sin guardar se conserva al volver de un subdiálogo (editar una lista, el asistente…).
 - Accesibilidad: cada desplegable y casilla de Ajustes y de los paneles «Cambiar» de la tarjeta tiene su nombre para
-  un lector de pantalla (los de la tabla de Proyectos dicen de qué proyecto son, y cada «Editar», cuál edita).
+  un lector de pantalla (los de la tabla de Proyectos dicen de qué proyecto son, y cada «Editar», cuál edita). Los
+  avisos de abajo («Guardado», «Los ajustes cambiaron en otra parte…») también se leen en voz alta.
+- «Otra carpeta (fuera de Chuleta)…» en «Reuniones sin proyecto» cuenta como cambio sin guardar: lo dice «Hay cambios
+  sin guardar» y vuelve tras un subdiálogo. Antes la carpeta se vinculaba y se enseñaba elegida, pero al volver de
+  editar una lista se quedaba en «Automática» sin avisar.
 - Si la app no puede leer la lista de micrófonos y salidas, Ajustes y la tarjeta de grabar lo dicen en una frase
   («No se ha podido leer la lista de micrófonos y salidas de audio») en vez de callarlo o de enseñar el final del error
   de la grabadora, que queda al pasar el ratón.

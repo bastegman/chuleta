@@ -1757,8 +1757,11 @@ document.addEventListener('click', e => { if (!e.target.closest('#jobsPanel, #bt
 let modalResolve = null;
 function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
-  // se deja Ajustes por un subdiálogo (o se reabre): lo escrito allí vale para esta configuración (openSettings)
-  if ($('.dialog.aj', m)) S.ajBorradorRev = S.config?.config_rev;
+  // se deja Ajustes por un subdiálogo: con qué configuración se ha escrito lo de Ajustes, según el servidor (incluye
+  // lo que Ajustes mismo haya guardado, aunque no haya pedido /api/config después). openSettings lo compara al volver;
+  // pintar Ajustes lo gasta, así que repintarlo desde dentro no compara nada
+  if (cls === 'aj') S.ajBorradorRev = null;
+  else if ($('.dialog.aj', m)) S.ajBorradorRev = api('/api/config').then(c => c.config_rev, () => null);
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
   m.classList.remove('hidden');
   document.body.classList.toggle('aj-abierto', cls === 'aj');  // los avisos, arriba solo con Ajustes (su «Guardar» abajo)
@@ -1934,21 +1937,32 @@ const AJ_SECS = [['algrabar', 'Al grabar'], ['proyectos', 'Proyectos'], ['proces
   ['calendario', 'Calendario y Teams'], ['voces', 'Voces'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
 function openSettings(opts) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
-    || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
-  S.ajSec = sec;
   // lo escrito y sin guardar (S.ajBorrador) solo vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el
   // asistente, «Apagar» › «Cancelar»…), que llaman a openSettings() sin nada o con volver: true. Cualquier otra forma
   // de abrir Ajustes (⚙, la paleta, Inicio, la tarjeta, un error) es abrirlo de nuevo, sin lo de antes (revisiones 3 y
-  // 4 de B2: un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto por otro camino)
-  // Y vuelve tal cual solo si la configuración no ha cambiado desde que se dejó Ajustes (config_rev, que el servidor
-  // sube con cada cambio, venga de donde venga: el asistente, una carpeta vinculada…): si cambió, se descarta entero y
-  // se dice (revisiones 5 a 7: reponer campo a campo traía cada vez un caso nuevo)
-  if (opts && !(typeof opts === 'object' && !(opts instanceof Event) && opts.volver)) S.ajBorrador = null;
-  else if (S.ajBorrador && S.ajBorradorRev !== S.config.config_rev) {
-    S.ajBorrador = null;
-    toast('Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado.');
+  // 4 de B2: un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto por otro camino).
+  // Y vuelve tal cual solo si ningún ajuste ha cambiado mientras se estaba fuera (config_rev, que el servidor sube con
+  // cada cambio de verdad, venga de donde venga): si cambió, se descarta entero y se dice (revisiones 5 a 7: reponerlo
+  // campo a campo traía cada vez un caso nuevo). Al volver se pide siempre la configuración, haya algo escrito o no:
+  // pone S.config al día (revisión 8: con una lista renombrada en su editor, Ajustes la daba por perdida y «Guardar»
+  // fallaba). Repintar Ajustes desde dentro («Probar otra vez», «Importar listas…») no es haber salido: lo escrito
+  // vuelve sin más
+  const vuelve = !(opts && !(typeof opts === 'object' && !(opts instanceof Event) && opts.volver));
+  if (!vuelve) S.ajBorrador = null;
+  else if (S.ajBorradorRev) {
+    const base = S.ajBorradorRev;
+    S.ajBorradorRev = null;
+    return Promise.all([base, api('/api/config')]).then(([b, c]) => {
+      setConfig(c);
+      if (S.ajBorrador && b != null && b !== c.config_rev) {
+        S.ajBorrador = null;
+        toast('Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado.');
+      }
+    }, () => { }).then(() => openSettings(opts));  // sin respuesta no se sabe si cambió: lo escrito se queda
   }
+  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
+    || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
+  S.ajSec = sec;
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
@@ -2070,7 +2084,7 @@ function openSettings(opts) {
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
     const inicial = foto();  // como viene de los ajustes guardados
     d.borradorAlAbrir = S.ajBorrador ? { ...S.ajBorrador } : null;  // ajustes.js: lo que no se pudo poner aún
-    // lo escrito antes de un subdiálogo, tal cual (openSettings ya ha comprobado que la configuración es la misma)
+    // lo escrito antes de un subdiálogo, tal cual (openSettings ya ha comprobado que ningún ajuste ha cambiado)
     const ponerBorrador = xs => {
       if (!S.ajBorrador) return;
       xs.forEach(x => {

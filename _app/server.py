@@ -251,12 +251,15 @@ class Store:
     SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"), ("cloud", "extra_keys_openai"),
                ("cloud", "extra_keys_azure"), ("cloud", "extra_keys_custom"))
 
+    FUERA_DE_REV = ("speed", "outlook_asistentes", "favorites", "folder_icons")
+
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
-        # sube con cada cambio de un ajuste (las claves de DEFAULT_SETTINGS, venga de donde venga; no el estado interno
-        # como agente_comprobado): /api/config lo da como config_rev, y Ajustes descarta lo escrito y sin guardar si al
-        # volver de un subdiálogo la configuración ya es otra
-        self.rev, self.claves = 0, tuple(defaults)
+        # sube con cada cambio de verdad de lo que enseña Ajustes, venga de donde venga (el asistente, una carpeta
+        # vinculada, una lista renombrada…): /api/config lo da como config_rev, y Ajustes descarta lo escrito y sin
+        # guardar si al volver de un subdiálogo es otro. Guardar lo mismo no lo sube, ni lo que la app apunta sola o no
+        # sale en Ajustes (FUERA_DE_REV, revisión 8: «speed» al acabar cada transcripción descartaba lo escrito)
+        self.rev, self.claves = 0, tuple(k for k in defaults if k not in self.FUERA_DE_REV)
         self.data = copy.deepcopy(defaults)
         self.broken, self.frozen = None, False  # settings.json ilegible: {"copia", "error", "recuperado"}
         for k, v in self._load().items():
@@ -5052,9 +5055,6 @@ class App:
                 new = [old.get(k.strip(), k.strip()) for k in incoming if isinstance(k, str) and k.strip()]
                 d["cloud"][field] = [k for k in new if "…" not in k and "•" not in k][:10]
         self.settings.update(upd)
-        # guardar a propósito (el asistente, «Aplicar ahora», «Probar conexión») cuenta como cambio aunque deje lo
-        # mismo: lo escrito en Ajustes antes de ese guardado ya no vuelve (config_rev)
-        self.settings.rev = getattr(self.settings, "rev", 0) + 1
         p = (getattr(self, "pruebas", None) or {}).get(b.get("prueba")) if b.get("prueba") else None
         if p is not None and p.terminada and p.firma == self._firma(self.settings.get()):
             res = p.resumen()  # la del asistente: es de lo que se acaba de guardar

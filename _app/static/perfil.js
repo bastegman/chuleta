@@ -221,6 +221,7 @@ function bindPerfilSettings(d) {
       if (rel && document.body.contains(fsel)) {
         fsel.innerHTML = `<option value="${PERFIL_AUTO}">Automática · la última usada</option>` + folderOpts(rel);
         fsel.dataset.prev = rel;
+        d.ajMarcar?.();  // es un cambio sin guardar como otro (revisión 8: no salía ni volvía de un subdiálogo)
       }
     };
   }

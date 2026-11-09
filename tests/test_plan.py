@@ -555,21 +555,28 @@ class ServidorPlanTests(TempTree):
         self.assertEqual(a.settings.get()["procesado"], "local")
 
     def test_config_rev(self):
-        """config_rev (revisión 7 de B2: Ajustes descarta lo escrito si la configuración cambió desde que se dejó):
-        sube con cada cambio de un ajuste, no con lo que no cambia nada ni con el estado interno (agente_comprobado), y
-        sube siempre con un guardado a propósito (/api/settings), aunque deje lo mismo."""
+        """config_rev (revisiones 7 y 8 de B2: Ajustes descarta lo escrito si, mientras se estaba fuera, cambió algún
+        ajuste): sube con cada cambio de verdad de lo que enseña Ajustes, venga de donde venga, y no con lo que no
+        cambia nada (guardar lo mismo, como «Probar» › «Terminar»), ni con lo que la app apunta sola (agente_comprobado,
+        speed al acabar una transcripción, outlook_asistentes) o no sale en Ajustes (favoritos, iconos)."""
         st = server.Store(os.path.join(self.tmp, "rev.json"), server.DEFAULT_SETTINGS)
         r0 = st.rev
         st.update(lambda d: d.update(language="pt"))
         self.assertEqual(st.rev, r0 + 1)
         st.update(lambda d: d.update(language="pt"))  # lo mismo: no es un cambio
         st.update(lambda d: d.update(agente_comprobado=123.0))  # estado interno, no un ajuste
+        st.update(lambda d: d.update(speed={"medium": 3.5}, outlook_asistentes="sí", favorites=[{"kind": "f"}],
+                                     folder_icons={"a": "x"}))
         self.assertEqual(st.rev, r0 + 1)
+        st.update(lambda d: d["cloud"].update(model="otro"))  # dentro de un ajuste compuesto, también
+        self.assertEqual(st.rev, r0 + 2)
         a = self.app(language="es")
         r = a.settings.rev
         with mock.patch.object(server.App, "config", lambda s, q: {}):  # lo que devuelve no hace falta aquí
-            a.save_settings({"language": "es"})  # «Guardar» a propósito, sin cambiar nada
-        self.assertGreater(a.settings.rev, r)
+            a.save_settings({"language": "es"})  # «Guardar» lo mismo
+            self.assertEqual(a.settings.rev, r)
+            a.save_settings({"language": "en"})
+            self.assertEqual(a.settings.rev, r + 1)
         import inspect
         self.assertIn('"config_rev": getattr(self.settings, "rev", 0)', inspect.getsource(server.App.config))
 

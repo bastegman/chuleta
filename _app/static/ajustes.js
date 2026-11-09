@@ -42,6 +42,8 @@ function ajDispositivos(devs) {
 }
 /* Las listas de vocabulario, una sola petición por cada vez que se abre Ajustes (Al grabar y Proyectos las piden a la
    vez). loadVocab (notas.js) no falla: deja S.vocabError si no se han podido leer. */
+/* las listas de vocabulario se han leído alguna vez (bien, aunque no haya ninguna, o con error) */
+function listasLeidas() { return Array.isArray(S.vocabCarpetas) || !!S.vocabError; }
 function ajListas(d) {
   return d.ajListas || (d.ajListas = loadVocab(S.config?.language ?? 'es-en'));
 }
@@ -195,8 +197,8 @@ function bindAjAlGrabar(d) {
     if (!document.body.contains(proy)) return;
     const antes = [...proy.options].map(o => o.value).join('|') + '#' + proy.value;
     listas();
-    const pv = $('#pfVocab', d);
-    (d.ajOpcionesListas ||= {}).pfVocab = !!(S.vocab?.length || S.vocabError);  // ya no espera (app.js, marcar)
+    const pv = $('#pfVocab', d), esperaba = !d.ajOpcionesListas?.pfVocab;
+    (d.ajOpcionesListas ||= {}).pfVocab = listasLeidas();  // ya no espera (app.js, marcar)
     if (pv && typeof perfilVocabOpts === 'function') {
       // con las listas ya aquí: lo que había (lo guardado o lo que has elegido) y, si no lo has tocado, lo escrito
       // antes de un subdiálogo, solo si su lista existe; si no (borrada o renombrada allí), queda lo guardado y no un
@@ -205,7 +207,9 @@ function bindAjAlGrabar(d) {
       pv.innerHTML = perfilVocabOpts(antesV);
       const valeB = b != null && (b === PERFIL_AUTO || b === '' || (S.vocab || []).some(v => v.id === b));
       if (valeB && !pv.dataset.tocado && pv.value !== b) pv.value = b;
-      if (pv.value !== antesV) d.ajMarcar?.();
+      // y el borrador al día: lo que esperaba a las listas y no está en ellas ya no espera (revisión 8: si marcar()
+      // había corrido antes de llegar, se quedaba pendiente)
+      if (pv.value !== antesV || (esperaba && d.ajOpcionesListas.pfVocab)) d.ajMarcar?.();
     }
     const av = $('.ag-sin-listas', d);
     // aquí, en una línea (Al grabar tiene que caber en una pantalla); en Proyectos y en las listas, con su recuadro
@@ -215,6 +219,9 @@ function bindAjAlGrabar(d) {
   };
   d.ajListasCambiadas = otraVez;
   d.ajPlanPedir = () => pedir();
+  // si las listas ya se habían leído (al volver de su editor, por ejemplo), «Proyecto al grabar» se ha pintado ya con
+  // ellas: no espera a la siguiente lectura
+  (d.ajOpcionesListas ||= {}).pfVocab = listasLeidas();
   ajListas(d).then(otraVez);
   // el primero, con la carpeta de cada proyecto: Proyectos la toma de aquí al abrir (una petición menos)
   d.ajPrimerPlan = pedir({ proyectos: true });
@@ -376,7 +383,9 @@ function bindAjProyectos(d) {
     if (listo) return cerrar(listo.closest('tr'));
     if (e.target.closest('[data-pj-lista]')) {
       const v = (S.vocab || []).find(x => x.id === e.target.closest('[data-pj-lista]').dataset.pjLista);
-      if (v) openVocabEditor(v, openSettings);
+      if (!v) return;
+      await guardarYa();  // lo pendiente de la fila, guardado desde aquí antes de salir (si no, contaría como de fuera)
+      openVocabEditor(v, openSettings);
       return;
     }
     if (!pe && !we) return;
