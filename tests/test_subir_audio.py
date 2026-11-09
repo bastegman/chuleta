@@ -333,6 +333,23 @@ class PlanSubirTests(unittest.TestCase):
         self.assertIn("2026-11-09 16-00", next(x for x in p["lineas"] if x["clave"] == "carpeta")["valor"])
 
 
+@unittest.skipUnless(shutil.which("git") and os.path.exists(os.path.join(REPO, ".git")), "sin copia de trabajo de git")
+class GitignoreFixturesTests(unittest.TestCase):
+    """Los audios de prueba van al repo; los de una reunión, ni siquiera dentro de tests/audio_formatos."""
+
+    def ignorado(self, p):
+        r = subprocess.run(["git", "-C", REPO, "check-ignore", "--no-index", "-q", p], capture_output=True, timeout=60)
+        return r.returncode == 0
+
+    def test_fixtures_si_reuniones_no(self):
+        for n in os.listdir(FIX):
+            self.assertFalse(self.ignorado(f"tests/audio_formatos/{n}"), n)
+        for p in ("tests/audio_formatos/2026-11-08 10-15-32 - Comite.m4a", "tests/otra.m4a", "tests/nota.amr",
+                  "tests/Proyecto/voz.3gp", "_app/static/voz.caf", "tests/x.waptt",
+                  "Proyecto/2026-11-08 Comite/2026-11-08 10-15-32 - Comite.opus", "nota.amr.txt"):
+            self.assertTrue(self.ignorado(p), p)
+
+
 class EtiquetaTests(unittest.TestCase):
     """El árbol quita el prefijo de las grabadoras (AUDIO_, VID-, REC) pero no la primera palabra de un nombre."""
 

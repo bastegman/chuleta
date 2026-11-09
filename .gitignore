@@ -42,6 +42,17 @@ _app/version.txt
 *.webm
 *.mkv
 *.mov
+# y los que se pueden subir desde el móvil y los mensajeros (AUDIO_EXT, 09/11/2026)
+*.oga
+*.amr
+*.3gp
+*.3gpp
+*.3ga
+*.caf
+*.qta
+*.aif
+*.aiff
+*.waptt
 *.srt
 *.resumen.md
 *.hablantes.*
@@ -58,3 +69,8 @@ dist/
 # sistema
 .DS_Store
 Thumbs.db
+# salvo los audios de prueba de «Subir audio»: una señal sintética que escribe tests/audio_formatos/generar.py en los
+# formatos del móvil y de WhatsApp, sin la voz de nadie
+!/tests/audio_formatos/
+!/tests/audio_formatos/*
+/tests/audio_formatos/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][ _][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*
