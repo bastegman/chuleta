@@ -347,6 +347,29 @@ class PistaDeParticipantesTests(Reunion):
             self.assertEqual(len(r["participantes"]), 500)
         self.assertEqual(vistos, {texto})
 
+    def test_de_grabar_a_confirmar(self):
+        """La cadena entera: grabar con la sugerencia de Outlook → el .md → «Confirmar» (el mismo texto, como
+        reunion.js) → la pista de la primera identificacion. Editado (quitar a uno), ya cuenta como texto libre."""
+        from test_carpetas import make_app, rec
+        os.makedirs(os.path.join(self.root, "Alfa"))
+        nombres = ["Stegmaier, Bernardo", "García López, Ana", "Ortega y Gasset, José"]
+        texto = server.calendario.join_participants(nombres)
+        resultados = []
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()):
+            for n, editar in enumerate((None, lambda t: t.rsplit("; ", 1)[0])):
+                a = make_app(self)
+                a.vigia = types.SimpleNamespace(ultimo={"sugerencia": {"participants": nombres}})
+                a.jobs.schedule_outputs = lambda rel, delay=4.0: None
+                r = rec(a, self, participantes=texto, sugerido="outlook", name=f"R{n}")
+                wav = os.path.join(self.root, *r["path"].split("/"))
+                antes = a.jobs._participant_hint(wav, {})
+                campo = server.parse_notes(server.read_text(wav[:-4] + ".md"))[0]["participantes"].strip()
+                with mock.patch.object(server, "log"):
+                    a.notes_save({"path": r["path"], "props": {"participantes": editar(campo) if editar else campo}})
+                props = server.parse_notes(server.read_text(wav[:-4] + ".md"))[0]
+                resultados.append((antes, a.jobs._participant_hint(wav, {}), props.get("participantes_origen")))
+        self.assertEqual(resultados, [(3, 3, None), (3, 4, None)])  # editado: «Stegmaier, Bernardo; García López, Ana»
+
     def test_al_reidentificar_si_los_sugirio_la_reunion(self):
         self.identificar(micro_en=None)
         self.assertEqual(self.correr({"participantes": "Ana, Luis", "participantes_origen": "teams"}), 2)
