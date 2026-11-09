@@ -94,6 +94,7 @@ class DesdeElMovilTests(unittest.TestCase):
         self.assertIn("whatsapp.opus", pc.locator(".mv-item").text_content())
         # el PC sabe que un móvil lo ha abierto, y ofrece otro código por si no era el tuyo
         self.assertIn("Un móvil ya ha abierto el código", pc.locator(".mv-conectado").text_content())
+        self.assertIn("Mostrar otro código", pc.locator(".mv-conectado").text_content())
         # con el código en pantalla, soltar audios en la ventana no rompe la tarjeta: se dice por qué no
         self.assertIn("cierra antes la tarjeta del móvil", pc.evaluate("sbNoSePuedeSoltar()"))
         self.captura(pc, "05_recibido", ".dialog.mvd")
@@ -155,6 +156,16 @@ class DesdeElMovilTests(unittest.TestCase):
         pc.click("#rGo")
         pc.wait_for_selector(".mv-qrimg svg", timeout=10000)
         self.assertEqual(pc.locator(".mv-url code").text_content(), url)
+        # «Mostrar otro código» con doble clic: un solo código nuevo
+        pc.evaluate("""() => { window.nAbrir = 0; const orig = api; window.api = (u, b) => {
+            if (u === '/api/movil/abrir') window.nAbrir++; return orig(u, b); }; }""")
+        self.s.post("/api/movil/cerrar", {})  # (caducado o parado: sale «Mostrar otro código»)
+        pc.wait_for_selector(".mv-fin [data-mv='otro']", timeout=5000)
+        pc.dblclick(".mv-fin [data-mv='otro']")
+        pc.wait_for_selector(".mv-qrimg svg", timeout=10000)
+        pc.wait_for_timeout(500)
+        self.assertEqual(pc.evaluate("window.nAbrir"), 1)
+        self.assertNotEqual(pc.locator(".mv-url code").text_content(), url)
         pc.keyboard.press("Escape")
         pc.wait_for_function("() => document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
         pc.wait_for_timeout(500)

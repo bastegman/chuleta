@@ -83,7 +83,7 @@ function abrirMovilCard(g) {
     clearTimeout(sub.sondeo);
     sub.cerrada = true;
     if (!sub.sesion) return;
-    api('/api/movil/cerrar', {}).then(r => {
+    api('/api/movil/cerrar', { url: sub.ultimo?.url || undefined }).then(r => {
       const llegando = (r.recibidos || []).filter(x => x.estado === 'llegando');
       if (llegando.length) toast(`«${esc(llegando[0].archivo)}» sigue llegando: se guardará al terminar.`);
       if ((r.recibidos || []).some(x => x.path)) { refreshTree(true); pollJobs(true); }
@@ -134,20 +134,23 @@ function mvError(texto) {
 /* «Mostrar el código» (y «Volver al código» tras «Cambiar»): un código nuevo, o el mismo con lo elegido ahora */
 async function mvMostrar() {
   const g = G, b = g && $('#rGo', g.d);
-  if (!g || !b || b.disabled) return;
+  if (!g || !b || b.disabled || g.subir.abriendo) return;  // un doble clic no abre dos códigos
   b.disabled = true;
+  g.subir.abriendo = true;
   if (g.timer) { clearTimeout(g.timer); g.timer = null; grPedir(); }
   await g.pendiente;  // lo último pedido: con lo que se está viendo
   const p = g.plan;
-  if (!p || G !== g) { b.disabled = false; return; }
+  if (!p || G !== g) { b.disabled = false; g.subir.abriendo = false; return; }
   const datos = { folder: p.rec.folder || '', vocab: p.rec.vocab || '', language: p.rec.language || '',
     contexto: p.rec.contexto || '', preset: p.rec.preset || '' };
   const sub = g.subir;
   try {
     const nuevo = !(sub.sesion && sub.activa);
     const r = nuevo ? await api('/api/movil/abrir', datos) : await api('/api/movil/datos', datos);
-    // cerrada (Esc) mientras se abría: ese código no lo va a ver nadie, fuera
-    if (sub.cerrada || G !== g) { if (nuevo && r.activa) api('/api/movil/cerrar', {}).catch(() => { }); return; }
+    sub.abriendo = false;
+    // cerrada (Esc) mientras se abría: ese código (y solo ese) no lo va a ver nadie, fuera
+    if (sub.cerrada || G !== g) { if (nuevo && r.activa) api('/api/movil/cerrar', { url: r.url }).catch(() => { }); return; }
+    sub.gen = (sub.gen || 0) + 1;  // un sondeo pedido antes ya no pinta (sería del código de antes)
     if (r.ok === false) { mvError(r.texto); b.disabled = false; return; }
     mvError('');
     if (r.qr) sub.qr = r.qr;
@@ -158,6 +161,7 @@ async function mvMostrar() {
     mvPintar(g, r);
     mvSondear(g);
   } catch (err) {
+    sub.abriendo = false;
     if (G === g) { mvError(err.message); b.disabled = false; }
   }
 }
@@ -235,14 +239,15 @@ const mvReloj = s => `${Math.floor((s || 0) / 60)}:${String((s || 0) % 60).padSt
 function mvSondear(g) {
   const sub = g.subir;
   clearTimeout(sub.sondeo);
+  const gen = sub.gen;
   sub.sondeo = setTimeout(async () => {
     if (G !== g || sub.cerrada) return;
     try {
       const r = await api('/api/movil/estado');
-      if (G !== g || sub.cerrada) return;
+      if (G !== g || sub.cerrada || gen !== sub.gen) return;
       mvPintar(g, r);
       if (r.activa || (r.recibidos || []).some(x => x.estado === 'llegando')) mvSondear(g);
-    } catch { if (G === g) mvSondear(g); }
+    } catch { if (G === g && gen === sub.gen) mvSondear(g); }
   }, 1000);
 }
 
@@ -256,6 +261,7 @@ document.addEventListener('click', async e => {
   if (q === 'cambiar') return mvVer(g, false);
   if (q === 'parar') {
     clearTimeout(g.subir.sondeo);  // un sondeo ya pedido no pinta «Aún nada» encima de lo recibido
+    g.subir.gen = (g.subir.gen || 0) + 1;
     try {
       const r = await api('/api/movil/cerrar', {});
       g.subir.parada = true; g.subir.sesion = false;
@@ -266,6 +272,8 @@ document.addEventListener('click', async e => {
     return;
   }
   if (q === 'otro') {
+    if (g.subir.abriendo) return;
+    clearTimeout(g.subir.sondeo);
     g.subir.parada = false; g.subir.sesion = false; g.subir.activa = false;
     $('#rGo', g.d).disabled = false;
     return mvMostrar();

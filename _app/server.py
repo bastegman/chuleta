@@ -5187,8 +5187,7 @@ class App:
         """GET /api/movil/red: si se puede recibir del móvil en la red de ahora ({ok, ip, red} o {ok: False, motivo,
         texto}). Mira los perfiles de red de Windows (PowerShell, ~1 s)."""
         red = movil.red_para_movil()
-        if red["ok"]:
-            App._movil_red = (time.time(), red)
+        App._movil_red = (time.time(), red) if red["ok"] else (0.0, None)  # una mala tira la buena de antes
         return red if red["ok"] else dict(red, texto=movil.motivo_texto(red))
 
     def movil_abrir(self, b):
@@ -5227,9 +5226,12 @@ class App:
         return rec.publico() if rec else {"activa": False, "recibidos": []}
 
     def movil_cerrar(self, b):
-        """POST /api/movil/cerrar: «Dejar de recibir», «Listo» o cerrar la ventana. Lo que estaba llegando se guarda."""
+        """POST /api/movil/cerrar {url?}: «Dejar de recibir», «Listo» o cerrar la ventana. Lo que estaba llegando se
+        guarda. Con `url`, solo si es ese código (uno que se abría al cerrar la tarjeta no cierra el de otra)."""
         rec = App._movil_rec
         estado = rec.publico() if rec else {"activa": False, "recibidos": []}
+        if b.get("url") and (not rec or rec.url != b.get("url")):
+            return dict(estado, cerrado=False)
         self._movil_parar()
         return dict(estado, activa=False)
 

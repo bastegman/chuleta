@@ -289,10 +289,11 @@ class ApiTests(TempTree):
             self.app.movil_red({})
             self.app.movil_abrir({"folder": ""})
         self.assertEqual(m.call_count, 1)
-        server.App._movil_red = (0.0, None)
+        # pasar a una red pública: la lectura mala tira la buena de antes, y «Mostrar el código» vuelve a mirar
         with mock.patch.object(movil, "red_para_movil", return_value={"ok": False, "motivo": "publica", "red": ""}):
             self.app.movil_red({})
-        self.assertEqual(server.App._movil_red, (0.0, None))
+            self.assertEqual(server.App._movil_red, (0.0, None))
+            self.assertFalse(self.app.movil_abrir({"folder": ""})["ok"])
 
     def test_sin_red_privada_no_hay_codigo(self):
         with mock.patch.object(movil, "red_para_movil", return_value={"ok": False, "motivo": "publica", "red": "Bar"}):
@@ -308,6 +309,16 @@ class ApiTests(TempTree):
                 with self.subTest(folder=malo), self.assertRaises(ApiError):
                     self.app.movil_abrir({"folder": malo})
         self.assertIsNone(server.App._movil_rec)
+
+    def test_cerrar_solo_ese_codigo(self):
+        """El cierre de un código que se abría al cerrar la tarjeta no cierra el que otra tarjeta abrió después."""
+        with mock.patch.dict(os.environ, {movil.ENV_RED: "127.0.0.1"}):
+            viejo = self.app.movil_abrir({"folder": ""})["url"]
+            nuevo = self.app.movil_abrir({"folder": ""})["url"]
+        self.assertFalse(self.app.movil_cerrar({"url": viejo}).get("cerrado", True))
+        self.assertTrue(self.app.movil_estado({})["activa"])
+        self.app.movil_cerrar({"url": nuevo})
+        self.assertFalse(self.app.movil_estado({})["activa"])
 
     def test_apagar_cierra_el_codigo(self):
         with mock.patch.dict(os.environ, {movil.ENV_RED: "127.0.0.1"}):

@@ -613,7 +613,7 @@ async function abrirSubir(files, opts = {}) {
   // recibido y si se estaba enseñando (revisor del QR, P1)
   const antes = movil && base ? base.subir : {};
   G = { pedido, plan: null, tocado, recientes: [], seq: 0, abierto: null, pendiente: null, timer: null, devs: null,
-    sugIdx: -1, subir: { ...antes, cerrada: false, items, rechazados, movil, fechaOrigen: nuevoUno ? items[0].origen : base?.subir?.fechaOrigen || items[0]?.origen } };
+    sugIdx: -1, subir: { ...antes, cerrada: false, abriendo: false, items, rechazados, movil, fechaOrigen: nuevoUno ? items[0].origen : base?.subir?.fechaOrigen || items[0]?.origen } };
   if (movil) return abrirMovilCard(G);  // recibir.js
   const uno = items[0], total = items.reduce((n, it) => n + (it.file.size || 0), 0);
   const lista = varios
@@ -665,7 +665,7 @@ async function abrirSubir(files, opts = {}) {
 /* soltar audios en la ventana: con otra ventana abierta encima (Grabar, Ajustes…), o mientras se sube, no */
 function sbNoSePuedeSoltar() {
   if (G?.subir && G.enviando) return 'Espera a que termine la subida que está en marcha.';
-  if (G?.subir?.movil) return 'Para subir audios desde este PC, cierra antes la tarjeta del móvil.';
+  if (G?.subir?.movil && $('#modal .dialog.mvd')) return 'Para subir audios desde este PC, cierra antes la tarjeta del móvil.';
   const m = $('#modal');
   if (m && !m.classList.contains('hidden') && !$('.dialog.sb', m)) return 'Para subir audios, cierra antes esta ventana.';
   return '';

@@ -52,7 +52,8 @@ PS_REDES = (
     "$i=$_.InterfaceIndex;"
     "$r=@(Get-NetRoute -InterfaceIndex $i -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric)[0];"
     "[pscustomobject]@{nombre=[string]$_.Name; categoria=[string]$_.NetworkCategory; alias=[string]$_.InterfaceAlias;"
-    "ruta=($null -ne $r); metrica=$(if ($r) { [int]$r.RouteMetric } else { 9999 });"
+    "ruta=($null -ne $r); metrica=$(if ($r) { [int]$r.RouteMetric + [int](Get-NetIPInterface -InterfaceIndex $i"
+    " -AddressFamily IPv4).InterfaceMetric } else { 9999 });"
     "ips=@(Get-NetIPAddress -InterfaceIndex $i -AddressFamily IPv4 | ForEach-Object { [string]$_.IPAddress })}});"
     "ConvertTo-Json -InputObject $o -Compress -Depth 3")
 
