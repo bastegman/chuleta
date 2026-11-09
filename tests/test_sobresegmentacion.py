@@ -177,7 +177,10 @@ class CountParticipantsTests(unittest.TestCase):
     def test_sugeridos_por_outlook(self):
         """Lo que escribe la app con los de Outlook (join_participants): «Apellido, Nombre» es una persona."""
         for text, n in (("Stegmaier, Bernardo; García López, Ana", 2), ("Stegmaier, Bernardo;\nGarcía, Ana; Luis", 3),
-                        ("Ana, Luis", 2), ("Ortega y Gasset, José; Ana", 2), ("", 0)):
+                        ("Ana, Luis", 2), ("Ortega y Gasset, José; Ana", 2), ("", 0),
+                        # una entrada que nombra a dos (una pareja, un buzon compartido): dos, nunca una (RF5)
+                        ("Pérez, Ana y Luis; García, Pedro", 3), ("Ana y Luis Pérez, Pedro García", 3),
+                        ("Equipo Ventas / Marketing, Ana López", 3)):
             self.assertEqual(voices.count_participants(text, sugeridos=True), n, text)
 
     def test_editado_a_mano_nunca_de_menos(self):

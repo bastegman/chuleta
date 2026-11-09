@@ -405,12 +405,19 @@ def count_participants(text, sugeridos=False):
     """Cuantas personas nombra el campo «Participantes». Texto libre («Ana, Luis y Pedro»): se parte por comas, «;»,
     lineas, «/» e «y/and/&»; ante la duda cuenta de mas, que une menos voces. sugeridos=True: el texto es el que
     escribio la app con los de Outlook o Teams (calendario.join_participants), que separa con «; » si algun nombre
-    lleva coma («Apellido, Nombre»): entonces cada trozo entre «;» es una persona, sin partir por «y» (apellidos como
-    «Ortega y Gasset»). Asi los nombres del directorio de una empresa no cuentan doble, y lo que el usuario edite a mano
-    (sin origen: participantes_origen) se cuenta del lado prudente (revision de la integracion del 08/11/2026)."""
-    text = str(text or "")
+    lleva coma («Apellido, Nombre»): entonces cada trozo entre «;» con una coma es una persona por cada nombre de
+    detras de la coma («Pérez, Ana y Luis» son dos; el «y» de «Ortega y Gasset, José» no separa), y lo demas se parte
+    como el texto libre. Asi los nombres del directorio de una empresa no cuentan doble (revision de la integracion
+    del 08/11/2026)."""
+    text, sep = str(text or ""), r"\s+(?:y|e|and|&)\s+|/"
     if sugeridos:
-        parts = re.split(r"[;\n]+" if ";" in text else r"[,\n]+", text)
+        parts = []
+        for trozo in re.split(r"[;\n]+" if ";" in text else r"[,\n]+", text):
+            if trozo.count(",") == 1:
+                ape, nom = trozo.split(",")
+                parts += [ape.strip() + ", " + n.strip() for n in re.split(sep, nom) if n.strip()]
+            else:
+                parts += re.split(r",|" + sep, trozo)
     else:
         parts = re.split(r"[,;\n/]+|\s+(?:y|e|and|&)\s+", text)
     return len({p.strip().casefold() for p in parts if p.strip()})
