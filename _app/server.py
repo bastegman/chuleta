@@ -592,6 +592,16 @@ def procesado_de(st):
     return "api" if ((st.get("cloud") or {}).get("api_key") or "").strip() else "local"
 
 
+def proveedor_elegido(st):
+    """Si ya hay un proveedor de la nube elegido: «API externa» elegida, o una clave, una direccion propia o una de
+    Azure guardadas. En una instalacion nueva no lo hay, y la interfaz no da ninguno por elegido (Bernardo, msg 1386:
+    «Lo que no quiero es sugerir Groq a un nuevo instalador»). cloud.provider sigue siendo "groq" por defecto en los
+    ajustes, para no cambiar nada a quien ya lo usa sin haberlo guardado nunca."""
+    c = st.get("cloud") or {}
+    return procesado_de(st) == "api" or any(str(c.get(k) or "").strip() for k in (
+        "api_key", "base_url", "azure_endpoint")) or any(c.get(f) for f in engines.EXTRA_KEYS_FIELDS.values())
+
+
 def agente_de(st):
     """(clase del agente, {tipo, modelo}): el configurado, o Claude Code si no se reconoce."""
     a = st.get("agente") if isinstance(st.get("agente"), dict) else {}
@@ -5262,6 +5272,7 @@ class App:
             d["size_mb"] = round(sum(s for _, s, _ in m[2]) / 1e6) if m else None  # lo que descarga la primera vez
             presets.append(d)
         cloud = dict(st["cloud"])
+        cloud["elegido"] = proveedor_elegido(st)  # sin elegir (instalacion nueva): la interfaz no preselecciona ninguno
         cloud["has_key"] = bool(cloud.get("api_key"))
         cloud["api_key"] = masked(cloud.get("api_key"))
         # claves adicionales: enmascaradas (nunca en claro) y por proveedor, cada una con el suyo; en extra_keys, las
@@ -6978,6 +6989,8 @@ class App:
                 d["agente"] = {"tipo": cls.tipo, "modelo": modelo}
             c = b.get("cloud") or {}
             for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
+                if k == "provider" and c.get(k) not in engines.PROVIDERS:
+                    continue  # «Elige el proveedor…» sin elegir: no se guarda vacio (el motor tomaria Groq)
                 if k in c:
                     d["cloud"][k] = (c[k] or "").strip()
             # 20 min de FLAC 16 kHz ~ 22 MB: por debajo del limite de 25 MB por archivo de las APIs

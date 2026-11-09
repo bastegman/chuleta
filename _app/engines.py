@@ -1758,8 +1758,8 @@ def chat_missing(cfg, what="El resumen con IA"):
     if chat_url(cfg) and cloud_keys(cfg):
         return None
     if cfg.get("provider") == "azure":
-        return (f"{what} aún no funciona con Azure OpenAI (con Azure solo se transcribe). Para usarlo, elige Groq, "
-                "OpenAI u otra API compatible con OpenAI en Ajustes ⚙ → Procesado.")
+        return (f"{what} aún no funciona con Azure OpenAI (con Azure solo se transcribe). Para usarlo, elige otro "
+                "proveedor (cualquiera compatible con OpenAI) en Ajustes ⚙ → Procesado.")
     if cfg.get("provider") == "custom" and not chat_url(cfg):
         return f"{what} necesita la URL base de la API (Ajustes ⚙ → Procesado)."
     return f"{what} necesita una API key de la nube (Ajustes ⚙ → Procesado)."

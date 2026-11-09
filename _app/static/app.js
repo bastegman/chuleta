@@ -133,7 +133,12 @@ function longTitle(a) {
 }
 const fullTitle = a => (a.props && a.props.titulo) ? `${nfc(a.props.titulo)} · ${shortTitle(a)}` : longTitle(a) + (a.label ? ` · ${nfc(a.label)}` : '');
 const provName = () => S.config?.procesado === 'agente' ? `${S.config.agente?.label || 'Claude Code'} (tu cuenta)`
-  : (S.config?.providers?.[S.config.cloud?.provider]?.label || 'la nube');
+  : provElegido() ? (S.config?.providers?.[S.config.cloud?.provider]?.label || 'la nube') : 'el proveedor que elijas';
+/* hay un proveedor de la nube elegido (server.proveedor_elegido): en una instalación nueva no, y ninguno se da por
+   elegido ni se nombra (Bernardo, msg 1386: «Lo que no quiero es sugerir Groq a un nuevo instalador») */
+const provElegido = () => S.config?.cloud?.elegido !== false;
+/* los proveedores para elegir: por su nombre, y la API de tu empresa al final (sin uno delante de los demás) */
+const provOrden = P => Object.entries(P || {}).sort(([a, x], [b, y]) => (a === 'custom') - (b === 'custom') || x.label.localeCompare(y.label, 'es'));
 const estDuration = a => a.duration || (a.ext === '.wav' ? a.size / 192000 : a.size / 16000);
 /* nombres de carpeta: las vinculadas (fuera de Audios) van por dentro como ":<id>/…" y se ven con su nombre */
 const nodeName = p => nfc(S.folders.get(p)?.name ?? p.split('/').pop());
@@ -2029,7 +2034,7 @@ function procesadoFieldsetHtml() {
       ${opt('local', 'Solo en este PC', 'Whisper transcribe en tu ordenador. Nada sale de él. Sin resumen con IA.')}
       ${opt('agente', `Con tu cuenta de Claude (${agLabel})`, `Transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de ${agLabel}: ${esc(APP_NAME)} no ve ni guarda tus credenciales.`,
     'El texto de la reunión (título, fecha, transcripción con quién habla si se sabe, notas, contexto, participantes confirmados e instrucciones; el audio no) se envía a Anthropic con esa cuenta: con la de empresa, bajo el acuerdo de tu empresa; con la personal, bajo sus términos de uso. En algunas reuniones puede ser un bloqueante: compruébalo antes. Al terminar de transcribir, las reuniones de los últimos 3 días se resumen solas; se desactiva aquí debajo.')}
-      ${opt('api', 'API externa (Groq, OpenAI, Azure…)', 'Transcripción rápida en la nube y resumen con el proveedor que elijas, con su API key.',
+      ${opt('api', 'API externa', 'Transcripción rápida en la nube y resumen con el proveedor que elijas (o la API de tu empresa), con su API key.',
     'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.')}
     </div>
     <div class="help" id="procGuardado" aria-live="polite"></div>
@@ -2054,7 +2059,7 @@ function procesadoFieldsetHtml() {
 
 /* la ayuda del directo en Ajustes › Avanzado (OBS): con la API, la nube y su cupo; sin ella, solo el PC */
 const lAyuda = api => 'El motor con el que empieza cada directo se elige en Procesado › Motores y se puede cambiar en mitad de la grabación desde la propia pantalla. '
-  + (api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.'
+  + (api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo del proveedor y no se hace si has corregido el texto a mano.'
     : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.');
 /* Ajustes por secciones (07/11/2026, configurar.js): antes, un diálogo de 6 a 7,5 pantallas con «Guardar» al final.
    Todas las secciones están en el DOM (collect() lee de todas); solo se ve la elegida. opts.sec: la que se abre (si
@@ -2074,7 +2079,9 @@ function openSettings(opts) {
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
-  const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
+  const elegido = provElegido();  // en una instalación nueva, «Elige el proveedor…»: ninguno preseleccionado
+  const provOpts = (elegido ? '' : '<option value="" selected>Elige el proveedor…</option>')
+    + provOrden(P).map(([k, v]) => `<option value="${k}"${elegido && k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
     <div class="aj-grid">
     <div class="aj-side"><nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}"${id === sec ? ' autofocus' : ''}>${l}</button>`).join('')}</nav>
@@ -2104,7 +2111,7 @@ function openSettings(opts) {
     ${procesadoFieldsetHtml()}
     <div id="procApi"${S.config.procesado === 'api' ? '' : ' hidden'}>
     <fieldset><legend>${I.nube}Transcripción en la nube</legend>
-      <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
+      <div class="notice">Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo, confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay. Si tu empresa tiene una pasarela propia (Azure OpenAI u otra compatible con OpenAI), configúrala aquí.</div>
       <label>Proveedor</label><select id="cProv">${provOpts}</select>
       <div id="cFields"></div>
       <div class="row" style="margin-top:14px"><button class="btn sm" id="cTest">Probar conexión</button><span id="cTestRes" class="muted" style="font-size:12.5px"></span></div>
@@ -2117,7 +2124,7 @@ function openSettings(opts) {
       <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
       <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
       <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-      <div class="help">El idioma del resumen y las instrucciones extra están en <a href="#" data-sec-ir="resumen">Resumen</a>. Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+      <div class="help">El idioma del resumen y las instrucciones extra están en <a href="#" data-sec-ir="resumen">Resumen</a>. Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre.${elegido && c.provider === 'groq' ? ' Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.' : ''}</div>
     </fieldset>
     </div>
     ${typeof perfilMotoresHtml === 'function' ? perfilMotoresHtml() : ''}
@@ -2356,13 +2363,14 @@ function openSettings(opts) {
       // repintaba lo de antes, y «Guardar» lo guardaba (revisión 14)
       const c = S.config.cloud || {}, P = S.config.providers || {};
       const p = $('#cProv', d).value, info = P[p];
+      if (!info) { $('#cFields', d).innerHTML = '<div class="help">Elige el proveedor para ver qué pide (la clave y, según cuál, la dirección de la API).</div>'; return; }
       if (p === 'azure') {
         $('#cFields', d).innerHTML = `<label>Endpoint</label><input class="input" id="cAzEp" placeholder="https://<recurso>.openai.azure.com" value="${esc(c.azure_endpoint)}">
           <div class="grid2"><div><label>Deployment (whisper)</label><input class="input" id="cAzDep" value="${esc(c.azure_deployment)}"></div>
           <div><label>API version</label><input class="input" id="cAzVer" value="${esc(c.azure_api_version)}"></div></div>
           <label>API key</label><input class="input" id="cKey" type="password" placeholder="${c.has_key ? 'Guardada: ' + esc(c.api_key) + ' (escribe para cambiarla)' : 'Clave del recurso de Azure'}">`;
       } else if (p === 'custom') {
-        $('#cFields', d).innerHTML = `<label>URL base de la API</label><input class="input" id="cBase" placeholder="https://api.groq.com/openai/v1" value="${esc(c.base_url || '')}">
+        $('#cFields', d).innerHTML = `<label>URL base de la API</label><input class="input" id="cBase" placeholder="https://api.tu-empresa.com/v1" value="${esc(c.base_url || '')}">
           <div class="help">Cualquier servicio con el formato de OpenAI (pasarela o proxy de la empresa, LiteLLM…). Se usan <code>/audio/transcriptions</code> para transcribir y <code>/chat/completions</code> para el resumen.</div>
           <label>API key</label><input class="input" id="cKey" type="password" placeholder="${c.has_key ? 'Guardada: ' + esc(c.api_key) + ' (escribe para cambiarla)' : 'Pega aquí tu API key'}">
           <label>Modelo de transcripción</label><input class="input" id="cModel" list="cModels" value="${esc(c.model || 'whisper-large-v3')}">
@@ -2412,12 +2420,12 @@ function openSettings(opts) {
     const proc = pedido && $(`input[name="proc"][value="${pedido}"]`, d);
     if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); marcar(); }
     const collect = () => {
-      const p = $('#cProv', d).value;
-      const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
+      const p = $('#cProv', d).value;  // '' = sin elegir: no se manda (el servidor tampoco guarda uno vacío)
+      const cloud = { ...(p ? { provider: p } : {}), chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
       const key = $('#cKey', d)?.value.trim();
       if (key) cloud.api_key = key;
       if (p === 'azure') Object.assign(cloud, { azure_endpoint: $('#cAzEp', d).value, azure_deployment: $('#cAzDep', d).value, azure_api_version: $('#cAzVer', d).value });
-      else cloud.model = $('#cModel', d).value;
+      else if ($('#cModel', d)) cloud.model = $('#cModel', d).value;
       if (p === 'custom') cloud.base_url = $('#cBase', d).value;
       if (typeof collectDirectoSettings === 'function') Object.assign(cloud, collectDirectoSettings(d));
       S.selLang = $('#sLang', d).value;
@@ -2443,6 +2451,7 @@ function openSettings(opts) {
     for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = String(inicial[el.id] ?? el.value); }
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
+      if (!$('#cProv', d).value) { res.innerHTML = '<span style="color:var(--err)">Elige antes el proveedor.</span>'; $('#cProv', d).focus(); return; }
       res.textContent = 'Probando…';
       try {
         // guarda el modo elegido y la nube (para probar con la clave escrita), no el resto del formulario: «Cancelar»

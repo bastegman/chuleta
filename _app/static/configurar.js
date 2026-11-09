@@ -11,7 +11,7 @@ const MODO_NOMBRE = { local: 'Solo en este PC', agente: 'Con tu cuenta de Claude
 
 function modeloNombre(model) { return MODELO_NOMBRE[model] || model || ''; }
 function modoNombre(m) { return MODO_NOMBRE[m] || m || ''; }
-function cfgProv(c) { return c?.providers?.[c?.cloud?.provider || 'groq']?.label || 'la nube'; }
+function cfgProv(c) { return c?.cloud?.elegido === false ? 'la nube' : c?.providers?.[c?.cloud?.provider]?.label || 'la nube'; }
 function cfgFmtGb(mb) {  // 1531 -> «1,5 GB»; 486 -> «486 MB»
   mb = +mb || 0;
   return mb >= 1000 ? `${(mb / 1000).toFixed(1).replace('.', ',')} GB` : `${Math.round(mb)} MB`;
@@ -196,13 +196,14 @@ const W = { paso: 1, modo: 'local', cloud: {}, prueba: null, timer: null, agTime
 // los avisos de privacidad, con su texto de siempre (decisión de producto del 02/11/2026)
 const AVISO_CLAUDE = 'El texto de la reunión (título, fecha, transcripción con quién habla si se sabe, notas, contexto, participantes confirmados e instrucciones; el audio no) se envía a Anthropic con esa cuenta: con la de empresa, bajo el acuerdo de tu empresa; con la personal, bajo sus términos de uso. En algunas reuniones puede ser un bloqueante: compruébalo antes. Al terminar de transcribir, las reuniones de los últimos 3 días se resumen solas; se desactiva en Ajustes.';
 const AVISO_API = 'El audio (para transcribir) y el texto (para resumir) salen del PC hacia el proveedor. Comprueba la política de tu empresa y el acuerdo con tu cliente, si lo hay.';
-const AVISO_NUBE = 'Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo (Groq, OpenAI), confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.';
+const AVISO_NUBE = 'Las grabaciones de reuniones pueden ser información confidencial. Antes de mandar audio a un servicio externo, confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.';
 
 function abrirConfigurar(opts = {}) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
   const c = S.config.cloud || {};
   Object.assign(W, { paso: opts.paso || 1, modo: opts.modo || S.config.procesado || 'local', prueba: null, volver: opts.volver || null, empezar: !!opts.empezar,
-    cloud: { provider: c.provider || 'groq', api_key: '', base_url: c.base_url || '', azure_endpoint: c.azure_endpoint || '',
+    // en una instalación nueva no hay proveedor elegido: ninguno se preselecciona (msg 1386)
+    cloud: { provider: c.elegido === false ? '' : c.provider || '', api_key: '', base_url: c.base_url || '', azure_endpoint: c.azure_endpoint || '',
       azure_deployment: c.azure_deployment || '', azure_api_version: c.azure_api_version || '' } });
   W.guardado = false;
   openModal('<div class="wz-raiz"></div>', d => { W.d = d; wzPintar(); }, 'wz');
@@ -225,6 +226,8 @@ function wzParar() {
   W.timer = W.agTimer = null;
 }
 function wzProv() { return S.config.providers?.[W.cloud.provider]?.label || 'la API'; }
+/* el proveedor elegido en el asistente es el que ya está guardado (y elegido: en una instalación nueva no hay ninguno) */
+function wzMisma() { const c = S.config.cloud || {}; return !!W.cloud.provider && c.elegido !== false && W.cloud.provider === c.provider; }
 function wzOpcion(v, titulo, chip, chipCls, texto, aviso) {
   const on = W.modo === v;
   return `<label class="wz-opt${on ? ' on' : ''}"><input type="radio" name="wzModo" value="${v}"${on ? ' checked' : ''}>
@@ -241,7 +244,7 @@ function wzPaso1() {
     <fieldset class="wz-opts"><legend class="sr-only">Dónde se procesan tus reuniones</legend>
       ${wzOpcion('local', 'Solo en este PC', 'Lo más privado', 'g', 'Tu PC transcribe las reuniones. No hay resumen con IA y nada sale del PC.')}
       ${wzOpcion('agente', 'Con tu cuenta de Claude', 'Necesita Claude Code', '', 'Tu PC transcribe y Claude resume, con tu suscripción personal o de empresa.', AVISO_CLAUDE)}
-      ${wzOpcion('api', 'Con una API externa', 'El audio sale del PC', 'w', 'Groq, OpenAI o la API de tu empresa transcriben y resumen en la nube, con tu clave. Es lo más rápido.', AVISO_API)}
+      ${wzOpcion('api', 'Con una API externa', 'El audio sale del PC', 'w', 'Un proveedor de la nube que elijas, o la API de tu empresa, transcribe y resume con tu clave. Es lo más rápido.', AVISO_API)}
     </fieldset>`;
 }
 function wzDescargaHtml(strip) {
@@ -284,7 +287,7 @@ function wzPaso2() {
       <p class="help">¿Usas Claude Code en VS Code? ${esc(APP_NAME)} también encuentra esa copia y su sesión. La app de escritorio de Claude no basta: su sesión es solo suya.</p>`;
   }
   const P = S.config.providers || {}, p = P[W.cloud.provider] || {}, c = S.config.cloud || {};
-  const misma = W.cloud.provider === (c.provider || 'groq');
+  const misma = wzMisma();
   const ph = misma && c.has_key ? `Guardada: ${c.api_key} (escribe para cambiarla)` : 'Pega aquí la clave';
   const keys = p.keys ? p.keys.replace('https://', '') : '';
   const campos = W.cloud.provider === 'azure'
@@ -294,13 +297,22 @@ function wzPaso2() {
     : W.cloud.provider === 'custom'
       ? `<label>Dirección de la API (te la da tu empresa)</label><input class="input" id="wzBase" placeholder="https://…/v1" value="${esc(W.cloud.base_url)}">` : '';
   const deQue = W.cloud.provider === 'custom' ? 'de tu API' : `de ${p.label || 'la API'}`;
+  const sinElegir = !P[W.cloud.provider];  // instalación nueva: primero el proveedor, ninguno preseleccionado
+  const compacto = misma && !W.provAbierto;  // el que ya usas: sin la lista, con «Cambiar de proveedor»
+  if (sinElegir) {
+    return `<h2 tabindex="-1">Elige el proveedor y pega su clave</h2>
+    <p class="wz-lead">Cada proveedor te da una clave en su web. Se guarda solo en este PC, fuera de OneDrive.</p>
+    <div data-wz-prov><label>Proveedor</label><select id="wzProv"><option value="" selected>Elige el proveedor…</option>${provOrden(P).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`).join('')}</select></div>
+    <div class="wz-err" data-wz-err></div>
+    <div class="notice">${AVISO_NUBE}</div>`;
+  }
   return `<h2 tabindex="-1">Pega la clave ${esc(deQue)}</h2>
     <p class="wz-lead">${keys ? `Consíguela en <a href="#" data-wz="claves">${esc(keys)}</a>. ` : ''}Se guarda solo en este PC, fuera de OneDrive.</p>
-    <div data-wz-prov${misma && W.cloud.provider === 'groq' && !W.provAbierto ? ' hidden' : ''}><label>Proveedor</label><select id="wzProv">${Object.entries(P).map(([k, v]) => `<option value="${esc(k)}"${k === W.cloud.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></div>
+    <div data-wz-prov${compacto ? ' hidden' : ''}><label>Proveedor</label><select id="wzProv">${provOrden(P).map(([k, v]) => `<option value="${esc(k)}"${k === W.cloud.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></div>
     ${campos}
     <label>Clave ${esc(deQue)}</label><input class="input" type="password" id="wzKey" autocomplete="off" spellcheck="false" placeholder="${esc(ph)}" value="${esc(W.cloud.api_key)}">
     <div class="wz-err" data-wz-err></div>
-    ${misma && W.cloud.provider === 'groq' && !W.provAbierto ? '<div class="help">¿Usas OpenAI, Azure o la API de tu empresa? <a href="#" data-wz="prov">Cambiar de proveedor</a></div>' : ''}
+    ${compacto ? `<div class="help">Es el que ya usas. ¿Otro, o la API de tu empresa? <a href="#" data-wz="prov">Cambiar de proveedor</a></div>` : ''}
     <div class="notice">${AVISO_NUBE}</div>`;
 }
 function wzPaso3() {
@@ -383,7 +395,7 @@ function wzCandidata() {
   if (W.modo === 'agente') out.agente = { tipo: S.config.agente?.tipo || 'claude', modelo: S.config.agente?.modelo };
   if (W.modo === 'api') {
     const c = { provider: W.cloud.provider };
-    const misma = W.cloud.provider === (S.config.cloud?.provider || 'groq');
+    const misma = wzMisma();
     if (!misma) c.model = (S.config.providers?.[W.cloud.provider]?.models || [])[0] || '';
     if (W.cloud.api_key) c.api_key = W.cloud.api_key;
     if (W.cloud.provider === 'custom') c.base_url = W.cloud.base_url;
@@ -522,8 +534,9 @@ document.addEventListener('click', async e => {
     if (W.paso === 2) {
       wzLeerCampos();
       if (W.modo === 'api') {
-        const c = S.config.cloud || {}, misma = W.cloud.provider === (c.provider || 'groq');
-        const err = !W.cloud.api_key && !(misma && c.has_key) ? 'Pega la clave para seguir.'
+        const c = S.config.cloud || {}, misma = wzMisma();
+        const err = !S.config.providers?.[W.cloud.provider] ? 'Elige el proveedor para seguir.'
+          : !W.cloud.api_key && !(misma && c.has_key) ? 'Pega la clave para seguir.'
           : W.cloud.provider === 'custom' && !W.cloud.base_url ? 'Escribe la dirección de la API.'
             : W.cloud.provider === 'azure' && (!W.cloud.azure_endpoint || !W.cloud.azure_deployment) ? 'Faltan la dirección del recurso y el nombre del despliegue.' : '';
         if (err) { const x = $('[data-wz-err]', W.d); if (x) x.textContent = err; return; }

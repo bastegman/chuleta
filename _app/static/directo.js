@@ -303,7 +303,7 @@ function directoSettingsHtml(c) {
     <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="dkAdd">${I.plus}Añadir clave</button></div>
     <div class="notice">Cada clave es de una cuenta distinta: el audio y el texto se procesan bajo esa cuenta.</div>
     <div class="help" id="dkOwner"></div>
-    <div class="help">Se pasa a la siguiente cuando a la clave activa le quedan menos de 20 peticiones del día (Groq), cuando el servicio pide esperar más de un minuto o cuando una clave no es válida. También las usan el resumen y el repaso final.</div>
+    <div class="help">Se pasa a la siguiente cuando a la clave activa le quedan menos de 20 peticiones del día (si tu proveedor las limita por día), cuando el servicio pide esperar más de un minuto o cuando una clave no es válida. También las usan el resumen y el repaso final.</div>
     ${quota ? `<div class="help" id="dkQuota">${esc(quota)}</div>` : ''}`;
 }
 
@@ -324,7 +324,7 @@ function bindDirectoSettings(d) {
     $$('[data-xkey]', rows).forEach((i, n) => { i.value = rs[n] ? rs[n].value : ''; });
   };
   const sync = () => {
-    add.disabled = $$('[data-xkey]', rows).length >= 10;
+    add.disabled = !cur || $$('[data-xkey]', rows).length >= 10;  // sin proveedor elegido, no hay de quién
     if (model) model.classList.toggle('hidden', cur !== 'groq');  // la lista de modelos es la de Whisper en Groq
     if (modelC) modelC.classList.toggle('hidden', cur !== 'custom');  // una pasarela propia: el suyo (o el de arriba)
     if (owner) { stash(); owner.textContent = directoOwnerText(cur, state); }

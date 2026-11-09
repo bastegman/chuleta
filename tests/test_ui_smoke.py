@@ -1138,6 +1138,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click(".aj-nav [data-sec='procesado']")
         poner("#pfPreset", a_mano)
         pg.check("#modal input[name='proc'][value='api']")
+        pg.select_option("#cProv", "groq")  # sin proveedor elegido, ninguno viene puesto (msg 1386): se elige
         pg.fill("#cKey", "gsk_primera_r14")
         en_nube = {**base, "procesado": "api", "preset": "nube", "live_preset": "nube",
                    "cloud": {**base["cloud"], "has_key": True, "api_key": "gsk_…r14"}}

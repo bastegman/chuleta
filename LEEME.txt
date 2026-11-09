@@ -30,17 +30,19 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 
   3. Se abre Tenca. Lo primero: "Configurar Tenca" (en la portada; luego, en ⚙ Ajustes >
      Procesado): eliges dónde se procesan tus reuniones y al final lo pruebas. Una de tres:
-       - Solo en este PC: Whisper transcribe en tu ordenador y nada sale de él (sin resumen con IA).
+       - Solo en este PC (lo que viene por defecto): Whisper transcribe en tu ordenador y nada sale de
+         él (sin resumen con IA).
        - Con tu cuenta de Claude: transcribe en tu PC y resume con Claude usando tu suscripción (personal o
          de empresa) a través de Claude Code. El asistente te guía: "Abrir PowerShell", instalar Claude
          Code con una línea, escribir claude en esa misma ventana y entrar con tu cuenta en el navegador
          (si es la de tu empresa, con su inicio de sesión de siempre), y "Probar". Tenca no ve ni
          guarda tus credenciales. Si ya usas Claude Code en VS Code, encuentra esa copia y su sesión;
          la app de escritorio de Claude no basta (su sesión es solo suya).
-       - API externa: transcripción rápida en la nube y resumen con Groq (gratis: la API key se crea en
-         console.groq.com/keys; deja el modelo whisper-large-v3, el más preciso), OpenAI, Azure OpenAI o la
-         pasarela de tu empresa ("Otra, compatible con OpenAI": su URL base, la key y el modelo; en "Modelo
-         del directo" puedes poner otro más rápido). Pulsa "Probar conexión" y Guardar.
+       - API externa: transcripción rápida en la nube y resumen con el proveedor que elijas (Azure
+         OpenAI, Groq, OpenAI o la pasarela de tu empresa: "Otra, compatible con OpenAI", con su URL
+         base, la key y el modelo; en "Modelo del directo" puedes poner otro más rápido). La API key te
+         la da el proveedor en su web; de modelo, whisper-large-v3 (el más preciso) si lo tiene. Pulsa
+         "Probar conexión" y Guardar.
      Las dos últimas avisan: el contenido de la reunión sale del PC (el texto, a Anthropic con tu cuenta de
      Claude; el audio y el texto, al proveedor de la API). En algunas reuniones puede ser un bloqueante:
      compruébalo antes (política de tu empresa, acuerdo con tu cliente).
@@ -247,7 +249,7 @@ PRIVACIDAD
     el modelo de Whisper, entre 0,5 y 3 GB según el que elijas).
 
 
-LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/settings/limits)
+SI USAS GROQ: LÍMITES DE SU PLAN GRATUITO (orientativos, en console.groq.com/settings/limits)
 ----------------------------------------------------------------------------------
   - Transcripción: unas 2 horas de audio por hora y 8 horas de audio al día.
   - Resumen: unas 7 reuniones de 1 hora al día.

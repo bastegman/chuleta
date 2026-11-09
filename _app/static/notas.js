@@ -69,7 +69,8 @@ function recentCards() {
   }).join('')}</div>`;
 }
 
-/* primer arranque (p. ej. en el PC de otra persona): conectar la nube y grabar la primera reunion */
+/* primer arranque (p. ej. en el PC de otra persona): elegir dónde se procesan las reuniones y grabar la primera.
+   Por defecto, «Solo en este PC»: no se sugiere ningún proveedor de la nube (Bernardo, msg 1386) */
 function welcomeCard(all) {
   const key = S.config.procesado === 'api' ? S.config.cloud?.has_key : true;  // sin API no hay nada que conectar
   const elegir = S.config.procesado === 'local' && !localStorage.getItem('procElegido');  // nadie ha elegido aun
@@ -84,8 +85,8 @@ function welcomeCard(all) {
       ${all.length ? '' : '<div class="help" style="margin-top:10px">¿Ya tienes el audio (del móvil, de WhatsApp…)? Pulsa <b>Subir audio</b>, arriba, o arrástralo aquí.</div>'}</div></div>`;
   }
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
-    <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
-    <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Procesado: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
+    <b>${key ? `Bienvenido a ${APP_NAME}` : 'Falta la clave de la API'}</b>
+    <ol>${key ? '' : '<li><b>Pega la clave de tu proveedor</b> en ⚙ Ajustes → Procesado: elegiste «API externa» y sin ella no se transcribe nada. Si prefieres no usar la nube, elige «Solo en este PC».</li>'}
     ${elegir ? '<li><b>Elige dónde se procesan tus reuniones</b> en ⚙ Ajustes: solo en este PC (como ahora), con tu cuenta de Claude o con una API externa. Las dos últimas resumen con IA y avisan de lo que sale del PC.</li>' : ''}
     ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). Si ya tienes el audio (del móvil, de WhatsApp…), pulsa <b>Subir audio</b> o arrástralo aquí. También puedes guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
     ${key && !elegir ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
@@ -468,7 +469,7 @@ function renderSummary(a) {
   const err = !j && last && last.status === 'error' ? `<div class="notice">No se pudo resumir: ${esc(last.error)}</div>` : '';
   // con Azure OpenAI solo se configura el deployment de Whisper: el resumen aún no funciona ahí (no es que falte configurar)
   const azure = S.config?.procesado === 'api' && S.config?.cloud?.provider === 'azure' && !s.ready;
-  const azureNote = '<div class="muted">El resumen con IA aún no funciona con Azure OpenAI: con Azure solo se transcribe. Para resumir, elige Groq, OpenAI u otra API compatible con OpenAI en Ajustes.</div>';
+  const azureNote = '<div class="muted">El resumen con IA aún no funciona con Azure OpenAI: con Azure solo se transcribe. Para resumir, elige otro proveedor (cualquiera compatible con OpenAI) en Ajustes.</div>';
   if (!s.exists) {
     box.innerHTML = progress + err + `<div class="card sum-empty">
       <div class="se-i">${I.spark}</div>
@@ -499,7 +500,7 @@ main.addEventListener('click', async e => {
   const a = curAudio();
   if (act.dataset.act === 'summarize' && a) {
     try {
-      const okKey = 'sumOk:' + (S.config?.procesado || 'api');  // el permiso es por destino: el de Groq no vale para Anthropic
+      const okKey = 'sumOk:' + (S.config?.procesado || 'local');  // el permiso es por destino: el de una API no vale para Anthropic
       if (!localStorage.getItem(okKey) && !await ask(`Resumir con IA en ${provName()}`,
         `El texto de la transcripción, tus notas, el contexto y los participantes confirmados se envían a <b>${esc(provName())}</b> para hacer el resumen (el audio no; los participantes que sugirió Outlook o Teams sin confirmar, tampoco). Si es una reunión de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.`, 'Entendido, resumir')) return;
       localStorage.setItem(okKey, '1');
