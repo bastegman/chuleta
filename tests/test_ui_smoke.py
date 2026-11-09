@@ -582,7 +582,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             if idioma:
                 pg.select_option("#sLang", idioma)
 
-        def editar():  # «editar» la primera lista (Proyectos › Listas de vocabulario)
+        def editar():  # «editar» la primera lista (Proyectos › Listas de vocabulario; se pinta al llegar /api/vocab)
+            pg.wait_for_selector("#sVocab [data-vedit]", state="attached", timeout=10000)
             pg.evaluate("document.querySelector('#sVocab [data-vedit]').click()")
 
         def en_ajustes(idioma, pend):  # Ajustes sigue abierto, con su idioma y su «Hay cambios sin guardar»
@@ -640,6 +641,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         en_ajustes(otro, "")
         # «Nuevo proyecto» y «Editar la lista» de Proyectos también preguntan
         pg.select_option("#sLang", lang)
+        pg.wait_for_selector("#sVocab [data-vnew]", state="attached", timeout=10000)
         pg.evaluate("document.querySelector('#sVocab [data-vnew]').click()")
         pg.wait_for_selector(pregunta, timeout=5000)
         pg.click(f"{pregunta} [data-m='volver']")
