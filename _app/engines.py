@@ -371,48 +371,115 @@ def media_duration(path):
     return None
 
 
-def _valid_frames(frames, av):
-    """Los fotogramas que se pueden decodificar: uno danado a mitad se salta (como hace faster-whisper), en vez de
-    cortar ahi el audio sin decirlo."""
-    it = iter(frames)
-    while True:
+SILENCIO_MAX_S = 2.0  # lo más que se rellena por un paquete que no se puede leer (uno de verdad dura milisegundos)
+PROBAR_TOPE_S = 120.0  # al subir, cuánto audio ilegible se recorre buscando el primer trozo que se lee
+
+
+def _paquetes(c, s, av):
+    """Los fotogramas del audio, paquete a paquete. Un paquete que no se puede decodificar (danado, o de un tipo que
+    FFmpeg no implementa, como algunos de los AMR de los moviles Android antiguos) se cambia por silencio de su
+    duracion: el audio sigue entero y el texto, en su sitio. Por cada paquete perdido devuelve sus segundos (float) en
+    vez de fotogramas. Con el generador de c.decode() el primer error lo terminaba y el resto del audio se perdia sin
+    decirlo (PyAV 19, medido el 09/11/2026: un AMR real se quedaba en 11,8 s de 53, y un m4a, un mp3 o un .aac con
+    400 bytes danados a mitad, en menos de la mitad)."""
+    cc = s.codec_context
+    paso = cc.frame_size / cc.sample_rate if getattr(cc, "frame_size", 0) and getattr(cc, "sample_rate", 0) else 0.0
+    for pk in c.demux(s):
         try:
-            yield next(it)
-        except StopIteration:
-            return
-        except av.error.InvalidDataError:
+            frames = s.decode(pk)
+        except av.error.FFmpegError:
+            seg = float(pk.duration * pk.time_base) if pk.duration and pk.time_base else paso
+            # con tope: una duración rota en el contenedor no puede pedir horas de silencio (ni toda la memoria)
+            yield min(max(seg, 0.0), SILENCIO_MAX_S)
             continue
+        yield from frames
 
 
 def decode_16k(path, start=0.0, cancelled=lambda: False):
-    """Cualquier audio/video a int16 16 kHz mono, frame a frame (la mitad de memoria que float32)."""
+    """Cualquier audio/video a int16 16 kHz mono, paquete a paquete (la mitad de memoria que float32)."""
     import av
     import numpy as np
-    skip, parts = int(start * 16000), []
+    skip, parts, leidos = int(start * 16000), [], 0
+
+    def anadir(a):
+        nonlocal skip
+        if skip:  # continuar desde ese segundo
+            cut = min(skip, len(a))
+            a, skip = a[cut:], skip - cut
+        if len(a):
+            parts.append(a)
+
     try:
         with av.open(path) as c:
             s = next((s for s in c.streams if s.type == "audio"), None)
             if s is None:
                 raise EngineError("El archivo no tiene pista de audio.")
             rs = av.AudioResampler(format="s16", layout="mono", rate=16000)
-            frames = _valid_frames(c.decode(s), av)
-            for fr in itertools.chain(frames, [None]):  # perezoso: no carga el archivo entero antes
+            for fr in itertools.chain(_paquetes(c, s, av), [None]):  # perezoso: no carga el archivo entero antes
                 if cancelled():
                     raise Cancelled()
+                if isinstance(fr, float):  # un paquete que no se pudo leer: su silencio
+                    anadir(np.zeros(int(round(fr * 16000)), np.int16))
+                    continue
                 for o in rs.resample(fr):
                     a = o.to_ndarray().reshape(-1)
-                    if skip:  # continuar desde ese segundo
-                        cut = min(skip, len(a))
-                        a, skip = a[cut:], skip - cut
-                    if len(a):
-                        parts.append(a.copy())
+                    leidos += len(a)
+                    anadir(a.copy())
     except (EngineError, Cancelled):
         raise
     except Exception as e:
-        if not parts:
+        if not leidos:
             raise EngineError(f"No se pudo leer el audio ({e.__class__.__name__}: {e})")
         # WAV cortado (p. ej. grabacion interrumpida): se usa lo que se pudo leer
+    if not leidos and parts:  # ningun paquete se pudo leer: solo habria silencio
+        raise EngineError("No se pudo leer el audio: ningún trozo se puede decodificar.")
     return np.concatenate(parts) if parts else np.zeros(0, np.int16)
+
+
+# Lo que se dice al subir un archivo que la cadena de arriba no puede transcribir (probar_audio)
+NO_ES_AUDIO = "no parece un audio, o está dañado"
+
+
+def probar_audio(path, segundos=3.0):
+    """Comprueba, al subirlo, que un archivo se podrá transcribir: tiene pista de audio y sus primeros segundos se
+    decodifican con la misma cadena que la cola (PyAV). Devuelve la duración en segundos (None si la cabecera no la da)
+    o lanza EngineError con el motivo en una frase para el usuario. Sin PyAV (desarrollo) no comprueba nada: None."""
+    try:
+        import av
+    except ImportError:
+        return None
+    try:
+        c = av.open(path)
+    except Exception as e:
+        raise EngineError(NO_ES_AUDIO) from e
+    with c:
+        s = next((s for s in c.streams if s.type == "audio"), None)
+        if s is None:
+            raise EngineError("no tiene sonido: es un vídeo sin pista de audio" if any(
+                x.type == "video" for x in c.streams) else NO_ES_AUDIO)
+        # hasta tener `segundos` leídos o haber recorrido PROBAR_TOPE_S ilegibles: un AMR de un Android antiguo
+        # puede empezar con segundos de tramas de silencio (SID y NO_DATA) que FFmpeg no decodifica y que la cola
+        # cambia por silencio (revisión de f40e6b7: se rechazaban por contar 50 paquetes malos)
+        leidos, malos, ultimo = 0.0, 0.0, None
+        try:
+            for fr in _paquetes(c, s, av):
+                if isinstance(fr, float):
+                    malos += fr or 0.02
+                else:
+                    leidos += fr.samples / (fr.sample_rate or 16000)
+                if leidos >= segundos or malos >= PROBAR_TOPE_S:
+                    break
+        except Exception as e:  # el contenedor se corta o se lee mal a mitad
+            ultimo = e
+        if leidos <= 0:
+            codec = getattr(s.codec_context, "name", "") or "desconocido"
+            raise EngineError(f"tiene un audio que no se puede decodificar (formato {codec})") from ultimo
+        dur = None
+        if c.duration:
+            dur = c.duration / 1_000_000
+        elif s.duration and s.time_base:
+            dur = float(s.duration * s.time_base)
+    return dur
 
 
 def find_silences(y, sr=16000, thresh_db=-35.0, min_s=0.4):

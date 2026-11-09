@@ -16,12 +16,14 @@ const GR_ALCANCES = { carpeta: ['reunion', 'proyecto', 'ajustes'], idioma: ['reu
 // las claves del pedido que cambia cada línea
 const GR_CLAVES = { carpeta: ['carpeta'], idioma: ['idioma'], contexto: ['contexto'], transcribe: ['live', 'preset'],
   audio: ['mic', 'sys'] };
-let G = null;  // la tarjeta abierta: {d, pedido, plan, tocado, recientes, seq, ...}
+let G = null;  // la tarjeta abierta: {d, pedido, plan, tocado, recientes, seq, ...; subir: {items, rechazados}}
 // «Usar las listas de una carpeta…» en Proyecto (rama vocab-carpeta, msg 1148: perfil.js define vocabConectar): no es un
 // proyecto, abre el selector de carpetas y vuelve a la tarjeta con lo que tenías
 const GR_CONECTAR = '__conectar';
 
 function grFila(plan, clave) { return (plan?.lineas || []).find(l => l.clave === clave); }
+// las líneas de la tarjeta: al subir un audio no hay nada que grabar (sin la de audio)
+function grFilas() { return GR_FILAS.filter(([k]) => !(G?.subir && k === 'audio')); }
 function grProyecto(plan) { return plan?.proyecto?.vocab ? plan.proyecto.proyecto : ''; }
 
 /* ---------------------------------------------------------------- abrir */
@@ -64,15 +66,18 @@ async function abrirGrabar(opts = {}) {
 
 async function grMontar(d) {
   G.d = d;
-  if (G.tocado.nombre && 'nombre' in G.pedido) $('#grNombre', d).value = G.pedido.nombre;  // al volver de editar una lista
+  const nom = $('#grNombre', d);  // al subir varios audios no hay nombre: cada uno lleva el suyo
+  if (nom && G.tocado.nombre && 'nombre' in G.pedido) nom.value = G.pedido.nombre;  // al volver de editar una lista
   d.addEventListener('click', e => { if (e.target.closest('[data-m="no"]')) closeModal(false); });
-  d.querySelector('[data-m="consent"]').onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
+  const aviso = d.querySelector('[data-m="consent"]');
+  if (aviso) aviso.onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
   $('#rGo', d).onclick = grEmpezar;
-  grNombreEventos(d);
+  if (nom) grNombreEventos(d);
   $('#grProy', d).onchange = e => grProyectoElegido(e.target.value);
   d.addEventListener('click', grClick);
   d.addEventListener('change', grCambio);
   d.addEventListener('keydown', grTecla);
+  if (G.subir) return sbMontar(d);
   const g = G;
   // a la vez: dispositivos (medidores), listas de vocabulario y la reunión en curso (Teams y, si está activado,
   // Outlook). La tarjeta espera a la reunión como mucho 2 s y se rellena una sola vez (D4)
@@ -95,6 +100,11 @@ async function grMontar(d) {
     grProponer(sug);
   });
   if (!S.vocab.length) $('#grNombre', d).focus();
+}
+
+/* volver a la tarjeta abierta (la de grabar o la de subir) con lo que tenías, tras editar o conectar una lista */
+function grVolver(extra = {}) {
+  return G?.subir ? abrirSubir(null, { ...extra, seguir: true }) : abrirGrabar({ ...extra, seguir: true });
 }
 
 /* ---------------------------------------------------------------- pedir el plan al servidor */
@@ -123,9 +133,9 @@ function grPedirLuego() {
 function grPintar() {
   const g = G, p = g.plan, d = g.d;
   const nombre = $('#grNombre', d);
-  if (!g.tocado.nombre && nombre.value !== (p.nombre.valor || '')) nombre.value = p.nombre.valor || '';  // no lo has tocado
-  nombre.placeholder = 'Nombre de la reunión (opcional)';
-  const tag = $('#grNombreTag', d);
+  if (nombre && !g.tocado.nombre && nombre.value !== (p.nombre.valor || '')) nombre.value = p.nombre.valor || '';  // no lo has tocado
+  if (nombre) nombre.placeholder = 'Nombre de la reunión (opcional)';
+  const tag = $('#grNombreTag', d) || document.createElement('span');
   // con signos que un nombre de archivo no admite, se graba sin ellos: se dice cómo quedará
   tag.textContent = p.nombre.archivo != null ? `se guarda como «${p.nombre.archivo || 'sin nombre'}»` : p.nombre.texto || '';
   tag.title = p.nombre.archivo != null ? 'Un nombre de archivo no puede llevar \\ / : * ? " < > |' : '';
@@ -138,11 +148,11 @@ function grPintar() {
   sel.value = p.proyecto.vocab || '';
   sel.classList.toggle('vacio', !p.proyecto.vocab);
   $('#grMotivo', d).textContent = p.proyecto.motivo || '';
-  $('#grLlamada', d).classList.toggle('hidden', !S.rec.meeting && p.fuente !== 'teams');
+  $('#grLlamada', d)?.classList.toggle('hidden', !S.rec.meeting && p.fuente !== 'teams');
   // asistentes de la cita de Outlook: a las notas como sugeridos, sin salir del PC hasta que los confirmes
   const part = grPartes(p.rec.participantes);
-  $('#grAsistL', d).classList.toggle('hidden', !part.length);
-  $('#grAsist', d).classList.toggle('hidden', !part.length);
+  $('#grAsistL', d)?.classList.toggle('hidden', !part.length);
+  $('#grAsist', d)?.classList.toggle('hidden', !part.length);
   if (part.length) {
     const sep = grSep(part), nombres = part.slice(0, 4).join(sep) + (part.length > 4 ? ` y ${part.length - 4} más` : '');
     $('#grAsist', d).innerHTML = `<span title="${esc(part.join(sep))}"><b>${esc(nombres)}</b> · de ${p.rec.sugerido === 'outlook' ? 'Outlook' : 'Teams'}</span>`
@@ -190,12 +200,12 @@ function grPintarFilas() {
   const g = G, p = g?.plan, box = g && $('#grFilas', g.d);
   if (!p || !box) return;
   if (!box.querySelector('[data-fila]')) {
-    box.innerHTML = GR_FILAS.map(([k, icon]) => `<div class="gr-fila" data-fila="${k}"><span class="gr-ic">${I[icon]}</span>`
+    box.innerHTML = grFilas().map(([k, icon]) => `<div class="gr-fila" data-fila="${k}"><span class="gr-ic">${I[icon]}</span>`
       + `<span class="gr-et"></span><span class="gr-v"></span><span class="gr-origen"></span>`
       + `<button class="gr-cambiar" type="button" data-gr-cambiar="${k}" aria-expanded="false">Cambiar</button></div>`
       + `<div class="gr-panel hidden" data-panel="${k}"></div>`).join('');
   }
-  for (const [k] of GR_FILAS) {
+  for (const [k] of grFilas()) {
     const l = grFila(p, k), row = box.querySelector(`[data-fila="${k}"]`);
     if (!l || !row) continue;
     // el contexto solo se ve si hay uno (Ajustes o esta reunión) o si lo estás cambiando
@@ -208,7 +218,8 @@ function grPintarFilas() {
     row.classList.toggle('cambiado', l.origen === 'reunion');
   }
   // el modelo del directo aún no está en el PC: se dice antes de empezar (configurar.js)
-  const t = grFila(p, 'transcribe'), falta = t?.live && typeof faltaModeloHtml === 'function' ? faltaModeloHtml(t.preset) : '';
+  const t = grFila(p, 'transcribe');
+  const falta = (t?.live || g.subir) && typeof faltaModeloHtml === 'function' ? faltaModeloHtml(t?.preset, g.subir ? 'subir' : '') : '';
   let fm = $('.gr-falta', box);
   if (!fm) { fm = document.createElement('div'); fm.className = 'gr-falta'; box.querySelector('[data-panel="transcribe"]').after(fm); }
   if (fm.dataset.sig !== falta) { fm.innerHTML = falta; fm.dataset.sig = falta; }
@@ -230,9 +241,9 @@ function grPintarFilas() {
 /* ---------------------------------------------------------------- «Cambiar» */
 function grAlcanceHtml(k) {
   const opts = GR_ALCANCES[k];
-  if (!opts) return '';
+  if (!opts || (G.subir && k === 'transcribe')) return '';
   const proy = grProyecto(G.plan);
-  const txt = { reunion: 'Solo esta reunión', proyecto: proy ? `Todas las de ${esc(proy)}` : '',
+  const txt = { reunion: G.subir?.items.length > 1 ? 'Solo estos audios' : 'Solo esta reunión', proyecto: proy ? `Todas las de ${esc(proy)}` : '',
     ajustes: k === 'carpeta' ? (proy ? '' : 'Todas las reuniones sin proyecto (Ajustes)') : 'Todas (Ajustes)' };
   const vis = opts.filter(a => txt[a]);
   if (vis.length < 2) return '';
@@ -253,6 +264,7 @@ function grPanelHtml(k) {
   if (k === 'contexto') {
     return `<label class="gr-l" for="grCtx">De qué va y quién participa</label><input class="input" data-gr="contexto" id="grCtx" maxlength="500" value="${esc(l.valor || '')}" placeholder="Una o dos frases: las recibe Whisper detrás del vocabulario, y el resumen" autocomplete="off">${pie()}`;
   }
+  if (k === 'transcribe' && G.subir) return sbPanelTranscribe(l, pie);
   if (k === 'transcribe') {
     const presets = (S.config.presets || []).map(x => `<option value="${esc(x.id)}"${x.id === l.preset ? ' selected' : ''}>${esc(x.live_label || x.label)} · ${liveFit(x)[1]}</option>`).join('');
     return `<div class="seg2 gr-modo"><label class="${l.live ? 'on' : ''}"><input type="radio" name="grLive" data-gr="live" value="1"${l.live ? ' checked' : ''}><b>En directo</b><span>El texto va saliendo mientras se habla</span></label>
@@ -340,6 +352,7 @@ async function grListo(k) {
 
 /* ---------------------------------------------------------------- eventos */
 function grClick(e) {
+  if (G?.enviando) return;  // subiendo un audio: la tarjeta no cambia (ni «Quitar el cambio» de un panel abierto)
   const c = e.target.closest('[data-gr-cambiar]');
   if (c) return grAbrirPanel(c.dataset.grCambiar);
   const l = e.target.closest('[data-gr-listo]');
@@ -354,7 +367,7 @@ function grClick(e) {
   const ir = e.target.closest('[data-gr-ir]');
   if (ir) {
     const v = (S.vocab || []).find(x => x.id === G.plan?.proyecto?.vocab);
-    const volver = () => abrirGrabar({ seguir: true, vocab: S.vocabJustSaved || undefined });
+    const volver = () => grVolver({ vocab: S.vocabJustSaved || undefined });
     if (ir.dataset.grIr === 'proyecto') { grCerrarPanel(); $('#grProy', G.d).focus(); }
     else if (ir.dataset.grIr === 'editar' && v) openVocabEditor(v, volver);
     else if (ir.dataset.grIr === 'nuevo') openVocabEditor(null, volver, v?.project || '');
@@ -381,7 +394,7 @@ function grClick(e) {
 }
 async function grCambio(e) {
   const x = e.target.closest('[data-gr]');
-  if (!x || !G) return;
+  if (!x || !G || G.enviando) return;
   G.tocado.algo = true;
   const k = x.dataset.gr, c = G.pedido.cambios;
   if (k === 'carpeta' && x.value === '__pick') {  // otra carpeta: se vincula y se elige
@@ -404,11 +417,11 @@ async function grCambio(e) {
 function grProyectoElegido(val) {
   if (val === '__nuevo') {
     $('#grProy', G.d).value = G.plan?.proyecto?.vocab || '';
-    return openVocabEditor(null, () => abrirGrabar({ seguir: true, vocab: S.vocabJustSaved || undefined }));
+    return openVocabEditor(null, () => grVolver({ vocab: S.vocabJustSaved || undefined }));
   }
   if (val === GR_CONECTAR) {
     $('#grProy', G.d).value = G.plan?.proyecto?.vocab || '';
-    if (typeof vocabConectar === 'function') vocabConectar(() => abrirGrabar({ seguir: true }));
+    if (typeof vocabConectar === 'function') vocabConectar(() => grVolver());
     return;
   }
   G.pedido.vocab = val;
@@ -496,6 +509,7 @@ function grMonitor() {
   api('/api/rec/monitor', { mic: a.mic, sys: a.sys }).catch(() => { });
 }
 async function grEmpezar() {
+  if (G?.subir) return sbSubir();
   const g = G, b = g && $('#rGo', g.d);
   if (!g || !b || b.disabled) return;
   b.disabled = true;
@@ -513,4 +527,311 @@ async function grEmpezar() {
     pollRec(); pollJobs(true);
     go('a', r.path);
   } catch (err) { S.recLocal = false; toast(esc(err.message), 'err'); b.disabled = false; }
+}
+
+/* ---------------------------------------------------------------- «Subir audio» (09/11/2026, msg 1296) */
+/* Un audio que ya tienes (el móvil, un audio de WhatsApp, otra grabadora) entra como una reunión grabada con esta
+   tarjeta: el mismo plan (/api/grabar/plan con `subir`), sin la línea de audio y con la transcripción de la cola. «Subir
+   y transcribir» manda cada archivo a /api/subir con lo que se está viendo; el servidor comprueba con la cadena de la
+   cola (PyAV) que se puede leer antes de guardarlo y lo pone a transcribir. Se llega con «Subir audio» (arriba, junto
+   a Grabar), con «Subir audio aquí» en una carpeta y soltando audios en la ventana. */
+const SB_EXT = ['.wav', '.mp3', '.m4a', '.mp4', '.flac', '.ogg', '.aac', '.wma', '.opus', '.mkv', '.mov', '.webm'];
+function sbExts() { return S.config?.audio_ext?.length ? S.config.audio_ext : SB_EXT; }
+function sbExt(f) { const m = /\.[^.\\/]+$/.exec(f?.name || ''); return m ? m[0].toLowerCase() : ''; }
+function esAudio(f) { return sbExts().includes(sbExt(f)); }
+// lo mismo que dice el servidor (FORMATOS_SUBIR) de un archivo que no es un audio
+const SB_FORMATOS = 'm4a, mp3, opus, ogg, wav, aac, webm, flac, amr o un vídeo mp4 o mov';
+const sbNoAudio = f => `«${esc(f.name)}» no es un audio que ${esc(APP_NAME)} sepa leer. Sirven ${SB_FORMATOS}.`;
+
+/* el selector de archivos de Windows con los formatos que se leen; lo elegido abre la tarjeta */
+function elegirAudios(opts = {}) {
+  let inp = $('#sbInput');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.id = 'sbInput'; inp.multiple = true; inp.hidden = true; inp.tabIndex = -1;
+    document.body.append(inp);
+  }
+  inp.accept = sbExts().join(',');
+  inp.value = '';
+  inp.onchange = () => { const fs = [...inp.files]; inp.value = ''; if (fs.length) abrirSubir(fs, opts); };
+  inp.click();
+}
+
+/* el nombre y la fecha que propone el archivo: «WhatsApp Ptt 2026-11-08 at 10.15.32», «PTT-20261108-WA0003»,
+   «2026-11-08 10-15-32 - Comité» (de Tenca), «Nueva grabación 12»… Sin fecha en el nombre, la de cuándo se guardó */
+function sbDesdeArchivo(f) {
+  const stem = String(f.name || '').replace(/\.[^.]+$/, '');
+  const ok = (y, mo, d, h = 0, mi = 0, se = 0) => y >= 2000 && y < 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h < 24 && mi < 60 && se < 60;
+  let fecha = null, origen = 'archivo', resto = stem;
+  const m = /(20\d{2})-?(\d{2})-?(\d{2})(?:[ _T-]|\s+at\s+)(\d{2})[.:_-]?(\d{2})(?:[.:_-]?(\d{2}))?(?!\d)/i.exec(stem);
+  if (m && ok(+m[1], +m[2], +m[3], +m[4], +m[5], +(m[6] || 0))) {
+    fecha = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    origen = 'nombre';
+    resto = stem.slice(0, m.index) + ' ' + stem.slice(m.index + m[0].length);
+  } else {
+    const d = /(?:^|\D)(20\d{2})-?(\d{2})-?(\d{2})(?!\d)/.exec(stem);
+    if (d && ok(+d[1], +d[2], +d[3])) {  // solo el día (los de WhatsApp en Android): la hora, la del archivo
+      const t = new Date(f.lastModified || Date.now());
+      fecha = new Date(+d[1], d[2] - 1, +d[3], t.getHours(), t.getMinutes(), t.getSeconds());
+      origen = 'nombre';
+    }
+  }
+  if (!fecha) { fecha = new Date(f.lastModified || Date.now()); origen = f.lastModified ? 'guardado' : 'ahora'; }
+  let nombre = /^(PTT|AUD)-\d{8}-WA\d+$/i.test(stem) || /^WhatsApp (Ptt|Audio)\b/i.test(stem) ? 'Mensaje de voz de WhatsApp'
+    : resto.replace(/\s+/g, ' ').replace(/^[\s\-_·]+|[\s\-_·]+$/g, '');
+  // lo que pone la grabadora sin decir nada («AUDIO_», «REC 12», «Recording», «Grabación 3», «Voice 001»): sin nombre
+  if (/^(AUDIO|REC|VID|Recording|Grabaci[oó]n|Voice|Voz)?[\s_-]*\d*$/i.test(nombre)) nombre = '';
+  return { file: f, nombre: nombre.slice(0, 120), fecha: fecha.getTime(), origen };
+}
+const SB_FECHA_ORIGEN = { nombre: 'del nombre del archivo', guardado: 'de cuándo se guardó el archivo', ahora: 'de ahora', tuya: 'cambiada por ti' };
+function sbFechaInput(ms) {  // «AAAA-MM-DDTHH:MM» en hora local, para <input type="datetime-local">
+  const d = new Date(ms), z = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+// los audios de WhatsApp son de pocos KB: «1 MB» (fmtSize) engañaría
+const sbTam = b => b >= 1e6 ? fmtSize(b) : `${Math.max(1, Math.round(b / 1e3))} KB`;
+function sbFechaTxt(ms) {
+  const d = new Date(ms), z = n => String(n).padStart(2, '0');
+  return `${d.getDate()} ${MES[d.getMonth()]} ${d.getFullYear()}, ${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+
+/* abrir la tarjeta con los archivos elegidos (files) o, con seguir, la que había (al volver de editar una lista) */
+async function abrirSubir(files, opts = {}) {
+  if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
+  // con una subida en marcha, la tarjeta no se rehace (perdería cómo cancelarla): «Elegir otro», volver de editar una
+  // lista o soltar más audios esperan (revisión 2)
+  if (G?.subir && G.enviando) return toast('Espera a que termine la subida que está en marcha.', 'err');
+  // la tarjeta de subir abierta (y sin subir nada) sigue con lo elegido: al volver de editar una lista o tras un fallo
+  // (seguir), al soltar más audios (anadir: se suman) y con «Elegir otro» (reemplazar: los nuevos en su lugar)
+  const actual = G?.subir && !G.enviando ? G : null;
+  const base = actual && (opts.seguir || opts.anadir || opts.reemplazar) ? actual : null;
+  let items = base && !opts.reemplazar ? base.subir.items : [];
+  let rechazados = base && !opts.reemplazar ? base.subir.rechazados : [];
+  if (files) {
+    items = items.concat(files.filter(esAudio).map(sbDesdeArchivo));
+    rechazados = rechazados.concat(files.filter(f => !esAudio(f)));
+  }
+  if (!items.length) {
+    if (rechazados.length) toast(sbNoAudio(rechazados[0]), 'err');
+    return;
+  }
+  const varios = items.length > 1;
+  const pedido = base ? base.pedido : { cambios: {} };
+  pedido.subir = true;
+  pedido.varios = varios;
+  if (!base && opts.carpeta) pedido.cambios.carpeta = opts.carpeta;  // desde una carpeta: ahí
+  if (opts.vocab != null) pedido.vocab = opts.vocab;
+  const tocado = base ? base.tocado : {};
+  // un audio nuevo (o el único que queda) trae su nombre y su fecha; lo escrito para otro no se le pone
+  const nuevoUno = !varios && (!base || !('nombre' in pedido) || opts.reemplazar);
+  if (varios) { delete pedido.nombre; delete pedido.archivo; delete pedido.fecha; }
+  else if (nuevoUno) {
+    const it = items[0];
+    Object.assign(pedido, { nombre: it.nombre, archivo: it.nombre, fecha: it.fecha });
+    tocado.nombre = false;
+  }
+  G = { pedido, plan: null, tocado, recientes: [], seq: 0, abierto: null, pendiente: null, timer: null, devs: null,
+    sugIdx: -1, subir: { items, rechazados, fechaOrigen: nuevoUno ? items[0].origen : base?.subir?.fechaOrigen || items[0].origen } };
+  const uno = items[0], total = items.reduce((n, it) => n + (it.file.size || 0), 0);
+  const lista = varios
+    ? `<div class="sb-lista" role="list">${items.map(it => `<div class="sb-item" role="listitem">${I.wave}<span class="sb-nom" title="${esc(it.file.name)}">${esc(nfc(it.file.name))}</span>`
+      + `<span class="muted">${sbTam(it.file.size || 0)} · ${esc(sbFechaTxt(it.fecha))}</span></div>`).join('')}</div>`
+    : '';
+  const archivo = `<div class="sb-archivo">${I.wave}<span class="sb-nom" title="${esc(uno.file.name)}">${varios ? `${items.length} audios` : esc(nfc(uno.file.name))}</span>`
+    + `<span class="muted">${sbTam(total)}</span><button type="button" class="gr-cambiar" data-sb-otro>Elegir ${varios ? 'otros' : 'otro'}</button></div>`;
+  const top = varios ? '' : `<label for="grNombre">Reunión</label>
+        <div class="gr-nombre"><input class="input" id="grNombre" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Nombre de la reunión (opcional)" aria-autocomplete="list" aria-controls="grSug">
+          <div class="gr-sug hidden" id="grSug" role="listbox"></div></div>
+        <span class="gr-tag" id="grNombreTag"></span>
+        <label for="sbFecha">Fecha</label>
+        <div class="sb-fecha"><input class="input" type="datetime-local" id="sbFecha" required>
+          <span class="gr-motivo" id="sbFechaOrigen"></span></div>`;
+  openModal(`<div class="gr-cab"><span class="gr-kicker">${I.upload}Subir audio</span></div>
+    <div class="gr-cuerpo">
+      ${archivo}${lista}
+      <div class="sb-error${rechazados.length ? '' : ' hidden'}" id="sbError" role="alert">${rechazados.map(sbNoAudio).join('<br>')}</div>
+      <div class="gr-top">${top}
+        <label for="grProy">Proyecto</label>
+        <div class="gr-proyecto"><select id="grProy" class="gr-proy" title="Proyecto › workstream: su carpeta, su idioma y su vocabulario"></select>
+          <span class="gr-motivo" id="grMotivo"></span></div>
+      </div>
+      <div class="gr-plan" aria-live="polite"><div class="gr-plan-h">Así se va a subir</div>
+        <div id="grFilas"><div class="gr-cargando">Preparando…</div></div></div>
+      <button type="button" class="gr-anadir hidden" id="grAnadirCtx" data-gr-cambiar="contexto">${I.plus}Contexto: de qué va y quién participa</button>
+      <div class="gr-atajo">${I.info}Se guarda como una reunión más, con su fecha, y se transcribe solo. Puedes seguir usando ${esc(APP_NAME)} mientras tanto.</div>
+    </div>
+    <div class="btns gr-pie"><span class="gr-hueco"></span>
+      <button class="btn" data-m="no" type="button">Cancelar</button>
+      <button class="btn primary" id="rGo" type="button" disabled>${I.upload}<span>${varios ? `Subir y transcribir los ${items.length}` : 'Subir y transcribir'}</span> <kbd>Intro</kbd></button></div>`, d => grMontar(d), 'gr sb');
+  // cerrarla (Cancelar, Esc o un clic fuera) a mitad de subida la cancela: lo que estaba llegando no se guarda. Si ya
+  // había llegado entero, el servidor lo está comprobando y se guarda igual: se dice
+  S.modalCleanup = () => {
+    const g = G;
+    G = null;
+    if (!g?.enviando) return;
+    g.cancelado = true;
+    const resto = g.subir.items.length - 1 - (g.enCurso || 0) > 0 ? '; los demás no se suben' : '';
+    if (g.xhr && !g.llegado) {
+      g.xhr.abort();
+      toast(`Subida cancelada${resto}.`);
+      setTimeout(() => refreshTree(true), 1500);  // si el servidor ya lo tenía entero (cuestión de milisegundos), se ve
+    } else toast(`«${esc(g.subir.items[g.enCurso || 0]?.file.name || '')}» ya había llegado: se está comprobando${resto}.`);
+  };
+}
+
+/* soltar audios en la ventana: con otra ventana abierta encima (Grabar, Ajustes…), o mientras se sube, no */
+function sbNoSePuedeSoltar() {
+  if (G?.subir && G.enviando) return 'Espera a que termine la subida que está en marcha.';
+  const m = $('#modal');
+  if (m && !m.classList.contains('hidden') && !$('.dialog.sb', m)) return 'Para subir audios, cierra antes esta ventana.';
+  return '';
+}
+
+async function sbMontar(d) {
+  const g = G;
+  const f = $('#sbFecha', d);
+  if (f) {
+    f.value = sbFechaInput(g.pedido.fecha);
+    f.max = sbFechaInput(Date.now() + 86400000);
+    $('#sbFechaOrigen', d).textContent = SB_FECHA_ORIGEN[g.subir.fechaOrigen] || '';
+    f.addEventListener('change', () => {
+      const ms = new Date(f.value).getTime();
+      if (!f.value || isNaN(ms)) return;
+      g.pedido.fecha = ms;
+      g.subir.fechaOrigen = 'tuya';
+      $('#sbFechaOrigen', d).textContent = SB_FECHA_ORIGEN.tuya;
+      grPedirLuego();
+    });
+  }
+  // otro archivo: el selector otra vez, con lo elegido aquí; si lo cancelas, la tarjeta sigue como estaba
+  d.querySelector('[data-sb-otro]').onclick = () => elegirAudios({ reemplazar: true });
+  await voc0();
+  if (G !== g) return;
+  await grPedir({ recientes: true });
+  if (G !== g) return;
+  $('#rGo', d).disabled = false;
+  const n = $('#grNombre', d);
+  if (n) { n.focus(); n.select(); } else $('#rGo', d).focus();  // varios: Intro sube
+}
+const voc0 = () => (typeof loadVocab === 'function' ? loadVocab(S.config.language ?? 'es-en') : Promise.resolve()).catch(() => { });
+
+/* el modelo con el que se transcribe al subir: el de la cola (Ajustes › Procesado), para este audio */
+function sbPanelTranscribe(l, pie) {
+  const nube = S.config.procesado === 'api';
+  const ps = (S.config.presets || []).filter(x => x.engine !== 'cloud' || nube);
+  const nom = x => x.engine === 'cloud' ? `${S.config.providers?.[S.config.cloud?.provider || 'groq']?.label || 'La nube'} · en la nube`
+    : `${typeof modeloNombre === 'function' ? modeloNombre(x.model) : x.label} · en este PC`;
+  return `<label class="gr-l" for="grSelPreset">Modelo</label><select data-gr="preset" id="grSelPreset">${ps.map(x => `<option value="${esc(x.id)}"${x.id === l.preset ? ' selected' : ''}>${esc(nom(x))}</option>`).join('')}</select>
+    <div class="help">${esc(S.presetsById?.[l.preset]?.hint || '')} El de siempre se cambia en Ajustes › Procesado.</div>${pie()}`;
+}
+
+/* mientras sube, la tarjeta no se toca (solo «Cancelar»): cambiar el proyecto o el archivo a mitad no tendría efecto */
+function sbBloquear(g, on) {
+  $$('input, select, textarea, button', g.d).forEach(x => {
+    if (x.dataset.m === 'no') return;
+    if (on) { x.dataset.sbAntes = x.disabled ? '1' : ''; x.disabled = true; }
+    else if ('sbAntes' in x.dataset) { x.disabled = x.dataset.sbAntes === '1'; delete x.dataset.sbAntes; }
+  });
+  g.d.classList.toggle('sb-enviando', on);
+}
+
+function sbProgreso(b, i, n, frac) {
+  const pct = Math.min(100, Math.round(frac * 100));
+  $('span', b).textContent = frac >= 1 ? 'Comprobando el audio…' : `Subiendo… ${pct} %` + (n > 1 ? ` (${i + 1} de ${n})` : '');
+}
+/* un archivo al servidor, con su progreso (fetch no da el de la subida) */
+function sbEnviar(url, file, onProg, g) {
+  return new Promise((ok, ko) => {
+    const x = new XMLHttpRequest();
+    g.xhr = x;
+    g.llegado = false;
+    x.open('POST', url);
+    x.setRequestHeader('X-Audios', '1');
+    x.upload.onprogress = e => { if (e.lengthComputable) onProg(e.loaded / e.total); };
+    x.upload.onload = () => { g.llegado = true; onProg(1); };
+    x.onabort = () => ko(Object.assign(new Error('cancelada'), { cancelada: true }));
+    x.onloadend = () => { if (g.xhr === x) g.xhr = null; };
+    x.onload = () => {
+      let j;
+      try { j = JSON.parse(x.responseText); } catch { j = { error: x.statusText || 'respuesta no válida' }; }
+      if (x.status >= 400 || j.error) ko(new Error(j.error || x.statusText)); else ok(j);
+    };
+    x.onerror = () => ko(new Error(`No se ha podido subir: ¿se ha cerrado ${APP_NAME}?`));
+    x.send(file);
+  });
+}
+
+async function sbSubir() {
+  const g = G, b = g && $('#rGo', g.d);
+  if (!g || !b || b.disabled) return;
+  b.disabled = true;
+  const etiqueta = $('span', b).textContent;
+  if (g.timer) { clearTimeout(g.timer); g.timer = null; grPedir(); }
+  await g.pendiente;  // lo último pedido: se sube con lo que se está viendo
+  const p = g.plan;
+  if (!p || G !== g) { b.disabled = false; return; }
+  g.enviando = true;
+  g.cancelado = false;
+  $('#sbError', g.d).classList.add('hidden');
+  sbBloquear(g, true);
+  b.disabled = true;
+  const items = g.subir.items, hechos = [], fallidos = [];
+  for (const [i, it] of items.entries()) {
+    if (g.cancelado) break;
+    g.enCurso = i;
+    const uno = items.length === 1;
+    const q = new URLSearchParams({
+      folder: p.rec.folder || '', name: uno ? (p.rec.name || '') : it.nombre, fecha: String(uno ? g.pedido.fecha : it.fecha),
+      vocab: p.rec.vocab || '', language: p.rec.language || '', contexto: p.rec.contexto || '', preset: p.rec.preset || '',
+      archivo: it.file.name });
+    try {
+      hechos.push(await sbEnviar(`/api/subir?${q}`, it.file, frac => { if (G === g) sbProgreso(b, i, items.length, frac); }, g));
+    } catch (err) {
+      if (err.cancelada) break;
+      fallidos.push({ it, msg: err.message });
+    }
+  }
+  g.enviando = false;
+  const abierta = G === g;
+  if (abierta && fallidos.length === items.length) {
+    // no se ha subido ninguno: la tarjeta sigue como estaba, con el motivo, para elegir otro o cambiar algo
+    sbBloquear(g, false);
+    $('span', b).textContent = etiqueta;
+    b.disabled = false;
+    const e = $('#sbError', g.d);
+    e.innerHTML = fallidos.map(f => esc(f.msg)).join('<br>');
+    e.classList.remove('hidden');
+    ($('#grNombre', g.d) || b).focus();  // Intro reintenta
+    return;
+  }
+  if (g.cancelado || (fallidos.length && abierta)) {
+    // cancelada, o alguno no se ha podido subir: lo subido se dice y se queda; sin ir a ningún sitio. Desde ya, en la
+    // tarjeta solo quedan los que han fallado (si se sueltan más audios mientras tanto, se suman a esos)
+    g.subir.items = fallidos.map(f => f.it);
+    g.subir.rechazados = [];
+    if (hechos.length) {
+      toast(`✓ ${hechos.length === 1 ? 'Subido' : `${hechos.length} subidos`}: ${hechos.map(r => esc(folderName(r.carpeta))).join(', ')}`);
+      hechos.filter(r => r.aviso).forEach(r => toast(esc(r.aviso), 'err'));
+      await refreshTree(true);
+      pollJobs(true);
+    }
+    if (g.cancelado || G !== g) return fallidos.forEach(f => toast(esc(f.msg), 'err'));
+    // la tarjeta sigue abierta con los que han fallado y su motivo, para elegir otro o cambiar algo
+    abrirSubir(null, { seguir: true });
+    const e = $('#sbError');
+    if (e) { e.innerHTML = fallidos.map(f => esc(f.msg)).join('<br>'); e.classList.remove('hidden'); }
+    return;
+  }
+  if (abierta) closeModal(true);
+  if (hechos.length) {
+    const ult = hechos[hechos.length - 1], cola = hechos.filter(r => r.job).length;
+    // varios: la carpeta principal (cada uno va en la suya, dentro); uno: la de su reunión
+    toast(`✓ ${hechos.length === 1 ? 'Subido' : `${hechos.length} audios subidos`} a ${esc(folderName(hechos.length === 1 ? ult.carpeta : p.rec.folder || ''))}`
+      + (cola ? ` · ${cola === hechos.length ? 'en la cola para transcribir' : `${cola} en la cola`}` : ''));
+    hechos.filter(r => r.aviso).forEach(r => toast(esc(r.aviso), 'err'));
+    await refreshTree(true);
+    pollJobs(true);
+    go('a', ult.path);
+  }
+  fallidos.forEach(f => toast(esc(f.msg), 'err'));
 }

@@ -72,7 +72,11 @@ HOST, PORT = "127.0.0.1", 8765
 URL = f"http://{HOST}:{PORT}/"
 SERVER, WINDOW = None, None  # los pone main(): el servidor HTTP y la ventana propia (None si se abre en Edge)
 
-AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm"}
+# los del movil y de los mensajeros tambien (09/11/2026, «Subir audio»; todos probados con el PyAV de la app): .oga de
+# Telegram, .amr/.3gp/.3gpp de los Android antiguos, .3ga de grabadoras de llamadas, .caf/.qta/.aif(f) de Apple y el
+# .waptt de los WhatsApp antiguos (un Ogg Opus con otro nombre)
+AUDIO_EXT = {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".opus", ".mkv", ".mov", ".webm",
+             ".oga", ".amr", ".3gp", ".3gpp", ".3ga", ".caf", ".qta", ".aif", ".aiff", ".waptt"}
 TEXT_EXT = {".txt", ".md", ".srt"}
 # lo que acompana a cada audio (se mueve y borra con el): texto, subtitulos, notas, resumen, hablantes y su exportacion
 SIDE_EXTS = (".txt", ".srt", ".md", ".resumen.md", voices.SIDECAR_EXT, ".hablantes.txt")
@@ -80,6 +84,9 @@ MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": 
         ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aac": "audio/aac",
         ".webm": "audio/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".wma": "audio/x-ms-wma",
         ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+        ".oga": "audio/ogg", ".waptt": "audio/ogg", ".amr": "audio/amr", ".3gp": "audio/3gpp",
+        ".3gpp": "audio/3gpp", ".3ga": "audio/3gpp", ".caf": "audio/x-caf", ".qta": "video/quicktime",
+        ".aif": "audio/aiff", ".aiff": "audio/aiff",
         ".woff2": "font/woff2",  # las tipografías de la marca (static/*.woff2)
         ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 # Atributos de OneDrive "solo en linea": leer el archivo dispararia la descarga
@@ -689,8 +696,12 @@ def scan(dirs=None):
                 m = DATE_RE.search(stem)
                 label = ""
                 if m:
-                    label = (stem[:m.start()] + " " + stem[m.end():]).strip(" -_·")
-                    label = re.sub(r"^(AUDIO|VID|REC)[-_ ]*", "", label, flags=re.I)
+                    # el prefijo de las grabadoras y los móviles (AUDIO_, VID-, REC…) va delante de la fecha; el
+                    # nombre que pone la app, detrás: solo se quita delante. Antes se quitaba de todo, y «… - Audio
+                    # de WhatsApp» quedaba en «de WhatsApp» y «Recursos humanos», en «ursos humanos» (09/11/2026)
+                    antes = re.sub(r"^(AUDIO|VID|REC)$", "", stem[:m.start()].strip(" -_·"), flags=re.I)  # solo
+                    antes = re.sub(r"^(AUDIO|VID|REC)[-_ ]+", "", antes)  # delante de un nombre, en mayúsculas
+                    label = (antes + " " + stem[m.end():]).strip(" -_·")
                     label = re.sub(r"^_?\d{2,6}$", "", label)
                 tx_mtime = 0
                 for t in (txt, srt):
@@ -2053,6 +2064,56 @@ def meeting_dir_name(label="", when=None, limit=MEETING_DIR_MAX):
     lt = time.localtime(when) if isinstance(when, (int, float)) else (when or time.localtime())
     name = calendario.nombre_archivo(label, limit=limit) if label and limit >= 12 else ""
     return time.strftime("%Y-%m-%d", lt) + " " + (name or time.strftime("%H-%M", lt))
+
+
+# «Subir audio»: lo que se dice cuando no vale un archivo (la lista entera está en AUDIO_EXT)
+FORMATOS_SUBIR = "m4a, mp3, opus, ogg, wav, aac, webm, flac, amr o un vídeo mp4 o mov"
+SUBIR_FECHA_MIN = 946684800  # 01/01/2000: antes de eso, la fecha del archivo no es la de la reunión
+
+
+def fecha_subida(v):
+    """La fecha de un audio subido, en segundos: la de la tarjeta («AAAA-MM-DDTHH:MM», hora local) o la del archivo
+    (File.lastModified del navegador, en milisegundos). Si no hay o no es razonable (antes de 2000 o de mañana en
+    adelante), ahora."""
+    ahora, t = time.time(), None
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        t = float(v)
+    elif isinstance(v, str) and v.strip():
+        x = v.strip()
+        try:
+            t = float(x)
+        except ValueError:
+            for fmt, n in (("%Y-%m-%dT%H:%M:%S", 19), ("%Y-%m-%dT%H:%M", 16)):
+                try:
+                    t = time.mktime(time.strptime(x[:n], fmt))
+                    break
+                except (ValueError, OverflowError):
+                    continue
+    if t is not None and t > 1e11:  # milisegundos
+        t /= 1000
+    if t is None or t != t or not (SUBIR_FECHA_MIN <= t <= ahora + 86400):
+        return ahora
+    return t
+
+
+SUBIENDO = ".subiendo-"  # lo que se está recibiendo en «Subir audio» (el árbol no enseña lo que empieza por punto)
+SUBIENDO_VIEJO_S = 6 * 3600
+
+
+def limpiar_subidas(folder):
+    """Borra de `folder` lo que quedó a medias de una subida de hace horas (la app se cerró o el PC se apagó mientras
+    llegaba): en Windows el punto no lo oculta del Explorador, y en OneDrive se sincronizaría."""
+    try:
+        viejo = time.time() - SUBIENDO_VIEJO_S
+        for e in os.scandir(folder):
+            if e.name.startswith(SUBIENDO) and e.is_file(follow_symlinks=False) and e.stat().st_mtime < viejo:
+                try:
+                    os.remove(e.path)
+                    log(f"   borrado un resto de subida: {rel_of(e.path)}")
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def own_meeting_dir(abs_audio):
@@ -4474,10 +4535,14 @@ class App:
                 continue
         return rel  # sin carpeta propia en la app (p. ej. listas de una carpeta conectada): lo de siempre, a la vista
 
-    def plan_grabar(self, pedido, st=None, sug=None, plantilla=False):
+    def plan_grabar(self, pedido, st=None, sug=None, plantilla=False, cuando=None):
         """El plan de una grabación nueva con el origen de cada valor (ver plan.py). `pedido`: lo elegido en la
-        tarjeta; `sug`: la reunión en curso (si no se da, la última lectura del vigilante o Teams al momento)."""
+        tarjeta; `sug`: la reunión en curso (si no se da, la última lectura del vigilante o Teams al momento).
+        `cuando`: la fecha de la reunión (segundos) para su carpeta «AAAA-MM-DD Nombre»; por defecto, ahora (al subir
+        un audio, la del audio)."""
         st = st or self.settings.get()
+        if pedido.get("subir"):
+            sug = {}  # un audio que ya existe: ni Teams ni Outlook
         if sug is None:
             sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
         full, listas = {}, []
@@ -4502,7 +4567,7 @@ class App:
             carpeta_origen=self._carpeta_origen(st, full),
             sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
             motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
-            carpeta_reunion=self._carpeta_reunion(st, plantilla), raiz=root_name())
+            carpeta_reunion=self._carpeta_reunion(st, plantilla, cuando), raiz=root_name())
         # la carpeta de Ajustes (la de las reuniones sin proyecto) guardada que ahora no se encuentra (una vinculada
         # desconectada): se graba en otra y se dice por qué en su línea (revisión 3 de B2)
         fija = perfil_de(st)["folder"]
@@ -4530,7 +4595,7 @@ class App:
     PLANTILLA_REUNION = "AAAA-MM-DD Nombre de la reunión"
 
     @classmethod
-    def _carpeta_reunion(cls, st, plantilla=False):
+    def _carpeta_reunion(cls, st, plantilla=False, cuando=None):
         """La carpeta «AAAA-MM-DD Nombre» que creará rec_start dentro de la base, o None. Con la rama de carpetas
         (B1b): su meeting_dir_preview, con el nombre como lo limpia rec_start (rec_destino hace lo mismo). Sin ella,
         None: la grabación va en la base. plantilla (Ajustes › Al grabar, sin reunión): sin nombre, el patrón y no
@@ -4553,7 +4618,7 @@ class App:
                 except ApiError:
                     label = calendario.nombre_archivo(nombre)
             try:
-                sub = previa(base or "", label, st)
+                sub = previa(base or "", label, st, **({} if cuando is None else {"when": cuando}))
             except (ApiError, OSError):
                 return None
             return sub if sub and sub != (base or "") else None
@@ -4585,10 +4650,14 @@ class App:
         pedido = {k: b[k] for k in ("nombre", "vocab", "participantes") if k in b}
         if isinstance(b.get("cambios"), dict):
             pedido["cambios"] = b["cambios"]
+        cuando = None
+        if b.get("subir"):  # «Subir audio»: el plan de subir uno que ya existe (ver plan.resolver)
+            pedido.update(subir=True, archivo=str(b.get("archivo") or ""), varios=bool(b.get("varios")))
+            cuando = fecha_subida(b.get("fecha"))
         st = self.settings.get()
         if isinstance(b.get("ajustes"), dict):  # Ajustes › Al grabar: cómo quedaría con lo que aún no se ha guardado
             st = ajustes_previstos(st, b["ajustes"])
-        p = self.plan_grabar(pedido, st=st, plantilla=isinstance(b.get("ajustes"), dict))
+        p = self.plan_grabar(pedido, st=st, plantilla=isinstance(b.get("ajustes"), dict), cuando=cuando)
         if b.get("recientes"):
             vs = list_vocab()
             p["recientes"] = grabar_plan.recientes(grabar_plan.historial_de(
@@ -5073,6 +5142,7 @@ class App:
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL,
                            "tenca": TENCA_URL},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
+                "audio_ext": sorted(AUDIO_EXT),  # «Subir audio»: lo que se ofrece en el selector y se sube al soltar
                 "procesado": mode, "agente": self._agente_info(st),
                 "ultima_prueba": (st.get("ultima_prueba") if (st.get("ultima_prueba") or {}).get("modo") == mode
                                   else None),
@@ -5694,6 +5764,138 @@ class App:
         self.library.at = 0
         log(f"⤓ importado: {rel_of(target)}")
         return {"path": rel_of(target)}
+
+    def subir(self, handler, q):
+        """POST /api/subir?folder&name&fecha&vocab&language&contexto&preset&archivo (09/11/2026, msg 1296: «poder subir
+        un audio, independiente de donde venga»). El cuerpo es el archivo tal cual (el del móvil, un audio de WhatsApp,
+        otra grabadora); lo demás es lo que da POST /api/grabar/plan con subir. Entra como una grabación hecha con la
+        tarjeta: «AAAA-MM-DD HH-MM-SS - Nombre» con la fecha del audio, en su carpeta de reunión dentro de la principal,
+        con el proyecto, el idioma y el contexto en su .md, y a la cola de transcripción. Antes de guardarlo se
+        comprueba con la misma cadena que la cola (engines.probar_audio) que se puede transcribir: si no, no se guarda
+        nada y se dice por qué."""
+        original = os.path.basename(str(q.get("archivo") or "").replace("\\", "/")) or "El archivo"
+        ext = os.path.splitext(original)[1].lower()
+        if ext not in AUDIO_EXT:
+            raise ApiError(f"«{original}» no es un audio que {APP_NAME} sepa leer. Sirven {FORMATOS_SUBIR}.")
+        folder = safe(q.get("folder", ""), "dir")
+        if in_app_dir(folder):
+            raise ApiError("No se puede guardar ahí")
+        st = self.settings.get()
+        cuando = fecha_subida(q.get("fecha"))
+        lt = time.localtime(cuando)
+        nombre = " ".join(str(q.get("name") or "").split())[:120]
+        label = ""
+        if nombre:
+            try:
+                label = clean_name(nombre)
+            except ApiError:
+                label = calendario.nombre_archivo(nombre)
+        stem = time.strftime("%Y-%m-%d %H-%M-%S", lt) + (f" - {label}" if label else "")
+        # se recibe en un archivo oculto de la carpeta principal (el árbol no enseña los que empiezan por punto) y con
+        # su extensión, para que PyAV lo reconozca al comprobarlo
+        remaining = int(handler.headers.get("Content-Length") or 0)
+        if remaining < 0:
+            raise ApiError("Cuerpo no válido")
+        limpiar_subidas(folder)
+        tmp = os.path.join(folder, f"{SUBIENDO}{secrets.token_hex(4)}{ext}")
+        total, guardado, mdir_nueva = remaining, False, None
+        try:  # lo recibido a medias (disco lleno, la ventana se cierra a mitad) no se queda en la carpeta
+            with open(tmp, "wb") as f:
+                while remaining > 0:
+                    chunk = handler.rfile.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+            if remaining <= 0:
+                handler.body_read = True
+            if remaining > 0:
+                raise ApiError("La subida se cortó.")
+            consejo = " Si en el móvil se oye bien, vuelve a pasarlo al PC o conviértelo a mp3."
+            if not total:
+                raise ApiError(f"«{original}» está vacío.{consejo}")
+            try:
+                dur = engines.probar_audio(tmp)
+            except engines.EngineError as e:
+                raise ApiError(f"«{original}» {e}.{consejo}")
+            # su carpeta «AAAA-MM-DD Nombre», como al grabar (con la fecha del audio, no la de hoy)
+            mname = fit_meeting_dir(folder, label, lt, stem) if por_reunion(st) else None
+            mdir = free_dir(folder, mname) if mname else None
+            dest = mdir or folder
+            base, n = stem, 2
+            # ni otro audio ni sus notas con ese nombre (dos audios con el mismo nombre compartirían el .txt y el .md)
+            while any(os.path.exists(os.path.join(dest, base + e)) for e in AUDIO_EXT | set(SIDE_EXTS)):
+                base, n = f"{stem} ({n})", n + 1
+            target = os.path.join(dest, base + ext)
+            if mdir:
+                try:
+                    if not os.path.isdir(mdir):
+                        os.makedirs(mdir)
+                        mdir_nueva = mdir
+                except OSError as e:
+                    raise ApiError(f"No se puede crear la carpeta de la reunión en {display_rel(rel_of(folder))} "
+                                   f"({e.__class__.__name__}).")
+                carpetas_reunion().add(rel_of(mdir))
+            for intento in range(20):  # Defender u OneDrive pueden tener el archivo abierto un instante (WinError 32)
+                try:
+                    os.replace(tmp, target)
+                    break
+                except PermissionError:
+                    if intento == 19:
+                        raise
+                    time.sleep(0.1)
+            guardado = True
+        except OSError as e:  # sin permiso de escritura, el disco lleno… (una ApiError no es OSError: pasa tal cual)
+            raise ApiError(f"No se ha podido guardar en {display_rel(rel_of(folder))}: "
+                           f"{e.strerror or e.__class__.__name__}.")
+        finally:
+            if not guardado:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                if mdir_nueva:  # la carpeta de la reunión creada para él, si se ha quedado vacía
+                    try:
+                        os.rmdir(mdir_nueva)
+                        carpetas_reunion().discard(rel_of(mdir_nueva))
+                    except OSError:
+                        pass
+        try:  # la fecha del audio también como la de modificación (la que enseña el Explorador)
+            os.utime(target, (cuando, cuando))
+        except OSError:
+            pass
+        rel, avisos, props = rel_of(target), [], {}
+        v = None
+        if q.get("vocab"):
+            try:
+                v = find_vocab(None, None, q["vocab"])
+            except (ApiError, OSError):
+                v = None
+        if v:
+            props.update(proyecto=v["project"], workstream=v["name"], vocabulario=v["id"])
+        if "language" in q:
+            lang = str(q.get("language") or "").strip().lower()
+            props["idioma"] = lang if lang and IDIOMA_RE.match(lang) else "auto"
+        ctx = q.get("contexto") if "contexto" in q else perfil_de(st)["context"]
+        ctx = " ".join(str(ctx or "").split())[:engines.ABOUT_CHARS]
+        if ctx:
+            props["contexto"] = ctx
+        if props:
+            try:
+                self.notes_save({"path": rel, "props": props, "_al_grabar": True})
+            except Exception as e:
+                log_exc()
+                avisos.append(f"sin cabecera de notas ({e.msg if isinstance(e, ApiError) else e})")
+        self.library.at = 0
+        job = None
+        preset = str(q.get("preset") or st.get("preset") or "rapido")
+        try:  # el idioma de la reunión es el de su .md (None: el de cada reunión, como «Transcribir los pendientes»)
+            job = (self.jobs.submit([rel], preset, None) or [None])[0]
+        except ApiError as e:
+            avisos.append(f"no se ha puesto a transcribir: {e.msg}")
+        log(f"⤒ subido: {rel} ({original}, {total} bytes" + (f", {dur:.0f} s" if dur else "") + ")"
+            + (f" [{v['project']} · {v['name']}]" if v else "") + (f" · aviso: {'; '.join(avisos)}" if avisos else ""))
+        return {"path": rel, "job": job, "carpeta": rel_of(dest), "duracion": dur, "aviso": "; ".join(avisos) or None}
 
     def _meeting_watch(self):
         notified = None
@@ -7609,6 +7811,10 @@ class Handler(BaseHTTPRequestHandler):
                 r = a.import_file(self, {k: v[0] for k, v in parse_qs(u.query).items()})
                 self.body_read = True  # import_file lo ha leido entero (si se corta, lanza ApiError)
                 return self._json(r)
+            if u.path == "/api/subir":  # igual, pero subir marca body_read en cuanto lo ha leído entero: un audio
+                # que no se puede leer se contesta al momento, sin esperar a vaciar un cuerpo que ya no queda
+                q = {k: v[0] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
+                return self._json(a.subir(self, q))
             n = int(self.headers.get("Content-Length") or 0)
             if n < 0:
                 raise ApiError("Cuerpo no válido")

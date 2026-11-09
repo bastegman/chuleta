@@ -543,24 +543,30 @@ class WorkerClientTests(unittest.TestCase):
 
 class AudioYUrlTests(unittest.TestCase):
     def test_fotograma_danado_se_salta(self):
-        """decode_16k no corta el audio en el primer fotograma dañado (faster-whisper los saltaba)."""
-        class InvalidDataError(Exception):
+        """decode_16k no corta el audio en el primer fotograma dañado. Hasta el 09/11/2026 lo intentaba saltando el
+        error en el generador de c.decode(), pero con PyAV 19 ese generador se acaba en el primer error (medido: un m4a
+        con 400 bytes dañados a mitad se quedaba en 1,8 s de 5): ahora decodifica paquete a paquete y el paquete malo
+        pasa a ser silencio de su duración (engines._paquetes; con los audios reales, test_subir_audio)."""
+        class FFmpegError(Exception):
             pass
-        av = types.SimpleNamespace(error=types.SimpleNamespace(InvalidDataError=InvalidDataError))
+        av = types.SimpleNamespace(error=types.SimpleNamespace(FFmpegError=FFmpegError))
 
-        class Gen:  # un iterador que, como el de PyAV, sigue después de un fotograma dañado
-            def __init__(self):
-                self.seq = iter([1, InvalidDataError("x"), 2, InvalidDataError("y"), 3])
+        class Stream:
+            codec_context = types.SimpleNamespace(frame_size=1024, sample_rate=16000)
 
-            def __iter__(self):
-                return self
+            def decode(self, pk):
+                if pk.v is None:
+                    raise FFmpegError("x")
+                return [pk.v]
 
-            def __next__(self):
-                v = next(self.seq)
-                if isinstance(v, Exception):
-                    raise v
-                return v
-        self.assertEqual(list(engines._valid_frames(Gen(), av)), [1, 2, 3])
+        def pk(v, duration=None, time_base=None):
+            return types.SimpleNamespace(v=v, duration=duration, time_base=time_base)
+
+        class Container:  # el malo con su duración (40 ms) o, si no la trae, la de un fotograma del códec (64 ms)
+            def demux(self, s):
+                return iter([pk(1), pk(None, 2, 1 / 50), pk(2), pk(None), pk(3)])
+
+        self.assertEqual(list(engines._paquetes(Container(), Stream(), av)), [1, 0.04, 2, 0.064, 3])
 
     def test_host_sin_credenciales(self):
         self.assertEqual(engines.url_host("https://token123@pasarela.empresa/v1/audio"), "pasarela.empresa")

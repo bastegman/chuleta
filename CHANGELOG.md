@@ -10,6 +10,25 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Subir audio (09/11/2026)
+
+Ítem 7 del backlog (Bernardo, msg 1296: «poder subir un audio, independiente de donde venga»). Hecho por Steve en la
+rama `subir-audio` (`da525ab`, tres revisiones de contexto fresco); detalle en su informe.
+
+- **Subir audio**: el botón junto a Grabar (y «Subir audio aquí» en cada carpeta, o soltar audios en la ventana) sube
+  un audio que ya tengas, del móvil, de WhatsApp o de otra grabadora, con su proyecto, su fecha y su carpeta, y lo pone
+  a transcribir. Lee m4a (también el «sin pérdida» del iPhone), opus y ogg de WhatsApp, mp3, wav, aac, webm, flac, amr
+  y el sonido de un vídeo mp4 o mov; si un archivo no se puede leer, lo dice y no guarda nada. Los .txt y .md que se
+  sueltan siguen como antes.
+- **Arreglado**: un audio con un trozo dañado se transcribía solo hasta ese trozo (`engines.decode_16k` decodifica
+  paquete a paquete y cambia el paquete malo por silencio de su duración; lo usan la transcripción local, la de la nube
+  y «Quién habla»). En Ogg, WebM y AAC ADTS el demultiplexor sigue perdiendo el resto, igual que ffmpeg.
+- El árbol ya no le quita «Audio », «Rec» o «Vid» a cualquier nombre («Recursos humanos»): solo el prefijo en
+  mayúsculas de las grabadoras delante de la fecha.
+- Formatos nuevos en `AUDIO_EXT` (.oga .amr .3gp .3gpp .3ga .caf .qta .aif .aiff .waptt), también en las salidas y en
+  `instalar.ps1`. Tests: `tests/test_subir_audio.py` con audios de prueba sintéticos en
+  `tests/audio_formatos/` (en ui-smoke, Ubuntu y Windows).
+
 ### Setup.exe: otra forma de instalar, con un asistente (09/11/2026)
 
 Fase 1 del instalador «de verdad» (aprobada por Bernardo, msg 1296; research de Harvey del 02/11/2026). El zip sigue

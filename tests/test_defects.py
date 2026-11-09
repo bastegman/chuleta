@@ -93,13 +93,14 @@ class Defecto4DecodePerezoso(unittest.TestCase):
             def to_ndarray(self):
                 return np.zeros((1, 160), np.int16)
 
-        def decode(stream):
+        def demux(stream):  # paquete a paquete (09/11/2026): cada paquete, un fotograma
             for i in range(50):
                 pulled.append(i)
-                yield Frame(i)
+                yield types.SimpleNamespace(i=i)
 
         class Container:
-            streams = [types.SimpleNamespace(type="audio")]
+            streams = [types.SimpleNamespace(type="audio", decode=lambda pk: [Frame(pk.i)],
+                                             codec_context=types.SimpleNamespace(frame_size=0, sample_rate=16000))]
 
             def __enter__(self):
                 return self
@@ -107,8 +108,8 @@ class Defecto4DecodePerezoso(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-            def decode(self, s):
-                return decode(s)
+            def demux(self, s):
+                return demux(s)
 
         class Resampler:
             def __init__(self, **kw):
@@ -117,7 +118,8 @@ class Defecto4DecodePerezoso(unittest.TestCase):
             def resample(self, fr):
                 return [fr] if fr is not None else []
 
-        fake_av = types.SimpleNamespace(open=lambda path: Container(), AudioResampler=Resampler)
+        fake_av = types.SimpleNamespace(open=lambda path: Container(), AudioResampler=Resampler,
+                                        error=types.SimpleNamespace(FFmpegError=RuntimeError))
         calls = {"n": 0}
 
         def cancelled():
@@ -135,7 +137,8 @@ class Defecto4DecodePerezoso(unittest.TestCase):
                 return np.arange(1600, dtype=np.int16).reshape(1, -1)
 
         class Container:
-            streams = [types.SimpleNamespace(type="audio")]
+            streams = [types.SimpleNamespace(type="audio", decode=lambda pk: [Frame()],
+                                             codec_context=types.SimpleNamespace(frame_size=0, sample_rate=16000))]
 
             def __enter__(self):
                 return self
@@ -143,8 +146,8 @@ class Defecto4DecodePerezoso(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-            def decode(self, s):
-                return iter([Frame(), Frame()])
+            def demux(self, s):
+                return iter([object(), object()])
 
         class Resampler:
             def __init__(self, **kw):
@@ -153,7 +156,8 @@ class Defecto4DecodePerezoso(unittest.TestCase):
             def resample(self, fr):
                 return [fr] if fr is not None else []
 
-        fake_av = types.SimpleNamespace(open=lambda path: Container(), AudioResampler=Resampler)
+        fake_av = types.SimpleNamespace(open=lambda path: Container(), AudioResampler=Resampler,
+                                        error=types.SimpleNamespace(FFmpegError=RuntimeError))
         with mock.patch.dict(sys.modules, {"av": fake_av}):
             y = engines.decode_16k("x.wav", start=0.1)  # salta 1600 muestras: queda el segundo frame
         self.assertEqual(len(y), 1600)

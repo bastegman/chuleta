@@ -132,7 +132,7 @@ function modoLineaHtml(presetId, opts = {}) {
     + (opts.falta ? faltaModeloHtml(presetId) : '');
 }
 /* el modelo de ese motor aún no está en el PC: aviso antes de empezar, con «Descargar ahora» y su % */
-function faltaModeloHtml(presetId) {
+function faltaModeloHtml(presetId, ctx = '') {  // ctx 'subir': la tarjeta de subir un audio (grabar.js)
   const p = S.presetsById?.[presetId] || {};
   if (p.engine === 'cloud' || p.cached !== false) return '';
   const m = S.modelos?.[p.model];
@@ -140,12 +140,12 @@ function faltaModeloHtml(presetId) {
   const nombre = modeloNombre(p.model), tam = cfgFmtGb(m?.total_mb || m?.size_mb || p.size_mb);
   if (m?.downloading) {
     const pct = Math.floor((m.frac || 0) * 100);
-    return `<div class="notice info falta-modelo" data-falta="${esc(p.model)}"><span>Descargando el modelo ${esc(nombre)}: ${pct} %. Puedes empezar ya: el texto saldrá cuando termine.</span></div>`;
+    return `<div class="notice info falta-modelo" data-falta="${esc(p.model)}"><span>Descargando el modelo ${esc(nombre)}: ${pct} %. Puedes ${ctx === 'subir' ? 'subirlo' : 'empezar'} ya: el texto saldrá cuando termine.</span></div>`;
   }
   if (m?.error) {
     return `<div class="notice falta-modelo" data-falta="${esc(p.model)}"><span>${esc(m.error)}</span><button class="btn sm" type="button" data-act="modelo-bajar" data-model="${esc(p.model)}">Reintentar</button></div>`;
   }
-  return `<div class="notice falta-modelo" data-falta="${esc(p.model)}"><span>El modelo ${esc(nombre)} (${esc(tam)}) aún no está en este PC. Puedes empezar ya: se descarga mientras grabas y el texto sale cuando termine.</span><button class="btn sm" type="button" data-act="modelo-bajar" data-model="${esc(p.model)}">Descargar ahora</button></div>`;
+  return `<div class="notice falta-modelo" data-falta="${esc(p.model)}"><span>El modelo ${esc(nombre)} (${esc(tam)}) aún no está en este PC. ${ctx === 'subir' ? 'Puedes subirlo ya: se descarga antes de transcribir' : 'Puedes empezar ya: se descarga mientras grabas'} y el texto sale cuando termine.</span><button class="btn sm" type="button" data-act="modelo-bajar" data-model="${esc(p.model)}">Descargar ahora</button></div>`;
 }
 async function modeloBajar(model) {
   try {

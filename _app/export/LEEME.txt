@@ -103,6 +103,9 @@ USO DIARIO
     "Cambiar" pregunta si es solo para esta reunión, para todas las del proyecto o para todas.
     Ctrl+Alt+R (desde cualquier programa) graba con eso mismo sin preguntar, y vuelve a pulsarlo
     para parar.
+  - ¿Ya tienes el audio (del móvil, de WhatsApp, de otra grabadora)? Pulsa "Subir audio", arriba,
+    o arrástralo a la ventana: se guarda como una reunión más, con su proyecto y su fecha, y se
+    transcribe solo. Si un archivo no se puede leer, lo dice y no guarda nada.
   - Voces dobles: si una salida solo repite a otra (un dispositivo virtual, el «espejo» de un
     driver), la grabadora lo detecta sola en unos segundos y no suma la copia («igual que …: no se
     suma» en el medidor de ● Grabar). Si con altavoces el micro recoge la reunión, o una salida

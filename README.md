@@ -12,6 +12,10 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
 
 - **Grabar** el micrófono y el sonido del ordenador (Teams, Zoom, el navegador…) a la vez, con `Ctrl+Alt+R` desde
   cualquier programa.
+- **Subir audio** que ya tengas (del móvil, de WhatsApp o de otra grabadora): el botón junto a Grabar, «Subir audio
+  aquí» en cada carpeta, o arrastrarlo a la ventana. Se guarda como una reunión más, con su proyecto, su fecha y su
+  carpeta, y se pone a transcribir. Lee m4a (también el «sin pérdida» del iPhone), opus y ogg de WhatsApp, mp3, wav,
+  aac, webm, flac, amr y el sonido de un vídeo mp4 o mov; si un archivo no se puede leer, lo dice y no guarda nada.
 - **Transcribir** mientras se habla o al terminar: en tu PC (faster-whisper) o en la nube (Groq, OpenAI, Azure OpenAI
   o cualquier API compatible con OpenAI). En la nube el directo va casi en streaming: trozos de 3–6 s cortados en las
   pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de respaldo de otras cuentas
