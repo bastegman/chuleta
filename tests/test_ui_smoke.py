@@ -629,6 +629,9 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.check(f"#modal input[name='proc'][value='{modo}']")
         pg.select_option("#lPreset", antes["live_preset"])
         pg.evaluate(abrir)
+        # la base de config_rev se pide al salir de Ajustes: lo de fuera llega después (una persona tarda más que esto
+        # en guardar algo en un subdiálogo; sin esperarla, el servidor podía contestarla ya con el cambio dentro)
+        pg.evaluate("S.ajBorradorRev")
         guardado = "api" if modo != "api" else "local"
         tercero = next(x["id"] for x in cfg["presets"]
                        if x["engine"] == "local" and x["id"] not in (motor, antes["live_preset"]))

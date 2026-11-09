@@ -1758,8 +1758,9 @@ let modalResolve = null;
 function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
   // se deja Ajustes por un subdiálogo: con qué configuración se ha escrito lo de Ajustes, según el servidor (incluye
-  // lo que Ajustes mismo haya guardado, aunque no haya pedido /api/config después). openSettings lo compara al volver;
-  // pintar Ajustes lo gasta, así que repintarlo desde dentro no compara nada
+  // lo que Ajustes mismo haya guardado, aunque no haya pedido /api/config después; lo que guarde el subdiálogo va
+  // después, tras un clic tuyo). openSettings lo compara al volver; pintar Ajustes lo gasta, así que repintarlo desde
+  // dentro no compara nada
   if (cls === 'aj') S.ajBorradorRev = null;
   else if ($('.dialog.aj', m)) S.ajBorradorRev = api('/api/config').then(c => c.config_rev, () => null);
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
