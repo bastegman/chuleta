@@ -925,6 +925,7 @@ body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen Â«GuardarÂ
 .sb-item .muted { margin-left: auto; white-space: nowrap; font-size: 12px; }
 .sb-fecha { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sb-fecha .input { width: auto; height: 34px; }
+.dialog.sb.sb-enviando .gr-cambiar, .dialog.sb.sb-enviando .gr-anadir { opacity: .45; cursor: default; }
 .sb-error { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--err-soft); color: var(--err); font-size: 13px; line-height: 1.5; }
 @media (max-width: 720px) { .sb-fecha { grid-column: 1; } }
 .dialog.gr .btns.gr-pie { margin: 0; padding: 12px 24px 16px; border-top: 1px solid var(--line); align-items: center; flex: none; background: var(--panel); }

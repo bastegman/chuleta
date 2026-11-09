@@ -597,6 +597,9 @@ function sbFechaTxt(ms) {
 /* abrir la tarjeta con los archivos elegidos (files) o, con seguir, la que había (al volver de editar una lista) */
 async function abrirSubir(files, opts = {}) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
+  // con una subida en marcha, la tarjeta no se rehace (perdería cómo cancelarla): «Elegir otro», volver de editar una
+  // lista o soltar más audios esperan (revisión 2)
+  if (G?.subir && G.enviando) return toast('Espera a que termine la subida que está en marcha.', 'err');
   // la tarjeta de subir abierta (y sin subir nada) sigue con lo elegido: al volver de editar una lista o tras un fallo
   // (seguir), al soltar más audios (anadir: se suman) y con «Elegir otro» (reemplazar: los nuevos en su lugar)
   const actual = G?.subir && !G.enviando ? G : null;
@@ -666,8 +669,12 @@ async function abrirSubir(files, opts = {}) {
     G = null;
     if (!g?.enviando) return;
     g.cancelado = true;
-    if (g.xhr && !g.llegado) { g.xhr.abort(); toast('Subida cancelada: lo que estaba a medias no se ha guardado.'); }
-    else toast('Ese audio ya había llegado: se guarda y se transcribe igual.');
+    const resto = g.subir.items.length - 1 - (g.enCurso || 0) > 0 ? '; los demás no se suben' : '';
+    if (g.xhr && !g.llegado) {
+      g.xhr.abort();
+      toast(`Subida cancelada${resto}.`);
+      setTimeout(() => refreshTree(true), 1500);  // si el servidor ya lo tenía entero (cuestión de milisegundos), se ve
+    } else toast(`«${esc(g.subir.items[g.enCurso || 0]?.file.name || '')}» ya había llegado: se termina de guardar${resto}.`);
   };
 }
 
@@ -717,6 +724,16 @@ function sbPanelTranscribe(l, pie) {
     <div class="help">${esc(S.presetsById?.[l.preset]?.hint || '')} El de siempre se cambia en Ajustes › Procesado.</div>${pie()}`;
 }
 
+/* mientras sube, la tarjeta no se toca (solo «Cancelar»): cambiar el proyecto o el archivo a mitad no tendría efecto */
+function sbBloquear(g, on) {
+  $$('input, select, textarea, button', g.d).forEach(x => {
+    if (x.dataset.m === 'no') return;
+    if (on) { x.dataset.sbAntes = x.disabled ? '1' : ''; x.disabled = true; }
+    else if ('sbAntes' in x.dataset) { x.disabled = x.dataset.sbAntes === '1'; delete x.dataset.sbAntes; }
+  });
+  g.d.classList.toggle('sb-enviando', on);
+}
+
 function sbProgreso(b, i, n, frac) {
   const pct = Math.min(100, Math.round(frac * 100));
   $('span', b).textContent = frac >= 1 ? 'Comprobando el audio…' : `Subiendo… ${pct} %` + (n > 1 ? ` (${i + 1} de ${n})` : '');
@@ -755,9 +772,12 @@ async function sbSubir() {
   g.enviando = true;
   g.cancelado = false;
   $('#sbError', g.d).classList.add('hidden');
+  sbBloquear(g, true);
+  b.disabled = true;
   const items = g.subir.items, hechos = [], fallidos = [];
   for (const [i, it] of items.entries()) {
     if (g.cancelado) break;
+    g.enCurso = i;
     const uno = items.length === 1;
     const q = new URLSearchParams({
       folder: p.rec.folder || '', name: uno ? (p.rec.name || '') : it.nombre, fecha: String(uno ? g.pedido.fecha : it.fecha),
@@ -772,8 +792,21 @@ async function sbSubir() {
   }
   g.enviando = false;
   const abierta = G === g;
+  if (abierta && fallidos.length === items.length) {
+    // no se ha subido ninguno: la tarjeta sigue como estaba, con el motivo, para elegir otro o cambiar algo
+    sbBloquear(g, false);
+    $('span', b).textContent = etiqueta;
+    b.disabled = false;
+    const e = $('#sbError', g.d);
+    e.innerHTML = fallidos.map(f => esc(f.msg)).join('<br>');
+    e.classList.remove('hidden');
+    return;
+  }
   if (g.cancelado || (fallidos.length && abierta)) {
-    // cancelada, o algún archivo no se ha podido subir: lo subido se dice y se queda; sin ir a ningún sitio
+    // cancelada, o alguno no se ha podido subir: lo subido se dice y se queda; sin ir a ningún sitio. Desde ya, en la
+    // tarjeta solo quedan los que han fallado (si se sueltan más audios mientras tanto, se suman a esos)
+    g.subir.items = fallidos.map(f => f.it);
+    g.subir.rechazados = [];
     if (hechos.length) {
       toast(`✓ ${hechos.length === 1 ? 'Subido' : `${hechos.length} subidos`}: ${hechos.map(r => esc(folderName(r.carpeta))).join(', ')}`);
       hechos.filter(r => r.aviso).forEach(r => toast(esc(r.aviso), 'err'));
@@ -782,9 +815,6 @@ async function sbSubir() {
     }
     if (g.cancelado || G !== g) return fallidos.forEach(f => toast(esc(f.msg), 'err'));
     // la tarjeta sigue abierta con los que han fallado y su motivo, para elegir otro o cambiar algo
-    $('span', b).textContent = etiqueta;
-    g.subir.items = fallidos.map(f => f.it);
-    g.subir.rechazados = [];
     abrirSubir(null, { seguir: true });
     const e = $('#sbError');
     if (e) { e.innerHTML = fallidos.map(f => esc(f.msg)).join('<br>'); e.classList.remove('hidden'); }

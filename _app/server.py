@@ -685,13 +685,11 @@ def scan(dirs=None):
                 m = DATE_RE.search(stem)
                 label = ""
                 if m:
-                    label = (stem[:m.start()] + " " + stem[m.end():]).strip(" -_·")
-                    # el prefijo de los nombres de grabadoras y móviles (AUDIO_, VID-, REC …): solo, en cualquier
-                    # forma; delante de un nombre, solo en mayúsculas. Nunca la primera palabra de un nombre puesto a
-                    # mano («Audio de WhatsApp» quedaba en «de WhatsApp» y «Recursos humanos», en «ursos humanos»;
-                    # visto al subir audios, 09/11/2026)
-                    label = re.sub(r"^(AUDIO|VID|REC)[-_ ]*$", "", label, flags=re.I)  # solo eso: «audio_», «REC»
-                    label = re.sub(r"^(AUDIO|VID|REC)[-_ ]+", "", label)  # delante de un nombre, solo en mayúsculas
+                    # el prefijo de las grabadoras y los móviles (AUDIO_, VID-, REC…) va delante de la fecha; el
+                    # nombre que pone la app, detrás: solo se quita delante. Antes se quitaba de todo, y «… - Audio
+                    # de WhatsApp» quedaba en «de WhatsApp» y «Recursos humanos», en «ursos humanos» (09/11/2026)
+                    antes = re.sub(r"^(AUDIO|VID|REC)(?:[-_ ]+|$)", "", stem[:m.start()].strip(" -_·"), flags=re.I)
+                    label = (antes + " " + stem[m.end():]).strip(" -_·")
                     label = re.sub(r"^_?\d{2,6}$", "", label)
                 tx_mtime = 0
                 for t in (txt, srt):

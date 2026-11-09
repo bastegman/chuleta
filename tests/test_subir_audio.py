@@ -419,6 +419,8 @@ class EtiquetaTests(unittest.TestCase):
                    "2026-11-08 10-15-32 - Videollamada.mp4": "Videollamada",
                    "AUDIO_2026-11-08_10-15-32.m4a": "", "REC 2026-11-08 10-15-32.wav": "",
                    "audio_2026-11-08_10-15-32.ogg": "", "Rec-2026-11-08-10-15-32.mp3": "",
+                   "2026-11-08 10-15-32 - Audio.m4a": "Audio", "2026-11-08 10-15-32 - Rec.mp3": "Rec",
+                   "REC_Comité 2026-11-08 10-15-32.wav": "Comité", "2026-11-08 10-15-32 - VID 12.mp4": "VID 12",
                    "VID-2026-11-08-10-15-32 Comité.mp4": "Comité"}
         for n in nombres:
             open(os.path.join(tmp, n), "wb").close()
@@ -873,6 +875,15 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         self.elegir(pg, "#btnSubir", grande)
         pg.click("#rGo")
         pg.wait_for_function("/Subiendo… [1-9]/.test(document.querySelector('#rGo').innerText)", timeout=15000)
+        # mientras sube, la tarjeta no se toca: ni otro archivo, ni otro proyecto, ni soltar más (revisión 2)
+        for sel in ("[data-sb-otro]", "#grProy", "#grNombre", "#sbFecha", "[data-gr-cambiar='carpeta']"):
+            self.assertTrue(pg.locator(f".dialog.sb {sel}").is_disabled(), sel)
+        self.assertFalse(pg.locator(".dialog.sb [data-m='no']").is_disabled())
+        pg.evaluate("""() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'otra.m4a'));
+            dispatchEvent(new DragEvent('drop', { dataTransfer: dt, cancelable: true })); }""")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('Espera a que termine')",
+                             timeout=5000)
+        self.assertIn("Entrevista larga.wav", pg.inner_text(".dialog.sb .sb-archivo"))  # la misma tarjeta
         pg.click(".dialog.sb [data-m='no']")
         pg.wait_for_function("document.querySelector('#toasts').innerText.includes('Subida cancelada')", timeout=5000)
         time.sleep(2)
