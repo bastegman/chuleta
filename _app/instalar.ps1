@@ -67,6 +67,7 @@ $AppId = "Bernardo.Chuleta"
 # se migra a $AppName (punto 6 de arriba)
 $LegacyNames = @(@("Chuleta", "Notas") | Where-Object { $_ -ne $AppName })
 $FolderName = "Tenca"  # carpeta propia en el perfil del usuario (no cambia con -AppName, como los .bat)
+$LegacyArranque = @("Chuleta")  # = common.ARRANQUE_ANTIGUOS: el arranque con Windows nacio con Chuleta; un Notas.lnk de la carpeta Inicio es de otro programa
 $LegacyFolders = @("Chuleta")  # la carpeta propia con el nombre anterior: si es de la app, se sigue usando
 $Launcher = "ABRIR TENCA.bat"  # el .bat de la raiz que abre la app con consola (llama a _app\Tenca.bat)
 $LegacyLaunchers = @("ABRIR CHULETA.bat", "ABRIR NOTAS.bat")  # los de los nombres anteriores: sobran
@@ -436,13 +437,13 @@ function Get-LnkInfo($lnkPath) {
     return $r
 }
 
-function Get-LnkAntiguos($dir, $appDir) {
+function Get-LnkAntiguos($dir, $appDir, $nombres = $LegacyNames) {
     # los accesos directos con un nombre anterior de la app en $dir que sobran: los que apuntan a $appDir, que
     # se migran, y los de la app que ya no apuntan a nada (una carpeta borrada). Cada uno: @{ path; name; tipo = "esta" o
     # "rota" }. Uno que apunta a otra copia de la app (otra carpeta con server.py) se queda y se dice; uno que no es de
     # la app (un documento que se llame igual) no se toca
     $out = @()
-    foreach ($n in $LegacyNames) {
+    foreach ($n in $nombres) {
         $p = Join-Path $dir "$n.lnk"
         if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
         $i = Get-LnkInfo $p
@@ -676,14 +677,14 @@ function Remove-LanzadoresAntiguos($rootDir) {
 function Copy-ArranqueAprobado($desde, $hacia, $clave = $null) {
     # el Administrador de tareas (Aplicaciones de inicio) guarda si el usuario desactivo un acceso directo de la carpeta
     # Inicio por su nombre de fichero (HKCU ...\Explorer\StartupApproved\StartupFolder, REG_BINARY; sin valor =
-    # activado). Al pasar de "$desde" a "$hacia" se copia su valor, para que lo desactivado siga desactivado, y se quita
-    # el del nombre viejo. Sin valor, nada. $clave: otra clave (los tests)
+    # activado). Al pasar de "$desde" a "$hacia" se copia su valor, para que lo desactivado siga desactivado. El del nombre
+    # viejo se deja (sin su fichero no hace nada; si no se pudiera quitar el .lnk viejo, sigue como estaba). Sin valor,
+    # nada. $clave: otra clave (los tests)
     if (-not $clave) { $clave = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder" }
     try {
         $v = (Get-ItemProperty -LiteralPath $clave -Name $desde -ErrorAction Stop).$desde
         if ($null -eq $v) { return }
         $null = New-ItemProperty -LiteralPath $clave -Name $hacia -Value ([byte[]]$v) -PropertyType Binary -Force -ErrorAction Stop
-        Remove-ItemProperty -LiteralPath $clave -Name $desde -ErrorAction SilentlyContinue
         Log-File "    StartupApproved: $desde -> $hacia ($(if ($v[0] -eq 3) { 'desactivado' } else { 'activado' }) en Aplicaciones de inicio)"
     } catch {}
 }
@@ -696,7 +697,7 @@ function Update-Arranque($progLnk, $appDir, $startup = $null) {
     if (-not $startup) { $startup = [Environment]::GetFolderPath("Startup") }
     if (-not $startup -or -not (Test-Path -LiteralPath $startup -PathType Container)) { return }
     $nuevo = Join-Path $startup "$AppName.lnk"
-    $antiguos = @(Get-LnkAntiguos $startup $appDir)
+    $antiguos = @(Get-LnkAntiguos $startup $appDir $LegacyArranque)
     $activo = (Test-Path -LiteralPath $nuevo) -or @($antiguos | Where-Object { $_.tipo -eq "esta" }).Count -gt 0
     if ($activo) {
         if (-not (Test-Path -LiteralPath $progLnk)) {

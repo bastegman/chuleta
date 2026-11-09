@@ -33,8 +33,8 @@ La app pasa a llamarse **Tenca** (Bernardo, msg 1249). Lo de abajo, con «Chulet
 - **No se mueve nada**: la carpeta de las reuniones conserva su nombre (`%USERPROFILE%\Chuleta`; renombrarla rompería
   OBS, los accesos del usuario y los anclajes) y los datos siguen en `%LOCALAPPDATA%\AudiosApp` (ajustes, claves,
   voces). Las reuniones y listas de vocabulario con `proyecto: Chuleta` siguen siendo de la raíz
-  (`APP_FORMER_NAMES`), y la carpeta y el idioma asignados a ese proyecto en Ajustes pasan a «Tenca» al arrancar (se
-  guardaban por el nombre de la app). Una reinstalación tras desinstalar Chuleta vuelve a su carpeta.
+  (`APP_FORMER_NAMES`), y la carpeta y el idioma asignados a ese proyecto en Ajustes pasan de «Chuleta» a «Tenca» la
+  primera vez que arranca (se guardaban por el nombre de la app; «Notas» no, que ya no se usaba). Una reinstalación tras desinstalar Chuleta vuelve a su carpeta.
 - **Anclajes de la barra de tareas**: Windows no deja que un programa los cambie. Siguen funcionando y agrupando la
   ventana (el AppUserModelID no cambia); el instalador detecta un «Chuleta» anclado de esta instalación y dice cómo
   volver a anclarla.

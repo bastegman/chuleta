@@ -405,7 +405,7 @@ class Store:
     # esta apagada, con su marca de migracion) tambien: no hay donde volver a ponerlas en la interfaz (revision de la
     # integracion del 08/11/2026)
     RESCUE = (("links",), ("vocab_links",), ("perfil", "outputs"), ("project_folders",), ("workstream_folders",),
-              ("carpeta_por_reunion",), ("carpetas_v",))
+              ("carpeta_por_reunion",), ("carpetas_v",), ("nombre_v",))
 
     @classmethod
     def _rescue(cls, raw):
@@ -431,6 +431,8 @@ class Store:
                     ok = v is False
                 elif keys == ("carpetas_v",):  # la migracion ya hecha no se repite
                     ok = isinstance(v, int) and not isinstance(v, bool) and v >= 1
+                elif keys == ("nombre_v",):  # la del nombre de la app (migrate_app_name), tampoco
+                    ok = isinstance(v, str) and bool(v)
                 else:  # links, vocab_links y outputs: listas de {"path": …}
                     ok = isinstance(v, list) and bool(v) and all(isinstance(x, dict) and isinstance(x.get("path"), str)
                                                                  for x in v)
@@ -2281,24 +2283,27 @@ def migrate_main_folders(d):
 
 
 def migrate_app_name(d):
-    """Lo que los ajustes guardan por el nombre del proyecto (la carpeta asignada, project_folders, y el idioma,
-    project_langs) lleva, para las listas de la raiz, el nombre que tenia la app («Chuleta»): pasa al de ahora, si aun
-    no tiene uno, para que la carpeta y el idioma asignados sigan valiendo tras el renombrado (09/11/2026). Se mira en
-    cada arranque (sin nada que cambiar, no cambia nada). Devuelve [(clave, nombre anterior)]."""
+    """Una vez por nombre (nombre_v): lo que los ajustes guardan por el nombre del proyecto (la carpeta asignada,
+    project_folders, y el idioma, project_langs) lleva, para las listas de la raiz, el nombre que tenia la app
+    inmediatamente antes (APP_FORMER_NAMES[0], «Chuleta»: el unico con el que la version anterior los buscaba). Pasa al
+    de ahora, si aun no tiene uno, para que la carpeta y el idioma asignados sigan valiendo tras el renombrado
+    (09/11/2026). Uno mas antiguo («Notas») no: la version anterior ya no lo usaba y puede ser un proyecto de verdad.
+    Solo una vez: si despues se quita la asignacion de la raiz, no vuelve. Devuelve [(clave, nombre anterior)]."""
     from common import APP_FORMER_NAMES
     out = []
+    if d.get("nombre_v") == APP_NAME:
+        return out
     for key in ("project_folders", "project_langs"):
         m = d.get(key)
         if not isinstance(m, dict) or any(fold(k) == fold(APP_NAME) for k in m):
             continue
-        for viejo in APP_FORMER_NAMES:  # del mas reciente al mas antiguo: el primero que haya
-            k = next((k for k in m if fold(k) == fold(viejo)), None)
-            if k is not None:
-                m = dict(m)
-                m[APP_NAME] = m.pop(k)
-                d[key] = m
-                out.append((key, k))
-                break
+        k = next((k for k in m if fold(k) == fold(APP_FORMER_NAMES[0])), None)
+        if k is not None:
+            m = dict(m)
+            m[APP_NAME] = m.pop(k)
+            d[key] = m
+            out.append((key, k))
+    d["nombre_v"] = APP_NAME
     return out
 
 
@@ -4272,9 +4277,8 @@ class App:
             self.settings.update(lambda d: cambios.extend(migrate_main_folders(d)))
             for k, old, new in cambios:
                 log(f"   carpeta principal de {k}: era la de una reunión ({old}); pasa a {new or 'la raíz'}")
-        renombrados = []  # los ajustes del proyecto de la raiz con el nombre anterior de la app (09/11/2026)
-        st0 = self.settings.get()
-        if any(isinstance(st0.get(k), dict) and st0[k] for k in ("project_folders", "project_langs")):
+        renombrados = []  # los ajustes del proyecto de la raiz con el nombre anterior de la app (09/11/2026): una vez
+        if self.settings.get().get("nombre_v") != APP_NAME:
             self.settings.update(lambda d: renombrados.extend(migrate_app_name(d)))
         for k, viejo in renombrados:
             log(f"   {k}: la carpeta de la app se llamaba «{viejo}»; pasa a «{APP_NAME}»")

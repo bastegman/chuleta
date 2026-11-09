@@ -30,7 +30,8 @@ VIEJO = re.compile(r"chuleta", re.I)
 # entorno de los procesos y de la CI
 INTERNOS = re.compile(r"X-Chuleta-Token|Bernardo\.Chuleta|\bCHULETA_[A-Z0-9_*]*")
 # PowerShell: las listas con los nombres anteriores, que el instalador y el desinstalador migran o quitan
-PS_LEGADO = re.compile(r"^\s*\$(LegacyNames|LegacyFolders|LegacyLaunchers|LegacyUninstallKeys|RootLaunchers)\s*=")
+PS_LEGADO = re.compile(r"^\s*\$(LegacyNames|LegacyArranque|LegacyFolders|LegacyLaunchers|LegacyUninstallKeys"
+                       r"|RootLaunchers)\s*=")
 # Python: las tuplas con los nombres anteriores (common.APP_FORMER_NAMES y el que tuvo «Arrancar con Windows»)
 LEGADO_PY = ("APP_FORMER_NAMES", "ARRANQUE_ANTIGUOS")
 # el aviso de la migración en el LEEME y el README (lo único que puede nombrar a Chuleta en un texto para el usuario)
@@ -206,6 +207,13 @@ class InstaladorTextoTests(unittest.TestCase):
         self.assertIn('[string]$AppName = "%s"' % common.APP_NAME, self.ps1)
         self.assertIn('$AppName = "%s"' % common.APP_NAME, self.des)
 
+    def test_arranque_solo_con_chuleta(self):
+        """La carpeta Inicio de Windows solo puede tener una copia de la app con el nombre Chuleta (el arranque nació
+        con ella): un Notas.lnk de allí es de otro programa (revisión de 977f8b0)."""
+        self.assertEqual(tuple(self.lista(self.ps1, "LegacyArranque")), common.ARRANQUE_ANTIGUOS)
+        self.assertEqual(common.ARRANQUE_ANTIGUOS, ("Chuleta",))
+        self.assertIn("Get-LnkAntiguos $startup $appDir $LegacyArranque", function_body(self.ps1, "Update-Arranque"))
+
     def test_carpeta_lanzador_y_claves(self):
         self.assertIn('$FolderName = "Tenca"', self.ps1)
         self.assertEqual(self.lista(self.ps1, "LegacyFolders"), ["Chuleta"])
@@ -224,18 +232,18 @@ class InstaladorTextoTests(unittest.TestCase):
         """El instalador solo quita accesos directos antiguos (Remove-LnkAntiguos), los .bat antiguos de la raíz
         (Remove-LanzadoresAntiguos) y la entrada antigua de Aplicaciones instaladas (Remove-RegistroAntiguo); nunca
         recorre ni mueve nada, y renombra solo en Set-AccesoDirecto."""
-        donde = {r"Remove-Item\b(?!Property)": ["Remove-LnkAntiguos", "Remove-LanzadoresAntiguos"],
-                 r"DeleteSubKeyTree": ["Remove-RegistroAntiguo"], r"Rename-Item": ["Set-AccesoDirecto"],
-                 r"Remove-ItemProperty": ["Copy-ArranqueAprobado"]}
+        donde = {r"Remove-Item\b": ["Remove-LnkAntiguos", "Remove-LanzadoresAntiguos"],
+                 r"DeleteSubKeyTree": ["Remove-RegistroAntiguo"], r"Rename-Item": ["Set-AccesoDirecto"]}
         for orden, funciones in donde.items():
             dentro = sum(len(re.findall(orden, function_body(self.ps1, f))) for f in funciones)
             self.assertEqual(len(re.findall(orden, self.ps1)), dentro, orden)
             self.assertGreater(dentro, 0, orden)
         for ln in self.ps1.split("\n"):
-            if re.search(r"Remove-Item\b(?!Property)", ln):
+            if re.search(r"Remove-Item\b", ln):
                 self.assertRegex(ln, r"Remove-Item -LiteralPath \$(x\.path|f) -Force -ErrorAction Stop")
         self.assertNotRegex(self.ps1, r"Remove-Item[^\n]*-Recurse")
         self.assertNotIn("Move-Item", self.ps1)
+        self.assertNotIn("Remove-ItemProperty", self.ps1)  # StartupApproved: se copia el valor, el viejo se deja
         reg = function_body(self.ps1, "Remove-RegistroAntiguo")
         self.assertIn("foreach ($k in $LegacyUninstallKeys)", reg)
         self.assertIn("if ($pub -ne $Publisher) {", reg)  # la de otro programa con ese nombre no se toca
@@ -402,20 +410,33 @@ class AjustesDelProyectoDeLaRaizTests(unittest.TestCase):
         self.assertEqual(server.migrate_app_name(d), [("project_folders", "Chuleta"), ("project_langs", "chuleta")])
         self.assertEqual(d["project_folders"], {"Tenca": "Reuniones raiz", "Alfa": "Alfa/R"})
         self.assertEqual(d["project_langs"], {"Tenca": "en"})
+        self.assertEqual(d["nombre_v"], "Tenca")
         self.assertEqual(server.migrate_app_name(d), [])  # otra vez: nada
+
+    def test_una_sola_vez(self):
+        """Revisión de 977f8b0 (P1): si después se quita la asignación de la raíz, no vuelve en el siguiente
+        arranque."""
+        d = {"project_folders": {"Chuleta": "raiz"}}
+        server.migrate_app_name(d)
+        d["project_folders"] = {"Chuleta": "otra vez"}  # p. ej. un proyecto de verdad que se llame así
+        self.assertEqual(server.migrate_app_name(d), [])
+        self.assertEqual(d["project_folders"], {"Chuleta": "otra vez"})
 
     def test_no_pisa_lo_que_ya_tiene_el_nombre_nuevo(self):
         d = {"project_folders": {"Chuleta": "vieja", "Tenca": "nueva"}}
         self.assertEqual(server.migrate_app_name(d), [])
         self.assertEqual(d["project_folders"], {"Chuleta": "vieja", "Tenca": "nueva"})
 
-    def test_el_mas_reciente_primero(self):
-        d = {"project_folders": {"Notas": "de Notas", "Chuleta": "de Chuleta"}}
-        server.migrate_app_name(d)
-        self.assertEqual(d["project_folders"], {"Notas": "de Notas", "Tenca": "de Chuleta"})
-        d = {"project_langs": {"Notas": "de"}, "otra": 1}
-        server.migrate_app_name(d)
-        self.assertEqual(d, {"project_langs": {"Tenca": "de"}, "otra": 1})
+    def test_notas_no(self):
+        """Revisión de 977f8b0 (P1): solo el nombre de la versión anterior (Chuleta, con el que se buscaban); «Notas» ya
+        no se usaba y puede ser un proyecto de verdad."""
+        d = {"project_folders": {"Notas": "Notas/Reuniones", "Chuleta": "de Chuleta"}, "project_langs": {"Notas": "de"}}
+        self.assertEqual(server.migrate_app_name(d), [("project_folders", "Chuleta")])
+        self.assertEqual(d["project_folders"], {"Notas": "Notas/Reuniones", "Tenca": "de Chuleta"})
+        self.assertEqual(d["project_langs"], {"Notas": "de"})
+
+    def test_se_rescata_la_marca(self):
+        self.assertIn(("nombre_v",), server.Store.RESCUE)
 
     def test_se_aplica_al_grabar(self):
         """La carpeta asignada al proyecto de la raíz vale otra vez para rec_folder_origin y el idioma para el plan."""
@@ -434,6 +455,7 @@ class AjustesDelProyectoDeLaRaizTests(unittest.TestCase):
         src = open(os.path.join(APP, "server.py"), encoding="utf-8").read()
         init = src[src.index("class App:"):src.index("self.library = Library(")]
         self.assertIn("renombrados.extend(migrate_app_name(d))", init)
+        self.assertIn('if self.settings.get().get("nombre_v") != APP_NAME:', init)
         self.assertLess(init.index("self._load_links()"), init.index("migrate_app_name"))
 
 
@@ -556,7 +578,8 @@ class MigracionWindowsTests(unittest.TestCase):
     def ps(self, body):
         return run_ps_functions(INSTALAR, self.FUNCS,
                                 SAY + "$AppName = 'Tenca'; $LegacyNames = @('Chuleta', 'Notas'); "
-                                "$AppId = 'Bernardo.Chuleta'; $Launcher = 'ABRIR TENCA.bat'; $script:antes = ''; "
+                                "$LegacyArranque = @('Chuleta'); $AppId = 'Bernardo.Chuleta'; "
+                                "$Launcher = 'ABRIR TENCA.bat'; $script:antes = ''; "
                                 + body)
 
     def lnk(self, path, target, args="", wd=""):
@@ -636,6 +659,17 @@ class MigracionWindowsTests(unittest.TestCase):
             self.assertEqual(a.read(), b.read())  # la misma copia que pone la app (inicio_windows_al_dia no la toca)
         self.assertIn("sigue activado", out)
 
+    def test_arranque_no_toca_un_notas_lnk(self):
+        """Revisión de 977f8b0 (P2): en la carpeta Inicio, un Notas.lnk que parezca de la app (roto) es de otro
+        programa: el arranque nació con Chuleta."""
+        progs, startup = os.path.join(self.base, "Programas"), os.path.join(self.base, "Inicio")
+        self.lnk_app(os.path.join(progs, "Tenca.lnk"), self.app)
+        self.lnk(os.path.join(startup, "Notas.lnk"), self.pyw, '"C:\\no-existe\\_app\\server.py"',
+                 "C:\\no-existe\\_app")
+        self.ps("$LegacyArranque = @('Chuleta'); Update-Arranque " + q(os.path.join(progs, "Tenca.lnk")) + " "
+                + q(self.app) + " " + q(startup))
+        self.assertEqual(os.listdir(startup), ["Notas.lnk"])
+
     def test_arranque_apagado_no_se_pone(self):
         progs, startup = os.path.join(self.base, "Programas"), os.path.join(self.base, "Inicio")
         self.lnk_app(os.path.join(progs, "Tenca.lnk"), self.app)
@@ -697,7 +731,8 @@ class MigracionWindowsTests(unittest.TestCase):
 
     def test_arranque_desactivado_en_el_administrador_de_tareas_sigue_desactivado(self):
         """Revisión de 53d0103 (P2): Aplicaciones de inicio guarda «desactivado» por nombre de fichero
-        (StartupApproved\\StartupFolder): el valor de Chuleta.lnk pasa a Tenca.lnk."""
+        (StartupApproved\\StartupFolder): el valor de Chuleta.lnk se copia a Tenca.lnk (el viejo se deja: sin su .lnk
+        no hace nada, y si el .lnk no se pudiera quitar, sigue desactivado; revisión de 977f8b0)."""
         import winreg
         clave = "Software\\TencaTest-%d\\StartupFolder" % os.getpid()
 
@@ -714,8 +749,7 @@ class MigracionWindowsTests(unittest.TestCase):
         out = self.ps("Copy-ArranqueAprobado 'Chuleta.lnk' 'Tenca.lnk' " + q("HKCU:\\" + clave))
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave) as k:
             self.assertEqual(winreg.QueryValueEx(k, "Tenca.lnk")[0], desactivado, out)
-            with self.assertRaises(FileNotFoundError):
-                winreg.QueryValueEx(k, "Chuleta.lnk")
+            self.assertEqual(winreg.QueryValueEx(k, "Chuleta.lnk")[0], desactivado)
         self.ps("Copy-ArranqueAprobado 'Nada.lnk' 'Otra.lnk' " + q("HKCU:\\" + clave))  # sin valor: nada
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave) as k:
             with self.assertRaises(FileNotFoundError):
