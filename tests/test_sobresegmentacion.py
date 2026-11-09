@@ -288,9 +288,20 @@ class PistaDeParticipantesTests(Reunion):
         self.assertIsNone(self.correr({"participantes": "Ana"}))
 
     def test_los_de_outlook_con_apellido_y_nombre(self):
-        """Sugeridos por Outlook (con su origen): «Apellido, Nombre» cuenta uno."""
+        """El texto que escribio la app desde Outlook: «Apellido, Nombre» cuenta uno."""
         texto = "Stegmaier, Bernardo; García López, Ana"
-        self.assertEqual(self.correr({"participantes": texto, "participantes_origen": "outlook"}), 2)
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", {texto}):
+            self.assertEqual(self.correr({"participantes": texto, "participantes_origen": "outlook"}), 2)
+
+    def test_con_origen_pero_editado_fuera(self):
+        """Con la nota «sugeridos por…» pero un texto que la app no escribio (el .md editado fuera): texto libre."""
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", {"García, Ana; Luis Pérez"}):
+            for texto, real in (("García, Ana; Luis Pérez, Pedro", 3), ("Ana; Luis y Pedro", 3),
+                                ("Ana, Luis y Pedro", 3)):
+                self.tearDown()
+                self.setUp()
+                self.assertGreaterEqual(self.correr({"participantes": texto, "participantes_origen": "outlook"}), real,
+                                        texto)
 
     def test_editados_a_mano_del_lado_prudente(self):
         """Un texto que la app no escribio (editado a mano, o tras reiniciar) es texto libre: de mas, nunca de menos."""
@@ -304,12 +315,18 @@ class PistaDeParticipantesTests(Reunion):
             self.assertEqual(self.correr({"participantes": texto}), 2)
 
     def test_rec_start_apunta_el_texto_sugerido(self):
-        from test_carpetas import make_app, rec
+        from test_carpetas import FakeRec as FakeRecSup, make_app, rec  # noqa: F401
         os.makedirs(os.path.join(self.root, "Alfa"))
         a, texto = make_app(self), "Stegmaier, Bernardo; García López, Ana"
+        a.vigia = types.SimpleNamespace(sugerencia=lambda fn: {"source": "teams", "participants": ["Teams, Uno"]})
         with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos:
             rec(a, self, participantes=texto, sugerido="outlook")
             rec(a, self, participantes="Ana, Luis", name="Otra")  # sin origen: escrito a mano
+            # sin nombre ni tema (otra app) y con participantes propios: el origen se hereda, el texto no es de la app
+            body = {"mic": "default", "sys": "all", "folder": "Alfa", "participantes": "Pérez, Luis, Pedro"}
+            a.rec = None
+            with mock.patch.object(server, "RecorderProcess", FakeRecSup), mock.patch.object(server, "log"):
+                a.rec_start(body)
         self.assertEqual(vistos, {texto})
 
     def test_al_reidentificar_si_los_sugirio_la_reunion(self):
