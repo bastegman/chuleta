@@ -6741,7 +6741,7 @@ class App:
         if keep != other and (a_.get("es_usuario") or b_.get("es_usuario")):
             raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
                            "«No soy yo»; si eres tú, «Soy yo».")
-        n, fallidas = 0, []
+        n, fallidas, hechas = 0, [], []
         if keep != other:
             self.library.refresh(max_age=5)
             for a in list(self.library.flat):  # sin mirar a["_spk"]: en pleno movimiento el sidecar ya esta en la nueva
@@ -6751,17 +6751,27 @@ class App:
                     except ApiError:
                         continue  # ya no esta
                     side = voices.sidecar_path(abs_path)
-                    data = voices.read_sidecar(side)
-                    if not data or not any(i.get("persona") == other for i in (data.get("hablantes") or {}).values()):
+                    if not os.path.isfile(side):
                         continue
-                    for i in data["hablantes"].values():
-                        if i.get("persona") == other:
-                            i["persona"] = keep
+                    try:  # que no se pueda LEER (OneDrive sin descargar, el antivirus) tambien es una que falta
+                        data = json.loads(voices.read_text(side))
+                    except OSError as e:
+                        fallidas.append(f"{display_rel(rel_of(abs_path))} ({e.__class__.__name__})")
+                        continue
+                    except ValueError:  # roto: no es de nadie (como read_sidecar)
+                        continue
+                    if not isinstance(data, dict) or not any(
+                            i.get("persona") == other for i in (data.get("hablantes") or {}).values()):
+                        continue
+                    cambiados = [h for h, i in data["hablantes"].items() if i.get("persona") == other]
+                    for h in cambiados:
+                        data["hablantes"][h]["persona"] = keep
                     try:  # una reunion con el fichero abierto no deja las demas a medias
                         voices.write_sidecar(side, data)
                     except OSError as e:
                         fallidas.append(f"{display_rel(rel_of(abs_path))} ({e.__class__.__name__})")
                         continue
+                    hechas.append((a["path"], cambiados))
                     self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: con el nombre que queda
                 n += 1
         self.library.at = 0
@@ -6772,13 +6782,29 @@ class App:
                            "ahí: ciérralas y vuelve a fusionar.")
         try:
             v.merge(keep, other)
-        except KeyError:
-            raise ApiError("Alguna de las dos personas ya no existe.")
-        except ValueError:
-            raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
-                           "«No soy yo»; si eres tú, «Soy yo».")
+        except (KeyError, ValueError) as e:  # cambio entretanto (otra pestaña): se deshace lo reescrito y se dice
+            self._merge_deshacer(hechas, keep, other)
+            raise ApiError(("Alguna de las dos personas ya no existe." if isinstance(e, KeyError) else
+                            "Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
+                            "«No soy yo»; si eres tú, «Soy yo».") + " No se ha cambiado ninguna reunión.")
         log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
         return {"id": keep, "reuniones": n, "personas": v.public()}
+
+    def _merge_deshacer(self, hechas, keep, other):
+        """Vuelve a poner `other` en los hablantes a los que voices_merge acababa de poner `keep` (hechas: [(rel,
+        [h…])]); los que ya eran de keep se quedan."""
+        for rel, hs in hechas:
+            with self._voices_lock():
+                try:
+                    side = voices.sidecar_path(safe(alias_of(rel), "file"))
+                    data = voices.read_sidecar(side)
+                    if data:
+                        for h in hs:
+                            if (data.get("hablantes") or {}).get(h, {}).get("persona") == keep:
+                                data["hablantes"][h]["persona"] = other
+                        voices.write_sidecar(side, data)
+                except (ApiError, OSError):
+                    log_exc()
 
     def voices_forget(self, b):
         v = self.jobs.voices

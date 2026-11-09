@@ -823,6 +823,43 @@ class FusionarPersonasTests(Reunion):
         self.assertEqual(voices.read_sidecar(s_side)["hablantes"]["h3"]["persona"], ana)
 
 
+class FusionarPersonasMasTests(Reunion):
+    """«Fusionar», mas casos (RF7): una reunion que no se puede LEER tambien falta; y si la fusion falla al final (otra
+    pestaña cambio a una de las dos), se deshace lo reescrito y se dice."""
+
+    def preparar(self):
+        self.identificar(micro_en=None)
+        luis, ana = self.v.create("Luis")["id"], self.v.create("Ana")["id"]
+        self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": luis})
+        self.app.voices_reassign({"path": "r.wav", "h": "h1", "persona": ana})  # ya era de Ana: no se toca
+        return luis, ana
+
+    def test_no_se_puede_leer(self):
+        luis, ana = self.preparar()
+        real = voices.read_text
+
+        def bloqueado(path, *a, **k):
+            if path.endswith("r.hablantes.json"):
+                raise PermissionError(13, "solo en línea")
+            return real(path, *a, **k)
+        with mock.patch.object(voices, "read_text", bloqueado), mock.patch.object(server, "log"):
+            with self.assertRaises(server.ApiError):
+                self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertIsNotNone(self.v.find(luis))
+        self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], luis)
+
+    def test_falla_al_final_y_se_deshace(self):
+        luis, ana = self.preparar()
+        with mock.patch.object(self.v, "merge", side_effect=ValueError("ahora es tu persona")), \
+                mock.patch.object(server, "log"):
+            with self.assertRaises(server.ApiError) as e:
+                self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertIn("No se ha cambiado ninguna reunión", e.exception.msg)
+        hs = self.leer()["hablantes"]
+        self.assertEqual((hs["h3"]["persona"], hs["h1"]["persona"]), (luis, ana))
+        self.assertIsNotNone(self.v.find(luis))
+
+
 class EvalScoreTests(unittest.TestCase):
     """La medida de scripts/eval_voces.py (DER por tramas, pureza, cobertura, en cuantos grupos se parte cada uno)."""
 
