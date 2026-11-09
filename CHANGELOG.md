@@ -22,10 +22,16 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
   de Chuleta. Así sus documentos «por proyecto» siguen en la subcarpeta «Chuleta» de siempre (con `4553b9c` empezaban
   a ir a una «Tenca» nueva) y la carpeta y el idioma que tenía asignados vuelven a ese nombre una vez al arrancar
   (`migrate_app_name`, marca `nombre_v`; los que `4553b9c` pasó a «Tenca» también). Las reuniones y ajustes guardados
-  con «Tenca», «Chuleta» o «Notas» se siguen reconociendo como de la raíz.
+  con «Tenca», «Chuleta» o «Notas» se siguen reconociendo como de la raíz, en el servidor (`root_names`,
+  `_is_app_name`) y en la página de la reunión (`/api/config` → `root_names`, `deProyecto` en `notas.js`: con
+  `4553b9c`, una reunión de la raíz con otra lista del mismo nombre en otro proyecto se quedaba en «no se encuentra el
+  archivo»). Los documentos «por proyecto» de las reuniones grabadas con `4553b9c` siguen en la subcarpeta «Tenca»
+  donde se escribieron (su cabecera dice «Tenca»; no se mueven ni se reescriben); las nuevas van a la de la carpeta.
+  La miga de pan sigue empezando por «Tenca»: es el inicio de la app, que reúne también las carpetas vinculadas.
 - **Arranque con Windows**: si la migración de «Chuleta.lnk» la hace la app (porque el instalador no pudo), copia
   también el «desactivado» de Aplicaciones de inicio (StartupApproved), como ya hacía el instalador; y reconoce su
-  acceso directo por la ruta de su `_app` seguida de la barra (`…\_app` ya no casa con `…\_app2`).
+  acceso directo leyendo sus cadenas de .lnk (`_lnk_cadenas`): la carpeta de trabajo exacta o una ruta de dentro de
+  `_app` en los argumentos o el icono (también con `%USERPROFILE%`); `…\_app` ya no casa con `…\_app2`.
 - **Instalador**: un `Notas.lnk`/`Chuleta.lnk` que abre un `.bat` con ese nombre que existe sin `server.py` al lado
   no se da por roto (puede ser de otro programa) y se queda. Sin instalación anterior, si `%USERPROFILE%\Tenca` (un zip
   descomprimido ahí) y `%USERPROFILE%\Chuleta` (desinstalada, con reuniones) fueron de la app, va a la que tiene

@@ -737,6 +737,7 @@ class TemaPorIdTests(TempTree):
         aid, bid = (f":{server.link_id(p)}/Vocabulario/General.txt" for p in (a_dir, b_dir))
         vocab = [{"id": i, "project": "Proyecto", "name": "General"} for i in (aid, bid)]
         js = js_defs(read("app.js"), ["nfc", "foldMap", "fold"]) + "\n" + js_function(read("notas.js"), "vocabOf")
+        js += "\n" + js_function(read("notas.js"), "deProyecto")  # vocabOf la usa (revisión de b7b9bea)
         js += js_defs(read("notas.js"), ["wsPatch"]) + f"\nconst S = {{vocab: {json.dumps(vocab)}}};\n"
 
         def node(code):

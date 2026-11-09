@@ -149,9 +149,17 @@ function vocabOf(a) {
   // server.py, solo si la lista se llama como dice la cabecera): con dos proyectos que se llaman igual, los nombres
   // no dicen cuál es
   const byId = p.vocabulario ? S.vocab.find(v => v.id === p.vocabulario) : null;
-  if (byId && fold(byId.name) === fold(p.workstream) && fold(byId.project) === fold(p.proyecto || '')) return byId;
+  if (byId && fold(byId.name) === fold(p.workstream) && deProyecto(byId, p.proyecto)) return byId;
   const same = S.vocab.filter(v => fold(v.name) === fold(p.workstream));
-  return same.find(v => fold(v.project) === fold(p.proyecto || '')) || (same.length === 1 ? same[0] : null);
+  return same.find(v => fold(v.project) === fold(p.proyecto || '')) || same.find(v => deProyecto(v, p.proyecto))
+    || (same.length === 1 ? same[0] : null);
+}
+/* la lista es del proyecto que dice la cabecera de la reunión: se llama así o es de la raíz y la cabecera lleva uno de
+   sus nombres (el de su carpeta, el de la app o uno anterior: config.root_names), como _of_project en server.py. Una
+   reunión de la raíz grabada con «Tenca» en una carpeta que se llama «Chuleta» sigue con su lista (revisión de b7b9bea) */
+function deProyecto(v, proyecto) {
+  const p = fold(proyecto || '');
+  return fold(v.project) === p || (v.folder === '' && !v.conectada && (S.config?.root_names || []).some(n => fold(n) === p));
 }
 function vocabOptions(sel, none = 'Ninguno · vocabulario general de Ajustes') {
   const groups = {};

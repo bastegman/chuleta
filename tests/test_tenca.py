@@ -11,6 +11,7 @@ import ast
 import os
 import re
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -301,6 +302,70 @@ def lnk_de(carpeta, extra=b""):
     en UTF-16LE), con algo delante para que la ruta no empiece en un byte par."""
     return (b"L\x00\x00\x00\x01" + extra + os.path.join(carpeta, "server.py").encode("utf-16-le") + b"\x00\x00"
             + carpeta.encode("utf-16-le"))
+
+
+def lnk_real(workdir="", args="", icon="", unicode=True, idlist=b"", linkinfo=b""):
+    """Los bytes de un .lnk con el formato de verdad (MS-SHLLINK): cabecera de 76 bytes con LinkFlags, lista de IDs y
+    LinkInfo si se pasan, y las cadenas (carpeta de trabajo, argumentos, icono) con su longitud delante."""
+    flags, body = (0x80 if unicode else 0), b""
+    if idlist:
+        flags |= 0x1
+        body += struct.pack("<H", len(idlist)) + idlist
+    if linkinfo:
+        flags |= 0x2
+        body += struct.pack("<I", len(linkinfo) + 4) + linkinfo
+    for bit, val in ((0x10, workdir), (0x20, args), (0x40, icon)):
+        if val:
+            flags |= bit
+            body += struct.pack("<H", len(val)) + val.encode("utf-16-le" if unicode else "latin-1")
+    return struct.pack("<I", 0x4C) + bytes(16) + struct.pack("<I", flags) + bytes(52) + body + bytes(4)
+
+
+class LnkFormatoTests(unittest.TestCase):
+    """Revisión de b7b9bea (P2): con la barra final, un acceso directo cuya única ruta de la _app es la carpeta de
+    trabajo (uno a Tenca.bat sin argumentos, con el icono guardado con %USERPROFILE%) dejaba de ser de esta copia. Ahora
+    se leen las cadenas del .lnk: la carpeta de trabajo exacta, o una ruta de dentro en los argumentos o el icono."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="tenca-lnk-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.app = os.path.join(self.dir, "Chuleta", "_app")
+
+    def lnk(self, data):
+        p = os.path.join(self.dir, "x.lnk")
+        with open(p, "wb") as f:
+            f.write(data)
+        return p
+
+    def test_cadenas(self):
+        d = lnk_real(self.app, '"' + os.path.join(self.app, "server.py") + '"', "ico", idlist=b"\x00" * 30,
+                     linkinfo=b"\x01" * 40)
+        args = '"' + os.path.join(self.app, "server.py") + '"'
+        self.assertEqual(server._lnk_cadenas(d), {"workdir": self.app, "args": args, "icon": "ico"})
+        self.assertEqual(server._lnk_cadenas(lnk_real(self.app, unicode=False)), {"workdir": self.app})
+        self.assertIsNone(server._lnk_cadenas(b"no es un lnk"))
+        self.assertIsNone(server._lnk_cadenas(lnk_real(self.app)[:-20]))  # cortado
+
+    def test_solo_la_carpeta_de_trabajo(self):
+        bat2 = os.path.join(self.app + "2", "Chuleta.bat")
+        self.assertTrue(server._lnk_apunta_a(self.lnk(lnk_real(self.app, icon="%SystemRoot%\\x.ico")), self.app))
+        self.assertTrue(server._lnk_apunta_a(self.lnk(lnk_real(self.app + os.sep)), self.app))
+        self.assertTrue(server._lnk_apunta_a(self.lnk(lnk_real(self.app.upper())), self.app))
+        self.assertFalse(server._lnk_apunta_a(self.lnk(lnk_real(self.app + "2")), self.app))  # «_app2»: otra
+        self.assertFalse(server._lnk_apunta_a(self.lnk(lnk_real(os.path.dirname(self.app))), self.app))
+        self.assertFalse(server._lnk_apunta_a(self.lnk(lnk_real(args=bat2)), self.app))
+
+    def test_icono_con_variable(self):
+        with mock.patch.dict(os.environ, {"TENCA_PRUEBA_PERFIL": os.path.dirname(os.path.dirname(self.app))}):
+            ico = os.path.join("%TENCA_PRUEBA_PERFIL%", "Chuleta", "_app", "static", "chuleta.ico")
+            self.assertTrue(server._lnk_apunta_a(self.lnk(lnk_real("", icon=ico)), self.app))
+            self.assertFalse(server._lnk_apunta_a(self.lnk(lnk_real("", icon=ico.replace("_app", "_app2"))),
+                                                  self.app))
+
+    def test_lo_de_antes_sigue(self):
+        """Los bytes sin formato de .lnk (lnk_de) siguen por la búsqueda en el fichero entero."""
+        self.assertTrue(server._lnk_apunta_a(self.lnk(lnk_de(self.app)), self.app))
+        self.assertFalse(server._lnk_apunta_a(self.lnk(lnk_de(self.app + "2")), self.app))
 
 
 class ArranqueConNombreAnteriorTests(unittest.TestCase):
@@ -730,6 +795,18 @@ class MigracionWindowsTests(unittest.TestCase):
         self.lnk_app(lnk, self.app)
         self.assertTrue(server._lnk_apunta_a(lnk, self.app))
         self.assertTrue(server._lnk_apunta_a(lnk, self.app.upper()))
+        self.assertFalse(server._lnk_apunta_a(lnk, self.otra))
+
+    def test_la_app_reconoce_un_lnk_a_su_bat_sin_argumentos(self):
+        """Revisión de b7b9bea (P2): un .lnk de verdad a _app\\Chuleta.bat, sin argumentos (sin pythonw), es de esta
+        copia por su carpeta de trabajo; el de otra copia, no."""
+        bat = os.path.join(self.app, "Chuleta.bat")
+        write(bat, "@echo off")
+        lnk = os.path.join(self.base, "Inicio2", "Chuleta.lnk")
+        self.lnk(lnk, bat, "", self.app)
+        with open(lnk, "rb") as f:
+            self.assertEqual(os.path.normcase(server._lnk_cadenas(f.read())["workdir"]), os.path.normcase(self.app))
+        self.assertTrue(server._lnk_apunta_a(lnk, self.app))
         self.assertFalse(server._lnk_apunta_a(lnk, self.otra))
 
     def test_arranque_con_windows(self):

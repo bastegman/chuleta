@@ -1622,11 +1622,17 @@ def _project_dir(v):
     return v.get("_dir") or os.path.dirname(os.path.dirname(v["_abs"]))
 
 
-def _is_app_name(project):
-    """El proyecto de las listas de la raiz: el nombre de su carpeta (root_name, con el que se llama), el de la app o
-    uno de los que tuvo («Chuleta», «Notas»: reuniones y ajustes guardados con ellos)."""
+def root_names():
+    """Los nombres del proyecto de las listas de la raiz: el de su carpeta (root_name, con el que se llama ahora), el
+    de la app y los que tuvo («Chuleta», «Notas»: reuniones y ajustes guardados con ellos). Tambien para la interfaz
+    (/api/config: notas.js, deProyecto)."""
     from common import APP_FORMER_NAMES
-    return fold(project or "") in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME, root_name())}
+    return list(dict.fromkeys((root_name(), APP_NAME) + tuple(APP_FORMER_NAMES)))
+
+
+def _is_app_name(project):
+    """El proyecto de las listas de la raiz con cualquiera de sus nombres (root_names)."""
+    return fold(project or "") in {fold(a) for a in root_names()}
 
 
 def _of_project(v, project):
@@ -5062,7 +5068,7 @@ class App:
         cloud["extra_keys_by"], cloud["extra_keys"] = by, by.get(cloud.get("provider") or "groq", [])
         cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
                           if cloud["has_key"] and getattr(self.jobs, "cloud", None) is not None else None)
-        return {"root": ROOT, "root_name": root_name(), "version": VERSION,
+        return {"root": ROOT, "root_name": root_name(), "root_names": root_names(), "version": VERSION,
                 "app_name": APP_NAME, "window": WINDOW is not None,
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL,
                            "tenca": TENCA_URL},
@@ -8199,18 +8205,58 @@ def _startup_lnks():
     return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(startup, f"{APP_NAME}.lnk")
 
 
+def _lnk_cadenas(data):
+    """Las cadenas de un acceso directo (.lnk, formato MS-SHLLINK): {"workdir", "args", "icon", ...} de su StringData
+    (detras de la cabecera de 76 bytes, la lista de IDs y LinkInfo, segun LinkFlags), o None si no es un .lnk que se
+    entienda."""
+    if len(data) < 76 or data[:4] != b"\x4c\x00\x00\x00":
+        return None
+    flags = struct.unpack_from("<I", data, 20)[0]
+    pos, out = 76, {}
+    try:
+        if flags & 0x1:  # HasLinkTargetIDList: tamano (2 bytes) y la lista
+            pos += 2 + struct.unpack_from("<H", data, pos)[0]
+        if flags & 0x2:  # HasLinkInfo: su tamano (4 bytes) lo incluye
+            pos += struct.unpack_from("<I", data, pos)[0]
+        uni = bool(flags & 0x80)  # IsUnicode
+        for bit, key in ((0x4, "name"), (0x8, "relpath"), (0x10, "workdir"), (0x20, "args"), (0x40, "icon")):
+            if flags & bit:
+                n = struct.unpack_from("<H", data, pos)[0] * (2 if uni else 1)
+                raw = data[pos + 2:pos + 2 + n]
+                if len(raw) < n:
+                    return None
+                out[key] = raw.decode("utf-16-le" if uni else "latin-1", "replace")
+                pos += 2 + n
+    except struct.error:
+        return None
+    return out
+
+
 def _lnk_apunta_a(path, carpeta):
-    """¿El acceso directo `path` es de esta copia de la app? Lo es si lleva una ruta de dentro de su carpeta _app
-    (`carpeta`): WScript.Shell guarda los argumentos («…\\_app\\server.py») y el icono («…\\_app\\static\\…») en
-    UTF-16LE. Se busca la carpeta seguida de la barra, en las dos alineaciones del fichero y sin distinguir mayusculas:
-    sin la barra, «…\\_app» casaba tambien con «…\\_app2», otra carpeta. Sin poder leerlo, no lo es."""
+    """¿El acceso directo `path` es de esta copia de la app (`carpeta`, su _app)? Lo es si su carpeta de trabajo es
+    esa, o si los argumentos («…\\_app\\server.py») o el icono («…\\_app\\static\\…», a veces con
+    %USERPROFILE%) llevan una ruta de dentro de ella, en sus cadenas de .lnk (_lnk_cadenas). Si no, se busca en el
+    fichero entero (UTF-16LE, en las dos alineaciones) la carpeta seguida de la barra: sin la barra, «…\\_app» casaba
+    tambien con «…\\_app2», otra carpeta. Sin mayusculas. Sin poder leerlo, no lo es."""
     try:
         with open(path, "rb") as f:
             data = f.read(1 << 16)
     except OSError:
         return False
-    aguja = os.path.normcase(os.path.join(os.path.normpath(carpeta), "")).casefold()
-    return any(aguja in os.path.normcase(data[i:].decode("utf-16-le", "ignore")).casefold() for i in (0, 1))
+
+    def norm(p):
+        p = re.sub(r"%([^%]+)%", lambda m: os.environ.get(m[1], m[0]), p or "")  # %USERPROFILE%… del icono
+        return os.path.normcase(os.path.normpath(p.strip().strip('"'))).casefold() if p.strip() else ""
+
+    base = norm(carpeta)
+    dentro = os.path.join(base, "")
+    cads = _lnk_cadenas(data)
+    if cads is not None:
+        if norm(cads.get("workdir")) == base:
+            return True
+        if any(dentro in norm(cads.get(k)) for k in ("args", "icon")):
+            return True
+    return any(dentro in os.path.normcase(data[i:].decode("utf-16-le", "ignore")).casefold() for i in (0, 1))
 
 
 def _startup_antiguos(destino):

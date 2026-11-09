@@ -1160,6 +1160,40 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
 
+    def test_reunion_de_la_raiz_con_un_nombre_anterior_sigue_con_su_lista(self):
+        """Revisión de b7b9bea (P1): el proyecto de las listas de la raíz se llama como su carpeta («Chuleta» aquí);
+        una reunión de la raíz guardada con otro de sus nombres («Tenca», con 4553b9c, o «Notas») sigue con su lista en
+        la página de la reunión aunque otro proyecto tenga una lista que se llame igual (antes: «no se encuentra el
+        archivo»). Con la función real de notas.js y las listas de /api/vocab sustituidas en la página."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        self.assertEqual(sorted(pg.evaluate("S.config.root_names")), ["Chuleta", "Notas", "Tenca"])
+        r = pg.evaluate("""() => {
+          const antes = S.vocab;
+          S.vocab = [{ id: 'Vocabulario/General.txt', project: 'Chuleta', folder: '', name: 'General' },
+                     { id: 'Alfa/Vocabulario/General.txt', project: 'Alfa', folder: 'Alfa', name: 'General' },
+                     { id: ':vx/Vocabulario/General.txt', project: 'Legal', folder: ':vx', name: 'General',
+                       conectada: ':vx' }];
+          const f = (proyecto, vocabulario) =>
+            (vocabOf({ props: { proyecto, workstream: 'General', vocabulario } }) || {}).id || null;
+          const out = [f('Tenca'), f('Chuleta'), f('notas'), f('Alfa'), f('Tenca', 'Vocabulario/General.txt'),
+                       f('Legal'), f('Otro')];
+          // con su id, la de la raíz aunque una carpeta conectada se llame «Tenca»
+          S.vocab.push({ id: ':vy/General.txt', project: 'Tenca', folder: ':vy', name: 'General', conectada: ':vy' });
+          out.push(f('Tenca', 'Vocabulario/General.txt'));
+          // sin lista en la raíz, un nombre de la raíz no vale para la de otro proyecto
+          S.vocab = S.vocab.filter(v => v.folder !== '' && v.folder !== ':vy');
+          out.push(f('Notas'));
+          S.vocab = antes;
+          return out;
+        }""")
+        raiz = "Vocabulario/General.txt"
+        self.assertEqual(r, [raiz, raiz, raiz, "Alfa/Vocabulario/General.txt", raiz, ":vx/Vocabulario/General.txt",
+                             None, raiz, None])
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+
     def test_rutas_con_el_nombre_de_la_carpeta_en_el_disco(self):
         """P2 del renombrado (09/11/2026): la carpeta de esta suite se llama «Chuleta», como la de una instalación de
         Tenca encima de Chuleta, que no la renombra. La tarjeta de grabar, su selector de carpeta y Ajustes › Proyectos
