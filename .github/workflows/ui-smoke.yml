@@ -7,6 +7,7 @@ name: ui-smoke
 # test_e2e_carpetas: grabar de verdad (grabadora real con la tarjeta de sonido falsa de tests/fake_soundcard), cambiar
 # la carpeta en pleno directo y comprobar que, al acabar el repaso final y el resumen (Groq falso), se mueve todo
 # (B1b y B1c, msgs 1158 y 1198). PyAV: lo usa el directo para remuestrear.
+# test_sin_groq: una instalación nueva no sugiere ni preselecciona Groq (msg 1386), y quien ya lo usa no nota nada.
 # test_subir_audio: «Subir audio» (msg 1296, 09/11/2026): los formatos del móvil y de WhatsApp leídos con PyAV (también
 # en Windows), cada uno subido y transcrito de punta a punta contra un Groq falso, y el botón, la tarjeta y soltar.
 # test_e2e_idioma: cambiar el idioma en pleno directo (lo del último minuto se rehace al momento, msgs 1150-1151) y la
@@ -47,9 +48,9 @@ jobs:
           NOTAS_ARTEFACTOS: ${{ github.workspace }}/artefactos
         run: |
           mkdir -p "$NOTAS_ARTEFACTOS"
-          python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas test_subir_audio test_e2e_idioma test_ui_aprender 2>&1 | tee salida.txt
+          python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas test_subir_audio test_e2e_idioma test_ui_aprender test_sin_groq 2>&1 | tee salida.txt
           test ${PIPESTATUS[0]} -eq 0
-          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces, test_e2e_carpetas, test_subir_audio, test_e2e_idioma o test_ui_aprender se ha saltado"; exit 1; fi
+          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces, test_e2e_carpetas, test_subir_audio, test_e2e_idioma, test_ui_aprender o test_sin_groq se ha saltado"; exit 1; fi
           grep -q "^Ran [1-9][0-9]* tests\?" salida.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()

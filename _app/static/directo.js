@@ -278,6 +278,7 @@ function directoKeyRowHtml(mask, prov) {
 
 /* texto de a quien pertenecen las claves (puro: se prueba con node). rows: {proveedor: [{mask, value}]} */
 function directoOwnerText(p, rows) {
+  if (!p) return 'Elige el proveedor en Procesado para añadir claves de otras cuentas.';
   const n = rs => (rs || []).filter(r => r.mask || String(r.value || '').trim()).length;
   let t = `Estas claves son solo de ${directoProvName(p)}: se usan con ${directoProvName(p)} y no se envían a ningún otro proveedor.`;
   Object.keys(rows || {}).filter(k => k !== p && n(rows[k])).forEach(k => {
@@ -303,7 +304,7 @@ function directoSettingsHtml(c) {
     <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="dkAdd">${I.plus}Añadir clave</button></div>
     <div class="notice">Cada clave es de una cuenta distinta: el audio y el texto se procesan bajo esa cuenta.</div>
     <div class="help" id="dkOwner"></div>
-    <div class="help">Se pasa a la siguiente cuando a la clave activa le quedan menos de 20 peticiones del día (Groq), cuando el servicio pide esperar más de un minuto o cuando una clave no es válida. También las usan el resumen y el repaso final.</div>
+    <div class="help">Se pasa a la siguiente cuando a la clave activa le quedan menos de 20 peticiones del día (si tu proveedor las limita por día), cuando el servicio pide esperar más de un minuto o cuando una clave no es válida. También las usan el resumen y el repaso final.</div>
     ${quota ? `<div class="help" id="dkQuota">${esc(quota)}</div>` : ''}`;
 }
 
@@ -324,7 +325,7 @@ function bindDirectoSettings(d) {
     $$('[data-xkey]', rows).forEach((i, n) => { i.value = rs[n] ? rs[n].value : ''; });
   };
   const sync = () => {
-    add.disabled = $$('[data-xkey]', rows).length >= 10;
+    add.disabled = !cur || $$('[data-xkey]', rows).length >= 10;  // sin proveedor elegido, no hay de quién
     if (model) model.classList.toggle('hidden', cur !== 'groq');  // la lista de modelos es la de Whisper en Groq
     if (modelC) modelC.classList.toggle('hidden', cur !== 'custom');  // una pasarela propia: el suyo (o el de arriba)
     if (owner) { stash(); owner.textContent = directoOwnerText(cur, state); }

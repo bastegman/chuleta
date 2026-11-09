@@ -16,10 +16,10 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
   aquí» en cada carpeta, o arrastrarlo a la ventana. Se guarda como una reunión más, con su proyecto, su fecha y su
   carpeta, y se pone a transcribir. Lee m4a (también el «sin pérdida» del iPhone), opus y ogg de WhatsApp, mp3, wav,
   aac, webm, flac, amr y el sonido de un vídeo mp4 o mov; si un archivo no se puede leer, lo dice y no guarda nada.
-- **Transcribir** mientras se habla o al terminar: en tu PC (faster-whisper) o en la nube (Groq, OpenAI, Azure OpenAI
-  o cualquier API compatible con OpenAI). En la nube el directo va casi en streaming: trozos de 3–6 s cortados en las
-  pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de respaldo de otras cuentas
-  del mismo proveedor, si las añades); con «Modo seguir» y, si quieres, traducción al español o al inglés en una
+- **Transcribir** mientras se habla o al terminar: en tu PC (faster-whisper; es lo que viene por defecto) o en la
+  nube, con el proveedor que elijas (Azure OpenAI, Groq, OpenAI o cualquier API compatible con OpenAI). En la nube el
+  directo va casi en streaming: trozos de 3–6 s cortados en las pausas, solo con la voz, al ritmo que permite el cupo
+  del proveedor (y con claves de respaldo de otras cuentas del mismo proveedor, si las añades); con «Modo seguir» y, si quieres, traducción al español o al inglés en una
   columna («Traducir al ▾», recordado por reunión; no se guarda). El idioma de la reunión se cambia en pleno directo y
   vale al momento: el trozo en curso se repite y lo escrito en el último minuto se rehace en el idioma nuevo.
 - **Corregir** la transcripción en la propia página y **tomar notas** por reunión (bloques, propiedades, etiquetas,
@@ -88,13 +88,13 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
    (`HKCU\…\Uninstall\Tenca`, sin administrador). Al terminar dice dónde ha quedado; la carpeta descomprimida ya se
    puede borrar.
 3. Se abre Tenca. Lo primero, «Configurar Tenca», en la portada (más tarde está en ⚙ Ajustes → Procesado): eliges
-   una de las tres opciones y al final lo pruebas todo:
+   una de las tres opciones (por defecto, «Solo en este PC») y al final lo pruebas todo:
    **Solo en este PC** (Whisper transcribe en tu ordenador, nada sale de él, sin resumen con IA), **Con tu cuenta de
    Claude** (transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de Claude
    Code: la app te guía paso a paso, «Abrir PowerShell», instalar, escribir `claude` y entrar con tu cuenta en el
    navegador, con el inicio de sesión de tu empresa si es la suya, y «Probar»; no ve ni guarda tus credenciales, y
    también encuentra la copia de Claude Code de VS Code con su sesión) o
-   **API externa** (Groq, OpenAI, Azure OpenAI o cualquier API compatible con OpenAI: transcripción rápida en la nube
+   **API externa** (Azure OpenAI, Groq, OpenAI o cualquier API compatible con OpenAI: transcripción rápida en la nube
    y resumen, con tu API key; con la primera key, la nube pasa a ser lo predeterminado para la cola y para el
    directo). Las dos últimas avisan de que el contenido de la reunión sale del PC: el texto, a Anthropic con la
    cuenta de Claude; el audio y el texto, al proveedor de la API. En algunas reuniones eso puede ser un bloqueante:

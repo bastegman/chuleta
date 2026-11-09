@@ -1493,10 +1493,12 @@ class CloudEngine:
         if provider == "custom":
             base = base_url(cfg)
             if not base.startswith(("http://", "https://")):
-                raise EngineError("Falta la URL base de la API (Ajustes ⚙), p. ej. https://api.groq.com/openai/v1")
+                raise EngineError("Falta la URL base de la API (Ajustes ⚙), p. ej. https://api.tu-empresa.com/v1")
             return base + "/audio/transcriptions", {"Authorization": f"Bearer {key}"}, \
                 (model or cfg.get("model") or "").strip() or "whisper-large-v3"
-        p = PROVIDERS.get(provider) or PROVIDERS["groq"]
+        p = PROVIDERS.get(provider)
+        if p is None:  # vacío o desconocido: no se manda a Groq (ni a nadie) un audio sin un proveedor elegido
+            raise EngineError("Elige el proveedor de la API externa en Ajustes ⚙ → Procesado.")
         model = model or cfg.get("model") or p["models"][0]
         return p["url"], {"Authorization": f"Bearer {key}"}, model
 
@@ -1854,8 +1856,8 @@ def chat_missing(cfg, what="El resumen con IA"):
     if chat_url(cfg) and cloud_keys(cfg):
         return None
     if cfg.get("provider") == "azure":
-        return (f"{what} aún no funciona con Azure OpenAI (con Azure solo se transcribe). Para usarlo, elige Groq, "
-                "OpenAI u otra API compatible con OpenAI en Ajustes ⚙ → Procesado.")
+        return (f"{what} aún no funciona con Azure OpenAI (con Azure solo se transcribe). Para usarlo, elige otro "
+                "proveedor (cualquiera compatible con OpenAI) en Ajustes ⚙ → Procesado.")
     if cfg.get("provider") == "custom" and not chat_url(cfg):
         return f"{what} necesita la URL base de la API (Ajustes ⚙ → Procesado)."
     return f"{what} necesita una API key de la nube (Ajustes ⚙ → Procesado)."

@@ -38,6 +38,26 @@ sin memoria y la app enseñó la traza de ONNX dos veces, una como «No se pudo 
   comprometida de «Quién habla» con este commit y con `fe29522`; falla si no baja o pasa de 1.200 MB
   (`scripts/e2e/voces_memoria.py`).
 
+### Sin Groq por defecto en una instalación nueva (09/11/2026)
+
+Bernardo, msg 1386: «Lo que no quiero es sugerir Groq a un nuevo instalador». Hecho por Steve en la rama
+`sin-groq-por-defecto`.
+
+- Por defecto, «Solo en este PC» (ya lo era: `procesado_de` sin clave es local), y ahora nada lo empuja hacia la nube:
+  la portada ya no dice «Conecta Groq» ni «Conecta la nube para ir mucho más rápido»; el asistente y Ajustes ›
+  Procesado describen «API externa» sin nombrar a ningún proveedor.
+- Al elegir «API externa» en una instalación nueva no hay proveedor preseleccionado: «Elige el proveedor…», con la
+  lista por orden alfabético y la API de tu empresa al final; sin elegir, no se sigue ni se prueba. El servidor dice
+  si ya hay uno elegido (`cloud.elegido`: «API externa» elegida, o una clave, una URL propia o una de Azure guardadas)
+  y no guarda un proveedor vacío. Las ayudas del cupo gratuito de Groq salen solo si usas Groq.
+- Groq sigue en «API externa», con el aviso de que el audio sale del PC. Quien ya lo usa no nota nada: su
+  configuración no cambia (sin migración ni avisos nuevos); `cloud.provider` sigue siendo "groq" por defecto en los
+  ajustes, para no cambiar a nadie que lo use sin haberlo guardado nunca.
+- README y LEEME: «Solo en este PC» como lo que viene por defecto y los proveedores en orden alfabético; los límites
+  del plan gratuito de Groq, solo «si usas Groq». Tests: `tests/test_sin_groq.py` (servidor y una instalación nueva en
+  Chromium, en ui-smoke; y, desde la integración, un settings.json con Groq como lo dejaba la versión anterior, igual
+  al arrancar y después de «Guardar» en Ajustes sin tocar nada, con su clave y la adicional).
+
 ### Idioma y traducción en pleno directo; oculta al compartir pantalla (09/11/2026)
 
 Ítems 12, 13a y 18 del backlog (msgs 1150-1152 y 1242). Rama `idioma-directo`.

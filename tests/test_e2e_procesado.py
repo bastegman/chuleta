@@ -302,6 +302,9 @@ class TresModosE2E(unittest.TestCase):
         aplicarlo) y «Aplicar ahora» lo aplica sin bajar hasta «Guardar»."""
         antes = self.api("/api/config")["procesado"]
         self.pg.check(f"#modal input[name='proc'][value='{modo}']")
+        if modo == "api" and not self.pg.input_value("#cProv"):
+            # en una instalación nueva no hay proveedor elegido, y sin él «Aplicar ahora» no aplica (msg 1386)
+            self.pg.select_option("#cProv", "groq")
         if antes != modo:
             self.pg.wait_for_selector("#procAplicar", timeout=10000)
             self.assertIn("aún no está aplicado", self.pg.inner_text("#procGuardado"))
