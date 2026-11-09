@@ -1,0 +1,53 @@
+name: voces-memoria
+
+# «Quién habla» con una reunión larga en Windows (fix-subir-memoria, 09/11/2026, msg 1378): con un audio de 55 min, la
+# versión de antes (fe29522) llegaba a ~2,3 GB y en el portátil de Bernardo acabó en «bad allocation». Sintetiza una
+# reunión con las voces del sistema (SAPI), baja los modelos de voces con su sha256 y mide el pico de memoria
+# comprometida (PeakPagefileUsage) del subproceso de voces con este commit y con fe29522. Falla si la de ahora no gasta
+# menos que la de antes o pasa del tope. Resultado en el artefacto voces-memoria.
+on:
+  workflow_dispatch:
+    inputs:
+      minutos:
+        description: "Minutos de la reunión sintética"
+        default: "55"
+      tope:
+        description: "MB de memoria comprometida que no puede pasar la versión de ahora"
+        default: "1200"
+  push:
+    branches: [main, fix-subir-memoria]
+    paths: ["_app/voices.py", "_app/engines.py", "scripts/e2e/voces_memoria.py", ".github/workflows/voces-memoria.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      ANTES: fe29522d698e26c6e3d2f8547da5e37639a16ab3
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: "3.13"
+      - name: Lo que instala INSTALAR.bat para «Quién habla» (sherpa-onnx, PyAV) y requests
+        run: python -m pip install --disable-pip-version-check "sherpa-onnx==2.0.1" numpy av requests
+      - name: La app de antes del arreglo (fe29522)
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "$ANTES"
+          mkdir antes
+          git archive FETCH_HEAD _app | tar -x -C antes
+      - name: Medir (falla si no baja o pasa del tope)
+        shell: bash
+        run: |
+          python scripts/e2e/voces_memoria.py --salida artefactos --minutos "${{ inputs.minutos || '55' }}" \
+            --antes antes/_app --tope "${{ inputs.tope || '1200' }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: voces-memoria
+          path: artefactos
+          if-no-files-found: warn

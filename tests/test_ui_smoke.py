@@ -1771,13 +1771,17 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg, errores, red = self.pagina()
         pg.route("**/api/jobs", jobs)
         pg.route("**/api/config", config)
+        # antes de cerrar la página: un route.fetch que siga en vuelo al cerrarla daba TargetClosedError en el
+        # new_page del test siguiente (ui-smoke de Windows, run 42686380142)
+        self.addCleanup(pg.unroute_all, behavior="ignoreErrors")
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.evaluate("p => location.hash = '#/a/' + encodeURIComponent(p)", rel)
         pg.wait_for_function("document.querySelector('#aJob') && document.querySelector('#aJob').innerText"
                              ".includes('Identificando voces')", timeout=15000)
-        # mientras, en la lista no dice «Transcribiendo 40 %»: ya está transcrita
+        # mientras, en la lista no dice «Transcribiendo 40 %» ni sale de «Transcritas»: ya está transcrita
         self.assertIn("Voces 40 %", pg.evaluate("p => statusPill(S.audios.get(p))", rel))
+        self.assertEqual(pg.evaluate("p => statusOf(S.audios.get(p))", rel), "done")
         # termina en error: lo que manda el servidor (Job.public) es el error técnico y su aviso en una frase
         estado["voz"] = dict(voz, status="error", stage="Error", error=onnx, progress=0.4,
                              aviso=explicar.explicar(onnx))

@@ -214,7 +214,7 @@ const lastTxJobFor = path => { for (let i = S.jobs.length - 1; i >= 0; i--) { co
 function statusOf(a) {
   const j = jobFor(a.path);
   if (j && j.live) return 'rec';
-  if (j) return j.status;
+  if (j && j.kind !== 'voces') return j.status;  // identificando voces sigue «Transcrita» (y en su filtro)
   if (a.recording) return 'rec';
   if (a.txt || a.srt) return a.partial ? 'partial' : 'done';
   const l = lastTxJobFor(a.path);

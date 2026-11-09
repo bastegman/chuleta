@@ -3820,6 +3820,7 @@ class Jobs:
                 p.wait(timeout=5)
             except Exception:
                 pass
+            borrar_pcm_voces(p.pid)
 
     def speaker_vector(self, rel, h):
         """Huella de un hablante de una reunion: de la memoria del servidor o recalculada en un subproceso."""
@@ -8455,6 +8456,21 @@ def reserve_port(wait=None):
               f"consola o, en el Administrador de tareas, pythonw.exe) y vuelve a abrir {APP_NAME}.")
     fatal(f"No se puede usar el puerto {PORT}: lo tiene otro programa ({err}).\n\nCierra ese programa (o arranca "
           f"{APP_NAME} con --port 8766) y vuelve a abrir {APP_NAME}.")
+
+
+def borrar_pcm_voces(pid):
+    """El audio decodificado de un subproceso de voces (voices.main lo borra al acabar, pero uno cancelado o que muere
+    no llega a su finally: ~115 MB por hora de audio hasta el siguiente arranque; revisión de fix-subir-memoria)."""
+    d = os.path.join(DATA_DIR, "tmp")
+    try:
+        nombres = [e.name for e in os.scandir(d) if e.name.startswith(f"voces-{pid}-") and e.name.endswith(".pcm")]
+    except OSError:
+        return
+    for n in nombres:
+        try:
+            os.remove(os.path.join(d, n))
+        except OSError:
+            pass
 
 
 def write_token(data_dir, token):

@@ -161,7 +161,7 @@ class FFmpegError(Exception):
     pass
 
 
-def fake_av(paquetes, frame=1600):
+def fake_av(paquetes, frame=1600, duracion=None):
     """PyAV falso: cada paquete es True (se lee: `frame` muestras de valor 1) o un float (no se lee y dice durar
     eso)."""
     class Stream:
@@ -175,6 +175,7 @@ def fake_av(paquetes, frame=1600):
 
     class Container:
         streams = [Stream()]
+        duration = int(duracion * 1_000_000) if duracion else None
 
         def __enter__(self):
             return self
@@ -211,12 +212,28 @@ class DecodeTopesTests(unittest.TestCase):
             y = engines.decode_16k("x.amr")
         self.assertEqual(len(y), 301 * 1600 + 200 * 1600)
 
+    def test_con_duracion_declarada_el_relleno_llega_hasta_ella(self):
+        """Revisión de fix-subir-memoria: un AMR largo cuya mayor parte son tramas DTX que no se leen no puede perder
+        su silencio a mitad (todo lo de después se adelantaría y el .srt y las voces dejarían de casar). Si la
+        cabecera dice cuánto dura, el relleno llega hasta ahí, más que SILENCIO_LIBRE_S y que lo leído."""
+        paquetes = [True] * 10 + [0.1] * 400 + [True] * 10  # 1 s leído, 40 s sin leer, 1 s leído: 42 s
+        with mock.patch.dict(sys.modules, {"av": fake_av(paquetes, duracion=42.0)}), \
+                mock.patch.object(engines, "SILENCIO_LIBRE_S", 1.0):
+            y = engines.decode_16k("x.amr")
+        self.assertEqual(len(y), 42 * SR)  # sin cabecera, se quedaba en 1 s + 1 s + 1 s de silencio
+        self.assertEqual((y[0], y[SR + 5], y[-1]), (1, 0, 1))
+        # y no pasa de lo que dice durar (+2 % y 10 s): paquetes que dicen durar 2 s de un archivo de 5 s
+        with mock.patch.dict(sys.modules, {"av": fake_av([True] + [2.0] * 100 + [True], duracion=5.0)}):
+            y = engines.decode_16k("x.m4a")
+        self.assertLessEqual(len(y), int((5.0 * 1.02 + 10) * SR) + 1600)
+        self.assertEqual(y[-1], 1)  # lo legible del final sigue
+
     def test_mas_largo_que_el_tope_es_un_error_claro(self):
         with mock.patch.dict(sys.modules, {"av": fake_av([True] * 20)}), \
                 mock.patch.object(engines, "AUDIO_MAX_S", 1.0):
             with self.assertRaises(engines.EngineError) as cm:
                 engines.decode_16k("x.mp3")
-        self.assertIn("córtalo en partes", str(cm.exception))
+        self.assertIn("divídelo en partes", str(cm.exception))
         with mock.patch.dict(sys.modules, {"av": fake_av([True] * 20)}), \
                 mock.patch.object(engines, "AUDIO_MAX_S", 1.0):
             with self.assertRaises(engines.EngineError):  # también si continúa desde un segundo (start)
@@ -395,12 +412,44 @@ class AvisoTests(unittest.TestCase):
         self.assertNotIn("Where", r["frase"])
         self.assertEqual(r["accion"]["tipo"], "diagnostico")
 
+    def test_no_le_roba_la_frase_a_otras(self):
+        """Revisión: las reglas nuevas iban delante de la de instalación y de la de descarga de modelos."""
+        for err in ("sherpa-onnx no esta disponible: ImportError: DLL load failed while importing _sherpa_onnx: "
+                    "onnxruntime.dll no se encuentra", "No module named 'onnxruntime'",
+                    ImportError("DLL load failed while importing onnxruntime_pybind11_state")):
+            self.assertIn("INSTALAR.bat", explicar.explicar(err)["frase"], err)
+        r = explicar.explicar("RuntimeError: Applying the VAD filter requires the onnxruntime package")
+        self.assertNotIn("análisis", r["frase"])  # dice lo que pasa, no «ha fallado el análisis»
+        r = explicar.explicar("No se pudo descargar el modelo medium de huggingface.co: out of memory")
+        self.assertEqual(r["accion"]["tipo"], "reintentar_descarga")
+        for nube in ("HTTP 500: CUDA out of memory", "HTTP 503: out of memory"):  # memoria del servidor, no del PC
+            self.assertNotIn("Al PC", explicar.explicar(nube)["frase"], nube)
+
     def test_el_trabajo_de_voces_lleva_la_frase(self):
         j = server.Job("Reuniones/a.m4a", "a.m4a", "voces", None)
         j.status, j.error = "error", ONNX
         d = j.public()
         self.assertEqual(d["error"], ONNX)
         self.assertIn("memoria", d["aviso"]["frase"])
+
+
+class PcmDeUnSubprocesoMuertoTests(TempTree):
+    def test_el_servidor_borra_el_de_ese_subproceso(self):
+        """Un subproceso de voces cancelado (kill) no llega a su finally: el servidor borra su .pcm al acabar."""
+        d = os.path.join(self.data_dir, "tmp")
+        os.makedirs(d)
+        nombres = ("voces-123-aa.pcm", "voces-1234-bb.pcm", "voces-123-cc.txt", "job1")
+        for n in nombres:
+            with open(os.path.join(d, n), "wb") as f:
+                f.write(b"x")
+        server.borrar_pcm_voces(123)
+        self.assertEqual(sorted(os.listdir(d)), sorted(["job1", "voces-1234-bb.pcm", "voces-123-cc.txt"]))
+        server.borrar_pcm_voces(999)  # sin nada suyo, nada
+
+    def test_lo_llama_al_acabar_el_subproceso(self):
+        src = leer("server.py")
+        cuerpo = src[src.index("def _voices_subprocess"):src.index("def speaker_vector")]
+        self.assertIn("borrar_pcm_voces(p.pid)", cuerpo.split("finally:")[-1])
 
 
 class SubirDemasiadoLargoTests(TempTree):

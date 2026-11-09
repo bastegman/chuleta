@@ -20,16 +20,21 @@ sin memoria y la app enseñó la traza de ONNX dos veces, una como «No se pudo 
   30 s y promedia (la huella sale igual: coseno 0,999-1,0), suelta la memoria del modelo de cada bloque al acabarlo y
   lee el audio desde un archivo temporal en vez de tenerlo en memoria. Con la misma reunión, 0,69-0,75 GB.
 - **Arreglado**: un fallo de las voces salía también como «No se pudo transcribir» (con «Reintentar») aunque la
-  transcripción estuviera hecha, y la lista decía «Transcribiendo» mientras se identificaban las voces. Ahora cada
-  aviso va en su sitio y la lista dice «Voces n %».
+  transcripción estuviera hecha, y mientras se identificaban las voces la lista decía «Transcribiendo» y la reunión
+  salía del filtro «Transcritas». Ahora cada aviso va en su sitio y la lista dice «Voces n %».
 - **Arreglado**: un error de memoria se explica en una frase («Al PC le ha faltado memoria…»), sin la traza; otro fallo
   dentro de un modelo, también.
 - En el PC, sin batched (Whisper «Normal»), el espectrograma de todo el audio se calculaba de una vez (+1,5 GB con
   30 min): ahora va por bloques de 60 s, con el mismo resultado. El audio pasa a float32 con una copia en vez de dos.
-- Topes: el silencio que sustituye a los trozos ilegibles tiene tope total (30 min; después, nunca más que el audio
-  leído) y un audio de más de 8 horas se rechaza al subirlo, antes de guardarlo, y no se decodifica en la cola.
+- Topes: el silencio que sustituye a los trozos ilegibles no pasa de lo que el archivo dice durar (si no lo dice,
+  30 min y, después, nunca más que el audio leído); un audio de más de 8 horas se rechaza al subirlo, antes de
+  guardarlo, y no se decodifica en la cola (pide dividirlo, por ejemplo con Audacity).
+- El audio temporal de las voces se borra al acabar, también si se cancela.
 - «Quién habla» usa la mitad de los hilos del PC, entre 2 y 4 (antes, siempre 2): con 4, un 21 % menos de tiempo
   (medido en un Mac de 8 núcleos).
+- Desarrollo y CI: `voces-memoria.yml` (Windows) sintetiza una reunión de 55 min y mide el pico de memoria
+  comprometida de «Quién habla» con este commit y con `fe29522`; falla si no baja o pasa de 1.200 MB
+  (`scripts/e2e/voces_memoria.py`).
 
 ### Idioma y traducción en pleno directo; oculta al compartir pantalla (09/11/2026)
 

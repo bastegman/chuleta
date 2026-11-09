@@ -117,19 +117,6 @@ def explicar(err, proveedor=None):
         out["accion"] = _accion("diagnostico")
         return out
 
-    # --- sin memoria (09/11/2026): «bad allocation» de onnxruntime (std::bad_alloc en Windows), MemoryError de numpy…
-    # Bernardo recibió la traza de ONNX en crudo en dos avisos al identificar las voces de un audio subido (msg 1378)
-    if "MemoryError" in names or any(k in low for k in SIN_MEMORIA):
-        out["frase"] = ("Al PC le ha faltado memoria para terminar. Cierra lo que no estés usando (otras "
-                        "aplicaciones, pestañas del navegador) y vuelve a probar.")
-        out["accion"] = _accion("reintentar")
-        return out
-    if "non-zero status code returned while running" in low or "onnxruntime" in low:  # otro fallo dentro del modelo
-        out["frase"] = ("Ha fallado el análisis del audio en este PC. Vuelve a probar y, si se repite, copia el "
-                        "diagnóstico en Ajustes → Ayuda.")
-        out["accion"] = _accion("diagnostico")
-        return out
-
     # --- instalación de la app (lo que instala INSTALAR.bat)
     if names & {"ImportError", "ModuleNotFoundError"} or any(k in low for k in INSTALACION):
         out["frase"] = ("Falta una pieza de la instalación: vuelve a ejecutar INSTALAR.bat (tus grabaciones no se "
@@ -148,6 +135,20 @@ def explicar(err, proveedor=None):
     # --- frases que ya vienen hechas (engines.connection_error, engines.cloud_http_error, WhisperModels): el botón
     if "huggingface" in low or ("modelo" in low and ("descarg" in low or "espacio" in low)):
         out["accion"] = _accion("reintentar_descarga")
+        return out
+    # --- sin memoria (09/11/2026): «bad allocation» de onnxruntime (std::bad_alloc en Windows), MemoryError de numpy…
+    # Bernardo recibió la traza de ONNX en crudo en dos avisos al identificar las voces de un audio subido (msg 1378).
+    # Después de la instalación y de la descarga de modelos (no les quita su frase ni su botón) y nunca la de un
+    # servidor («HTTP 500 … CUDA out of memory» es de la nube, no del PC)
+    if ("MemoryError" in names or any(k in low for k in SIN_MEMORIA)) and not re.search(r"\bhttp \d{3}\b|cuda", low):
+        out["frase"] = ("Al PC le ha faltado memoria para terminar. Cierra lo que no estés usando (otras "
+                        "aplicaciones, pestañas del navegador) y vuelve a probar.")
+        out["accion"] = _accion("reintentar")
+        return out
+    if "non-zero status code returned while running" in low:  # otro fallo dentro de un modelo (onnxruntime)
+        out["frase"] = ("Ha fallado el análisis del audio en este PC. Vuelve a probar y, si se repite, copia el "
+                        "diagnóstico en Ajustes → Ayuda.")
+        out["accion"] = _accion("diagnostico")
         return out
     m = re.search(r"desde ((?:console|platform)\.[a-z.]+/[\w/-]*keys)", tecnico)
     if m:  # 401: la clave no vale -> la página de claves del proveedor
