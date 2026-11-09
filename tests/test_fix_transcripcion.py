@@ -813,7 +813,9 @@ class InterfazModelosTests(unittest.TestCase):
             self.assertRegex(app, rf"typeof {fn} === 'function'", fn)
         # «Dónde se procesan»: elegir no aplica (un clic de prueba no pasa un directo de la nube al PC); el cambio
         # pendiente se dice, con «Aplicar ahora», y al cerrar Ajustes sin aplicarlo se avisa
-        self.assertIn("api('/api/settings', { procesado: v })", app)
+        # (con «API externa», también el proveedor y la clave de la pantalla: sin proveedor no se aplica; msg 1386)
+        self.assertIn("api('/api/settings', v === 'api' ? { procesado: v, cloud: collect().cloud } "
+                      ": { procesado: v })", app)
         self.assertIn('id="procGuardado"', app)
         self.assertIn('id="procAplicar"', app)
         self.assertIn("pero aún no está aplicado", app)

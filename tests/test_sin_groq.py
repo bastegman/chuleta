@@ -54,6 +54,28 @@ class GuardarTests(TempTree):
         a.save_settings({"cloud": {"provider": "openai"}})
         self.assertEqual(a.settings.get()["cloud"]["provider"], "openai")
 
+    def test_la_prueba_sin_proveedor_no_va_a_groq(self):
+        """La prueba del asistente con un proveedor vacío o desconocido no va a Groq (revisor 2). Que «Guardar» y
+        «Aplicar ahora» no guarden la API sin proveedor lo pone la interfaz (test_portada_asistente_y_ajustes_sin_groq):
+        el servidor sigue aceptando {procesado: api} como antes, que es lo que esperan otros caminos y tests."""
+        a = self.app()
+        st, _ = a._candidata({"candidata": {"procesado": "api", "cloud": {"provider": "", "api_key": "k"}}})
+        self.assertEqual(st["cloud"]["provider"], "")  # el motor lo rechaza: nada sale hacia Groq
+        st, _ = a._candidata({"candidata": {"procesado": "api", "cloud": {"provider": "inventado", "api_key": "k"}}})
+        self.assertEqual(st["cloud"]["provider"], "")
+        st, _ = a._candidata({"candidata": {"procesado": "api", "cloud": {"provider": "openai", "api_key": "k"}}})
+        self.assertEqual(st["cloud"]["provider"], "openai")
+        a.save_settings({"procesado": "api", "cloud": {"provider": "openai", "api_key": "sk-x"}})
+        self.assertEqual((a.settings.get()["procesado"], a.settings.get()["cloud"]["provider"]), ("api", "openai"))
+
+    def test_quien_ya_tiene_groq_puede_volver_a_la_api(self):
+        """Con su clave de Groq guardada (y el procesado en local), «Aplicar ahora» con la API sigue como siempre."""
+        a = self.app(cloud={"provider": "groq", "api_key": "gsk_x"}, procesado="local")
+        a.save_settings({"procesado": "api"})
+        self.assertEqual((a.settings.get()["procesado"], a.settings.get()["cloud"]["provider"]), ("api", "groq"))
+        st, _ = a._candidata({"candidata": {"procesado": "api", "cloud": {}}})
+        self.assertEqual(st["cloud"]["provider"], "groq")
+
     def test_el_motor_no_manda_a_groq_sin_proveedor(self):
         from support import engines
         for p in ("", "inventado"):
@@ -163,8 +185,13 @@ class InstalacionNuevaTests(unittest.TestCase):
         self.assertEqual(pg.locator("#cTestRes").text_content(), "Elige antes el proveedor.")
         self.assertFalse(pg.locator("#modal").is_hidden())
         self.assertEqual(pg.evaluate("document.activeElement.id"), "cProv")
+        # «Aplicar ahora» (sin cerrar Ajustes), lo mismo
+        pg.click("#procAplicar")
+        self.assertIn("Elige antes el proveedor", pg.locator("#procGuardado").text_content())
+        self.assertEqual(pg.evaluate("document.activeElement.id"), "cProv")
         # nada se ha guardado por mirar
         self.assertFalse(self.nueva.get("/api/config")["cloud"]["elegido"])
+        self.assertNotEqual(self.nueva.get("/api/config").get("procesado"), "api")
         self.assertNotRegex(self.visible(pg), r"\ba el\b")  # «las envía a tu proveedor», no «a el proveedor…»
         # el asistente, con Groq elegido a mano: el modelo es el guardado (el más preciso), no el primero de la lista
         pg.keyboard.press("Escape")

@@ -7100,6 +7100,7 @@ class App:
             st["agente"] = {"tipo": cls.tipo,
                             "modelo": ag.get("modelo") if ag.get("modelo") in dict(cls.MODELOS) else cls.MODELO}
         cl = c.get("cloud") if isinstance(c.get("cloud"), dict) else {}
+        elegido = proveedor_elegido(self.settings.get()) or cl.get("provider") in engines.PROVIDERS
         st["cloud"] = dict(st.get("cloud") or {})
         for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
             if k == "provider" and cl.get(k) not in engines.PROVIDERS:
@@ -7109,6 +7110,8 @@ class App:
         key = (cl.get("api_key") or "").strip()
         if key and "…" not in key and "•" not in key:
             st["cloud"]["api_key"] = key
+        if st.get("procesado") == "api" and not elegido:
+            st["cloud"]["provider"] = ""  # el motor lo rechaza con «Elige el proveedor…»: nada sale hacia Groq
         return st, True
 
     @staticmethod

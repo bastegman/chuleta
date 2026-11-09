@@ -2308,9 +2308,16 @@ function openSettings(opts) {
       if (!e.target.closest('#procAplicar')) return;
       const v = procPendiente(), res = $('#procGuardado', d);
       if (!v) return procPintar();
+      // «API externa» sin proveedor: como «Guardar», no se aplica (se quedaría con el de por defecto; msg 1386). Con
+      // uno elegido, va con lo que hay en pantalla (proveedor y clave): si no, se aplicaba el guardado antes
+      if (v === 'api' && !$('#cProv', d).value) {
+        res.innerHTML = '<span style="color:var(--err)">Elige antes el proveedor y pega su clave.</span>';
+        $('#cProv', d).focus();
+        return;
+      }
       res.textContent = 'Aplicando…';
       try {
-        const c = await api('/api/settings', { procesado: v });
+        const c = await api('/api/settings', v === 'api' ? { procesado: v, cloud: collect().cloud } : { procesado: v });
         setConfig(c);
         localStorage.setItem('procElegido', '1');
         res.innerHTML = `<span class="ok-aplicado" style="color:var(--ok)">✓ Aplicado: ${esc({ local: 'transcribe Whisper en este PC; sin resumen con IA', agente: `transcribe Whisper en este PC y resume ${S.config.agente?.label || 'Claude Code'} con tu cuenta`, api: `transcribe y resume ${provName()} con tu API key` }[v] || v)}.</span>`;
