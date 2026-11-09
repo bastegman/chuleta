@@ -27,15 +27,16 @@ function ajDispositivos(devs) {
   const c = S.config || {}, def = list => nfc(((list || []).find(x => x.default) || {}).name || '');
   const o = (v, l, s) => `<option value="${esc(v)}"${v === s ? ' selected' : ''}>${esc(l)}</option>`;
   const mic = c.rec_mic || 'default', sys = c.rec_sys || 'all';
-  let m = o('default', `Micrófono predeterminado de Windows${def(devs?.mics) ? ` (ahora: ${def(devs.mics)})` : ''}`, mic)
+  // cortos: van dos en una fila («Micrófono · audio del PC»); el entero, al pasar el ratón (title)
+  let m = o('default', `El de Windows${def(devs?.mics) ? ` · ahora ${def(devs.mics)}` : ''}`, mic)
     + (devs?.mics?.length ? `<optgroup label="Fijar un micrófono">${devs.mics.map(x => o(x.id, nfc(x.name), mic)).join('')}</optgroup>` : '')
     + o('none', 'Sin micrófono', mic);
-  let s = o('all', 'Todo lo que suena en el PC', sys) + o('default', `Salida predeterminada de Windows${def(devs?.outputs) ? ` (ahora: ${def(devs.outputs)})` : ''}`, sys)
+  let s = o('all', 'Todo lo que suena', sys) + o('default', `La de Windows${def(devs?.outputs) ? ` · ahora ${def(devs.outputs)}` : ''}`, sys)
     + (devs?.outputs?.length ? `<optgroup label="Fijar una salida">${devs.outputs.map(x => o(x.id, nfc(x.name), sys)).join('')}</optgroup>` : '')
     + o('none', 'Sin el audio del PC', sys);
   // un dispositivo guardado que no está en la lista se enseña tal cual, para no cambiarlo sin querer
-  if (!['default', 'none'].includes(mic) && !(devs?.mics || []).some(x => x.id === mic)) m += o(mic, 'El que elegiste (no está conectado)', mic);
-  if (!['all', 'default', 'none'].includes(sys) && !(devs?.outputs || []).some(x => x.id === sys)) s += o(sys, 'La que elegiste (no está conectada)', sys);
+  if (!['default', 'none'].includes(mic) && !(devs?.mics || []).some(x => x.id === mic)) m += o(mic, 'El elegido, desconectado', mic);
+  if (!['all', 'default', 'none'].includes(sys) && !(devs?.outputs || []).some(x => x.id === sys)) s += o(sys, 'La elegida, desconectada', sys);
   return [m, s];
 }
 /* Las listas de vocabulario, una sola petición por cada vez que se abre Ajustes (Al grabar y Proyectos las piden a la
@@ -88,7 +89,9 @@ function bindAjAlGrabar(d) {
       const ir = { proyecto: 'proyectos', workstream: 'proyectos', procesado: 'procesado' }[l.origen];
       const origen = ir ? `<a href="#" class="gr-origen ag-ir" data-sec-ir="${ir}">${esc(l.origen_txt)}</a>` : `<span class="gr-origen">${esc(l.origen_txt)}</span>`;
       // la ruta en una línea (la entera, al pasar el ratón): con la carpeta por reunión puede ser larga
-      const v = (l.clave === 'carpeta' ? `<code class="gr-ruta" title="${esc(l.valor)}">${esc(l.valor)}</code>` : `<b>${esc(l.valor)}</b>`)
+      // y el contexto, también en una línea: está entero justo debajo, en su casilla
+      const v = (l.clave === 'carpeta' ? `<code class="gr-ruta" title="${esc(l.valor)}">${esc(l.valor)}</code>`
+        : l.clave === 'contexto' ? `<b class="gr-ctx" title="${esc(l.valor)}">${esc(l.valor)}</b>` : `<b>${esc(l.valor)}</b>`)
         + (l.aviso ? `<span class="gr-aviso">${esc(l.aviso)}</span>` : '');
       const icon = (GR_FILAS.find(([k]) => k === l.clave) || [])[1];
       return `<div class="gr-fila" data-fila="${l.clave}"><span class="gr-ic">${icon ? I[icon] : ''}</span><span class="gr-et">${esc(l.etiqueta)}</span><span class="gr-v">${v}</span>${origen}<span></span></div>`;
@@ -140,8 +143,10 @@ function bindAjAlGrabar(d) {
   // micrófono y audio del PC: los de Ajustes (lo de una reunión se cambia en su tarjeta). Con la lista de
   // dispositivos, sin cambiar lo elegido (ni lo que ya hayas tocado)
   const c = S.config || {}, mic = $('#agMic', d), sys = $('#agSys', d), tocado = {};
-  mic.addEventListener('change', () => { tocado.mic = true; });
-  sys.addEventListener('change', () => { tocado.sys = true; });
+  const titulo = s => { s.title = s.options[s.selectedIndex]?.textContent || ''; };  // el texto entero, si no cabe
+  mic.addEventListener('change', () => { tocado.mic = true; titulo(mic); });
+  sys.addEventListener('change', () => { tocado.sys = true; titulo(sys); });
+  titulo(mic); titulo(sys);
   const borrador = d.borradorAlAbrir || {};  // lo que había sin guardar al volver de un subdiálogo
   api('/api/rec/devices').then(r => {
     if (!document.body.contains(mic)) return;
@@ -154,6 +159,7 @@ function bindAjAlGrabar(d) {
     mic.innerHTML = m; sys.innerHTML = s;
     if ([...mic.options].some(x => x.value === vm)) mic.value = vm;
     if ([...sys.options].some(x => x.value === vs)) sys.value = vs;
+    titulo(mic); titulo(sys);
     // si ha cambiado lo que se ve, que lo sepan el plan de arriba y el aviso de «sin guardar»
     if (mic.value !== antes[0]) mic.dispatchEvent(new Event('change', { bubbles: true }));
     if (sys.value !== antes[1]) sys.dispatchEvent(new Event('change', { bubbles: true }));
@@ -189,7 +195,7 @@ function bindAjAlGrabar(d) {
 
 /* ---------------------------------------------------------------- Proyectos: carpeta e idioma de cada uno */
 function ajProyectosHtml() {
-  return `<div class="ag-cab"><h4>Proyectos y workstreams</h4><div class="help" style="margin-top:2px">La carpeta y el idioma con los que se graba cada uno. En negro, lo asignado a ese proyecto o workstream (aquí, con «Usarlo en» al grabar o, de antes, la carpeta que elegiste para él); en gris, lo heredado: el workstream usa lo del proyecto, y el proyecto, su carpeta y el idioma de <a href="#" data-sec-ir="algrabar">Al grabar</a>. Lo que cambies en una fila se guarda al momento.</div></div>
+  return `<div class="ag-cab"><h4>Proyectos y workstreams</h4><div class="help" style="margin-top:2px">La carpeta y el idioma con los que se graba cada uno. En negro, lo asignado a ese proyecto o workstream; en gris, lo heredado (el workstream usa lo del proyecto, y el proyecto, su carpeta y el idioma de <a href="#" data-sec-ir="algrabar">Al grabar</a>). Lo que cambies en una fila se guarda al momento.</div></div>
     <div id="pjTabla"><div class="gr-cargando">Cargando…</div></div>`;
 }
 /* la carpeta de un proyecto que no tiene una asignada, en palabras (car: /api/grabar/plan con proyectos) */

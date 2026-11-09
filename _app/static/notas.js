@@ -171,11 +171,11 @@ function vocabFit(v) {
 /* crear / editar un workstream (y con el, un proyecto nuevo). after: a donde volver al terminar */
 function openVocabEditor(v, after = openSettings, project = '') {
   const isNew = !v, projects = [...new Set(S.vocab.map(x => x.project))];
-  openModal(`<h3>${I.book}${isNew ? (project ? `Nuevo tema en ${esc(project)}` : 'Nuevo proyecto o tema') : `${esc(v.project)} · ${esc(v.name)}`}</h3>
+  openModal(`<h3>${I.book}${isNew ? (project ? `Nuevo workstream en ${esc(project)}` : 'Nuevo proyecto o workstream') : `${esc(v.project)} · ${esc(v.name)}`}</h3>
     <div class="grid2">
       <div><label>Proyecto</label><input class="input" id="veProj" list="veProjs" value="${esc(v ? v.project : project)}" placeholder="p. ej. Proyecto Alfa, Comunidad de vecinos…" ${isNew ? 'autofocus' : ''}>
         <datalist id="veProjs">${projects.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
-      <div><label>Tema</label><input class="input" id="veName" value="${esc(v ? v.name : (project ? '' : 'General'))}" placeholder="p. ej. Legal, Finanzas, Tecnología…"></div>
+      <div><label>Workstream</label><input class="input" id="veName" value="${esc(v ? v.name : (project ? '' : 'General'))}" placeholder="p. ej. Legal, Finanzas, Tecnología…"></div>
     </div>
     <label>Descripción <span class="muted" style="font-weight:400">· opcional, se ve al elegirlo</span></label>
     <input class="input" id="veDesc" value="${esc(v ? v.desc || '' : '')}" placeholder="p. ej. Reunión semanal del equipo">
@@ -405,7 +405,7 @@ main.addEventListener('click', async e => {
     await api('/api/notes', { path: a.path, body });
     S.notes = null; a.has_notes = true;
     toast('Resumen añadido a 📝 Notas (ahí lo puedes editar)');
-  } else if (act.dataset.act === 'settings') openSettings();
+  } else if (act.dataset.act === 'settings') openSettings({ sec: 'procesado' });  // los avisos de Inicio son de Procesado
 });
 /* progreso del resumen y recarga al terminar (lo llama el sondeo de trabajos de app.js) */
 function onSummaryJobs(prev) {
@@ -802,7 +802,7 @@ main.addEventListener('click', e => {
 /* ---------------------------------------------------------------- busqueda rapida (Ctrl+P) */
 const ACTIONS = [
   ['<i class="recdot"></i>', 'Grabar ahora', () => openRec()], [I.list, 'Reuniones', () => go('r', '')], [I.calendar, 'Calendario', () => go('c', '')],
-  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings()], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
+  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar' })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
   [I.clipboard, 'Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
 function paletteItems(q) {
   const f = fold(q.trim()), out = [];

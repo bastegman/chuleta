@@ -2079,6 +2079,9 @@ function openSettings(opts) {
       if (!x) return;
       e.preventDefault();
       irSec(x.dataset.sec || x.dataset.secIr);
+      // desde un enlace de dentro (el origen de una línea del plan, «Proyectos»…), el foco a su sección en el menú: si
+      // no, con el teclado caía en el cuerpo de la página, fuera del diálogo (revisión 2 de B2)
+      if (x.dataset.secIr) $(`.aj-nav [data-sec="${x.dataset.secIr}"]`, d)?.focus();
     });
     const pendiente = e => { if (e.target.closest('.aj-main') && !NO_CUENTA.has(e.target.id)) marcar(); };
     d.addEventListener('input', pendiente);
@@ -2322,7 +2325,9 @@ function openSettings(opts) {
     });
   }, 'aj');
 }
-$('#btnSettings').onclick = openSettings;
+// ⚙ abre siempre en «Al grabar» (rediseño B2): lo que se usará al grabar, arriba. Volver de un subdiálogo (editar una
+// lista, el asistente…) sí vuelve a la sección en la que estabas (openSettings sin sección)
+$('#btnSettings').onclick = () => openSettings({ sec: 'algrabar' });
 
 /* ---------------------------------------------------------------- apagar */
 async function confirmShutdown() {

@@ -40,26 +40,50 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - Un solo nombre para los antiguos destinos de salida: «copias en otras carpetas», como en Ajustes, también en la
   tarjeta de grabar, al confirmar participantes, al borrar una reunión y en «Copiar diagnóstico».
 - **Calendario y Teams**, sin repetir nada: Outlook sale una vez, en su fila, con «Activar» o «Desactivar» y, activado,
-  «Probar»; mientras no se guarde, lo dice («Se activa al pulsar Guardar»). La ayuda larga, plegada en «¿Cómo
-  funciona?». El aviso flotante dice que depende de «Llamada detectada» (Al grabar) y, con ella apagada, no se puede
-  marcar: era una segunda casilla casi igual que no decía de cuál colgaba.
+  «Probar»; mientras no se guarde, lo dice («Se activa al pulsar Guardar»). Con el estado del calendario (`GET
+  /api/calendario/estado`), la frase es ese estado y «Activar» y «Desactivar» guardan al momento. Fuera de Windows no
+  se ofrece activarlo. La ayuda larga, plegada en «¿Cómo funciona?». El aviso flotante dice que depende de «Llamada
+  detectada» (Al grabar) y, con ella apagada, no se puede marcar: era una segunda casilla casi igual que no decía de
+  cuál colgaba. La línea de Teams ya no consulta Outlook cada vez que se abre Ajustes.
 - «Llamada detectada» (Al grabar) vuelve a decir lo que hace: «avisarme si estoy en una llamada y no estoy
   grabando». Decía «aviso con «Grabar»», que es el aviso flotante, otro ajuste.
-- «Al grabar» cabe en una pantalla a 1500×920 (antes 828 px para 655): las pistas de cada regla van bajo su nombre,
-  «¿Cómo funciona?» en la línea de arriba y sin la línea del pie, que repetía el enlace a Proyectos.
+- «Al grabar» cabe en una pantalla a 1500×920 (antes 828 px para 655), también con «Una carpeta por reunión» y con
+  contexto: las pistas de cada regla van bajo su nombre, «¿Cómo funciona?» en la línea de arriba, sin la línea del pie
+  (repetía el enlace a Proyectos), y la carpeta y el contexto del plan en una línea (enteros, al pasar el ratón). El
+  micrófono y la salida, con nombres cortos («El de Windows · ahora …», «Todo lo que suena»), ya no se cortan.
 - En la tabla de Proyectos, editar una fila ya no cambia los anchos de la tabla ni corta los desplegables por la
   mitad.
 - Un nombre de reunión escrito con signos que no admite un archivo (`\ / : * ? " < > |`, p. ej. «Comité: Q4») ya no
   hace fallar «Empezar a grabar» con «Nombre no válido»: se graba sin esos signos y la tarjeta dice antes cómo se
   guardará («se guarda como «Comité Q4»»). Ctrl+Alt+R, igual.
-- En **Proyectos**, lo que cambias en una fila se guarda al momento («Guardando…», «Guardado» en la propia fila) y
-  «Listo» la cierra. Antes hacía falta el «Guardar» de la fila, y el «Guardar» de abajo la perdía diciendo «Ajustes
-  guardados». Ahora también se elige la carpeta de cada workstream, y una carpeta asignada que ya no existe se avisa
-  también al editarla.
+- En **Proyectos**, lo que cambias en una fila se guarda al momento («Guardando…», «Carpeta guardada», «Idioma
+  guardado» en la propia fila) y «Listo» la cierra. Antes hacía falta el «Guardar» de la fila, y el «Guardar» de abajo
+  la perdía diciendo «Ajustes guardados». Dos cambios seguidos, o cambiar de fila enseguida, ya no pierden el primero.
+  Ahora también se elige la carpeta de cada workstream, y una carpeta asignada que ya no existe se avisa también al
+  editarla. En negro, lo asignado; en gris, lo heredado.
 - **«Así se graba ahora»** cambia también con lo que aún no has guardado en otras secciones (los motores de
   Procesado, resumir al terminar, el vocabulario de las reuniones sin proyecto y «Una carpeta por reunión») y se
-  recalcula al volver de Proyectos. «Transcribe» dice que sale de Ajustes › Procesado, donde están los motores. Sin
-  reunión, la carpeta de la reunión se enseña como «AAAA-MM-DD Nombre de la reunión», no con la hora de ese minuto.
+  recalcula al volver de Proyectos. También con la opción marcada en «Dónde se procesan» aunque aún no la hayas
+  aplicado: «Guardar» la aplica, así que cuenta como «Hay cambios sin guardar». «Transcribe» dice que sale de Ajustes ›
+  Procesado, donde están los motores (o de Al grabar, si es «Texto en directo» apagado). Sin reunión, la carpeta de la
+  reunión se enseña como «AAAA-MM-DD Nombre de la reunión», no con la hora de ese minuto. Al recalcular, solo cambian
+  las líneas que cambian (un lector de pantalla no vuelve a leer el plan entero).
+- Si no se pueden leer las listas de vocabulario (OneDrive sin conexión, por ejemplo), Al grabar, Proyectos y las
+  listas lo dicen con «Probar otra vez»; antes Proyectos decía «Todavía no hay proyectos. Crea uno…».
+- La carpeta de las reuniones sin proyecto y el proyecto al grabar guardados, si ahora no se encuentran (una carpeta
+  vinculada desconectada, una lista que no se lee), se ven como «(no se encuentra)» y se conservan con cualquier
+  «Guardar». Antes el desplegable enseñaba «Automática» y el «Guardar» de otra sección los borraba sin avisar.
+- ⚙ abre siempre en «Al grabar». Al volver de editar una lista o del asistente, en la sección en la que estabas. Un
+  enlace de dentro (el origen de una línea del plan, «Proyectos» en la ayuda) lleva el foco a esa sección.
+- Deshacer un cambio en Ajustes ya quita «Hay cambios sin guardar»: los campos de la nube, que se pintan después,
+  contaban siempre como cambiados.
+- Los idiomas se llaman igual en todas partes, en español («Portugués», «Francés», «Alemán», «Catalán»): los
+  desplegables decían «Português» o «Deutsch» y el plan, «Portugués» o «Alemán».
+- Los asistentes de una cita de Outlook de empresa («Apellido, Nombre») se unen con «; », como en el resto de la app:
+  con «, » eran el doble de personas en la tarjeta y en la pista de quién habla.
+- El editor de listas dice «workstream», como la tarjeta y Proyectos.
+- Con la copia de Claude Code de VS Code y una organización que no admite API keys, el botón es «Probar otra vez»
+  (se entra en el panel de VS Code), no «Abrir PowerShell».
 - No se puede dejar en Ajustes «Sin micrófono» y «Sin el audio del PC» a la vez (no se grabaría nada): el plan lo avisa
   y al guardar se dice por qué.
 - Si no se puede calcular el plan o la carpeta de cada proyecto, Ajustes lo dice en una frase con «Probar otra vez»,

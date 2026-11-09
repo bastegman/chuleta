@@ -233,8 +233,18 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("#modal [data-m='ok']")
         pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
         self.assertEqual(pg.evaluate("api('/api/config')")["threads"], 2)  # guardado desde una sección oculta al abrir
+        # ⚙ abre en «Al grabar» (rediseño B2); volver de un subdiálogo (openSettings sin sección), en la última vista
         pg.click("#btnSettings")
-        pg.wait_for_selector("#modal:not(.hidden) .aj-nav [data-sec='avanzado'].on", timeout=5000)  # la última vista
+        pg.wait_for_selector("#modal:not(.hidden) .aj-nav [data-sec='algrabar'].on", timeout=5000)
+        pg.click(".aj-nav [data-sec='avanzado']")
+        pg.evaluate("openSettings()")
+        pg.wait_for_selector("#modal:not(.hidden) .aj-nav [data-sec='avanzado'].on", timeout=5000)
+        # un enlace de dentro («Proyectos» en la ayuda, el origen de una línea…) lleva el foco a su sección del menú
+        pg.click(".aj-nav [data-sec='algrabar']")
+        pg.click(".ag-como-btn")
+        pg.focus("#agComo [data-sec-ir='proyectos']")
+        pg.keyboard.press("Enter")
+        self.assertTrue(pg.evaluate("document.activeElement.matches(\".aj-nav [data-sec='proyectos'].on\")"))
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
