@@ -6458,10 +6458,11 @@ class App:
         on = b.get("activar") is True
         self.settings.update(lambda d: d.update(outlook_on=on))
         log(f"   calendario: {'activado' if on else 'apagado'} desde Ajustes")
+        r = calendario.estado(on, probar=on)  # primero «Probar», con el usuario delante por si Outlook pregunta
         ag = getattr(self, "agenda", None)
         if ag is not None:
-            ag.pedir()  # la agenda de Hoy, ya (o fuera, si se apaga)
-        return calendario.estado(on, probar=on)
+            ag.pedir()  # después, la agenda de Hoy (o fuera, si se apaga): las dos a la vez competirían por Outlook
+        return r
 
     # --- la pantalla Hoy (B7) y la agenda de Outlook de un mes
     def _reunion_ahora(self, st=None, recordar=True, citas=None):
@@ -6480,7 +6481,7 @@ class App:
             lect = {"sugerencia": self.vigia.sugerencia(leer)}
         if citas is None:
             ag = getattr(self, "agenda", None)
-            citas = ag.citas() if ag is not None and st.get("outlook_on") else []
+            citas = ag.citas() if ag is not None and st.get("outlook_on") and ag.fresca() else []
         return calendario.reunion_de_ahora(lect, citas, self._vocab_terms)
 
     def _ultima_vez(self, nombre):
@@ -6512,22 +6513,35 @@ class App:
     PREPARADA_ANTES, PREPARADA_DESPUES = 10, 5  # minutos: lo preparado vale de 10 min antes a 5 min después
 
     @staticmethod
-    def _clave_preparada(asunto, inicio):
-        return f"{inicio}|{grabar_plan.norm_titulo(asunto)}"
+    def _nombre_preparada(s):
+        """El asunto como lo deja la sugerencia (calendario.nombre_archivo: sin \\ / : * ? " < > | y recortado) y
+        normalizado: «Comité: Q4» de Outlook es «Comité Q4» en la reunión de ahora."""
+        return grabar_plan.norm_titulo(calendario.nombre_archivo(s))
+
+    @classmethod
+    def _clave_preparada(cls, asunto, inicio):
+        return f"{inicio}|{cls._nombre_preparada(asunto)}"
+
+    def _preparadas(self, st=None, dict_=False):
+        """Lo preparado en settings.json (un fichero tocado a mano no tumba Hoy: lo que no sea un dict, fuera)."""
+        # (desde update, con el dict que se está cambiando: settings.get() ahí se quedaría esperando al candado)
+        d = (st if st is not None else self.settings.get()).get("preparadas")
+        d = {k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {}
+        return d if dict_ else list(d.values())
 
     def _preparada(self, nombre, st=None, now=None):
         """Lo preparado en Hoy («Preparar» en la agenda: {vocab?, idioma?, contexto?}) para la reunión que se llama así
         y es ahora (de 10 min antes de empezar a 5 min después de acabar), o None."""
-        k = grabar_plan.norm_titulo(nombre)
+        k = self._nombre_preparada(nombre)
         if not k:
             return None
         now = now or datetime.now()
-        for p in ((st or self.settings.get()).get("preparadas") or {}).values():
+        for p in self._preparadas(st):
             try:
                 ini, fin = datetime.fromisoformat(p["inicio"]), datetime.fromisoformat(p["fin"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if (grabar_plan.norm_titulo(p.get("asunto")) == k
+            if (self._nombre_preparada(p.get("asunto")) == k
                     and ini - timedelta(minutes=self.PREPARADA_ANTES) <= now <= fin + timedelta(
                         minutes=self.PREPARADA_DESPUES)):
                 return {x: p[x] for x in ("vocab", "idioma", "contexto") if x in p}
@@ -6567,8 +6581,8 @@ class App:
         limite = (datetime.now() - timedelta(days=1)).isoformat(timespec="minutes")
 
         def upd(d):
-            prep = {k: v for k, v in (d.get("preparadas") or {}).items()
-                    if k != clave and isinstance(v, dict) and str(v.get("fin") or "") >= limite}
+            prep = {k: v for k, v in self._preparadas(d, dict_=True).items()
+                    if k != clave and str(v.get("fin") or "") >= limite}
             if guardar:
                 prep[clave] = entrada
             d["preparadas"] = dict(sorted(prep.items(), key=lambda kv: kv[1].get("inicio") or "")[-200:])
@@ -6585,19 +6599,21 @@ class App:
         st = self.settings.get()
         activado = bool(st.get("outlook_on"))
         ag = getattr(self, "agenda", None)
-        if ag is not None and activado and (q.get("refrescar") in ("1", "true") or ag.toca(calendario.AGENDA_VIEJA)):
-            ag.pedir()
+        if ag is not None and activado and (q.get("refrescar") in ("1", "true") or (
+                q.get("abrir") in ("1", "true") and ag.toca(calendario.AGENDA_VIEJA))):
+            ag.pedir()  # el sondeo de cada 30 s no relee: cada lectura ocupa Outlook (y el candado COM)
         apagado = None
         if not activado:  # sin hablar con Outlook: apagado, Outlook nuevo, sin Outlook o no es Windows
             e = calendario.estado(False)
             apagado = (e["estado"], e["frase"])
         # una sola foto de la agenda para la reunión de ahora y la lista (el hilo puede estar renovándola)
         agenda = ag.publica(activado, apagado) if ag is not None else None
-        sug, info = self._reunion_ahora(st, recordar=False,
-                                        citas=[dict(c) for c in agenda["citas"]] if agenda and activado else [])
+        fresca = ag is not None and ag.fresca()
+        sug, info = self._reunion_ahora(st, recordar=False, citas=[dict(c) for c in agenda["citas"]]
+                                        if agenda and activado and fresca else [])
         plan = self.plan_grabar({}, st=st, sug=sug)
         nombre = plan["nombre"]["valor"]
-        prep = st.get("preparadas") or {}
+        prep = self._preparadas(st, dict_=True)
         for c in (agenda or {}).get("citas") or []:  # lo preparado de cada cita («Preparada · Alfa › General»)
             p = prep.get(self._clave_preparada(c.get("subject"), c.get("start")))
             if p:
@@ -6627,7 +6643,10 @@ class App:
             return
         if not (forzado or ag.toca()):
             return
-        ocupado = bool(getattr(self, "rec", None) and self.rec.alive()) or bool(getattr(self, "meeting", None))
+        # en llamada: la lectura del registro de privacidad (meeting_prev), también con «Avisarme si estoy en una
+        # llamada» apagado, que deja meeting en None
+        ocupado = bool(getattr(self, "rec", None) and self.rec.alive()) or bool(
+            getattr(self, "meeting", None) or getattr(self, "meeting_prev", None))
         if ocupado and ag.datos is not None:
             return
         sesion = getattr(self, "agenda_sesion", None)

@@ -222,7 +222,8 @@ class HoyLlenoTests(Base):
         reunion(root, "Beta", now - timedelta(days=2), "Entrevista equipo", 2,
                 {"proyecto": "Beta", "workstream": "General", "titulo": "Entrevista equipo"})
         reunion(root, "", now - timedelta(hours=2), "", 12, txt=True)  # sin proyecto ni nombre
-        reunion(root, "Alfa", now - timedelta(minutes=30), "Migración de servidores", 38,
+        # ahora (no hace 30 min): así es de esta semana también si la prueba corre el lunes a las 00:10
+        reunion(root, "Alfa", now, "Migración de servidores", 38,
                 {"proyecto": "Alfa", "workstream": "Infraestructura", "titulo": "Migración de servidores"},
                 txt=True, resumen="## Resumen\nHecho.\n")
 
@@ -357,6 +358,83 @@ class HoyLlenoTests(Base):
         self.assertNotIn("Dentro de 40 días: no sale", asuntos)
         self.assertEqual(asuntos.count("Comité de seguimiento"), 2)
         self.assertEqual(asuntos, [c["subject"] for c in sorted(r["agenda"]["citas"], key=lambda c: c["start"])])
+
+
+class HoyCambiosTests(Base):
+    """Lo que cambia mientras Hoy está abierta (revisión 1 de la rama, 09/11/2026): la reunión de ahora cambia con el
+    foco en un chip (antes la tarjeta enseñaba la anterior y «Grabar» grababa la nueva: P0), y «Actualizar» de la agenda
+    (antes no repintaba con el foco en el botón: P1)."""
+    AJUSTES = {"outlook_on": True}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir_agenda = tempfile.mkdtemp(prefix="tenca-hoy-agenda-")
+        cls.agenda = os.path.join(cls.dir_agenda, "agenda.json")
+        cls.escribir([{"asunto": "Reunión A", "en": -20, "duracion": 60},
+                      {"asunto": "Primera cita", "dia": 1, "hora": "10:00"}])
+        cls.ENV = {"CHULETA_PRUEBAS_OUTLOOK": cls.agenda}
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(cls.dir_agenda, ignore_errors=True)
+
+    @classmethod
+    def preparar(cls, root):
+        reunion(root, "", datetime.now() - timedelta(days=1), "Vieja", 3, txt=True)
+
+    @classmethod
+    def escribir(cls, citas):
+        with open(cls.agenda, "w", encoding="utf-8") as f:
+            json.dump(citas, f)
+
+    def releer(self, nombre):
+        """Que el servidor relea la agenda y ya dé esa reunión de ahora (el hilo lee en segundo plano)."""
+        self.srv.api("/api/hoy?refrescar=1")
+        fin = time.time() + 20
+        while time.time() < fin and self.srv.api("/api/hoy")["plan"]["nombre"]["valor"] != nombre:
+            time.sleep(0.3)
+
+    def test_cambia_la_reunion_con_el_foco_en_un_chip_y_se_graba_la_que_se_ve(self):
+        self.escribir([{"asunto": "Reunión A", "en": -20, "duracion": 60}])
+        self.releer("Reunión A")
+        pg = self.pagina()
+        pg.wait_for_selector("#hoyAhora .ha-titulo:has-text('Reunión A')", timeout=30000)
+        with pg.expect_response(lambda r: "/api/grabar/plan" in r.url):
+            pg.select_option("[data-hoy='idioma']", "pt")
+        pg.wait_for_function("document.activeElement && document.activeElement.dataset.hoy === 'idioma'", timeout=5000)
+        self.escribir([{"asunto": "Reunión B", "en": -10, "duracion": 60}])
+        self.releer("Reunión B")
+        pg.evaluate("hoyCargar()")  # el sondeo de cada 30 s, sin esperarlo
+        pg.wait_for_selector("#hoyAhora .ha-titulo:has-text('Reunión B')", timeout=10000)
+        self.assertEqual(pg.input_value("[data-hoy='idioma']"), "")  # lo cambiado era para la otra
+        self.assertEqual(pg.evaluate("document.activeElement.dataset.hoy"), "idioma")  # el foco sigue en su chip
+        enviado = []
+
+        def start(route):
+            enviado.append(json.loads(route.request.post_data))
+            route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "Prueba: no"}))
+        pg.route("**/api/rec/start", start)
+        pg.click("[data-act='hoy-grabar']")
+        pg.wait_for_function("document.querySelector('#toasts').textContent.includes('Prueba: no')", timeout=5000)
+        self.assertEqual((enviado[0]["name"], enviado[0]["language"]),
+                         (pg.inner_text("#hoyAhora .ha-titulo"), ""))
+        self.sin_errores(permitidas=("/api/rec/start",))
+
+    def test_actualizar_la_agenda_la_repinta(self):
+        self.escribir([{"asunto": "Reunión A", "en": -20, "duracion": 60},
+                       {"asunto": "Primera cita", "dia": 1, "hora": "10:00"}])
+        self.releer("Reunión A")
+        pg = self.pagina()
+        pg.wait_for_selector("#hoyAgenda :text('Primera cita')", timeout=30000)
+        self.escribir([{"asunto": "Reunión A", "en": -20, "duracion": 60},
+                       {"asunto": "Primera cita", "dia": 1, "hora": "10:00"},
+                       {"asunto": "Cita nueva", "dia": 2, "hora": "10:00"}])
+        pg.click("[data-act='hoy-agenda-leer']")
+        pg.wait_for_selector("#hoyAgenda :text('Cita nueva')", timeout=15000)  # sin sacar el foco de la agenda
+        self.assertTrue(pg.evaluate("document.querySelector('#hoyAgenda').contains(document.activeElement)"))
+        self.sin_errores()
 
 
 if __name__ == "__main__":

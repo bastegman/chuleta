@@ -105,6 +105,14 @@ class AgendaTests(Base):
         datos, fallo = calendario.agenda(now=NOW, session=lambda: (_ for _ in ()).throw(e), fmt=DIA)
         self.assertEqual((datos, fallo[0]), (None, "sin_outlook"))
 
+    def test_cortada_solo_si_quedaban_mas(self):
+        """Revisión 1: con exactamente el tope no está cortada; con una más, sí."""
+        tres = [cita(f"C{i}", NOW + timedelta(hours=i)) for i in range(3)]
+        (datos, _), _ = leer(tres, max_citas=3)
+        self.assertEqual((len(datos["citas"]), datos["cortada"]), (3, False))
+        (datos, _), _ = leer(tres + [cita("C3", NOW + timedelta(hours=4))], max_citas=3)
+        self.assertEqual((len(datos["citas"]), datos["cortada"]), (3, True))
+
     def test_outlook_ocupado_con_otra_consulta(self):
         """El candado COM cogido (una consulta colgada): no se amontona otro hilo, se dice que no contesta."""
         self.assertTrue(calendario._COM_LOCK.acquire(timeout=1))
@@ -168,7 +176,7 @@ class AhoraTests(unittest.TestCase):
                          ("Comité Alfa", "outlook", "Alfa/Vocabulario/General.txt", []))
         self.assertEqual(info, {"titulo": "Comité Alfa", "fuente": "outlook", "teams": False,
                                 "inicio": "2026-11-09T10:00", "fin": "2026-11-09T11:00", "en_curso": True,
-                                "periodica": True})
+                                "periodica": True, "asunto": "Comité Alfa"})
         self.assertEqual(pedidas, [1])
 
     def test_teams_manda_y_las_horas_solo_si_es_la_misma(self):
@@ -445,17 +453,85 @@ class ServidorTests(TempTree):
             self.assertEqual(a.agenda.citas(), [])
             self.assertEqual(a.agenda.publica(True)["estado"], "leyendo")
 
-    def test_hoy_pide_la_agenda_si_es_vieja(self):
+    def test_hoy_pide_la_agenda_al_abrirla_si_es_vieja_y_el_sondeo_no(self):
+        """Revisión 1: con el sondeo de 30 s pidiendo cada vez que tenía más de 2 min, Outlook se releía cada ~2 min con
+        Hoy a la vista. Ahora solo al abrir Hoy (abrir=1) si es vieja, o con «Actualizar» (refrescar=1)."""
         a = self.app(outlook_on=True)
         a.agenda.despertar.clear()
-        a.hoy({})
+        a.hoy({"abrir": "1"})
         self.assertFalse(a.agenda.despertar.is_set())  # recién leída
         a.hoy({"refrescar": "1"})
         self.assertTrue(a.agenda.despertar.is_set())
         a.agenda.despertar.clear()
         a.agenda.intento -= calendario.AGENDA_VIEJA
         a.hoy({})
+        self.assertFalse(a.agenda.despertar.is_set())  # el sondeo no relee
+        a.hoy({"abrir": "1"})
         self.assertTrue(a.agenda.despertar.is_set())
+        self.assertTrue(a.hoy({})["agenda"]["comprobada"])
+
+    def test_una_agenda_vieja_se_ensena_pero_no_pone_nombre(self):
+        """Revisión 1: con Outlook cerrado horas, una cita movida o cancelada seguiría nombrando las grabaciones."""
+        a = self.app(outlook_on=True)
+        self.assertEqual(a.hoy({})["ahora"]["titulo"], "Comité de seguimiento")
+        a.agenda.leida -= calendario.AGENDA_FRESCA + 1
+        r = a.hoy({})
+        self.assertIsNone(r["ahora"])
+        self.assertEqual(len(r["agenda"]["citas"]), 2)
+        self.assertEqual(a._reunion_ahora()[0], {})
+
+    def test_preparada_con_signos_en_el_asunto(self):
+        """Revisión 1 (P1): «Comité: Q4» de Outlook es «Comité Q4» en la reunión de ahora (nombre_archivo)."""
+        a = self.app(outlook_on=True)
+        ini = datetime.now().replace(second=0, microsecond=0) - timedelta(minutes=20)
+        largo = "RE: Alfa | Sync / Q4 «presupuesto» " + "x" * 90
+        for asunto in ("Comité: Q4", largo):
+            self.citas[:] = [publica(asunto, ini)]
+            a.agenda.refrescar()
+            a.hoy_preparar({"asunto": asunto, "inicio": ini.isoformat(timespec="minutes"),
+                            "fin": (ini + timedelta(minutes=60)).isoformat(timespec="minutes"), "idioma": "pt"})
+            r = a.hoy({})
+            self.assertEqual(r["agenda"]["citas"][0]["preparada"], {"idioma": "pt"}, asunto)
+            self.assertEqual(r["ahora"]["asunto"], asunto)  # la agenda marca «Ahora» por el asunto de Outlook
+            idioma = {x["clave"]: x for x in r["plan"]["lineas"]}["idioma"]
+            self.assertEqual((idioma["code"], idioma["origen"]), ("pt", "preparada"), asunto)
+
+    def test_preparadas_raras_en_settings_no_tumban_hoy(self):
+        a = self.app(outlook_on=True)
+        base = {"asunto": "X", "inicio": "2030-01-01T10:00", "fin": "2030-01-01T11:00", "idioma": "pt"}
+        for raro in ("texto", ["lista"], {"k": "no es un dict"}, None):
+            a.settings.update(lambda d: d.update(preparadas=raro))
+            self.assertIn("agenda", a.hoy({}))
+            a.hoy_preparar(base)
+            self.assertEqual(list(a.settings.get()["preparadas"].values()), [base])
+
+    def test_el_hilo_no_relee_grabando_ni_en_llamada(self):
+        """Grabando, o en una llamada aunque «Avisarme si estoy en una llamada» esté apagado (meeting None, pero el
+        registro de privacidad dice que hay llamada: meeting_prev), con agenda ya leída no se relee."""
+        a = self.app(outlook_on=True)
+        llamadas = []
+        a.agenda.leer = lambda **kw: llamadas.append(1) or ({"citas": []}, None)
+        env = {"windows": True, "pywin32": True, "instalado": True, "abierto": True}
+        with mock.patch.object(calendario, "log"):
+            a.rec = types.SimpleNamespace(alive=lambda: True)
+            a._agenda_paso(forzado=True, entorno=env)
+            a.rec, a.meeting_prev = None, "Teams"
+            a._agenda_paso(forzado=True, entorno=env)
+            self.assertEqual(llamadas, [])
+            a.meeting_prev = None
+            a._agenda_paso(forzado=True, entorno=env)
+            self.assertEqual(llamadas, [1])
+
+    def test_activar_prueba_antes_de_pedir_la_agenda(self):
+        """Revisión 1: «Activar» lanza «Probar» con el usuario delante; si la agenda se pidiera antes, competirían por
+        el candado de Outlook y «Probar» podría decir «ocupado»."""
+        a = self.app(outlook_on=False)
+        orden = []
+        a.agenda.pedir = lambda: orden.append("agenda")
+        with mock.patch.object(calendario, "estado", lambda on, probar=False: orden.append("probar") or {}), \
+                mock.patch.object(server, "log"):
+            a.calendario_activar({"activar": True})
+        self.assertEqual(orden, ["probar", "agenda"])
 
     def test_preparar_una_cita_y_se_usa_al_grabarla(self):
         a = self.app(outlook_on=True)
@@ -536,7 +612,7 @@ class ServidorTests(TempTree):
 STATIC = os.path.join(REPO, "_app", "static")
 JS_STUBS = r"""
 const S = {jobs: [], vocab: [{id: 'v1', project: 'Alfa', name: 'General'}], audios: new Map(), route: {kind: 'x'}};
-const main = {addEventListener() {}}, document = {hidden: false};
+const main = {addEventListener() {}}, document = {hidden: false}, addEventListener = () => {};
 const setInterval = () => 0;
 const $ = () => null, $$ = () => [], esc = s => String(s ?? ''), I = new Proxy({}, {get: () => ''});
 const pad = n => String(n).padStart(2, '0'), nfc = s => s;

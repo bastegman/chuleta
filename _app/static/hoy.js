@@ -92,27 +92,36 @@ function hoyAgendaDias(citas, now, ahora) {
     if (isNaN(s) || isNaN(e) || e <= now) return;
     const k = hoyIniDia(s).getTime();
     if (!dias.has(k)) dias.set(k, []);
-    dias.get(k).push(Object.assign({}, c, { ahora: !!(ahora && ahora.inicio === c.start && ahora.titulo === c.subject) }));
+    dias.get(k).push(Object.assign({}, c, { ahora: !!(ahora && ahora.inicio === c.start && (ahora.asunto ?? ahora.titulo) === c.subject) }));
   });
   return [...dias.entries()].sort((x, y) => x[0] - y[0]).map(([k, l]) => ({ k, dia: hoyDiaTxt(new Date(k), now, true), citas: l }));
 }
 
 /* ---------------------------------------------------------------- cargar */
 const hoyViejo = () => Date.now() - Math.max(HOY.at, HOY.intento || 0) > HOY_CADA_MS;  // (un fallo no se reintenta en bucle)
-function hoyCargar(refrescar, otraVez) {
-  // con otra en camino, que puede traer lo de antes de un cambio: otraVez pide una más al terminar
+/* refrescar: que el servidor relea la agenda ya («Actualizar», «Volver a leer»); otraVez: si hay otra petición en
+   camino (que puede traer lo de antes de un cambio), una más al terminar; abrir: al llegar a Hoy, que el servidor relea
+   la agenda si tiene más de 2 min (el sondeo de cada 30 s no la relee: cada lectura ocupa Outlook) */
+function hoyCargar(refrescar, otraVez, abrir) {
   if (HOY.cargando) { if (otraVez) HOY.otraVez = refrescar ? 'r' : (HOY.otraVez || true); return HOY.cargando; }
   HOY.intento = Date.now();
-  HOY.cargando = api('/api/hoy' + (refrescar ? '?refrescar=1' : '')).then(d => {
+  if (refrescar) HOY.hasta = { t: Date.now() + 45000, comprobada: HOY.datos?.agenda?.comprobada || null };
+  const q = refrescar ? '?refrescar=1' : abrir ? '?abrir=1' : '';
+  HOY.cargando = api('/api/hoy' + q).then(d => {
     const antes = HOY.datos?.plan?.nombre?.valor;
     HOY.datos = d; HOY.at = Date.now(); HOY.error = null;
-    // otra reunión: lo que cambiaste era para la anterior
-    if (antes !== d.plan?.nombre?.valor) { HOY.pedido = null; HOY.plan = null; }
+    // otra reunión: lo que cambiaste era para la anterior, y la tarjeta se repinta aunque tengas el foco en ella (si
+    // no, enseñaría la anterior y «Grabar» grabaría la nueva)
+    if (antes !== d.plan?.nombre?.valor) { HOY.pedido = null; HOY.plan = null; HOY.forzarAhora = true; }
     if (!HOY.pedido) HOY.plan = null;
-    // la agenda se está leyendo: se vuelve a preguntar enseguida (como mucho un minuto)
+    // la agenda se está leyendo, o la has pedido otra vez y aún no ha cambiado: se vuelve a preguntar enseguida
     clearTimeout(HOY.leerTimer);
-    if (d.agenda?.estado === 'leyendo' && HOY.leyendo < 20) { HOY.leyendo++; HOY.leerTimer = setTimeout(() => hoyCargar(), 3000); }
-    else HOY.leyendo = 0;
+    const esperando = HOY.hasta && Date.now() < HOY.hasta.t && (d.agenda?.comprobada || null) === HOY.hasta.comprobada;
+    if (!esperando) HOY.hasta = null;
+    if ((d.agenda?.estado === 'leyendo' && HOY.leyendo < 20) || esperando) {
+      HOY.leyendo++;
+      HOY.leerTimer = setTimeout(() => hoyCargar(), esperando ? 2000 : 3000);
+    } else HOY.leyendo = 0;
   }).catch(err => { HOY.error = err.message; }).finally(() => {
     HOY.cargando = null;
     const otra = HOY.otraVez;
@@ -123,12 +132,21 @@ function hoyCargar(refrescar, otraVez) {
   });
   return HOY.cargando;
 }
-/* la tarjeta de ahora y la agenda, en su sitio (sin repintar la página ni pisar un chip que estés eligiendo) */
+/* la tarjeta de ahora y la agenda, en su sitio, sin repintar la página. La tarjeta no se repinta mientras eliges un
+   chip, salvo que la reunión haya cambiado; la agenda (solo botones) siempre. El foco vuelve a lo que tenías */
+function hoyRepintar(el, html) {
+  const f = document.activeElement, dentro = f && el.contains(f);
+  const sel = !dentro ? null : f.dataset.hoy ? `[data-hoy="${f.dataset.hoy}"]`
+    : f.dataset.act ? `[data-act="${f.dataset.act}"]${f.dataset.inicio ? `[data-inicio="${CSS.escape(f.dataset.inicio)}"]` : ''}` : null;
+  el.innerHTML = html;
+  if (sel) $(sel, el)?.focus();
+}
 function hoyPintarVivo(forzar) {
   if (S.route?.kind !== 'home') return;
   const ah = $('#hoyAhora'), ag = $('#hoyAgenda');
-  if (ah && (forzar || !ah.contains(document.activeElement))) ah.innerHTML = hoyAhoraHtml();
-  if (ag && (forzar || !ag.contains(document.activeElement))) ag.innerHTML = hoyAgendaHtml();
+  if (ah && (forzar || HOY.forzarAhora || !ah.contains(document.activeElement))) hoyRepintar(ah, hoyAhoraHtml());
+  HOY.forzarAhora = false;
+  if (ag) hoyRepintar(ag, hoyAgendaHtml());
 }
 setInterval(() => {
   if (S.route?.kind === 'home' && !document.hidden && !S.off && $('#modal')?.classList.contains('hidden')) hoyCargar();
@@ -168,6 +186,7 @@ function hoyAhoraHtml() {
   const lang = idi ? `<label class="ha-chip" title="Idioma de la reunión">${I.globe}<select data-hoy="idioma" aria-label="Idioma">${LANGS.map(([v, l]) => `<option value="${v}"${v === (idi.code || '') ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>` : '';
   const motivo = [proy.vocab ? proy.motivo : '', idi && idi.origen !== 'ajustes' ? `idioma ${idi.origen_txt}` : ''].filter(Boolean).join(' · ');
   const nombre = p.nombre?.valor || info.titulo;
+  HOY.visto = p;  // «Grabar» manda este, el que se está viendo
   return `<section class="card hoy-ahora"><div class="ha-ico">${info.teams ? I.phone : I.calendar}</div><div class="ha-txt">
     <div class="ha-kicker">${esc(hoyKicker(info, now))}</div>
     <h2 class="ha-titulo">${esc(nombre)}</h2>
@@ -201,12 +220,12 @@ async function hoyGrabar(b) {
   b.disabled = true;
   try {
     await HOY.pendiente;  // lo último que has cambiado: se graba con lo que se está viendo
-    const p = hoyPlan();
+    const p = HOY.visto;
     if (!p) throw new Error('Aún no se sabe cómo grabar: espera un segundo y vuelve a pulsar.');
     S.recLocal = true;
     const r = await api('/api/rec/start', { ...p.rec, resumen: p.resumen });
     toast(`● Grabando · ${esc(p.resumen)}${r.aviso ? ` · ${esc(r.aviso)}` : ''}`);
-    HOY.pedido = null; HOY.plan = null; HOY.at = 0;
+    HOY.pedido = null; HOY.plan = null; HOY.visto = null; HOY.at = 0;
     await refreshTree(true);
     pollRec(); pollJobs(true);
     go('a', r.path);
@@ -282,7 +301,7 @@ function hoyAgendaHtml() {
       <div class="ag-t"><div class="ag-n">${esc(c.subject || '(sin asunto)')}${tags}</div>${lugar}${prep}</div>${boton}</div>`;
   }).join('')}</div>`).join('');
   const nada = g.estado === 'ok' && !dias.length ? `<div class="ag-nada">No tienes más reuniones en los próximos ${g.dias} días.</div>` : '';
-  const pie = g.leida ? `<div class="ag-pie">Leída de Outlook a las ${hoyHora(g.leida)}${g.cortada ? ' · solo las primeras citas: tu agenda tiene más' : ''}
+  const pie = g.leida ? `<div class="ag-pie">${HOY.hasta ? 'Leyendo de Outlook…' : `Leída de Outlook a las ${hoyHora(g.leida)}`}${g.cortada ? ' · solo las primeras citas: tu agenda tiene más' : ''}
     <button class="btn ghost sm" data-act="hoy-agenda-leer" title="Volver a leer la agenda de Outlook">${I.refresh}Actualizar</button></div>` : '';
   return `<h2>Agenda${activo ? ` <span class="count">próximos ${g.dias} días</span>` : ''}</h2>${linea}
     ${filas || nada ? `<div class="card ag-lista">${filas}${nada}</div>` : ''}
@@ -303,7 +322,7 @@ function hoyCalDia(key) {
 /* ---------------------------------------------------------------- la página */
 function viewHoy() {
   const all = allAudios(), now = new Date();
-  if (!HOY.datos || hoyViejo()) hoyCargar();
+  if (!HOY.abierta) { HOY.abierta = true; hoyCargar(false, true, true); } else if (!HOY.datos || hoyViejo()) hoyCargar();
   const revisar = all.length ? hoyRevisar(all, now) : [];
   const fuera = new Set(revisar.slice(0, HOY_REVISAR_MAX).map(r => r.a.path));
   main.innerHTML = `<div class="page hoy">
@@ -400,7 +419,7 @@ main.addEventListener('click', e => {
   else if (act === 'hoy-subir') $('#btnSubir')?.click();
   else if (act === 'hoy-ultima' || act === 'hoy-resumen') { S.tab = 'sum'; go('a', b.dataset.path); }
   else if (act === 'hoy-accion' && a) hoyAccion(b.dataset.k, a);
-  else if (act === 'hoy-agenda-leer') { HOY.leyendo = 0; hoyCargar(true, true); }
+  else if (act === 'hoy-agenda-leer') { HOY.leyendo = 0; hoyCargar(true, true); hoyPintarVivo(); }
   else if (act === 'hoy-agenda-ajustes') openSettings({ sec: 'calendario' });
   else if (act === 'hoy-agenda-todo') { HOY.todo = true; hoyPintarVivo(true); }
   else if (act === 'hoy-preparar') {
@@ -409,3 +428,4 @@ main.addEventListener('click', e => {
   }
 }, true);
 main.addEventListener('change', e => { if (e.target.dataset?.hoy) hoyCambio(e.target); });
+addEventListener('hashchange', () => { if (S.route?.kind !== 'home') HOY.abierta = false; });

@@ -642,7 +642,7 @@ def _filtro(lo, hi, fmt):
     return f"[Start] <= '{fmt(hi)}' AND [End] >= '{fmt(lo)}'"
 
 
-def _recorrer(sel, now, lo, hi, max_citas):
+def _recorrer(sel, now, lo, hi, max_citas, info=None):
     out, objs, fuera, n = [], [], 0, 0
     item = sel.GetFirst()
     while item is not None and n < max_citas:
@@ -657,12 +657,14 @@ def _recorrer(sel, now, lo, hi, max_citas):
         except Exception:
             log_exc()
         item = sel.GetNext()
+    if info is not None:  # ¿se ha cortado en el tope con citas por leer? (con exactamente max_citas, no)
+        info["quedan"] = item is not None
     return out, objs, fuera, n
 
 
 def _candidatas(app, now, lo, hi, fmts, max_citas, info=None):
     """Las citas que tocan [lo, hi] (lo no protegido), sus objetos COM y el formato de fecha que ha valido. `info`:
-    dict donde se apunta cuántas se han recorrido ("n"), para saber si se ha cortado en `max_citas`."""
+    dict donde se apunta cuántas se han recorrido ("n") y si quedaban más al llegar a `max_citas` ("quedan")."""
     ns = app.GetNamespace("MAPI")
     items = ns.GetDefaultFolder(OL_FOLDER_CALENDAR).Items
     items.Sort("[Start]")  # orden obligatorio (docs de IncludeRecurrences): ordenar, incluir repeticiones, filtrar
@@ -677,7 +679,7 @@ def _candidatas(app, now, lo, hi, fmts, max_citas, info=None):
                 log(f"   calendario: el formato de fecha {nombre} no le vale a Outlook ({_texto(e)} "
                     f"{_codigo(e) or ''})")
             continue
-        out, objs, fuera, n = _recorrer(sel, now, lo, hi, max_citas)
+        out, objs, fuera, n = _recorrer(sel, now, lo, hi, max_citas, info)
         if info is not None:
             info["n"] = n
         if out or not fuera:
@@ -1036,6 +1038,7 @@ MAX_CITAS_AGENDA = 600  # 20 al día durante un mes; con más, se corta y se dic
 AGENDA_TIMEOUT = 30.0  # s: en segundo plano, Outlook puede tardar en expandir las periódicas de un mes
 AGENDA_CADA = 600  # s entre lecturas en segundo plano
 AGENDA_VIEJA = 120  # s: al abrir Hoy, una lectura más vieja se vuelve a pedir (sin esperarla)
+AGENDA_FRESCA = 3 * 3600  # s: más vieja, la agenda se enseña (con su hora) pero no pone nombre a la reunión de ahora
 VENTANA_AHORA = (10, 5)  # minutos hacia delante y hacia atrás: la misma ventana que outlook_current_meeting
 
 
@@ -1060,7 +1063,7 @@ def agenda(now=None, dias=AGENDA_DIAS, timeout=AGENDA_TIMEOUT, session=None, fmt
     def trabajo(app, caja):
         info = {}
         cands, _objs, caja["formato"] = _candidatas(app, now, lo, hi, fmts, max_citas, info)
-        caja["cortada"] = info.get("n", 0) >= max_citas
+        caja["cortada"] = bool(info.get("quedan"))
         caja["cands"] = _copias(cands)
 
     caja = _en_com(trabajo, timeout, session, espera_otra=espera_otra)
@@ -1119,6 +1122,12 @@ class Agenda:
         with self.lock:
             return [dict(c) for c in (self.datos or {}).get("citas") or []]
 
+    def fresca(self, max_s=None):
+        """¿La última lectura buena tiene menos de `max_s` (AGENDA_FRESCA)? Más vieja (Outlook cerrado desde hace
+        horas), no pone nombre a la reunión de ahora: una cita movida o cancelada después lo pondría mal."""
+        with self.lock:
+            return bool(self.datos is not None and self.reloj() - self.leida < (max_s or AGENDA_FRESCA))
+
     def olvidar(self, fallo=None):
         """El calendario está apagado (o no se puede leer en este PC): fuera lo leído y, si se da, por qué."""
         with self.lock:
@@ -1174,9 +1183,10 @@ class Agenda:
         frase del fallo («… Lo de abajo es de las 23:10.»). `apagado`: con el calendario apagado, (estado, frase) de
         estado(False) (apagado, Outlook nuevo, sin Outlook, no es Windows), que no habla con Outlook."""
         with self.lock:
-            datos, leida, fallo, leyendo = self.datos, self.leida, self.fallo, self.leyendo
+            datos, leida, fallo, leyendo, intento = self.datos, self.leida, self.fallo, self.leyendo, self.intento
         r = {"estado": "ok", "frase": "", "accion": None, "citas": [], "leida": None, "cortada": False,
-             "dias": AGENDA_DIAS}
+             "dias": AGENDA_DIAS,
+             "comprobada": datetime.fromtimestamp(intento).isoformat(timespec="seconds") if intento else None}
         if not activado:
             estado_, frase = apagado if apagado and apagado[0] != "apagado" else ("apagado", FRASES_AGENDA["apagado"])
             return dict(r, estado=estado_, frase=frase,
@@ -1369,7 +1379,7 @@ def reunion_de_ahora(lectura, citas, vocab_lists, now=None):
             s = e = None
         if s and e:
             info.update(inicio=cita["start"], fin=cita["end"], en_curso=bool(teams) or s <= now <= e,
-                        periodica=bool(cita.get("recurring")))
+                        periodica=bool(cita.get("recurring")), asunto=cita.get("subject") or "")
     return sug, info
 
 
