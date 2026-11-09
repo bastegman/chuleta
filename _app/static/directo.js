@@ -278,6 +278,7 @@ function directoKeyRowHtml(mask, prov) {
 
 /* texto de a quien pertenecen las claves (puro: se prueba con node). rows: {proveedor: [{mask, value}]} */
 function directoOwnerText(p, rows) {
+  if (!p) return 'Elige el proveedor en Procesado para añadir claves de otras cuentas.';
   const n = rs => (rs || []).filter(r => r.mask || String(r.value || '').trim()).length;
   let t = `Estas claves son solo de ${directoProvName(p)}: se usan con ${directoProvName(p)} y no se envían a ningún otro proveedor.`;
   Object.keys(rows || {}).filter(k => k !== p && n(rows[k])).forEach(k => {

@@ -395,8 +395,9 @@ function wzCandidata() {
   if (W.modo === 'agente') out.agente = { tipo: S.config.agente?.tipo || 'claude', modelo: S.config.agente?.modelo };
   if (W.modo === 'api') {
     const c = { provider: W.cloud.provider };
-    const misma = wzMisma();
-    if (!misma) c.model = (S.config.providers?.[W.cloud.provider]?.models || [])[0] || '';
+    // el modelo de ese proveedor: el guardado si es el mismo (aunque no estuviera «elegido»: el de por defecto es el
+    // más preciso), y si no, el primero de su lista
+    if (W.cloud.provider !== S.config.cloud?.provider) c.model = (S.config.providers?.[W.cloud.provider]?.models || [])[0] || '';
     if (W.cloud.api_key) c.api_key = W.cloud.api_key;
     if (W.cloud.provider === 'custom') c.base_url = W.cloud.base_url;
     if (W.cloud.provider === 'azure') Object.assign(c, { azure_endpoint: W.cloud.azure_endpoint, azure_deployment: W.cloud.azure_deployment, azure_api_version: W.cloud.azure_api_version });

@@ -133,7 +133,7 @@ function longTitle(a) {
 }
 const fullTitle = a => (a.props && a.props.titulo) ? `${nfc(a.props.titulo)} · ${shortTitle(a)}` : longTitle(a) + (a.label ? ` · ${nfc(a.label)}` : '');
 const provName = () => S.config?.procesado === 'agente' ? `${S.config.agente?.label || 'Claude Code'} (tu cuenta)`
-  : provElegido() ? (S.config?.providers?.[S.config.cloud?.provider]?.label || 'la nube') : 'el proveedor que elijas';
+  : provElegido() ? (S.config?.providers?.[S.config.cloud?.provider]?.label || 'la nube') : 'tu proveedor';
 /* hay un proveedor de la nube elegido (server.proveedor_elegido): en una instalación nueva no, y ninguno se da por
    elegido ni se nombra (Bernardo, msg 1386: «Lo que no quiero es sugerir Groq a un nuevo instalador») */
 const provElegido = () => S.config?.cloud?.elegido !== false;
@@ -2551,6 +2551,15 @@ function openSettings(opts) {
     };
     // «Guardar» (cierra Ajustes) y «Guardar y seguir» (no lo cierra: lo que sigue ocupa su hueco). true si se guardó
     const guardar = async (cerrar = true) => {
+      // «API externa» sin proveedor: no se guarda (se quedaría con el de por defecto, que nadie ha elegido; msg 1386)
+      if ($('input[name="proc"]:checked', d)?.value === 'api' && !$('#cProv', d).value) {
+        d.irSec?.('procesado');
+        const res = $('#cTestRes', d);
+        if (res) res.innerHTML = '<span style="color:var(--err)">Elige antes el proveedor.</span>';
+        toast('Elige el proveedor de «API externa» antes de guardar.', 'err');
+        $('#cProv', d).focus();
+        return false;
+      }
       try {
         const c = await api('/api/settings', collect());
         setConfig(c); localStorage.setItem('procElegido', '1');

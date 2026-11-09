@@ -598,8 +598,10 @@ def proveedor_elegido(st):
     «Lo que no quiero es sugerir Groq a un nuevo instalador»). cloud.provider sigue siendo "groq" por defecto en los
     ajustes, para no cambiar nada a quien ya lo usa sin haberlo guardado nunca."""
     c = st.get("cloud") or {}
-    return procesado_de(st) == "api" or any(str(c.get(k) or "").strip() for k in (
-        "api_key", "base_url", "azure_endpoint")) or any(c.get(f) for f in engines.EXTRA_KEYS_FIELDS.values())
+    # un proveedor que no es el de por defecto solo puede venir de una eleccion (aunque aun no tenga clave)
+    return (procesado_de(st) == "api" or c.get("provider") not in ("groq", "", None)
+            or any(str(c.get(k) or "").strip() for k in ("api_key", "base_url", "azure_endpoint"))
+            or any(c.get(f) for f in engines.EXTRA_KEYS_FIELDS.values()))
 
 
 def agente_de(st):
@@ -7013,6 +7015,8 @@ class App:
             if not lists and isinstance(c.get("extra_keys"), list):
                 lists = {d["cloud"].get("provider") or "groq": c["extra_keys"]}
             for prov, incoming in lists.items():
+                if prov not in engines.PROVIDERS:
+                    continue  # sin proveedor elegido no hay de quien: no se guardan como claves de Groq
                 field = engines.extra_keys_field(prov)
                 if not field or not isinstance(incoming, list):
                     continue
@@ -7098,6 +7102,8 @@ class App:
         cl = c.get("cloud") if isinstance(c.get("cloud"), dict) else {}
         st["cloud"] = dict(st.get("cloud") or {})
         for k in ("provider", "model", "base_url", "azure_endpoint", "azure_deployment", "azure_api_version"):
+            if k == "provider" and cl.get(k) not in engines.PROVIDERS:
+                continue  # como al guardar: un proveedor vacio o desconocido no se prueba como si fuera Groq
             if k in cl:
                 st["cloud"][k] = (cl[k] or "").strip()
         key = (cl.get("api_key") or "").strip()

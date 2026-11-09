@@ -29,7 +29,8 @@ class ProveedorElegidoTests(unittest.TestCase):
         for cambio in ({"procesado": "api"}, {"cloud": dict(cloud, api_key="x")},
                        {"cloud": dict(cloud, base_url="https://api.empresa.example/v1")},
                        {"cloud": dict(cloud, azure_endpoint="https://r.openai.azure.com")},
-                       {"cloud": dict(cloud, extra_keys_openai=["k"])}):
+                       {"cloud": dict(cloud, extra_keys_openai=["k"])},
+                       {"cloud": dict(cloud, provider="openai")}):  # otro que el de por defecto: alguien lo eligió
             with self.subTest(cambio=cambio):
                 self.assertTrue(server.proveedor_elegido(dict(nuevo, **cambio)))
 
@@ -48,8 +49,18 @@ class GuardarTests(TempTree):
         self.assertEqual(a.settings.get()["cloud"]["provider"], "groq")  # el de los ajustes, sin tocar
         a.save_settings({"cloud": {"provider": "inventado"}})
         self.assertEqual(a.settings.get()["cloud"]["provider"], "groq")
+        a.save_settings({"cloud": {"extra_keys_by": {"": ["gsk_sin_proveedor"]}}})
+        self.assertEqual(a.settings.get()["cloud"].get("extra_keys") or [], [])  # no van a parar a las de Groq
         a.save_settings({"cloud": {"provider": "openai"}})
         self.assertEqual(a.settings.get()["cloud"]["provider"], "openai")
+
+    def test_el_motor_no_manda_a_groq_sin_proveedor(self):
+        from support import engines
+        for p in ("", "inventado"):
+            with self.subTest(p=p), self.assertRaises(engines.EngineError) as cm:
+                engines.CloudEngine.endpoint({"provider": p, "api_key": "k"})
+            self.assertIn("Elige el proveedor", str(cm.exception))
+        self.assertIn("api.groq.com", engines.CloudEngine.endpoint({"api_key": "k"})[0])  # sin la clave: como siempre
 
 
 @unittest.skipUnless(sync_playwright, "playwright no instalado")
@@ -147,8 +158,20 @@ class InstalacionNuevaTests(unittest.TestCase):
         pg.click(".aj-nav [data-sec='avanzado']")  # lo de la nube en Avanzado (claves adicionales), tampoco
         self.sin_groq(pg, "Ajustes › Avanzado con API")
         self.assertTrue(pg.locator("#dkAdd").is_disabled())  # sin proveedor, no hay de quién añadir claves
+        # «Guardar» con «API externa» y sin proveedor: no se guarda (se quedaría con Groq, el de por defecto)
+        pg.click(".aj-pie [data-m='ok']")
+        self.assertEqual(pg.locator("#cTestRes").text_content(), "Elige antes el proveedor.")
+        self.assertFalse(pg.locator("#modal").is_hidden())
+        self.assertEqual(pg.evaluate("document.activeElement.id"), "cProv")
         # nada se ha guardado por mirar
         self.assertFalse(self.nueva.get("/api/config")["cloud"]["elegido"])
+        self.assertNotRegex(self.visible(pg), r"\ba el\b")  # «las envía a tu proveedor», no «a el proveedor…»
+        # el asistente, con Groq elegido a mano: el modelo es el guardado (el más preciso), no el primero de la lista
+        pg.keyboard.press("Escape")
+        cand = pg.evaluate("() => { abrirConfigurar({paso: 2, modo: 'api'}); W.cloud.provider = 'groq'; "
+                           "const c = wzCandidata(); closeModal(false); return c }")
+        self.assertEqual(cand["cloud"]["provider"], "groq")
+        self.assertNotIn("model", cand["cloud"])
         self.sin_errores()
 
     def test_quien_ya_usa_groq_no_nota_nada(self):
