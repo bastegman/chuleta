@@ -6464,12 +6464,12 @@ class App:
         return calendario.estado(on, probar=on)
 
     # --- la pantalla Hoy (B7) y la agenda de Outlook de un mes
-    def _reunion_ahora(self, st=None, recordar=True):
+    def _reunion_ahora(self, st=None, recordar=True, citas=None):
         """(sugerencia, info) de la reunión de ahora: la última lectura del vigilante (o la ventana de Teams al momento)
         y, si no da nombre, la cita de la agenda de Outlook ya leída que encaja con ahora (calendario.reunion_de_ahora).
         La usan el plan de grabar (tarjeta, Ctrl+Alt+R, aviso, Hoy) y /api/hoy: una sola reunión de ahora para todos.
         `recordar=False` (Hoy, que pregunta cada 30 s): la lectura al momento no se guarda como la del vigilante, que
-        durante una llamada la quiere con Outlook."""
+        durante una llamada la quiere con Outlook. `citas`: la agenda que ya se tiene (la misma que se enseña)."""
         st = st or self.settings.get()
 
         def leer():
@@ -6478,8 +6478,9 @@ class App:
             lect = self.vigia.lectura(leer, recordar=recordar)
         else:  # un vigilante que solo da la sugerencia (los dobles de los tests)
             lect = {"sugerencia": self.vigia.sugerencia(leer)}
-        ag = getattr(self, "agenda", None)
-        citas = ag.citas() if ag is not None and st.get("outlook_on") else []
+        if citas is None:
+            ag = getattr(self, "agenda", None)
+            citas = ag.citas() if ag is not None and st.get("outlook_on") else []
         return calendario.reunion_de_ahora(lect, citas, self._vocab_terms)
 
     def _ultima_vez(self, nombre):
@@ -6586,14 +6587,16 @@ class App:
         ag = getattr(self, "agenda", None)
         if ag is not None and activado and (q.get("refrescar") in ("1", "true") or ag.toca(calendario.AGENDA_VIEJA)):
             ag.pedir()
-        sug, info = self._reunion_ahora(st, recordar=False)
-        plan = self.plan_grabar({}, st=st, sug=sug)
-        nombre = plan["nombre"]["valor"]
         apagado = None
         if not activado:  # sin hablar con Outlook: apagado, Outlook nuevo, sin Outlook o no es Windows
             e = calendario.estado(False)
             apagado = (e["estado"], e["frase"])
+        # una sola foto de la agenda para la reunión de ahora y la lista (el hilo puede estar renovándola)
         agenda = ag.publica(activado, apagado) if ag is not None else None
+        sug, info = self._reunion_ahora(st, recordar=False,
+                                        citas=[dict(c) for c in agenda["citas"]] if agenda and activado else [])
+        plan = self.plan_grabar({}, st=st, sug=sug)
+        nombre = plan["nombre"]["valor"]
         prep = st.get("preparadas") or {}
         for c in (agenda or {}).get("citas") or []:  # lo preparado de cada cita («Preparada · Alfa › General»)
             p = prep.get(self._clave_preparada(c.get("subject"), c.get("start")))

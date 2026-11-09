@@ -369,6 +369,14 @@ class ServidorTests(TempTree):
             a.rec_toggle({"source": "hotkey"})
         self.assertEqual({k: v for k, v in vistos[0].items() if k != "resumen"}, r["plan"]["rec"])
 
+    def test_la_reunion_de_ahora_y_la_lista_salen_de_la_misma_foto(self):
+        """Si el hilo renueva la agenda en mitad de /api/hoy, la reunión de ahora no puede salir de otra lectura que la
+        lista (en ui-smoke de Ubuntu salía «agenda ok» con ahora = None)."""
+        a = self.app(outlook_on=True)
+        a.agenda.citas = lambda: []  # lo que habría dado una lectura de la caché a destiempo
+        r = a.hoy({})
+        self.assertEqual(r["ahora"]["titulo"], "Comité de seguimiento")
+
     def test_con_el_calendario_apagado_no_se_usa_la_agenda(self):
         a = self.app(outlook_on=False)
         with mock.patch.object(calendario, "estado", lambda on: {"estado": "apagado", "frase": "x"}):
