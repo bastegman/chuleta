@@ -115,8 +115,8 @@ class CapasTests(unittest.TestCase):
         import calendario
         unir = getattr(calendario, "join_participants", None)
         for nombres in (["Stegmaier, Bernardo", "García, Ana"], ["Ana", "Luis"], ["Ana", ""], [], None):
-            if unir:
-                self.assertEqual(plan.unir_participantes(nombres), unir(nombres), nombres)
+            if unir:  # con fix-calendario, la regla de reserva de aquí da lo mismo que la suya
+                self.assertEqual(plan._unir_local(nombres), unir(nombres), nombres)
 
     def test_los_idiomas_se_llaman_igual_que_en_los_desplegables(self):
         """«Portugués» en el plan y «Português» en el desplegable eran dos nombres del mismo idioma (revisión 2,

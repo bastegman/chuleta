@@ -94,7 +94,8 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   lo guarda; si entretanto se ha guardado otra cosa en ese campo (el asistente guarda el modo, el motor o la clave),
   manda lo guardado. Abrir Ajustes de cualquier otra forma (⚙, la paleta, Inicio, la tarjeta de grabar, un error, el
   aviso de cerrar la ventana) lo abre de nuevo, sin lo de antes. Desde el asistente abierto en Ajustes, «Revisar en
-  Ajustes» e «Ir a Avanzado» vuelven con lo escrito, y a esa sección. Antes un borrador abandonado volvía después y
+  Ajustes» e «Ir a Avanzado» vuelven con lo escrito, y a esa sección («Revisar en Ajustes» con «Con tu cuenta de
+  Claude» marcada). Si la opción escrita ya no existe al volver (una carpeta vinculada quitada), queda lo guardado. Antes un borrador abandonado volvía después y
   «Guardar» deshacía lo guardado entretanto con «Usarlo en»; y un motor repuesto se veía pero no se guardaba.
 - La carpeta de las reuniones sin proyecto que no se encuentra no tira el resto de lo escrito en el plan (el contexto),
   y el plan dice por qué graba en otra («No se encuentra la carpeta de las reuniones sin proyecto (…): se guarda

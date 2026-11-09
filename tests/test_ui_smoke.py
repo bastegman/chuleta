@@ -662,6 +662,63 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)
 
+    def test_ajustes_borrador_de_la_nube_y_el_asistente(self):
+        """Revisión 6 de B2: lo escrito en la parte de la nube (proveedor, modelo, clave) vuelve aunque entretanto
+        llegue otra configuración con el cupo cambiado (antes se firmaba la nube entera, con quota.reset_in, y se
+        tiraba); el proveedor vuelve con su modelo; lo que el asistente guarda (ajOlvidarAsistente) ya no vuelve del
+        borrador; un desplegable cuya opción ya no existe se queda en lo guardado (antes en blanco, y «Guardar» mandaba
+        «»); y «Revisar en Ajustes» del asistente enseña marcado el modo elegido allí."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        abrir = "openVocabEditor(S.vocab[0], openSettings)"
+        poner = ("([id, v]) => { const el = document.querySelector('#' + id); el.value = v;"
+                 " el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }")
+        # guardado OpenAI; se elige Groq con el modelo que no es el que pinta por defecto (el caso de la revisión)
+        prov_antes = pg.evaluate("api('/api/config')")["cloud"]["provider"]
+        pg.evaluate("api('/api/settings', {cloud: {provider: 'openai'}}).then(setConfig)")
+        self.addCleanup(pg.evaluate, "p => api('/api/settings', {cloud: {provider: p}}).then(setConfig)", prov_antes)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila", timeout=10000)
+        prov0, otro = "openai", "groq"
+        self.assertEqual(pg.input_value("#cProv"), prov0)
+        pg.evaluate(poner, ["cProv", otro])
+        modelo = pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
+                             ".find(v => v !== document.querySelector('#cModel').value)")  # no el que pinta
+        self.assertTrue(modelo)
+        pg.evaluate(poner, ["cModel", modelo])
+        pg.evaluate(poner, ["cKey", "clave-de-prueba"])
+        pg.evaluate(abrir)
+        # llega otra configuración con el cupo de la nube cambiado (p. ej. al guardar una fila de Proyectos)
+        pg.evaluate("setConfig({ ...S.config, cloud: { ...S.config.cloud, quota: { reset_in: 1.5 } } })")
+        pg.click("#modal [data-m='no']")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertEqual([pg.input_value(x) for x in ("#cProv", "#cModel", "#cKey")], [otro, modelo, "clave-de-prueba"])
+        # el asistente guarda: lo suyo (modo, nube, motores) ya no vuelve del borrador
+        pg.evaluate(abrir)
+        pg.evaluate("ajOlvidarAsistente()")
+        pg.click("#modal [data-m='no']")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertEqual([pg.input_value(x) for x in ("#cProv", "#cKey")], [prov0, ""])
+        with open(os.path.join(REPO, "_app", "static", "configurar.js"), encoding="utf-8") as f:
+            self.assertIn("ajOlvidarAsistente()", f.read())  # y el asistente lo llama al guardar
+        pg.keyboard.press("Escape")
+        # un desplegable sin la opción del borrador: lo guardado, no en blanco
+        pg.evaluate("S.ajBorrador = { pfFolder: 'No/Existe' };"
+                    " S.ajBorradorBase = { campos: { pfFolder: PERFIL_AUTO } }; openSettings()")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertEqual(pg.input_value("#pfFolder"), "__auto")
+        pg.keyboard.press("Escape")
+        # «Revisar en Ajustes» con «Con tu cuenta de Claude» elegido en el asistente
+        pg.evaluate("openSettings({ sec: 'procesado', proc: 'agente' })")
+        pg.wait_for_selector("#modal .aj-nav [data-sec='procesado'].on", timeout=5000)
+        self.assertTrue(pg.is_checked("#modal input[name='proc'][value='agente']"))
+        self.assertTrue(pg.is_visible("#procAgente"))
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
     def test_tarjeta_dice_los_avisos_del_plan(self):
         """Revisión 4 de B2: los avisos del plan (aquí, «Falta la API key» con «API externa» sin clave) salen en la
         tarjeta de grabar, en su línea, como en Ajustes: es al grabar cuando importan."""

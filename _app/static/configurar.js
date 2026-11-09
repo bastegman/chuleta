@@ -474,6 +474,7 @@ async function wzGuardar(despues) {
     localStorage.setItem('procElegido', '1');
     const volver = W.volver;
     W.guardado = true;
+    if (typeof ajOlvidarAsistente === 'function') ajOlvidarAsistente();  // lo que acaba de guardar no lo pisa Ajustes
     closeModal(true);
     toast(`Guardado: ${esc(modoNombre(c.procesado))}. ${esc(modoLinea(c.live_preset || 'medium'))}.`);
     if (c.descarga) modelosRefrescar(4000);
@@ -490,8 +491,14 @@ async function wzAccion(tipo, b) {
   // en el paso 2
   // a una sección de Ajustes: si el asistente se abrió desde Ajustes, es una vuelta (con lo escrito allí) y su cierre
   // ya no programa la vuelta a Procesado (que acababa ganando a «Avanzado»)
-  const aAjustes = sec => { const v = !!W.volver; W.volver = null; closeModal(false); return openSettings({ sec, volver: v }); };
-  if (tipo === 'procesado' && W.modo === 'agente') return aAjustes('procesado');
+  const aAjustes = (sec, proc) => {
+    const v = !!W.volver;
+    W.volver = null;
+    closeModal(false);
+    return openSettings({ sec, volver: v, proc });
+  };
+  // con «Con tu cuenta de Claude» elegido y sin guardar: Ajustes la enseña marcada, con su selector de modelo
+  if (tipo === 'procesado' && W.modo === 'agente') return aAjustes('procesado', W.modo);
   if (tipo === 'asistente' || tipo === 'procesado') { W.paso = 2; return wzPintar(); }
   if (tipo === 'reintentar_descarga') { await wzBajar(); return wzProbar(); }
   if (tipo === 'avanzado') return aAjustes('avanzado');

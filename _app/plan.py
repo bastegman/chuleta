@@ -108,10 +108,15 @@ def unir_participantes(nombres):
     """Los participantes de la reunión en una línea, como calendario.join_participants (revisión de la integración del
     08/11/2026): con «; » si algún nombre lleva coma (el directorio de una empresa en Outlook: «Apellido, Nombre») y,
     si no, con «, ». Con «, », «Stegmaier, Bernardo, García, Ana» eran cuatro personas para quien lo lee y para la pista
-    de quién habla. Con la rama fix-calendario, la suya (una sola regla); sin ella, la misma aquí."""
+    de quién habla. Con la rama fix-calendario, la suya (una sola regla); sin ella, la misma aquí (_unir_local)."""
     import calendario  # aquí y no arriba: plan.py sigue sin depender de calendario para lo demás
     if hasattr(calendario, "join_participants"):
         return calendario.join_participants(nombres)
+    return _unir_local(nombres)
+
+
+def _unir_local(nombres):
+    """La misma regla que calendario.join_participants, para cuando no está (tests/test_plan.py las compara)."""
     nombres = [n for n in (nombres or []) if n]
     return ("; " if any("," in n for n in nombres) else ", ").join(nombres)
 
