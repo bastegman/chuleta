@@ -333,14 +333,15 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(red, [])
 
     def test_ajustes_ocultar_al_compartir(self):
-        """«Al compartir pantalla» en Ajustes › Al grabar (ítem 18, msg 1242). Aquí no hay ventana propia (el servidor
-        va con --no-browser): el interruptor sale apagado y dice por qué. Con un servidor que sí puede (respuesta
-        simulada), marcarlo lo aplica al momento, sin «Guardar», y lo dice."""
+        """«Al compartir pantalla» en Ajustes › Calendario y Teams (ítem 18, msg 1242). Aquí no hay ventana propia (el
+        servidor va con --no-browser): el interruptor sale apagado y dice por qué. Con un servidor que sí puede
+        (respuesta simulada), marcarlo lo aplica al momento, sin «Guardar», y lo dice."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.click("#btnSettings")
-        pg.wait_for_selector("#agOcultar", timeout=10000)
+        pg.click(".aj-nav [data-sec='calendario']")
+        pg.wait_for_selector("#agOcultar", state="visible", timeout=10000)
         self.assertTrue(pg.is_disabled("#agOcultar"))
         nota = pg.inner_text("#agOcultarNota")
         self.assertTrue("Solo en Windows" in nota or "ventana propia" in nota, nota)
@@ -358,7 +359,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.route("**/api/ocultar-captura", ocultar)
         pg.evaluate("S.config.ocultar_captura = {activado: true, soportado: true, motivo: null, aplicado: true}")
         pg.click("#btnSettings")
-        pg.wait_for_selector("#agOcultar:not([disabled])", timeout=10000)
+        pg.click(".aj-nav [data-sec='calendario']")
+        pg.wait_for_selector("#agOcultar:not([disabled])", state="visible", timeout=10000)
         self.assertTrue(pg.is_checked("#agOcultar"))
         self.assertIn("Tú la sigues viendo", pg.inner_text("#agOcultarNota"))
         pg.click("#agOcultar")

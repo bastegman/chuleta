@@ -16,6 +16,7 @@ import copy
 import errno
 import hashlib
 import hmac
+import itertools
 import json
 import logging
 import os
@@ -2734,6 +2735,9 @@ def apply_edits(segs, edits):
     return out
 
 
+TEXT_GEN = itertools.count(1)  # generaciones del texto en directo (Job.text_gen); next() es atómico con el GIL
+
+
 def live_writer(job):
     """El escritor del directo (live.run lo llama tras cada trozo con todas las frases): guarda lo que dio Whisper
     (job.raw) y escribe el .txt y el .srt con las correcciones a mano. Si lo que llega cambia frases ya escritas (el
@@ -2745,7 +2749,7 @@ def live_writer(job):
             if old and segs[:len(old)] != old:  # se rehace lo ya escrito: desde la primera frase que cambia
                 i = next((n for n, (x, y) in enumerate(zip(segs, old)) if x != y), min(len(segs), len(old)))
                 desde = [float(v[i][0]) for v in (old, segs) if i < len(v) and v[i][0] is not None]
-                job.text_gen += 1
+                job.text_gen = next(TEXT_GEN)
                 job.rewrites.append((job.text_gen, min(desde) if desde else 0.0))
             job.raw = segs
             try:
@@ -2814,9 +2818,11 @@ class Job:
         self.translate_to = "es"  # destino de la traduccion: «es» o «en» (start_live pone el de la reunion)
         # correcciones a mano durante el directo: {inicio de la frase: texto}, sobre lo que da Whisper (raw)
         self.edits, self.raw, self.out, self.edit_lock = {}, [], None, threading.Lock()
-        # cada vez que el directo rehace texto ya escrito (cambio de idioma, «rehacer desde el principio») sube text_gen
-        # y se apunta desde qué segundo (rewrites): lo que se corrige sobre un texto anterior no toca lo rehecho
-        self.text_gen, self.rewrites = 0, []
+        # cada vez que el directo rehace texto ya escrito (cambio de idioma, «rehacer desde el principio») cambia
+        # text_gen y se apunta desde qué segundo (rewrites): lo que se corrige sobre un texto anterior no toca lo
+        # rehecho. Sale de un contador de todo el proceso: el directo siguiente de la misma reunión (pausar y volver a
+        # transcribir) no repite números de este (revisión 2)
+        self.text_gen, self.rewrites = next(TEXT_GEN), []
 
     def public(self):
         now = time.time()
@@ -3111,14 +3117,15 @@ class Jobs:
         except ApiError:
             return False
         # local_part del directo: si tuvo algun trozo en local (sin el dato, si: lo seguro)
-        j = self._queue_final_pass(job.path, job.name, job.language, local_part=getattr(job, "local_part", True))
-        j.idioma_repaso = idioma_repaso(getattr(job, "idiomas_directo", None))
-        if j.idioma_repaso is not None:
+        idioma = idioma_repaso(getattr(job, "idiomas_directo", None))
+        if idioma is not None:
             log(f"   {job.name}: el idioma cambió en el directo; el repaso final, con "
-                f"{j.idioma_repaso or 'detección'} (no solo el del final)")
+                f"{idioma or 'detección'} (no solo el del final)")
+        self._queue_final_pass(job.path, job.name, job.language, local_part=getattr(job, "local_part", True),
+                               idioma_repaso=idioma)
         return True
 
-    def _queue_final_pass(self, rel, name, language, local_part=True):
+    def _queue_final_pass(self, rel, name, language, local_part=True, idioma_repaso=None):
         """El repaso final de esa reunion a la cola: el del directo que acaba de terminar o, al arrancar, el que quedo
         apuntado (_resume_final_passes). Queda apuntado en repasos_pendientes.json hasta que termine: si se apaga
         antes, se retoma al arrancar. local_part: si su directo tuvo algun trozo en local (sin el dato, si: lo seguro).
@@ -3127,6 +3134,9 @@ class Jobs:
         sin permiso, tampoco con un repaso retomado tras reiniciar (tests/test_integracion.py)."""
         j = Job(rel, name, "nube", language)
         j.final_pass, j.stage, j.local_part = True, "En cola: repaso final en la nube", local_part is not False
+        # el idioma cambió en pleno directo (idioma_repaso): antes de entrar en la cola, que el hilo lo vea. No se
+        # apunta en repasos_pendientes.json: uno retomado tras reiniciar usa el de la reunión al terminar
+        j.idioma_repaso = idioma_repaso
         self._pending().set(rel, local_part=j.local_part)
         with self.lock:
             self.list.append(j)
@@ -6165,7 +6175,9 @@ class App:
         with job.edit_lock:
             corte = None
             if gen is not None and gen != getattr(job, "text_gen", 0):
-                corte = min((t for g, t in getattr(job, "rewrites", []) if g > gen), default=0.0)
+                # lo rehecho despues de la version del editor; ninguno (era la de otro directo de la reunion, que
+                # empezo con el texto del archivo): como siempre
+                corte = min((t for g, t in getattr(job, "rewrites", []) if g > gen), default=None)
             for a, _, t in job.raw:
                 k = seg_key(a)
                 if corte is not None and a >= corte - 1e-6:

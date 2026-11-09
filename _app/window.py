@@ -350,7 +350,8 @@ class Window:
             ok, err = set_display_affinity(hwnd, on)
             if ok:
                 self.capture_applied, self.capture_error = bool(on), None
-                log(f"ventana {'oculta' if on else 'visible'} al compartir pantalla (hwnd {hwnd})")
+                # (sin «ventana oculta»: es el texto de cerrar a segundo plano, que miran las pruebas de apagado)
+                log(f"al compartir pantalla, la ventana {'no sale' if on else 'vuelve a salir'} (hwnd {hwnd})")
             else:
                 self.capture_applied = False
                 self.capture_error = f"Windows no lo ha aceptado (error {err})."

@@ -375,6 +375,31 @@ class MultiCloud(LangCloud):
         return out, det
 
 
+class VozCloud(LangCloud):
+    """Nube falsa «como Whisper» de verdad: una frase por cada tramo de voz que oye, con sus tiempos (Whisper no corta
+    donde cortaba la vez anterior). antes(n, lenguaje, job): un gancho al empezar cada petición."""
+
+    def __init__(self, rec, opts, antes=None, **kw):
+        super().__init__(rec, opts, **kw)
+        self.antes, self.job = antes, None
+
+    def transcribe_array(self, cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, **kw):
+        if self.antes:
+            self.antes(len(self.calls) + 1, language, self.job)
+        _, det = super().transcribe_array(cfg, audio, language, prompt, tmp_dir, job_id, stage, cancelled, **kw)
+        n = len(self.calls)
+        return [(t["start"] / SR, t["end"] / SR, f"[{language}] v{n}.{i}")
+                for i, t in enumerate(energy_vad(audio))], det
+
+
+def huecos_y_repetidos(out, spans=SPANS, total=None):
+    """(tramos de voz sin ningún texto, pares de frases que se pisan más de 0,5 s)."""
+    sin = [(a, b) for a, b in spans if (total is None or b <= total)
+           and not any(s <= a + 0.3 and e >= b - 0.3 for s, e, _ in out)]
+    pisan = [(x[2], y[2]) for x, y in zip(out, out[1:]) if y[0] < x[1] - 0.5]
+    return sin, pisan
+
+
 class EdicionEnDirectoTests(TempTree):
     """Revisión de idioma-directo (P1): corrigiendo en «Editar» y cambiando el idioma, lo rehecho no le llegaba al
     editor y, al guardar, se daba por borrado (y la corrección se perdía). Ahora el escritor del directo sube
@@ -413,14 +438,16 @@ class EdicionEnDirectoTests(TempTree):
 
     def test_guardar_sobre_el_texto_de_antes_no_borra_lo_rehecho(self):
         job, snaps, path, _ = self.sesion(events=[(26.0, "pt")])
-        self.assertEqual(job.text_gen, 1)  # una vez: el cambio de idioma
+        self.assertEqual(len(job.rewrites), 1)  # una vez: el cambio de idioma
+        gen0 = snaps[0][0]  # la generación con que empezó
+        self.assertGreater(job.text_gen, gen0)
         corte = job.rewrites[0][1]
-        antes = [s for g, s in snaps if g == 0][-1]  # lo que tenía el editor (generación 0)
+        antes = [s for g, s in snaps if g == gen0][-1]  # lo que tenía el editor (la primera generación)
         self.assertTrue(all(t.startswith("[None]") for _, _, t in antes))
         ed = [list(s) for s in antes] + [list(s) for s in job.raw if s[0] > antes[-1][0] + 0.005]  # appendLive viejo
         ed[0][2] = "corregida a mano"  # la primera frase, que se ha rehecho
         with mock.patch.object(server, "log"):
-            r = self.app(job)._save_live_edits(job, [tuple(x) for x in ed], os.path.splitext(path)[0], gen=0)
+            r = self.app(job)._save_live_edits(job, [tuple(x) for x in ed], os.path.splitext(path)[0], gen=gen0)
         self.assertEqual(r["rehecho_desde"], corte)
         self.assertEqual(job.edits, {})  # ni «frase borrada» en lo rehecho ni la corrección sobre lo que ya no existe
         with open(os.path.splitext(path)[0] + ".txt", encoding="utf-8-sig") as f:
@@ -439,7 +466,7 @@ class EdicionEnDirectoTests(TempTree):
     def test_sin_generacion_como_antes(self):
         # una interfaz anterior no manda «gen»: el comportamiento de siempre (borrar lo que no está y es anterior)
         job, snaps, path, _ = self.sesion()
-        self.assertEqual(job.text_gen, 0)
+        self.assertEqual(job.rewrites, [])
         ed = [list(s) for s in job.raw][1:]  # la primera, borrada a mano
         with mock.patch.object(server, "log"):
             r = self.app(job)._save_live_edits(job, [tuple(x) for x in ed], os.path.splitext(path)[0])
@@ -449,11 +476,80 @@ class EdicionEnDirectoTests(TempTree):
     def test_el_texto_va_con_su_generacion(self):
         job, snaps, path, _ = self.sesion(events=[(26.0, "pt")])
         out = self.app(job).transcript({"path": "Alfa/reunion.wav"})
-        self.assertEqual(out["text_gen"], 1)
+        self.assertEqual(out["text_gen"], job.text_gen)
+        self.assertGreater(job.text_gen, snaps[0][0])
         self.assertEqual([s["text"] for s in out["segments"]], [t for _, _, t in job.raw])
         job.status = "done"
         a = self.app(None)
         self.assertNotIn("text_gen", a.transcript({"path": "Alfa/reunion.wav"}))  # sin directo, nada
+
+    def sesion_voz(self, antes=None, fail_on=(), on_call=None):
+        path = os.path.join(self.root, "Alfa", "reunion.wav")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        opts = {"preset": "nube", "language": None, "prompt": None, "about": None, "threads": 1, "tmp_dir": self.tmp,
+                "cloud_cfg": {"provider": "groq", "api_key": "k1"}, "resume": [], "summarizer": FakeSummarizer()}
+        rec = TimedRecorder(path, synth(SPANS, 34.0))
+        cloud = VozCloud(rec, opts, antes=antes, on_call=on_call or {7: "pt"}, fail_on=fail_on)
+        opts.update(cloud=cloud, worker=CancellableWorker(rec, opts))
+        job = server.Job("Alfa/reunion.wav", "reunion.wav", "nube", None)
+        job.live, job.status, job.out = True, "running", server.LiveOutputs(path)
+        cloud.job = job
+        logs = []
+        with mock.patch.object(live, "time", types.SimpleNamespace(time=rec.time, sleep=rec.sleep)), \
+                mock.patch.object(live, "speech", energy_vad), mock.patch.object(server, "log"):
+            rec.sleep(0.6)
+            live.run(job, path, opts, server.live_writer(job), logs.append)
+        return job, cloud, logs
+
+    def test_corregida_mientras_se_rehace_sin_huecos_ni_repetidos(self):
+        # revisión 2 (P1): al mandar la corrección, quedarse con parte del trozo que rehacía dejaba un hueco (la frase
+        # nueva que cruzaba donde acababa lo de antes) o, si ese trozo acababa antes, frases repetidas
+        hecho = []
+
+        def corrige(n, language, job):
+            if language == "pt" and not hecho:
+                with job.edit_lock:
+                    job.edits[server.seg_key(job.raw[1][0])] = "corregida mientras tanto"
+                hecho.append(n)
+        job, cloud, logs = self.sesion_voz(antes=corrige)
+        self.assertTrue(hecho)
+        self.assertTrue(any("se corrigió a mano entretanto" in x for x in logs), logs)
+        out = server.apply_edits(job.raw, job.edits)
+        self.assertIn("corregida mientras tanto", [t for _, _, t in out])
+        self.assertEqual(huecos_y_repetidos(out), ([], []), out)
+        self.assertEqual([a for a, _, _ in out], sorted(a for a, _, _ in out))
+
+    def test_si_el_trozo_que_rehace_falla_sin_huecos(self):
+        # revisión 2 (P2-3): vuelve lo de antes que acaba antes del corte y lo de detrás se relee desde ahí
+        job, cloud, logs = self.sesion_voz(fail_on=(8,))
+        self.assertEqual([c["language"] for c in cloud.calls][6:8], [None, "pt"])
+        out = server.apply_edits(job.raw, job.edits)
+        self.assertEqual(huecos_y_repetidos(out), ([], []), out)
+        self.assertTrue(any("se queda el texto de antes" in x for x in logs), logs)
+
+    def test_con_voz_de_verdad_tambien(self):
+        job, cloud, logs = self.sesion_voz()
+        out = server.apply_edits(job.raw, job.edits)
+        self.assertEqual(huecos_y_repetidos(out), ([], []), out)
+        self.assertTrue(all(t.startswith("[pt]") for _, _, t in out), out)
+
+    def test_la_generacion_de_otro_directo_no_tira_correcciones(self):
+        # revisión 2 (P2-1): «Pausar transcripción» y otra vez «Transcribir en directo» sin salir de «Editar»: el
+        # editor manda la generación del directo anterior; el nuevo empezó con el texto del archivo
+        job1, _, _ = self.sesion_voz()
+        self.assertEqual(len(job1.rewrites), 1)
+        job2 = server.Job("Alfa/reunion.wav", "reunion.wav", "nube", None)
+        job2.live, job2.status = True, "running"
+        job2.out = server.LiveOutputs(os.path.join(self.root, "Alfa", "reunion.wav"))
+        server.live_writer(job2)(list(job1.raw))  # retoma con lo escrito
+        self.assertGreater(job2.text_gen, job1.text_gen)
+        ed = [list(x) for x in job2.raw]
+        ed[0][2] = "corregida sobre lo retomado"
+        with mock.patch.object(server, "log"):
+            r = self.app(job2)._save_live_edits(job2, [tuple(x) for x in ed],
+                                                os.path.join(self.root, "Alfa", "reunion"), gen=job1.text_gen)
+        self.assertIsNone(r["rehecho_desde"])
+        self.assertEqual(list(job2.edits.values()), ["corregida sobre lo retomado"])
 
     def test_corregida_mientras_se_rehace_manda_la_correccion(self):
         # se corrige a mano una de las frases que se están rehaciendo, después del cambio de idioma y antes de que
@@ -684,7 +780,7 @@ class ServidorIdiomaTests(TempTree):
         jobs.settings = types.SimpleNamespace(get=lambda: {"live_final_pass": True})
         jobs._cloud_ready = lambda: None
         nuevo = types.SimpleNamespace()
-        jobs._queue_final_pass = lambda *a, **k: nuevo
+        jobs._queue_final_pass = lambda *a, **k: nuevo.__dict__.update(k) or nuevo
         job = types.SimpleNamespace(preset="nube", recorded=60.0, edits={}, path="r.wav", name="r", language="pt",
                                     local_part=False, idiomas_directo=["en", "pt"])
         with mock.patch.object(server, "backup_dir", lambda rel: os.path.join(self.tmp, "no")), \

@@ -922,16 +922,18 @@ def run(job, path, opts, write, log):
                         log("   directo: el idioma ha cambiado durante el trozo; se repite con el nuevo")
                         continue
                     if redo is not None and new:
-                        # corregiste a mano lo que se estaba rehaciendo (antes de que llegara lo nuevo): mandan tus
-                        # correcciones; vuelve lo de antes y lo nuevo vale desde donde acababa
                         tocadas = getattr(job, "edits", None) or {}
                         if any(seg_key(s[0]) in tocadas for s in redo["removed"]):
-                            despues = [s for s in new if s[0] >= redo["until"] - 1e-6]
+                            # corregiste a mano lo que se estaba rehaciendo, antes de que llegara lo nuevo: mandan tus
+                            # correcciones. Lo de antes se queda tal cual (es lo que hay en pantalla y en el archivo) y
+                            # se relee desde donde acababa, ya en el idioma nuevo: Whisper no corta justo ahi, asi que
+                            # quedarse con parte de este trozo dejaria un hueco o un repetido (revision 2)
+                            segs.extend(redo["removed"])
+                            st["redo"] = None
+                            reset(redo["until"])
                             log(f"   directo: lo que se rehacía se corrigió a mano entretanto; se queda lo de antes "
                                 f"({len(redo['removed'])} frases) y el idioma nuevo vale desde {redo['until']:.1f} s")
-                            segs.extend(redo["removed"])
-                            new, redo = despues, None
-                            st["redo"] = None
+                            continue
                     t_paint = perf_counter()
                     if new:
                         segs.extend(new)
@@ -951,12 +953,16 @@ def run(job, path, opts, write, log):
                             f"frases antes, {len(new)} ahora)")
                     else:  # no ha salido (un fallo de la nube, o nada): vuelve lo de antes, mejor que un hueco
                         back = back_of(redo["removed"], end_s)
+                        segs.extend(back)  # (ya estaba en pantalla y en el archivo: no hay que escribir nada)
+                        desde = back[-1][1] if back else redo["from"]
                         if back:
-                            segs.extend(back)
-                            write(segs)
-                            job.rev += 1
                             log(f"   directo: no se ha podido rehacer lo último en el idioma nuevo; se queda el texto "
                                 f"de antes ({len(back)} frases)")
+                        # lo que va detras se relee desde ahi (si no, se perderia el trozo de la frase que cruzaba el
+                        # corte); ya no es «rehacer»: si vuelve a fallar, se salta como cualquier trozo
+                        reset(desde)
+                        publish(pace if directo else None)
+                        continue
                 st["dedupe_until"] = (t0 + cut / SR) if overlap else None
                 st["buf"] = buf[cut - overlap:]
                 st["t0"] = t0 + (cut - overlap) / SR

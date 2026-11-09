@@ -5,6 +5,7 @@ window.py pone SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) en la ventana pr
 de enseñarla; Ajustes › Al grabar lo apaga y lo enciende al momento (POST /api/ocultar-captura). En un Windows anterior
 a 10 2004 (build 19041) no se aplica (lo pintaría en negro) y se dice. Aquí, con dobles (sin Windows); la ventana real
 con WebView2, su marca y capturas de pantalla, en test_ocultar_captura_windows (workflow windows-real)."""
+import json
 import os
 import shutil
 import subprocess
@@ -256,7 +257,7 @@ def read_server():
 class AjustesTests(unittest.TestCase):
     def run_js(self, code):
         app = read("app.js")
-        defs = js_defs(app, ["esc"]) + "\nconst APP_NAME = 'Tenca';\n"
+        defs = js_defs(app, ["esc"]) + "\nconst APP_NAME = 'Tenca'; const I = {monitor: '[M]'};\n"
         defs += js_defs(read("ajustes.js"), ["ajOcultarHtml", "ajOcultarAyuda"])
         r = subprocess.run(["node", "-e", defs + "\n" + code], capture_output=True, text=True, encoding="utf-8",
                            timeout=30)
@@ -264,28 +265,30 @@ class AjustesTests(unittest.TestCase):
         return r.stdout.rstrip("\n").splitlines()
 
     def test_interruptor(self):
-        out = self.run_js("""
-console.log(ajOcultarHtml({activado: true, soportado: true}));
-console.log(ajOcultarHtml({activado: false, soportado: true}));
-console.log(ajOcultarHtml({activado: true, soportado: false, motivo: 'Solo en Windows.'}));
-console.log(ajOcultarHtml({activado: true, soportado: true, error: 'Windows no lo ha aceptado (error 5).'}));
-console.log(JSON.stringify(ajOcultarHtml(undefined)));""")
+        out = [json.loads(x) for x in self.run_js("""
+const v = h => console.log(JSON.stringify(h));
+v(ajOcultarHtml({activado: true, soportado: true}));
+v(ajOcultarHtml({activado: false, soportado: true}));
+v(ajOcultarHtml({activado: true, soportado: false, motivo: 'Solo en Windows.'}));
+v(ajOcultarHtml({activado: true, soportado: true, error: 'Windows no lo ha aceptado (error 5).'}));
+v(ajOcultarHtml(undefined));""")]
         self.assertIn('id="agOcultar" data-se-guarda-solo checked>', out[0])
-        self.assertIn("ocultar Tenca: quien vea tu pantalla no la ve", out[0])
+        self.assertIn("Ocultar Tenca al compartir pantalla", out[0])
+        self.assertIn("(también su aviso «Grabar»)", out[0])
         self.assertIn("Tú la sigues viendo. Tampoco sale en tus capturas de pantalla: para enseñar Tenca en una demo "
                       "o hacerle una captura, quítalo (vale al momento).", out[0])
         self.assertIn('id="agOcultar" data-se-guarda-solo>', out[1])
         self.assertIn("disabled", out[2])
-        self.assertIn('<span class="gr-aviso" id="agOcultarNota">Solo en Windows.</span>', out[2])
+        self.assertIn('<div class="help warn-txt" id="agOcultarNota">Solo en Windows.</div>', out[2])
         self.assertNotIn("checked", out[2])
         self.assertIn("Windows no lo ha aplicado: Windows no lo ha aceptado (error 5).", out[3])
-        self.assertEqual(out[4], '""')
+        self.assertEqual(out[4], "")
 
     def test_se_aplica_al_marcarlo(self):
         js = read("ajustes.js")
-        self.assertIn("${ajOcultarHtml(c.ocultar_captura)}", js)
+        self.assertIn("${ajOcultarHtml((S.config || {}).ocultar_captura)}", js)  # en Calendario y Teams
         self.assertIn("api('/api/ocultar-captura', { activado: on })", js)
-        self.assertIn("bindAjOcultar(d);", js)
+        self.assertIn("function bindAjCalendario(d) {\n  bindAjOcultar(d);", js)
 
 
 if __name__ == "__main__":

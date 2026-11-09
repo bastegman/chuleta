@@ -59,7 +59,7 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
   reuniones. El resumen usa esos nombres.
 - **Oculta al compartir pantalla**: en Teams, Zoom o Meet los demás no ven Tenca ni su aviso «Grabar» (ven lo que
   haya detrás); tú sí.
-  Tampoco sale en capturas de pantalla. Se quita en Ajustes → Al grabar → «Al compartir pantalla» (para
+  Tampoco sale en capturas de pantalla. Se quita en Ajustes → Calendario y Teams → «Al compartir pantalla» (para
   una demo o una captura; vale al momento). Windows 10 2004 o posterior (`SetWindowDisplayAffinity` con
   `WDA_EXCLUDEFROMCAPTURE`).
 - **Compartir**: desde Ajustes se genera un zip instalable para otra persona.

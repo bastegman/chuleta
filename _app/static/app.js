@@ -1000,7 +1000,9 @@ async function liveRehecho(a) {
   if (S.liveRehaciendo) return;
   S.liveRehaciendo = true;
   try {
-    await saveEdits(true);
+    // si lo corregido no se ha podido guardar, el editor se queda como está (y se reintenta en el siguiente sondeo):
+    // cambiarlo ahora perdería esa corrección
+    if (!(await saveEdits(true))) return;
     if (!S.editing || !S.tx || S.tx.path !== a.path) return;
     let t;
     try { t = await api('/api/transcript?path=' + enc(a.path)); } catch { return; }

@@ -40,7 +40,8 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
 - **Tenca no sale al compartir pantalla** (de la research de competencia; Minutes lo hace por defecto): la ventana
   lleva `WDA_EXCLUDEFROMCAPTURE` desde antes de enseñarse. Lo que pinta WebView2 dentro también queda fuera
   (comprobado con capturas en Windows). Activado por defecto, con el interruptor «Al compartir pantalla» en Ajustes →
-  Al grabar (se aplica al momento, `POST /api/ocultar-captura`). Vale también para el aviso flotante «● Grabar», que
+  Calendario y Teams (se aplica al momento, `POST /api/ocultar-captura`; las reglas de «Al grabar» ya llenan una
+  pantalla). Vale también para el aviso flotante «● Grabar», que
   sale justo al empezar una llamada con el nombre de la reunión (`aviso.py --ocultar-captura`). En un Windows anterior
   a 10 2004 no se aplica (lo pintaría en negro): queda en el registro y el interruptor lo dice. Sin la ventana propia
   (abierta en Edge) no se puede, y también lo dice.

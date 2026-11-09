@@ -20,21 +20,23 @@ function ajAlGrabarHtml() {
       <div class="ag-regla"><label for="agMic">Micrófono · audio del PC</label><div class="ag-dos"><select id="agMic" aria-label="Micrófono">${ajDispositivos(null)[0]}</select><select id="agSys" aria-label="Audio del PC">${ajDispositivos(null)[1]}</select><span id="agDevsAviso" class="hidden"></span></div></div>
       <div class="ag-regla"><label for="agDirecto">Texto en directo</label><div><label class="ag-sw"><input type="checkbox" id="agDirecto"${c.rec_directo !== false ? ' checked' : ''}>si el portátil va lento, quítalo: transcribe al terminar</label></div></div>
       <div class="ag-regla"><label for="lMeet">Llamada detectada</label><div><label class="ag-sw"><input type="checkbox" id="lMeet"${c.meeting_detect !== false ? ' checked' : ''}>avisarme si estoy en una llamada y no estoy grabando</label></div></div>
-      ${ajOcultarHtml(c.ocultar_captura)}
     </div>`;
 }
-/* «Ocultar Tenca al compartir pantalla» (msg 1242; window.py): se aplica al marcarlo, sin «Guardar» (data-se-guarda-solo),
-   como «Arrancar con Windows». o: /api/config → ocultar_captura ({activado, soportado, motivo, error}). */
+/* «Ocultar Tenca al compartir pantalla» (msg 1242; window.py), en Calendario y Teams (las reglas de «Al grabar» ya
+   llenan una pantalla): se aplica al marcarlo, sin «Guardar» (data-se-guarda-solo), como «Arrancar con Windows».
+   o: /api/config → ocultar_captura ({activado, soportado, motivo, error}). */
 function ajOcultarHtml(o) {
   if (!o) return '';
-  const no = o.soportado === false;
-  const nota = no ? `<span class="gr-aviso" id="agOcultarNota">${esc(o.motivo || 'No se puede en este equipo.')}</span>`
-    : `<span class="ag-sub" id="agOcultarNota">${esc(ajOcultarAyuda(o))}</span>`;
-  return `<div class="ag-regla"><label for="agOcultar">Al compartir pantalla</label><div><label class="ag-sw"><input type="checkbox" id="agOcultar" data-se-guarda-solo${o.activado && !no ? ' checked' : ''}${no ? ' disabled' : ''}>ocultar ${esc(APP_NAME)}: quien vea tu pantalla no la ve</label>${nota}</div></div>`;
+  const no = o.soportado === false, mal = no || !!o.error;
+  return `<fieldset><legend>${I.monitor}Al compartir pantalla</legend>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500" id="agOcultarSw"><input type="checkbox" id="agOcultar" data-se-guarda-solo${o.activado && !no ? ' checked' : ''}${no ? ' disabled' : ''}> <span>Ocultar ${esc(APP_NAME)} al compartir pantalla <span class="muted" style="font-weight:400">(también su aviso «Grabar»)</span></span></label>
+      <div class="help${mal ? ' warn-txt' : ''}" id="agOcultarNota">${esc(ajOcultarAyuda(o))}</div>
+    </fieldset>`;
 }
 function ajOcultarAyuda(o) {
+  if (o && o.soportado === false) return o.motivo || 'No se puede en este equipo.';
   if (o && o.error) return `Windows no lo ha aplicado: ${o.error}`;
-  return `Tú la sigues viendo. Tampoco sale en tus capturas de pantalla: para enseñar ${APP_NAME} en una demo o hacerle una captura, quítalo (vale al momento).`;
+  return `Quien vea tu pantalla en Teams, Zoom o Meet no ve ${APP_NAME}: ve lo que haya detrás. Tú la sigues viendo. Tampoco sale en tus capturas de pantalla: para enseñar ${APP_NAME} en una demo o hacerle una captura, quítalo (vale al momento).`;
 }
 function bindAjOcultar(d) {
   const x = $('#agOcultar', d);
@@ -47,7 +49,7 @@ function bindAjOcultar(d) {
       if (S.config) S.config.ocultar_captura = r;
       x.checked = !!r.activado;
       const n = $('#agOcultarNota', d);
-      if (n) n.textContent = ajOcultarAyuda(r);
+      if (n) { n.textContent = ajOcultarAyuda(r); n.classList.toggle('warn-txt', !!r.error || r.soportado === false); }
       toast(r.error ? esc(`No se ha podido aplicar: ${r.error}`) : r.activado ? `${esc(APP_NAME)} no saldrá al compartir pantalla` : `${esc(APP_NAME)} vuelve a salir al compartir pantalla`, r.error ? 'err' : '');
     } catch (err) { x.checked = !on; toast(esc(err.message), 'err'); }
     finally { x.disabled = false; }
@@ -112,7 +114,6 @@ function ajAlGrabarCollect(d) {
   return out;
 }
 function bindAjAlGrabar(d) {
-  bindAjOcultar(d);
   const proy = $('#agProy', d), box = $('#agFilas', d);
   if (!proy || !box) return;
   let seq = 0, t = null, elegido = false;
@@ -439,9 +440,11 @@ function ajCalendarioHtml() {
       <div class="ct-fila"><span class="ct-n">${I.phone}Teams</span><span class="ct-estado" id="ctTeamsEstado">…</span><span class="ct-frase" id="ctTeamsFrase"></span><span class="ct-acc"></span></div>
       <div class="ct-fila hidden" id="ctOutFila"><span class="ct-n">${I.calendar}Outlook</span><span class="ct-estado" id="ctOutEstado"></span><span class="ct-frase" id="ctOutFrase"></span><span class="ct-acc" id="ctOutAcc"></span></div>
     </div>
-    ${window.reunionFieldsetHtml?.() || ''}`;
+    ${window.reunionFieldsetHtml?.() || ''}
+    ${ajOcultarHtml((S.config || {}).ocultar_captura)}`;
 }
 function bindAjCalendario(d) {
+  bindAjOcultar(d);
   const te = $('#ctTeamsEstado', d), tf = $('#ctTeamsFrase', d);
   if (!te) return;
   const chip = (el, cls, txt) => { el.textContent = txt; el.className = 'ct-estado ' + cls; };

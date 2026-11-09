@@ -155,6 +155,8 @@ def driver():
 
 threading.Thread(target=driver, daemon=True).start()
 res["run"] = w.run()
+with open(out, "w", encoding="utf-8") as f:  # otra vez, con lo que devolvio run() (el driver lo escribe antes)
+    json.dump(res, f, ensure_ascii=False, indent=1)
 '''
 
 

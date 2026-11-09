@@ -149,10 +149,10 @@ USO DIARIO
     las reglas: la carpeta de las reuniones sin proyecto, el idioma por defecto (se detecta solo;
     "Español + inglés", "Español + portugués" e "Inglés + portugués" son para reuniones que
     mezclan dos), el proyecto al grabar, un contexto de una o dos frases (de qué va, quién
-    participa), el micrófono y el audio del PC, el texto en directo, "Llamada detectada" (te
+    participa), el micrófono y el audio del PC, el texto en directo y "Llamada detectada" (te
     avisa si estás en una llamada y no grabas; el aviso flotante con "Grabar" está en Calendario y
-    Teams) y "Al compartir pantalla" (ver abajo). Con un idioma fijo, lo que se diga en otro se
-    traduce a ese: si la reunión puede cambiar de idioma, mejor una mezcla o "Detectar".
+    Teams). Con un idioma fijo, lo que se diga en otro se traduce a ese: si la reunión puede
+    cambiar de idioma, mejor una mezcla o "Detectar".
   - En la página de la reunión, idioma y contexto se cambian sobre la marcha. El idioma vale al
     momento: el trozo que se estaba transcribiendo se repite y lo escrito en el último minuto se
     rehace en el idioma nuevo (el aviso dice en cuántos segundos se verá); lo corregido a mano no se
@@ -164,8 +164,8 @@ USO DIARIO
     se guarda.
   - Al compartir pantalla (Teams, Zoom, Meet), Tenca y su aviso "Grabar" no salen en lo que ven
     los demás: ven lo que haya detrás. Tú los sigues viendo. Tampoco sale en tus capturas de pantalla: para enseñarla en
-    una demo o hacerle una captura, quítalo en Ajustes > Al grabar > "Al compartir pantalla" (vale
-    al momento). Necesita Windows 10 versión 2004 o posterior.
+    una demo o hacerle una captura, quítalo en Ajustes > Calendario y Teams > "Al compartir
+    pantalla" (vale al momento). Necesita Windows 10 versión 2004 o posterior.
   - Ajustes > Proyectos: una tabla con la carpeta y el idioma de cada proyecto y workstream, los
     que se usarán al grabar. En negro, lo asignado; en gris, lo heredado: sin carpeta asignada,
     la del proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. Con "Editar", lo
