@@ -314,19 +314,37 @@ class PistaDeParticipantesTests(Reunion):
         with mock.patch.object(server, "TEXTOS_SUGERIDOS", {texto}):
             self.assertEqual(self.correr({"participantes": texto}), 2)
 
-    def test_rec_start_apunta_el_texto_sugerido(self):
-        from test_carpetas import FakeRec as FakeRecSup, make_app, rec  # noqa: F401
+    def test_rec_start_apunta_solo_el_texto_de_la_app(self):
+        """rec_start apunta el texto solo si es, entero, el que la app escribe con la ultima sugerencia del vigilante
+        (dialogo Grabar, Ctrl+Alt+R): ni lo escrito a mano, ni lo que traiga otro programa (aunque herede el origen),
+        ni una lista cortada a 500 caracteres (contada exacta daria de menos)."""
+        from test_carpetas import FakeRec, make_app, rec
         os.makedirs(os.path.join(self.root, "Alfa"))
-        a, texto = make_app(self), "Stegmaier, Bernardo; García López, Ana"
-        a.vigia = types.SimpleNamespace(sugerencia=lambda fn: {"source": "teams", "participants": ["Teams, Uno"]})
-        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos:
-            rec(a, self, participantes=texto, sugerido="outlook")
+        a = make_app(self)
+        nombres = ["Stegmaier, Bernardo", "García López, Ana"]
+        texto = "Stegmaier, Bernardo; García López, Ana"
+        largos = [f"Apellido{n:02d} Segundo, Nombre{n:02d}" for n in range(30)]
+        a.vigia = types.SimpleNamespace(ultimo={"sugerencia": {"source": "outlook", "participants": nombres}},
+                                        sugerencia=lambda fn: {"source": "outlook", "participants": nombres})
+        a.toggle_lock, a.rec_folder_for = threading.Lock(), lambda v, st: "Alfa"
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos, \
+                mock.patch.object(server, "cue", lambda *x: None), mock.patch.object(server, "notify", lambda *x: None):
+            rec(a, self, participantes=texto, sugerido="outlook")  # el dialogo, con la sugerencia
+            self.assertEqual(vistos, {texto})
             rec(a, self, participantes="Ana, Luis", name="Otra")  # sin origen: escrito a mano
-            # sin nombre ni tema (otra app) y con participantes propios: el origen se hereda, el texto no es de la app
-            body = {"mic": "default", "sys": "all", "folder": "Alfa", "participantes": "Pérez, Luis, Pedro"}
-            a.rec = None
-            with mock.patch.object(server, "RecorderProcess", FakeRecSup), mock.patch.object(server, "log"):
-                a.rec_start(body)
+            rec(a, self, participantes="Ana, Luis", name="Otra 2", sugerido="outlook")  # con origen, otro texto
+            with mock.patch.object(server, "RecorderProcess", FakeRec), mock.patch.object(server, "log"):
+                a.rec = None  # otra app, sin nombre ni tema y con sus participantes: hereda el origen
+                r = a.rec_start({"mic": "default", "sys": "all", "folder": "Alfa",
+                                 "participantes": "Pérez, Luis, Pedro"})
+                self.assertEqual(r["participantes"], "Pérez, Luis, Pedro")
+                a.rec = None  # /api/rec/toggle con participantes propios (RF4)
+                r = a.rec_toggle({"participantes": "Ana, Luis y Pedro"})
+                self.assertTrue(r.get("recording"), r)
+            a.vigia.ultimo["sugerencia"]["participants"] = largos  # una cita enorme: se corta a 500
+            r = rec(a, self, participantes=server.calendario.join_participants(largos), name="Larga",
+                    sugerido="outlook")
+            self.assertEqual(len(r["participantes"]), 500)
         self.assertEqual(vistos, {texto})
 
     def test_al_reidentificar_si_los_sugirio_la_reunion(self):

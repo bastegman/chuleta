@@ -4277,10 +4277,7 @@ class App:
             mic, sys_dev = b.get("mic") or "default", b.get("sys") or "default"
             if mic == "none" and sys_dev == "none":
                 raise ApiError("Elige al menos el micrófono o el audio del ordenador.")
-            # el texto de «Participantes» es el de calendario.join_participants (dialogo, Ctrl+Alt+R): TEXTOS_SUGERIDOS
-            texto_de_la_app = True
             if "name" not in b and "vocab" not in b:  # sin nombre ni tema (otra app): la reunión en curso, si la hay
-                texto_de_la_app = not b.get("participantes")  # los que traiga quien llama no los escribio la app
                 sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
                                                                               outlook=False))
                 b = dict(b, name=sug.get("name") or "", vocab=sug.get("vocab") or "",
@@ -4339,16 +4336,21 @@ class App:
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
                 props = {"proyecto": v["project"], "workstream": v["name"], "vocabulario": v["id"]} if v else {}
                 if b.get("participantes"):  # sugeridos por Teams/Outlook: a la cabecera del .md, con su origen
-                    props["participantes"] = " ".join(str(b["participantes"]).split())[:500]
+                    completo = " ".join(str(b["participantes"]).split())
+                    props["participantes"] = completo[:500]
                     # sin confirmar: ni el resumen en la nube ni los destinos de salida los llevan hasta que el
                     # usuario los confirme o los edite en la pagina de la reunion (participantes_confirmados)
                     origen = str(b.get("sugerido") or "").strip().lower()
                     if origen in PARTICIPANTES_ORIGENES:
                         props["participantes_origen"] = origen
-                        if texto_de_la_app:
+                        # para la pista de quien habla: solo si es, entero, el texto que la app escribe con la ultima
+                        # sugerencia (dialogo, Ctrl+Alt+R, aviso); lo que traiga otro programa, o cortado, no
+                        ult = (getattr(getattr(self, "vigia", None), "ultimo", None) or {}).get("sugerencia") or {}
+                        if completo == " ".join(calendario.join_participants(ult.get("participants")).split()) \
+                                and len(completo) <= 500:
                             if len(TEXTOS_SUGERIDOS) > 500:
                                 TEXTOS_SUGERIDOS.clear()
-                            TEXTOS_SUGERIDOS.add(props["participantes"])
+                            TEXTOS_SUGERIDOS.add(completo)
                 # perfil de la reunion, a la cabecera del .md: idioma y contexto (el directo, la cola y el resumen
                 # los leen de ahi; se pueden cambiar en la pagina de la reunion) y la carpeta a la que copiar textos
                 perfil = perfil_de(self.settings.get())
