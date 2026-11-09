@@ -1757,12 +1757,16 @@ document.addEventListener('click', e => { if (!e.target.closest('#jobsPanel, #bt
 let modalResolve = null;
 function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
-  // se deja Ajustes por un subdiálogo: con qué configuración se ha escrito lo de Ajustes, según el servidor (incluye
-  // lo que Ajustes mismo haya guardado, aunque no haya pedido /api/config después; lo que guarde el subdiálogo va
-  // después, tras un clic tuyo). openSettings lo compara al volver; pintar Ajustes lo gasta, así que repintarlo desde
-  // dentro no compara nada
-  if (cls === 'aj') S.ajBorradorRev = null;
-  else if ($('.dialog.aj', m)) S.ajBorradorRev = api('/api/config').then(c => c.config_rev, () => null);
+  // se deja Ajustes por un subdiálogo: se toma el borrador, con la huella de lo guardado de sus claves según el
+  // servidor (incluye lo que Ajustes mismo haya guardado, aunque no haya pedido /api/config después; lo que guarde el
+  // subdiálogo va después, tras un clic tuyo). openSettings la compara al volver; pintar Ajustes la gasta, así que
+  // repintarlo desde dentro no compara nada. Una confirmación (ask) no es salir: lo que hagas tras «Activar» o
+  // «Quitar» es de Ajustes (revisión 9: activar las voces descartaba lo escrito)
+  if (cls === 'aj') S.ajHuella = null;
+  else if ($('.dialog.aj', m)) {
+    const ids = Object.keys(S.ajBorrador || {});
+    S.ajHuella = cls === 'ask' ? null : api('/api/config').then(c => ({ ids, huella: ajHuella(c, ids) }), () => null);
+  }
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
   m.classList.remove('hidden');
   document.body.classList.toggle('aj-abierto', cls === 'aj');  // los avisos, arriba solo con Ajustes (su «Guardar» abajo)
@@ -1771,7 +1775,9 @@ function openModal(html, onOpen, cls = '') {
   f && f.focus();
   return new Promise(r => { modalResolve = r; });
 }
+let modalCierres = 0;  // openSettings: si se cierra el modal mientras vuelve a Ajustes, no se abre solo
 function closeModal(v) {
+  modalCierres++;
   if (S.modalCleanup) { const f = S.modalCleanup; S.modalCleanup = null; f(); }
   $('#modal').classList.add('hidden');
   $('#modal').innerHTML = '';
@@ -1782,7 +1788,7 @@ $('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') cl
 function ask(title, html, ok = 'Aceptar') {
   return openModal(`<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`, d => {
     d.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) closeModal(b.dataset.m === 'ok'); });
-  });
+  }, 'ask');
 }
 
 function flatFolders() {
@@ -1934,6 +1940,28 @@ const lAyuda = api => 'El motor con el que empieza cada directo se elige en Proc
 // idioma y las instrucciones del resumen, a Resumen; Outlook y Teams, a Calendario y Teams; OBS, a Avanzado
 /* los desplegables de Ajustes que reciben sus opciones después de abrirse (listas de vocabulario y dispositivos) */
 const AJ_OPCIONES_TARDE = ['pfVocab', 'agMic', 'agSys'];
+/* de qué ajuste guardado (en /api/config) sale cada campo que el borrador de Ajustes puede reponer, y de qué depende:
+   la clave, el modelo y las direcciones, del proveedor; los motores, del modo. La huella de lo escrito es la de esos
+   valores y solo la de esos: lo que no está en el borrador no lo descarta (revisión 9). Un campo nuevo de Ajustes va
+   aquí (lo comprueba test_ajustes_cada_campo_tiene_su_ajuste) */
+const AJ_GUARDADO = {
+  __proc: ['procesado'], sLang: ['language'], pfFolder: ['perfil.folder'], pfVocab: ['perfil.vocab'],
+  pfContext: ['perfil.context'], agMic: ['rec_mic'], agSys: ['rec_sys'], agDirecto: ['rec_directo'],
+  agPorReunion: ['carpeta_por_reunion'], lMeet: ['meeting_detect'], sPrompt: ['prompt'],
+  agModelo: ['agente.tipo', 'agente.modelo'], lPreset: ['live_preset', 'procesado'], pfPreset: ['preset', 'procesado'],
+  cProv: ['cloud.provider'], cKey: ['cloud.provider', 'cloud.api_key', 'cloud.has_key'],
+  cModel: ['cloud.provider', 'cloud.model'], cBase: ['cloud.provider', 'cloud.base_url'],
+  cAzEp: ['cloud.provider', 'cloud.azure_endpoint'], cAzDep: ['cloud.provider', 'cloud.azure_deployment'],
+  cAzVer: ['cloud.provider', 'cloud.azure_api_version'], cLiveModel: ['cloud.provider', 'cloud.live_model'],
+  cLiveModelCustom: ['cloud.provider', 'cloud.live_model_custom'], cChunk: ['cloud.chunk_minutes'],
+  cPar: ['cloud.parallel'], sAuto: ['summary.auto'], sAutoAg: ['summary.auto'], sAutoLocal: ['summary.local'],
+  sModel: ['summary.model'], sSumLang: ['summary.lang'], sExtra: ['summary.extra'], rnOutlook: ['outlook_on'],
+  rnAviso: ['rec_aviso'], lAuto: ['live_auto'], lFinal: ['live_final_pass'], sThreads: ['threads'],
+};
+function ajHuella(c, ids) {
+  const leer = ruta => ruta.split('.').reduce((o, k) => (o == null ? undefined : o[k]), c) ?? null;
+  return JSON.stringify([...ids].sort().map(id => [id, (AJ_GUARDADO[id] || []).map(leer)]));
+}
 const AJ_SECS = [['algrabar', 'Al grabar'], ['proyectos', 'Proyectos'], ['procesado', 'Procesado'], ['resumen', 'Resumen'],
   ['calendario', 'Calendario y Teams'], ['voces', 'Voces'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
 function openSettings(opts) {
@@ -1942,24 +1970,33 @@ function openSettings(opts) {
   // asistente, «Apagar» › «Cancelar»…), que llaman a openSettings() sin nada o con volver: true. Cualquier otra forma
   // de abrir Ajustes (⚙, la paleta, Inicio, la tarjeta, un error) es abrirlo de nuevo, sin lo de antes (revisiones 3 y
   // 4 de B2: un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto por otro camino).
-  // Y vuelve tal cual solo si ningún ajuste ha cambiado mientras se estaba fuera (config_rev, que el servidor sube con
-  // cada cambio de verdad, venga de donde venga): si cambió, se descarta entero y se dice (revisiones 5 a 7: reponerlo
-  // campo a campo traía cada vez un caso nuevo). Al volver se pide siempre la configuración, haya algo escrito o no:
-  // pone S.config al día (revisión 8: con una lista renombrada en su editor, Ajustes la daba por perdida y «Guardar»
+  // Y vuelve tal cual solo si, mientras se estaba fuera, no ha cambiado lo guardado de ninguna de sus claves (la huella
+  // de openModal, con AJ_GUARDADO), venga de donde venga el cambio: si cambió, se descarta entero y se dice (revisiones
+  // 5 a 7: reponerlo campo a campo traía cada vez un caso nuevo; 8 y 9: una revisión de toda la configuración lo
+  // descartaba por cosas que no estaban en él). Al volver se pide siempre la configuración, haya algo escrito o no: pone
+  // S.config al día (revisión 8: con una lista renombrada en su editor, Ajustes la daba por perdida y «Guardar»
   // fallaba). Repintar Ajustes desde dentro («Probar otra vez», «Importar listas…») no es haber salido: lo escrito
   // vuelve sin más
   const vuelve = !(opts && !(typeof opts === 'object' && !(opts instanceof Event) && opts.volver));
-  if (!vuelve) S.ajBorrador = null;
-  else if (S.ajBorradorRev) {
-    const base = S.ajBorradorRev;
-    S.ajBorradorRev = null;
-    return Promise.all([base, api('/api/config')]).then(([b, c]) => {
+  if (!vuelve) { S.ajBorrador = null; S.ajVolviendo = null; }
+  else if (S.ajVolviendo) return S.ajVolviendo;  // ya está volviendo («Cancelar» dos veces): una sola vuelta
+  else if (S.ajHuella) {
+    const base = S.ajHuella, cierres = modalCierres;
+    S.ajHuella = null;
+    const vuelta = S.ajVolviendo = Promise.all([base, api('/api/config')]).then(([b, c]) => {
       setConfig(c);
-      if (S.ajBorrador && b != null && b !== c.config_rev) {
+      return !!(S.ajBorrador && b && b.ids.length && ajHuella(c, b.ids) !== b.huella);
+    }, () => false).then(descartar => {  // sin respuesta no se sabe si cambió: lo escrito se queda
+      if (S.ajVolviendo !== vuelta) return;  // entretanto se abrió Ajustes de nuevo
+      S.ajVolviendo = null;
+      if (modalCierres !== cierres) return;  // y si se cerró (Escape), no vuelve a abrirse solo
+      if (descartar) {
         S.ajBorrador = null;
         toast('Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado.');
       }
-    }, () => { }).then(() => openSettings(opts));  // sin respuesta no se sabe si cambió: lo escrito se queda
+      return openSettings(opts);
+    });
+    return vuelta;
   }
   const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
     || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
@@ -2085,7 +2122,8 @@ function openSettings(opts) {
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
     const inicial = foto();  // como viene de los ajustes guardados
     d.borradorAlAbrir = S.ajBorrador ? { ...S.ajBorrador } : null;  // ajustes.js: lo que no se pudo poner aún
-    // lo escrito antes de un subdiálogo, tal cual (openSettings ya ha comprobado que ningún ajuste ha cambiado)
+    // lo escrito antes de un subdiálogo, tal cual (openSettings ya ha comprobado que lo guardado de sus claves no ha
+    // cambiado)
     const ponerBorrador = xs => {
       if (!S.ajBorrador) return;
       xs.forEach(x => {

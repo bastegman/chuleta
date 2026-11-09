@@ -251,15 +251,8 @@ class Store:
     SECRETS = (("cloud", "api_key"), ("cloud", "extra_keys"), ("cloud", "extra_keys_openai"),
                ("cloud", "extra_keys_azure"), ("cloud", "extra_keys_custom"))
 
-    FUERA_DE_REV = ("speed", "outlook_asistentes", "favorites", "folder_icons")
-
     def __init__(self, path, defaults):
         self.path, self.lock = path, threading.Lock()
-        # sube con cada cambio de verdad de lo que enseña Ajustes, venga de donde venga (el asistente, una carpeta
-        # vinculada, una lista renombrada…): /api/config lo da como config_rev, y Ajustes descarta lo escrito y sin
-        # guardar si al volver de un subdiálogo es otro. Guardar lo mismo no lo sube, ni lo que la app apunta sola o no
-        # sale en Ajustes (FUERA_DE_REV, revisión 8: «speed» al acabar cada transcripción descartaba lo escrito)
-        self.rev, self.claves = 0, tuple(k for k in defaults if k not in self.FUERA_DE_REV)
         self.data = copy.deepcopy(defaults)
         self.broken, self.frozen = None, False  # settings.json ilegible: {"copia", "error", "recuperado"}
         for k, v in self._load().items():
@@ -381,10 +374,7 @@ class Store:
 
     def update(self, fn):
         with self.lock:
-            antes = {k: copy.deepcopy(self.data.get(k)) for k in self.claves}
             fn(self.data)
-            if any(self.data.get(k) != antes[k] for k in self.claves):
-                self.rev += 1
             out = copy.deepcopy(self.data)
             for keys in self.SECRETS:
                 d = out
@@ -4091,7 +4081,6 @@ class App:
                           if cloud["has_key"] and getattr(self.jobs, "cloud", None) is not None else None)
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL},
-                "config_rev": getattr(self.settings, "rev", 0),  # Ajustes: ¿ha cambiado algo desde que se escribió?
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "procesado": mode, "agente": self._agente_info(st),
                 "ultima_prueba": (st.get("ultima_prueba") if (st.get("ultima_prueba") or {}).get("modo") == mode

@@ -91,17 +91,18 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   los errores de las listas («Ese workstream ya no existe»).
 - Lo escrito y sin guardar en Ajustes vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el asistente,
   «Apagar» › «Cancelar» o Escape), y solo eso: lo cambiado, también el motor y el modo marcado sin aplicar, y «Guardar»
-  lo guarda. Vuelve tal cual si mientras tanto no ha cambiado ningún ajuste; si cambió alguno (el asistente guardó otro
-  modo o proveedor, se quitó una carpeta vinculada, se renombró la lista de «Proyecto al grabar»…), se descarta entero
-  y se dice: «Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado». Para eso el servidor da
-  `config_rev`, que sube con cada cambio de verdad de lo que enseña Ajustes; guardar lo mismo («Probar» › «Terminar»)
-  no lo sube, ni lo que la app apunta sola (la velocidad medida al acabar una transcripción). Lo que Ajustes mismo
-  guardó antes de salir (una fila de Proyectos, «Aplicar ahora», una carpeta vinculada) no cuenta como de fuera, y
-  repintar Ajustes desde dentro («Probar otra vez», «Importar listas…») no es salir. Al volver, aunque no hubiera nada
-  escrito, Ajustes enseña lo de ahora (una lista renombrada, con su nombre nuevo). Si la opción escrita ya no existe
-  al volver (una lista borrada en su editor), queda lo guardado; un micrófono o una lista que aún no han llegado se
-  siguen esperando. Abrir Ajustes de cualquier otra forma (⚙, la
-  paleta, Inicio, la tarjeta de grabar, un error, el aviso de cerrar la ventana) lo abre de nuevo, sin lo de antes.
+  lo guarda. Vuelve tal cual si mientras tanto no ha cambiado lo guardado de nada de lo escrito, ni de aquello de lo
+  que depende (la clave y el modelo, del proveedor; los motores, del modo). Si cambió (el asistente guardó otro modo o
+  proveedor, se renombró la lista de «Proyecto al grabar» que habías elegido…), se descarta entero y se dice: «Los
+  ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado». Lo que no está en lo escrito no lo
+  descarta: lo último usado al grabar, la velocidad medida, las voces o un guardado que deja lo mismo («Probar» ›
+  «Terminar»). Lo que Ajustes mismo guardó antes de salir y lo que haces tras confirmar un aviso lanzado desde Ajustes
+  («Activar» las voces, «Quitar» una carpeta vinculada) es de Ajustes, y repintarlo desde dentro («Probar otra vez»,
+  «Importar listas…») no es salir. «Cancelar» dos veces vuelve una sola vez, y Escape mientras vuelve no lo reabre.
+  Al volver, aunque no hubiera nada escrito, Ajustes enseña lo de ahora (una lista renombrada, con su nombre nuevo).
+  Si la opción escrita ya no existe al volver (una lista borrada en su editor), queda lo guardado; un micrófono o una
+  lista que aún no han llegado se siguen esperando. Abrir Ajustes de cualquier otra forma (⚙, la paleta, Inicio, la
+  tarjeta de grabar, un error, el aviso de cerrar la ventana) lo abre de nuevo, sin lo de antes.
   Desde el asistente abierto en Ajustes, «Revisar en Ajustes» e «Ir a Avanzado» vuelven con lo escrito, y a esa sección
   («Revisar en Ajustes» con «Con tu cuenta de Claude» marcada). Antes un borrador abandonado volvía después y «Guardar»
   deshacía lo guardado entretanto con «Usarlo en»; y un motor repuesto se veía pero no se guardaba.

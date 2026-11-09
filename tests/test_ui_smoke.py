@@ -629,9 +629,9 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.check(f"#modal input[name='proc'][value='{modo}']")
         pg.select_option("#lPreset", antes["live_preset"])
         pg.evaluate(abrir)
-        # la base de config_rev se pide al salir de Ajustes: lo de fuera llega después (una persona tarda más que esto
-        # en guardar algo en un subdiálogo; sin esperarla, el servidor podía contestarla ya con el cambio dentro)
-        pg.evaluate("S.ajBorradorRev")
+        # la huella de lo guardado se pide al salir de Ajustes: lo de fuera llega después (una persona tarda más que
+        # esto en guardar algo en un subdiálogo; sin esperarla, el servidor podía contestarla ya con el cambio dentro)
+        pg.evaluate("S.ajHuella")
         guardado = "api" if modo != "api" else "local"
         tercero = next(x["id"] for x in cfg["presets"]
                        if x["engine"] == "local" and x["id"] not in (motor, antes["live_preset"]))
@@ -704,7 +704,11 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(pg.input_value("#pfFolder"), "__auto")
         pg.keyboard.press("Escape")
         # igual con «Proyecto al grabar» (una lista borrada o renombrada en su editor), también a la segunda vuelta
-        # (revisión 7: acababa en «Sin proyecto», que nadie eligió)
+        # (revisión 7: acababa en «Sin proyecto», que nadie eligió). La nueva lectura de las listas, retenida: con las
+        # de antes ya leídas no se espera a ella (revisión 8: el ui-smoke de Ubuntu ganaba esa carrera a veces)
+        import re
+        vocab_rx, listas = re.compile(r"/api/vocab(\?|$)"), []
+        pg.route(vocab_rx, lambda r: listas.append(r))
         for _ in range(2):
             pg.evaluate("S.ajBorrador = S.ajBorrador || { pfVocab: 'Otro/Vocabulario/Borrada.txt' }; openSettings()")
             pg.wait_for_function("S.vocab.length && [...document.querySelectorAll('#pfVocab option')]"
@@ -712,6 +716,9 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             self.assertEqual(pg.input_value("#pfVocab"), "__auto")
             pg.select_option("#sLang", pg.evaluate("S.config.language") or "es")  # algo que pase por marcar()
         self.assertNotIn("pfVocab", pg.evaluate("S.ajBorrador || {}"))
+        for r in listas:
+            r.continue_()
+        pg.unroute(vocab_rx)
         pg.keyboard.press("Escape")
         # un micrófono fijo escrito y dos vueltas antes de que llegue la lista de dispositivos: sigue esperándola y,
         # cuando llega, se pone (revisión 7: a la segunda vuelta volvía a «El de Windows»)
@@ -759,9 +766,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
 
     def test_ajustes_borrador_y_lo_que_guarda_el_asistente(self):
         """Revisiones 7 y 8 de B2, por los caminos de verdad del asistente (wzGuardar): si el asistente cambia un
-        ajuste, lo escrito en Ajustes se descarta entero y se dice (config_rev); si vuelve sin guardar, o guarda lo que
-        ya había («Probar» › «Terminar»), lo escrito vuelve tal cual y sin aviso. Y «Revisar en Ajustes» con «Con tu
-        cuenta de Claude» elegida en el asistente la enseña marcada."""
+        ajuste de los que hay en lo escrito en Ajustes (o del que dependen: la clave, del proveedor), lo escrito se
+        descarta entero y se dice; si vuelve sin guardar, o guarda lo que ya había («Probar» › «Terminar»), lo escrito
+        vuelve tal cual y sin aviso. Y «Revisar en Ajustes» con «Con tu cuenta de Claude» elegida en el asistente la
+        enseña marcada."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
@@ -832,17 +840,60 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
 
-    def test_ajustes_borrador_y_config_rev(self):
-        """Revisión 8 de B2, lo escrito en Ajustes frente a config_rev:
+    def test_ajustes_cada_campo_tiene_su_ajuste(self):
+        """Revisión 9 de B2: la huella de lo escrito en Ajustes solo mira los ajustes de AJ_GUARDADO. Un campo de
+        Ajustes que el borrador pueda reponer y no esté allí se repondría sin mirar si lo guardado cambió: todos los
+        campos de todas las secciones (también los de Azure y «Personalizado») tienen su entrada, y cada entrada existe
+        en /api/config."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        cfg = pg.evaluate("api('/api/config')")
+        self.addCleanup(pg.evaluate, "p => api('/api/settings', { cloud: { provider: p } })", cfg["cloud"]["provider"])
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        ids = set()
+        listar = ("() => [...document.querySelectorAll('.aj-main input[id], .aj-main select[id],"
+                  " .aj-main textarea[id]')].filter(x => x.name !== 'proc'"
+                  " && !['vzOn', 'xVocab', 'agProy'].includes(x.id) && !('seGuardaSolo' in x.dataset)"
+                  " && x.type !== 'file' && x.type !== 'button').map(x => x.id)")
+        for prov in ("azure", "custom", cfg["cloud"]["provider"]):  # (puede estar en una sección oculta)
+            pg.evaluate("p => { const s = document.querySelector('#cProv'); s.value = p;"
+                        " s.dispatchEvent(new Event('change', { bubbles: true })); }", prov)
+            pg.wait_for_timeout(100)
+            ids |= set(pg.evaluate(listar))
+        self.assertTrue({"sLang", "pfContext", "cProv", "cAzEp", "cBase", "sThreads"} <= ids, ids)
+        faltan = pg.evaluate("ids => ids.filter(id => !(id in AJ_GUARDADO))", sorted(ids))
+        self.assertEqual(faltan, [], "campos de Ajustes sin su ajuste en AJ_GUARDADO (app.js)")
+        malos = pg.evaluate("""c => Object.entries(AJ_GUARDADO).flatMap(([id, rs]) => rs.filter(r => {
+            const ks = r.split('.'), ult = ks.pop(), o = ks.reduce((x, k) => x?.[k], c);
+            return id !== 'agPorReunion' && !(o && typeof o === 'object' && ult in o);
+          }).map(r => id + ' → ' + r))""", cfg)
+        self.assertEqual(malos, [], "entradas de AJ_GUARDADO que no están en /api/config")
+        self.assertIn('__proc', pg.evaluate("Object.keys(AJ_GUARDADO)"))
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_borrador_y_su_huella(self):
+        """Revisiones 8 y 9 de B2, lo escrito en Ajustes y la huella de lo guardado de sus claves (AJ_GUARDADO):
         - lo que Ajustes mismo guarda antes de salir (aunque no pida /api/config después) no es «de fuera»: repintar
-          Ajustes desde dentro («Probar otra vez», «Importar listas…») y volver de un subdiálogo lo dejan tal cual;
-        - «Otra carpeta (fuera de Chuleta)…» en «Reuniones sin proyecto» es un cambio sin guardar como otro;
-        - renombrar en su editor la lista guardada como «Proyecto al grabar» cambia un ajuste: lo escrito se descarta,
-          se dice, y Ajustes enseña la lista con su nombre nuevo y la guarda;
+          Ajustes desde dentro (openSettings() con Ajustes en pantalla, lo que hacen «Probar otra vez» e «Importar
+          listas…») y volver de un subdiálogo lo dejan tal cual;
+        - «Otra carpeta (fuera de Chuleta)…» en «Reuniones sin proyecto» es un cambio sin guardar como otro, y lo que
+          haces tras una confirmación lanzada desde Ajustes («Quitar» una carpeta vinculada) es de Ajustes;
+        - la vuelta pide /api/config: «Cancelar» dos veces vuelve una vez, Escape mientras tanto no reabre Ajustes y,
+          si una de las dos peticiones falla, lo escrito se queda;
+        - renombrar en su editor la lista guardada como «Proyecto al grabar» cambia ese ajuste: si lo escrito tiene
+          «Proyecto al grabar», se descarta y se dice; si no lo tiene, vuelve tal cual (lo que no está en lo escrito no
+          lo descarta); y en los dos casos Ajustes enseña la lista con su nombre nuevo y la guarda;
         - con las listas llegando después de abrir, lo escrito se pone si no lo has tocado (y cuenta como sin
-          guardar); si lo has tocado, queda lo tuyo."""
+          guardar); si lo has tocado, queda lo tuyo; y con cero listas, lo escrito no se queda esperándolas."""
         import re
         pg, errores, red = self.pagina()
+        # lo retenido con page.route, despachado aunque el test falle (si no, cerrar el navegador espera)
+        self.addCleanup(lambda: pg.unroute_all(behavior="ignoreErrors"))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         aviso = "document.querySelector('#toasts').innerText.includes('Los ajustes cambiaron en otra parte')"
@@ -865,15 +916,63 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         # 1. lo guardado desde Ajustes antes de salir, sin pedir /api/config: ni al repintar ni al volver se descarta
         escribir()
         otro = "pt" if cfg["language"] != "pt" else "en"
+        pg.select_option("#sLang", otro)  # en lo escrito, y guardado desde Ajustes sin pedir /api/config después
         pg.evaluate("l => api('/api/settings', { language: l })", otro)
         for repintar in ("openSettings()", "openSettings({ sec: 'algrabar', volver: true })"):
             pg.evaluate(repintar)
             pg.wait_for_selector("#modal .aj-nav", timeout=5000)
             self.assertEqual(pg.input_value("#pfContext"), escrito, repintar)
         ida_y_vuelta()
-        self.assertEqual(pg.input_value("#pfContext"), escrito)
+        self.assertEqual((pg.input_value("#pfContext"), pg.input_value("#sLang")), (escrito, otro))
         self.assertFalse(pg.evaluate(aviso))
         pg.keyboard.press("Escape")
+        # 1b. solo el modo marcado sin aplicar en lo escrito: lo descarta que cambie el modo guardado, no otro ajuste
+        modo0 = pg.evaluate("S.config.procesado")
+        marcado = "agente" if modo0 != "agente" else "local"
+        for fuera, descarta in (({"language": cfg["language"]}, False), ({"procesado": marcado}, True)):
+            pg.click("#btnSettings")
+            pg.click(".aj-nav [data-sec='procesado']")
+            pg.check(f"#modal input[name='proc'][value='{marcado}']")
+            self.assertEqual(list(pg.evaluate("S.ajBorrador")), ["__proc"])
+            pg.evaluate(callar)
+            pg.evaluate("openVocabEditor(S.vocab[0], openSettings)")
+            pg.wait_for_selector("#modal #veName", timeout=5000)
+            pg.evaluate("S.ajHuella")
+            pg.evaluate("b => api('/api/settings', b)", fuera)
+            pg.click("#modal [data-m='no']")
+            pg.wait_for_selector("#modal .aj-nav [data-sec='procesado'].on", timeout=5000)
+            pg.wait_for_timeout(100)
+            self.assertEqual(pg.evaluate(aviso), descarta, fuera)
+            self.assertEqual(pg.evaluate("S.ajBorrador?.__proc ?? null"), None if descarta else marcado)
+            pg.keyboard.press("Escape")
+        pg.evaluate("m => api('/api/settings', { procesado: m }).then(setConfig)", modo0)
+        # 1c. una confirmación lanzada desde Ajustes («Apagar» › «Cancelar») no es salir: no se toma huella y la vuelta
+        # es al momento, sin esperar a /api/config (así «Activar» las voces pinta lo de después de activar): con
+        # /api/config retenido, Ajustes vuelve igual
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        pg.fill("#pfContext", "escrito y apagando")
+        cfg_rx, en_espera = re.compile(r"/api/config$"), []
+
+        def soltar():  # lo retenido, siempre (si no, cerrar el navegador espera)
+            for r in en_espera:
+                try:
+                    r.continue_()
+                except Exception:
+                    pass
+            en_espera.clear()
+        self.addCleanup(soltar)
+        pg.route(cfg_rx, lambda r: en_espera.append(r))
+        pg.evaluate("document.querySelector('#sOff').click()")
+        pg.wait_for_selector("#modal .dialog.ask", timeout=5000)
+        self.assertIsNone(pg.evaluate("S.ajHuella"))
+        pg.click("#modal .dialog.ask [data-m='no']")
+        pg.wait_for_selector("#modal .aj-nav", timeout=3000)
+        self.assertEqual(pg.input_value("#pfContext"), "escrito y apagando")
+        soltar()
+        pg.unroute(cfg_rx)
+        pg.keyboard.press("Escape")
+        pg.evaluate(callar)  # el aviso de 1b aún se ve
         # 2. «Otra carpeta (fuera de Chuleta)…»: se vincula, cuenta como sin guardar y vuelve de un subdiálogo
         carpeta = os.path.join(self.tmp, "fuera-r8")
         os.makedirs(carpeta, exist_ok=True)
@@ -883,16 +982,26 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.select_option("#pfFolder", "__pick")
         pg.wait_for_function("!['__auto', '__pick'].includes(document.querySelector('#pfFolder').value)", timeout=5000)
         rel = pg.input_value("#pfFolder")
-        self.addCleanup(pg.evaluate, "p => api('/api/link/remove', { path: p })", rel)
+        self.addCleanup(pg.evaluate, "p => api('/api/link/remove', { path: p }).catch(() => null)", rel)
         self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
         ida_y_vuelta()
         self.assertEqual(pg.input_value("#pfFolder"), rel)
+        self.assertFalse(pg.evaluate(aviso))
+        # «quitar» esa carpeta en Ajustes y confirmarlo: es de Ajustes (revisión 9), lo escrito se queda y la carpeta
+        # quitada, que ya no se puede elegir, deja lo guardado
+        pg.fill("#pfContext", "escrito antes de quitar")
+        pg.evaluate("p => document.querySelector(`[data-unlink='${p}']`).click()", rel)
+        pg.click("#modal .dialog.ask [data-m='ok']")
+        de_vuelta = "document.querySelector('#modal .aj-nav') && !document.querySelector('#modal .dialog.ask')"
+        pg.wait_for_function(de_vuelta, timeout=5000)
+        self.assertEqual(pg.input_value("#pfContext"), "escrito antes de quitar")
+        self.assertEqual(pg.input_value("#pfFolder"), "__auto")
         self.assertFalse(pg.evaluate(aviso))
         pg.keyboard.press("Escape")
         pg.unroute("**/api/link/pick")
         # 3. la lista de «Proyecto al grabar», renombrada en su editor
         lista = pg.evaluate("api('/api/vocab/save', { project: 'Cliente R8', name: 'Legal', terms: 'uno' })")["id"]
-        self.addCleanup(pg.evaluate, "() => Promise.allSettled(['Legal', 'Legal 2', 'Legal 3'].map(n =>"
+        self.addCleanup(pg.evaluate, "() => Promise.allSettled(['Legal', 'Legal 2', 'Legal 3', 'Legal 4'].map(n =>"
                         " api('/api/vocab/delete', { id: `Cliente R8/Vocabulario/${n}.txt` })))")
         pg.evaluate("loadVocab(S.config.language ?? 'es-en')")
         pg.click("#btnSettings")
@@ -902,6 +1011,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_function("S.config.perfil?.vocab === 'Cliente R8/Vocabulario/Legal.txt' && !document.querySelector("
                              "'#modal .aj-nav')", timeout=5000)
         escribir()
+        general = "Proyecto/Vocabulario/General.txt"
+        pg.select_option("#pfVocab", general)  # «Proyecto al grabar», en lo escrito
         pg.evaluate(callar)
         pg.evaluate("id => openVocabEditor(S.vocab.find(v => v.id === id), openSettings)", lista)
         pg.wait_for_selector("#modal #veName", timeout=5000)
@@ -916,9 +1027,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("#modal .aj-pie [data-m='ok']")
         pg.wait_for_function("!document.querySelector('#modal .aj-nav')", timeout=5000)
         self.assertEqual(pg.evaluate("api('/api/config')")["perfil"]["context"], escrito)
-        # y sin nada escrito: no hay nada que descartar ni que decir, pero Ajustes enseña el nombre nuevo y guarda
+        # y con lo escrito sin «Proyecto al grabar»: no se descarta ni se dice; Ajustes enseña el nombre nuevo y guarda
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        pg.fill("#pfContext", "escrito al renombrar otra vez")
         pg.evaluate(callar)
         pg.evaluate("openVocabEditor(S.vocab.find(v => v.id === 'Cliente R8/Vocabulario/Legal 2.txt'), openSettings)")
         pg.wait_for_selector("#modal #veName", timeout=5000)
@@ -928,9 +1040,24 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_function(f"document.querySelector('#modal #pfVocab')?.value === '{nuevo}'", timeout=5000)
         self.assertNotIn("no se encuentra", pg.inner_text("#pfVocab"))
         self.assertFalse(pg.evaluate(aviso))
+        self.assertEqual(pg.input_value("#pfContext"), "escrito al renombrar otra vez")
         pg.click("#modal .aj-pie [data-m='ok']")
         pg.wait_for_function("!document.querySelector('#modal .aj-nav')", timeout=5000)
         self.assertEqual(pg.evaluate("api('/api/config')")["perfil"]["vocab"], "Cliente R8/Vocabulario/Legal 3.txt")
+        # y sin nada escrito: tampoco hay nada que descartar, pero la vuelta pide la configuración igual
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertIsNone(pg.evaluate("S.ajBorrador"))
+        pg.evaluate("openVocabEditor(S.vocab.find(v => v.id === 'Cliente R8/Vocabulario/Legal 3.txt'), openSettings)")
+        pg.wait_for_selector("#modal #veName", timeout=5000)
+        pg.fill("#veName", "Legal 4")
+        pg.click("#modal [data-m='ok']")
+        nuevo = "Cliente R8/Vocabulario/Legal 4.txt"
+        pg.wait_for_function(f"document.querySelector('#modal #pfVocab')?.value === '{nuevo}'", timeout=5000)
+        self.assertNotIn("no se encuentra", pg.inner_text("#pfVocab"))
+        pg.click("#modal .aj-pie [data-m='ok']")
+        pg.wait_for_function("!document.querySelector('#modal .aj-nav')", timeout=5000)
+        self.assertEqual(pg.evaluate("api('/api/config')")["perfil"]["vocab"], nuevo)
         # 4. las listas llegan después de abrir: lo escrito se pone (y cuenta) si no lo tocas; si lo tocas, lo tuyo
         retenidas = []
         pg.route(re.compile(r"/api/vocab(\?|$)"), lambda r: retenidas.append(r))
@@ -938,7 +1065,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         for tocar in (False, True):
             retenidas.clear()
             pg.evaluate("id => { S.vocab = []; S.vocabCarpetas = undefined; S.vocabError = null;"
-                        " S.ajBorrador = { pfVocab: id }; S.ajBorradorRev = null; openSettings(); }", general)
+                        " S.ajBorrador = { pfVocab: id }; S.ajHuella = null; openSettings(); }", general)
             pg.wait_for_selector("#modal .aj-nav", timeout=5000)
             if tocar:
                 pg.select_option("#pfVocab", "")
@@ -967,6 +1094,21 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             r.continue_()
         pg.wait_for_function("!('pfVocab' in (S.ajBorrador || {}))", timeout=5000)
         pg.keyboard.press("Escape")
+        # con las listas leídas y ninguna (no un error): lo escrito no se queda esperándolas
+        retenidas.clear()
+        pg.evaluate("() => { S.vocab = []; S.vocabCarpetas = []; S.vocabError = null;"
+                    " S.ajBorrador = { pfVocab: 'No/Vocabulario/Existe.txt' }; openSettings(); }")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        pg.select_option("#sLang", "en")  # algo que pase por marcar(), con la nueva lectura aún retenida
+        self.assertNotIn("pfVocab", pg.evaluate("S.ajBorrador || {}"))
+        for _ in range(100):
+            if retenidas:
+                break
+            pg.wait_for_timeout(50)
+        self.assertTrue(retenidas)
+        for r in retenidas:
+            r.continue_()
+        pg.keyboard.press("Escape")
         pg.unroute(re.compile(r"/api/vocab(\?|$)"))
         # 5. Proyectos: un idioma cambiado en una fila y, enseguida, «Editar la lista»: se guarda antes de salir, así
         # que al volver no cuenta como de fuera
@@ -988,6 +1130,72 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertFalse(pg.evaluate(aviso))
         self.assertEqual(pg.evaluate("api('/api/config')")["workstream_langs"].get(general), "en")
         pg.keyboard.press("Escape")
+        # 6. la vuelta pide /api/config: «Cancelar» dos veces mientras tanto vuelve una sola vez; Escape mientras tanto
+        # cierra y no reabre Ajustes; abrir Ajustes de nuevo mientras tanto (la paleta) gana a la vuelta; y si falla la
+        # petición de la ida o la de la vuelta, lo escrito se queda
+        cfg_rx = re.compile(r"/api/config$")
+        pg.evaluate("() => { window.__pintadas = 0; const o = window.openModal;"
+                    " window.openModal = (...a) => { if (a[2] === 'aj') window.__pintadas++; return o(...a); }; }")
+        for modo in ("doble", "escape", "nueva"):
+            pg.click("#btnSettings")
+            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+            pg.fill("#pfContext", "escrito y en vuelo")
+            pg.evaluate("openVocabEditor(S.vocab[0], openSettings)")
+            pg.wait_for_selector("#modal #veName", timeout=5000)
+            pg.evaluate("S.ajHuella")  # la base ya está
+            retenidas.clear()
+            pg.route(cfg_rx, lambda r: retenidas.append(r))
+            pg.evaluate("window.__pintadas = 0")
+            pg.click("#modal [data-m='no']")
+            if modo == "escape":
+                pg.keyboard.press("Escape")
+            elif modo == "nueva":
+                pg.evaluate("openSettings({ sec: 'avanzado' })")
+            else:
+                pg.click("#modal [data-m='no']")
+            for _ in range(100):
+                if retenidas:
+                    break
+                pg.wait_for_timeout(50)
+            self.assertEqual(len(retenidas), 1)
+            retenidas[0].continue_()  # antes de quitar la ruta: unroute despacha solo lo retenido
+            pg.unroute(cfg_rx)
+            pg.wait_for_timeout(400)
+            if modo == "escape":
+                self.assertTrue(pg.evaluate("document.querySelector('#modal').classList.contains('hidden')"))
+                self.assertEqual(pg.evaluate("window.__pintadas"), 0)
+            elif modo == "nueva":
+                self.assertEqual(pg.evaluate("window.__pintadas"), 1)
+                self.assertTrue(pg.is_visible("#modal .aj-nav [data-sec='avanzado'].on"))
+                self.assertEqual(pg.input_value("#pfContext"), pg.evaluate("S.config.perfil?.context || ''"))
+                pg.keyboard.press("Escape")
+            else:
+                self.assertEqual(pg.evaluate("window.__pintadas"), 1)
+                self.assertEqual(pg.input_value("#pfContext"), "escrito y en vuelo")
+                pg.keyboard.press("Escape")
+        for falla in ("ida", "vuelta"):
+            pg.click("#btnSettings")
+            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+            pg.fill("#pfContext", f"escrito con la {falla} fallida")
+            if falla == "ida":
+                pg.route(cfg_rx, lambda r: r.abort())
+            pg.evaluate("openVocabEditor(S.vocab[0], openSettings)")
+            pg.wait_for_selector("#modal #veName", timeout=5000)
+            pg.evaluate("S.ajHuella")
+            if falla == "ida":
+                pg.unroute(cfg_rx)
+            else:
+                pg.route(cfg_rx, lambda r: r.abort())
+            pg.click("#modal [data-m='no']")
+            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+            self.assertEqual(pg.input_value("#pfContext"), f"escrito con la {falla} fallida")
+            self.assertFalse(pg.evaluate(aviso))
+            if falla == "vuelta":
+                pg.unroute(cfg_rx)
+            pg.keyboard.press("Escape")
+        red[:] = [r for r in red if not (r.startswith("fallo") and cfg_rx.search(r.split("?")[0]))]
+        # 7. los avisos se leen en voz alta
+        self.assertEqual(pg.get_attribute("#toasts", "aria-live"), "polite")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)

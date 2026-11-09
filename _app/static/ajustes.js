@@ -383,9 +383,7 @@ function bindAjProyectos(d) {
     if (listo) return cerrar(listo.closest('tr'));
     if (e.target.closest('[data-pj-lista]')) {
       const v = (S.vocab || []).find(x => x.id === e.target.closest('[data-pj-lista]').dataset.pjLista);
-      if (!v) return;
-      await guardarYa();  // lo pendiente de la fila, guardado desde aquí antes de salir (si no, contaría como de fuera)
-      openVocabEditor(v, openSettings);
+      if (v) openVocabEditor(v, openSettings);
       return;
     }
     if (!pe && !we) return;
