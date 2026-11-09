@@ -168,7 +168,8 @@ Lo que vio: «a una persona la cataloga como 10 personas distintas a lo largo de
 - Las reuniones ya identificadas no cambian hasta «Volver a identificar».
 - Los participantes de Outlook con el nombre del directorio de la empresa («Apellido, Nombre») se separan con «; »,
   como en Outlook: antes, con «, », cada uno contaba como dos personas en la pista y en las notas no se sabía dónde
-  acababa cada nombre (revisión de la integración del 08/11/2026).
+  acababa cada nombre. Si los editas a mano, la pista los cuenta como texto libre, del lado que une menos voces
+  (revisión de la integración del 08/11/2026).
 
 ### «Con tu cuenta de Claude» en Windows: «Comprobar» sin esperas ocultas (07/11/2026)
 Lo que vio: «Comprobar» tardó unos minutos en su PC antes de responder (msg 1187).

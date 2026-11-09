@@ -3530,7 +3530,8 @@ class Jobs:
         if old.get("tramos") and props.get("participantes_origen") not in PARTICIPANTES_ORIGENES:  # la grabadora
             # deja un sidecar con solo «micro»: eso aun no es una identificacion
             return 0
-        return voices.count_participants(props.get("participantes"))
+        return voices.count_participants(props.get("participantes"),
+                                         sugeridos=props.get("participantes_origen") in PARTICIPANTES_ORIGENES)
 
     def _suggest_participants(self, abs_path, data):
         """Propiedad «Participantes» con los nombres reconocidos, solo si esta vacia (no se pisa lo escrito a mano)."""

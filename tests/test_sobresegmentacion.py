@@ -174,13 +174,19 @@ class CountParticipantsTests(unittest.TestCase):
                         ("Ana/Luis", 2), ("Ana e Inés", 2), ("Maya Ybarra", 1), ("Ana,\nLuis", 2)):
             self.assertEqual(voices.count_participants(text), n, text)
 
-    def test_nombres_de_directorio_de_outlook(self):
-        """«Apellido, Nombre» (Outlook de empresa): con «;» la coma es parte del nombre."""
+    def test_sugeridos_por_outlook(self):
+        """Lo que escribe la app con los de Outlook (join_participants): «Apellido, Nombre» es una persona."""
         for text, n in (("Stegmaier, Bernardo; García López, Ana", 2), ("Stegmaier, Bernardo;\nGarcía, Ana; Luis", 3),
-                        ("Ana; Luis, Pedro y Marta", 4), ("Ana; ana", 1)):
-            self.assertEqual(voices.count_participants(text), n, text)
-        # anadido a mano con coma detras de los de Outlook: nunca de menos (de mas, la pista une menos)
-        self.assertGreaterEqual(voices.count_participants("García, Ana; Pérez, Luis, Pedro"), 3)
+                        ("Ana, Luis", 2), ("Ortega y Gasset, José; Ana", 2), ("", 0)):
+            self.assertEqual(voices.count_participants(text, sugeridos=True), n, text)
+
+    def test_editado_a_mano_nunca_de_menos(self):
+        """Texto libre (lo que el usuario edita, mezclando con los de Outlook): nunca cuenta de menos."""
+        for text, real in (("García, Ana; Luis Pérez, Pedro", 3), ("García, Ana; luis@cliente.com, Pedro", 3),
+                           ("García, Ana; Pérez, Luis; Pedro, Marta", 4), ("Ana; Luis, Pedro", 3),
+                           ("Ana, Luis; Pedro", 3), ("García, Ana; Pérez, Luis, Pedro", 3),
+                           ("Ana; Luis, Pedro y Marta", 4)):
+            self.assertGreaterEqual(voices.count_participants(text), real, text)
 
 
 class ParticipantesDeOutlookTests(unittest.TestCase):
@@ -193,7 +199,7 @@ class ParticipantesDeOutlookTests(unittest.TestCase):
                                   "attendees": ["García López, Ana", "Stegmaier, Bernardo"]}, [])
         texto = calendario.join_participants(sug["participants"])
         self.assertEqual(texto, "Stegmaier, Bernardo; García López, Ana")
-        self.assertEqual(voices.count_participants(texto), 2)
+        self.assertEqual(voices.count_participants(texto, sugeridos=True), 2)
 
     def test_sin_comas_como_siempre(self):
         import calendario
@@ -280,6 +286,15 @@ class PistaDeParticipantesTests(Reunion):
         """Tras identificar, _suggest_participants pudo dejar solo los reconocidos: no vale como tope."""
         self.identificar(micro_en=None)
         self.assertIsNone(self.correr({"participantes": "Ana"}))
+
+    def test_los_de_outlook_con_apellido_y_nombre(self):
+        """Sugeridos por Outlook (con su origen): «Apellido, Nombre» cuenta uno."""
+        texto = "Stegmaier, Bernardo; García López, Ana"
+        self.assertEqual(self.correr({"participantes": texto, "participantes_origen": "outlook"}), 2)
+
+    def test_editados_a_mano_del_lado_prudente(self):
+        """El mismo texto ya editado (sin origen) es texto libre: se cuenta de mas, nunca de menos."""
+        self.assertEqual(self.correr({"participantes": "Stegmaier, Bernardo; García López, Ana"}), 4)
 
     def test_al_reidentificar_si_los_sugirio_la_reunion(self):
         self.identificar(micro_en=None)
