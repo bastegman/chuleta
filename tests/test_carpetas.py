@@ -280,10 +280,66 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
 
     def test_quitar_la_carpeta_de_listas_quita_la_carpeta_de_sus_workstreams(self):
         ws = {self.b["id"]: "Cliente B", self.alfa["id"]: "Alfa"}
-        self.a.settings.update(lambda d: d.update(workstream_folders=ws))
+        langs = {self.b["id"]: "en", self.alfa["id"]: "es-pt"}  # y su idioma (revisión de la fusión de ux-grabar)
+        self.a.settings.update(lambda d: d.update(workstream_folders=ws, workstream_langs=langs))
         with mock.patch.object(server, "log"), mock.patch.object(self.a, "_save_vocab_links"):
             self.a.vocab_link_remove({"rel": self.b["conectada"]})
         self.assertEqual(self.a.settings.get()["workstream_folders"], {self.alfa["id"]: "Alfa"})
+        self.assertEqual(self.a.settings.get()["workstream_langs"], {self.alfa["id"]: "es-pt"})
+
+    def plan_app(self):
+        a = self.a
+        sug = {"name": "", "vocab": "", "source": "", "participants": []}
+        a.vigia = types.SimpleNamespace(sugerencia=lambda leer: dict(sug))
+        a._vocab_terms = lambda: []
+        return a
+
+    @staticmethod
+    def linea(p, clave):
+        return next(x for x in p["lineas"] if x["clave"] == clave)
+
+    def test_desde_la_tarjeta(self):
+        """La tarjeta de grabar (ux-grabar) nunca manda una carpeta elegida a mano sin «Usarlo en» (revisión de la
+        fusión): con «Solo esta reunión» va en el pedido con recordar_carpeta: false y no cambia la del proyecto; con
+        «Todas las de Cliente B», /api/grabar/recordar la guarda como suya. Mientras no tiene, la línea de la carpeta
+        lo avisa y dice cómo."""
+        a = self.plan_app()
+        rec(a, self, folder="Alfa", vocab=self.alfa["id"], name="Comité")  # la última usada: la de otro cliente
+        car = self.linea(a.grabar_plan_api({"nombre": "Kickoff", "vocab": self.b["id"]}), "carpeta")
+        self.assertIn("Cliente B no tiene carpeta propia", car.get("aviso") or "")
+        self.assertIn("«Cambiar» y «Todas las de Cliente B»", car["aviso"])
+        # «Cambiar» › otra carpeta › «Solo esta reunión» (la opción marcada): se graba allí y no se aprende
+        p = a.grabar_plan_api({"nombre": "Kickoff", "vocab": self.b["id"], "cambios": {"carpeta": "Cliente B"}})
+        self.assertIs(p["rec"]["recordar_carpeta"], False)
+        r = rec(a, self, **p["rec"])
+        self.assertEqual(r["carpeta"], f"Cliente B/{TODAY} Kickoff")
+        self.assertEqual(a.settings.get().get("project_folders") or {}, {})
+        self.assertEqual(server.rec_folder_origin(self.b, a.settings.get()), ("Alfa", "ultimo"))
+        # «Todas las de Cliente B»: es su carpeta, y el plan la usa sin aviso
+        with mock.patch.object(server, "log"):
+            a.grabar_recordar({"clave": "carpeta", "valor": "Cliente B 2", "alcance": "proyecto",
+                               "vocab": self.b["id"]})
+        self.assertEqual(server.rec_folder_origin(self.b, a.settings.get()), ("Cliente B 2", "proyecto"))
+        p = a.grabar_plan_api({"nombre": "Seguimiento", "vocab": self.b["id"]})
+        self.assertEqual(p["rec"]["folder"], "Cliente B 2")
+        self.assertIsNone(self.linea(p, "carpeta").get("aviso"))
+
+    def test_ajustes_lee_las_listas_una_vez(self):
+        """Ajustes › Proyectos y el plan calculan la carpeta de cada lista con las listas ya leídas: una lista de una
+        carpeta conectada las volvía a leer todas (project_home) y, al abrir Ajustes, crecía con el cuadrado del número
+        de listas (revisión de la fusión de ux-grabar: 114 lecturas y 0,6 s con 40 listas)."""
+        ext = os.path.dirname(os.path.dirname(os.path.dirname(self.b["_abs"])))
+        for i in range(6):
+            with open(os.path.join(ext, "Cliente B", "Vocabulario", f"Tema {i}.txt"), "w", encoding="utf-8") as f:
+                f.write("Hito\n")
+        a, real, n = self.plan_app(), server.list_vocab, []
+        with mock.patch.object(server, "list_vocab", lambda *x, **k: n.append(1) or real(*x, **k)):
+            res = a._carpetas_de_proyectos(a.settings.get())
+            self.assertEqual(len(n), 1)
+            del n[:]
+            a.grabar_plan_api({"nombre": "Kickoff", "vocab": self.b["id"]})
+        self.assertLessEqual(len(n), 3)
+        self.assertEqual(len([k for k in res["workstreams"] if k.startswith(server.VLINK)]), 7)
 
 
 class CarpetaDeListasNuncaEsDestinoTests(TempTree):

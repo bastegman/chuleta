@@ -292,6 +292,26 @@ class ServidorPlanTests(TempTree):
                           "vocab": "Beta/Vocabulario/Legal.txt"})
         self.assertEqual(vistos[0]["vocab"], "Alfa/Vocabulario/General.txt")  # la misma reunión grabada antes manda
 
+    def test_ctrl_alt_r_dice_donde_se_guarda(self):
+        """Con proyecto, el resumen dice el proyecto y no la carpeta: el aviso de Ctrl+Alt+R, que no tiene tarjeta, dice
+        también la carpeta de la reunión (lo decía en la integración; revisión de la fusión de ux-grabar)."""
+        a = self.app(project_folders={"Alfa": "Alfa/Reuniones"})
+        self.sug.update(vocab="Alfa/Vocabulario/General.txt")
+        a.rec_start = lambda b: {"path": "Alfa/Reuniones/2026-11-09 Comité/x.wav", "workstream": None,
+                                 "carpeta": "Alfa/Reuniones/2026-11-09 Comité"}
+        with mock.patch.object(server, "cue"), mock.patch.object(server, "notify") as nt:
+            a.rec_toggle({"source": "hotkey"})
+        texto = nt.call_args[0][1]
+        self.assertIn("Comité de seguimiento → Alfa › General", texto)
+        self.assertIn(" · se guarda en \\Alfa\\Reuniones\\2026-11-09 Comité\\ · Ctrl+Alt+R para parar", texto)
+        # sin proyecto, el resumen ya es la carpeta: no se repite
+        self.sug.update(vocab="")
+        b = self.app(perfil={"folder": None}, rec_folder="Alfa/Reuniones")
+        b.rec_start = lambda body: {"path": "Alfa/Reuniones/x.wav", "workstream": None, "carpeta": "Alfa/Reuniones"}
+        with mock.patch.object(server, "cue"), mock.patch.object(server, "notify") as nt:
+            b.rec_toggle({"source": "hotkey"})
+        self.assertNotIn("se guarda en", nt.call_args[0][1])
+
     def test_rec_start_desde_el_plan_no_aprende_ni_pisa_lo_predeterminado(self):
         a = self.app(rec_mic="default", live_preset="medium", project_folders={})
         p = a.grabar_plan_api({"vocab": "Alfa/Vocabulario/General.txt",
@@ -342,7 +362,7 @@ class ServidorPlanTests(TempTree):
     def regla_de_carpetas(self):
         """La regla de la rama `carpetas` con su misma forma (rec_folder_origin y meeting_dir_preview, de módulo; su
         rec_folder_for la llama): para probar aquí que el plan la usa tal cual cuando está."""
-        def origin(v, st):
+        def origin(v, st, vs=None):
             if v and v["project"] == "Alfa":
                 return "Alfa/Reuniones", "carpeta_proyecto"
             return "Sueltas", "perfil"
@@ -352,7 +372,7 @@ class ServidorPlanTests(TempTree):
                 f"{rel}/2026-11-08 {label or '10-00'}"
         return [mock.patch.object(server, "rec_folder_origin", origin, create=True),
                 mock.patch.object(server, "meeting_dir_preview", preview, create=True),
-                mock.patch.object(server.App, "rec_folder_for", lambda s, v, st: origin(v, st)[0])]
+                mock.patch.object(server.App, "rec_folder_for", lambda s, v, st, vs=None: origin(v, st)[0])]
 
     def test_con_la_regla_de_la_rama_de_carpetas(self):
         """Contrato con `carpetas` (B1b y B1c): su regla decide la carpeta y su origen (sin el arreglo 11a′ de aquí,
@@ -565,10 +585,10 @@ class ServidorPlanTests(TempTree):
         self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Chuleta\\Fuera\\Clientes\\)",
                       b["carpeta"]["aviso"])
 
-        def origin(v, st):
+        def origin(v, st, vs=None):
             return ("Alfa/Reuniones", "carpeta_proyecto") if v and v["project"] == "Alfa" else ("", "ultimo")
         with mock.patch.object(server, "rec_folder_origin", origin, create=True), \
-                mock.patch.object(server.App, "rec_folder_for", lambda s, v, st: origin(v, st)[0]):
+                mock.patch.object(server.App, "rec_folder_for", lambda s, v, st, vs=None: origin(v, st)[0]):
             sin = self.app(perfil={"folder": None})
             b = lineas(sin.grabar_plan_api({"nombre": "", "vocab": "Beta/Vocabulario/Legal.txt"}))
             self.assertEqual(b["carpeta"]["aviso"], "Beta no tiene carpeta propia: asígnale una en Ajustes › Proyectos "

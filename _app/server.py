@@ -4287,7 +4287,11 @@ class App:
                 # lo que avisa el plan (la carpeta, un proyecto sin carpeta propia, la API key), también aquí y
                 # delante: el aviso de Windows corta lo que no cabe
                 del_plan = "".join(f"{a} · " for a in dict.fromkeys(x["aviso"] for x in p["lineas"] if x.get("aviso")))
-                notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + " · Ctrl+Alt+R para parar"
+                # con proyecto, el resumen dice el proyecto y no la carpeta: la de la reunión, también (sin tarjeta,
+                # es lo único que dice dónde se guarda; revisión de la fusión de ux-grabar)
+                donde = (f" · se guarda en {display_rel(r['carpeta'])}"
+                         if p["proyecto"].get("vocab") and r.get("carpeta") is not None else "")
+                notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + donde + " · Ctrl+Alt+R para parar"
                        + (f" · {r['aviso']}" if r.get("aviso") else ""))
                 return dict(r, recording=True, plan=p)
             except ApiError as e:
@@ -4331,7 +4335,7 @@ class App:
             rel = rel or ""
             if callable(regla):
                 try:
-                    r_rel, o = regla(full.get(v["id"]) if v else None, st)
+                    r_rel, o = regla(full.get(v["id"]) if v else None, st, full.values())
                 except Exception:
                     log_exc()
                 else:
@@ -4360,7 +4364,9 @@ class App:
         (la que contiene su Vocabulario; 11a′ del rediseño, msg 1158). Con la regla de la rama de carpetas
         (rec_folder_origin), su rec_folder_for ya lo decide así y esto no hace nada: una sola regla."""
         fv = full.get(v["id"]) if v else None
-        rel = self.rec_folder_for(fv, st)
+        # con las listas ya leídas (full): si no, cada lista de una carpeta conectada las volvía a leer todas
+        # (project_home), y Ajustes › Proyectos las leía una vez por lista (revisión de la fusión de ux-grabar)
+        rel = self.rec_folder_for(fv, st, full.values())
         if not fv or callable(globals().get("rec_folder_origin")):
             return rel
         # el mismo orden que la regla de la rama de carpetas: la del workstream, la asignada al proyecto, la del
@@ -5239,10 +5245,11 @@ class App:
         log(f"🔗 carpeta desvinculada (no se ha tocado nada): {l['path']}")
         return {"ok": True}
 
-    def rec_folder_for(self, v, st):
+    def rec_folder_for(self, v, st, vs=None):
         """La carpeta principal donde se graba una reunion con el tema `v` (la regla, en rec_folder_origin). Dentro,
-        rec_start crea la carpeta de la reunion (carpeta por reunion); para saber cual sera, rec_destino."""
-        return rec_folder_origin(v, st)[0]
+        rec_start crea la carpeta de la reunion (carpeta por reunion); para saber cual sera, rec_destino. `vs`: las
+        listas de list_vocab, si ya se tienen."""
+        return rec_folder_origin(v, st, vs)[0]
 
     def carpeta_principal(self, b):
         """POST /api/proyecto/carpeta {project, vocab?, folder}: asigna la carpeta principal de un proyecto (o, con
@@ -5405,7 +5412,7 @@ class App:
     def vocab_link_remove(self, b):
         """POST /api/vocab/link/remove {rel}: deja de leer esa carpeta. No borra ni mueve nada de ella. El tema fijo del
         perfil y el ultimo elegido, si eran de alli, vuelven a «automatico» y a ninguno, y sus workstreams pierden la
-        carpeta principal asignada (como al borrar un tema o desvincular una carpeta)."""
+        carpeta principal y el idioma asignados (como al borrar un tema o desvincular una carpeta)."""
         rel = str(b.get("rel") or b.get("path") or "")
         vid = rel[len(VLINK):].split("/")[0] if rel.startswith(VLINK) else ""
         if vid not in VOCAB_LINKS:
@@ -5419,8 +5426,9 @@ class App:
                 d["rec_vocab"] = ""
             if mine((d.get("perfil") or {}).get("vocab")):
                 d["perfil"] = dict(d["perfil"], vocab=None)
-            if any(mine(k) for k in (d.get("workstream_folders") or {})):
-                d["workstream_folders"] = {k: x for k, x in d["workstream_folders"].items() if not mine(k)}
+            for clave in ("workstream_folders", "workstream_langs"):
+                if any(mine(k) for k in (d.get(clave) or {})):
+                    d[clave] = {k: x for k, x in d[clave].items() if not mine(k)}
         self.settings.update(upd)
         log(f"🔤 carpeta de listas desconectada (no se ha tocado nada): {l['path']}")
         return {"ok": True, "vocab_links": self._vocab_links_public()}

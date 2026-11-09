@@ -444,7 +444,7 @@ class ParticipantesAlGrabarTests(TempTree):
         a = self.app()
         seen = []
         a.rec_start = lambda b: seen.append(b) or {"path": "Alfa/x.wav", "workstream": None}
-        a.rec_folder_for = lambda v, st: "Alfa"
+        a.rec_folder_for = lambda v, st, vs=None: "Alfa"
         with mock.patch.object(server, "cue"), mock.patch.object(server, "notify"):
             a.rec_toggle({"source": "hotkey"})
         self.assertEqual((seen[0]["participantes"], seen[0]["sugerido"]), ("Ana Pérez, Luis Gómez", "outlook"))

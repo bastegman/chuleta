@@ -220,17 +220,17 @@ proyecto o workstream» (msg 1158).
   carpeta del proyecto (la que tiene su carpeta `Vocabulario`); la que ya recordaba la app para cada proyecto se queda
   como asignada (si era la carpeta de una reunión, «AAAA-MM-DD …», pasa a su carpeta padre, para no meter las nuevas
   dentro). Grabar en otra carpeta una vez ya no cambia la del proyecto. Con tema, la del proyecto va antes que la fija
-  del perfil; sin tema, la fija del perfil o la última. Ctrl+Alt+R, el aviso de Teams y el diálogo usan la misma regla,
+  del perfil; sin tema, la fija del perfil o la última. Ctrl+Alt+R, el aviso de Teams y la tarjeta usan la misma regla,
   y el aviso de Ctrl+Alt+R dice dónde se guarda.
 - Un proyecto cuyas listas vienen de una carpeta conectada no tiene carpeta en el árbol: su carpeta principal es la
-  última que elegiste a mano para él, también en la tarjeta de grabar (salvo con «solo esta reunión»), o la que le
-  asignes en Ajustes → Proyectos. Si no, Ctrl+Alt+R y el aviso de Teams con su tema grababan en la última carpeta
-  usada, que podía ser la de otro proyecto. Si el proyecto también está en el árbol, sus listas conectadas graban en
+  que le asignes en Ajustes → Proyectos o, al grabar, en la tarjeta con «Cambiar» y «Todas las de <proyecto>» (con
+  «Solo esta reunión» es solo para esa). Mientras no tenga, la tarjeta lo avisa y dice cómo. Antes, Ctrl+Alt+R y el
+  aviso de Teams con su tema grababan en la última carpeta usada, que podía ser la de otro proyecto, sin decir nada. Si el proyecto también está en el árbol, sus listas conectadas graban en
   la carpeta del proyecto, como las demás. La app ya no toma una carpeta de listas conectada por la carpeta de su
   proyecto, tampoco si queda dentro de una carpeta vinculada (antes las reuniones caían dentro solas y luego no se
   podía volver a conectar); una carpeta vinculada dentro de una de listas sí es del árbol. Al
-  quitar una carpeta de listas, sus workstreams pierden la carpeta asignada (revisión de la integración del
-  08/11/2026).
+  quitar una carpeta de listas, sus workstreams pierden la carpeta y el idioma asignados (revisión de la integración
+  del 08/11/2026).
 - Al empezar a grabar, la app espera hasta 10 s (eran 3) a que la grabadora cree el archivo. Con el PC cargado tardó
   más y la reunión se quedaba sin cabecera (tema, contexto, participantes) y sin directo; se vio en el E2E de carpetas
   (revisión de la integración del 08/11/2026). En cuanto existe, sigue.

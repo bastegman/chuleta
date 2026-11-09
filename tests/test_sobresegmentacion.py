@@ -341,7 +341,7 @@ class PistaDeParticipantesTests(Reunion):
         largos = [f"Apellido{n:02d} Segundo, Nombre{n:02d}" for n in range(30)]
         a.vigia = types.SimpleNamespace(ultimo={"sugerencia": {"source": "outlook", "participants": nombres}},
                                         sugerencia=lambda fn: {"source": "outlook", "participants": nombres})
-        a.toggle_lock, a.rec_folder_for = threading.Lock(), lambda v, st: "Alfa"
+        a.toggle_lock, a.rec_folder_for = threading.Lock(), lambda v, st, vs=None: "Alfa"
         with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos, \
                 mock.patch.object(server, "cue", lambda *x: None), mock.patch.object(server, "notify", lambda *x: None):
             rec(a, self, participantes=texto, sugerido="outlook")  # el dialogo, con la sugerencia
