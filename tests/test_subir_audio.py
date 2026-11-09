@@ -745,9 +745,14 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         # /api/rec/devices contesta 400 sin soundcard (no lo pide la tarjeta de subir, pero sí otras pantallas)
         self.assertEqual([e for e in self.errores if "Failed to load resource" not in e], [])
 
+    def pulsar(self, pg, boton):
+        """«Subir audio» (y «Subir audio aquí») abre un menú desde el QR del móvil: «Desde este PC» es lo de antes."""
+        pg.click(boton)
+        pg.click(".sb-menu [data-sbm='pc']")
+
     def elegir(self, pg, boton, *archivos):
         with pg.expect_file_chooser() as fc:
-            pg.click(boton)
+            self.pulsar(pg, boton)
         self.assertTrue(fc.value.is_multiple())
         fc.value.set_files(list(archivos))
         pg.wait_for_selector("#modal:not(.hidden) .dialog.sb [data-fila='carpeta'] .gr-v code", timeout=10000)
@@ -823,7 +828,7 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         with open(pdf, "wb") as f:
             f.write(b"%PDF-1.4")
         with pg.expect_file_chooser() as fc:
-            pg.click("#btnSubir")
+            self.pulsar(pg, "#btnSubir")
         fc.value.set_files(pdf)
         pg.wait_for_function("document.querySelector('#toasts').innerText.includes('no es un audio')", timeout=5000)
         self.assertTrue(pg.locator("#modal").is_hidden())

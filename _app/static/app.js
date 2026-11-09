@@ -461,7 +461,10 @@ $('#btnRec').onclick = openRec;
    de archivos y, con lo elegido, la tarjeta de subir (grabar.js); desde una carpeta, sube ahí */
 $('#btnSubir').onclick = () => {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  if (typeof elegirAudios === 'function') return elegirAudios({ carpeta: S.route.kind === 'f' ? S.route.path : null });
+  const carpeta = S.route.kind === 'f' ? S.route.path : null;
+  // «Desde este PC» o «Desde el móvil» (recibir.js); sin él, el selector de archivos como antes
+  if (typeof subirMenu === 'function') return S.sbMenu ? cerrarSubirMenu() : subirMenu($('#btnSubir'), { carpeta });
+  if (typeof elegirAudios === 'function') return elegirAudios({ carpeta });
   toast('No se ha podido cargar «Subir audio»: recarga la página (Ctrl+R).', 'err');
 };
 
@@ -873,7 +876,7 @@ function viewFolder(f) {
       <h1 class="ptitle static">${esc(nfc(f.name))}</h1><button class="pfav${isFav('f', f.path) ? ' on' : ''}" data-act="fav" data-kind="f" data-path="${esc(f.path)}">${isFav('f', f.path) ? I.starOn : I.star}</button></div>
     <div class="meta"><span><b>${f.total}</b> audio${f.total === 1 ? '' : 's'}</span><span><b>${fmtDur(f.secs)}</b> de audio</span><span><b>${f.done}</b> transcritos</span></div>
     <div class="actions">
-      <button class="btn" data-act="subir" data-path="${esc(f.path)}" title="Un audio que ya tengas (del móvil, de WhatsApp…): se guarda en esta carpeta y se transcribe">${I.upload}Subir audio aquí</button>
+      <button class="btn" data-act="subir" data-path="${esc(f.path)}" aria-haspopup="menu" aria-expanded="false" title="Un audio que ya tengas, desde este PC o desde el móvil: se guarda en esta carpeta y se transcribe">${I.upload}Subir audio aquí</button>
       <button class="btn" data-act="new-folder" data-path="${esc(f.path)}">${I.plus}Subcarpeta</button>
       <button class="btn" data-act="rename-folder" data-path="${esc(f.path)}">${I.edit}Renombrar</button>
       <button class="btn" data-act="reveal" data-path="${esc(f.path)}">${I.ext}Abrir en el Explorador</button>

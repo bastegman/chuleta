@@ -44,6 +44,7 @@ import calendario
 import engines
 import explicar
 import live
+import movil
 import plan as grabar_plan
 import probar
 import salidas
@@ -4541,6 +4542,11 @@ DIAG_LINES = (
     "✦ aprendido: {t} en {t} ({n} regla⟦s⟧)",
     "✦ regla olvidada: {t}",
     "✦ diccionario: {t}",
+    "📱 recibiendo del móvil en la wifi ({n}) durante {n} min",
+    "📱 un móvil ha abierto el código",
+    "📱 ya no se reciben audios del móvil",
+    "📱 no se ha guardado un audio del móvil ({t})",
+    "   móvil: no se han podido leer las redes ({e})",
     "🔗 carpeta vinculada: {t}",
     "🔗 carpeta desvinculada (no se ha tocado nada): {t}",
     "🔤 vocabulario guardado: {t} ({n} términos)",
@@ -5450,6 +5456,7 @@ class App:
         with self.jobs.lock:
             activos = sum(1 for j in self.jobs.list if j.status in ("queued", "running"))
         bandeja = b.get("origen") == "bandeja"
+        self._movil_parar()  # deja de escuchar en la wifi (si el código del móvil estaba abierto)
         log(f"apagar pedido desde {'la bandeja' if bandeja else 'la interfaz'} ({activos} trabajos en cola o en "
             "marcha)")
         schedule_shutdown("bandeja > Salir" if bandeja else "Ajustes > Apagar")
@@ -5471,6 +5478,81 @@ class App:
                 return {"ok": True}
         open_ui()
         return {"ok": True, "browser": True}
+
+    # --- «Subir audio › Desde el móvil» (movil.py): un código QR que el móvil abre por la wifi
+    _movil_lock = threading.Lock()
+    _movil_rec = None
+    _movil_ultima = None  # el último código cerrado, para que la tarjeta siga enseñando lo que recibió
+    _movil_red = (0.0, None)  # la última red buena y cuándo: «Mostrar el código» no vuelve a lanzar PowerShell
+
+    def _movil_datos(self, b):
+        """Lo elegido en el PC para lo que mande el móvil (lo que da /api/grabar/plan con subir, como en /api/subir):
+        la carpeta se comprueba ya, para no enseñar un código que luego no puede guardar nada."""
+        folder = safe(b.get("folder", ""), "dir")
+        if in_app_dir(folder):
+            raise ApiError("No se puede guardar ahí")
+        return {k: str(b.get(k) or "") for k in ("folder", "vocab", "language", "contexto", "preset")} | {
+            "folder": rel_of(folder)}
+
+    def _movil_parar(self):
+        with self._movil_lock:
+            rec, App._movil_rec = App._movil_rec, None
+            if rec:
+                App._movil_ultima = rec  # lo recibido se sigue viendo en la tarjeta (y lo que llegaba, al terminar)
+        if rec:
+            rec.parar()
+
+    def movil_red(self, q):
+        """GET /api/movil/red: si se puede recibir del móvil en la red de ahora ({ok, ip, red} o {ok: False, motivo,
+        texto}). Mira los perfiles de red de Windows (PowerShell, ~1 s)."""
+        red = movil.red_para_movil()
+        App._movil_red = (time.time(), red) if red["ok"] else (0.0, None)  # una mala tira la buena de antes
+        return red if red["ok"] else dict(red, texto=movil.motivo_texto(red))
+
+    def movil_abrir(self, b):
+        """POST /api/movil/abrir {folder, vocab, language, contexto, preset}: un código nuevo (el anterior deja de
+        valer). Solo en una red privada de Windows (decisión 3 de la lámina, msg 1390)."""
+        datos = self._movil_datos(b)
+        cuando, red = App._movil_red
+        if not red or time.time() - cuando > 120:  # la de hace un momento (al abrir la tarjeta) vale; una mala, no
+            red = movil.red_para_movil()
+        if not red["ok"]:
+            return dict(red, texto=movil.motivo_texto(red))
+        try:
+            rec = movil.Recepcion(red["ip"], datos, self.subir, STATIC_DIR, AUDIO_EXT)
+        except OSError as e:
+            raise ApiError(f"No se puede recibir en la wifi ({e.strerror or e.__class__.__name__}). Vuelve a probar en "
+                           "un momento.")
+        with self._movil_lock:  # el cambio, de una vez: dos «Mostrar el código» a la vez no dejan uno suelto
+            viejo, App._movil_rec, App._movil_ultima = App._movil_rec, rec, None
+            rec.empezar()
+        if viejo:
+            viejo.parar()
+        return dict(rec.publico(), ok=True, red=red.get("red") or "", qr=movil.qr_svg(rec.url))
+
+    def movil_datos(self, b):
+        """POST /api/movil/datos {…}: «Cambiar» con el código ya en pantalla: lo que llegue desde ahora va con esto."""
+        datos = self._movil_datos(b)
+        rec = App._movil_rec
+        if not rec or not rec.vigente():
+            raise ApiError("El código ya no vale: pide uno nuevo.", 410)
+        rec.datos = datos
+        return rec.publico()
+
+    def movil_estado(self, q):
+        """GET /api/movil/estado: el código abierto y lo que va llegando, para el PC."""
+        rec = App._movil_rec or App._movil_ultima
+        return rec.publico() if rec else {"activa": False, "recibidos": []}
+
+    def movil_cerrar(self, b):
+        """POST /api/movil/cerrar {url?}: «Dejar de recibir», «Listo» o cerrar la ventana. Lo que estaba llegando se
+        guarda. Con `url`, solo si es ese código (uno que se abría al cerrar la tarjeta no cierra el de otra)."""
+        rec = App._movil_rec
+        estado = rec.publico() if rec else {"activa": False, "recibidos": []}
+        if b.get("url") and (not rec or rec.url != b.get("url")):
+            return dict(estado, cerrado=False)
+        self._movil_parar()
+        return dict(estado, activa=False)
 
     def acerca_abrir(self, b):
         """Ajustes > Acerca de: abre la carpeta de datos (DATA_DIR: ajustes, API key cifrada, registros) en el
@@ -8496,6 +8578,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
                   "/api/agente/estado": a.agente_estado,
                   "/api/aprender": a.aprender_get, "/api/aprender/reglas": a.aprender_reglas,
+                  "/api/movil/red": a.movil_red, "/api/movil/estado": a.movil_estado,
                   "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()},
                   "/api/ocultar-captura": lambda q: captura_estado(a.settings.get())}
         try:
@@ -8556,6 +8639,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
                   "/api/acerca/abrir": a.acerca_abrir, "/api/calendario/activar": a.calendario_activar,
+                  "/api/movil/abrir": a.movil_abrir, "/api/movil/datos": a.movil_datos,
+                  "/api/movil/cerrar": a.movil_cerrar,
                   "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)},
                   "/api/ocultar-captura": a.ocultar_captura}
         try:

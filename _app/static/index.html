@@ -20,7 +20,7 @@
     <kbd>Ctrl K</kbd>
   </div>
   <button id="meetChip" class="meet-chip hidden" title="{{APP_NAME}} ha detectado que estás en una llamada"></button>
-  <button id="btnSubir" class="subir-btn" title="Subir un audio que ya tengas: del móvil, de WhatsApp o de otra grabadora" aria-label="Subir audio"><svg viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Subir audio</span></button>
+  <button id="btnSubir" class="subir-btn" title="Subir un audio que ya tengas: desde este PC o desde el móvil" aria-label="Subir audio" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Subir audio</span></button>
   <button id="btnRec" class="rec-btn" title="Grabar el audio del ordenador y el micrófono"><i class="recdot"></i><span>Grabar</span></button>
   <a id="liveChip" class="live-chip hidden" title="Hay una grabación en curso"><i class="recdot"></i>EN VIVO <span data-rec-clock></span></a>
   <button id="btnJobs" class="tb-btn" title="Cola de transcripciones">
@@ -89,7 +89,9 @@
 <script src="/perfil.js"></script>
 <script src="/modelos.js"></script>
 <script src="/configurar.js"></script>
+<script src="/nombres-audio.js"></script>
 <script src="/grabar.js"></script>
+<script src="/recibir.js"></script>
 <script src="/ajustes.js"></script>
 </body>
 </html>

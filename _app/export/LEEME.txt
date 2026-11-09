@@ -108,6 +108,14 @@ USO DIARIO
   - ¿Ya tienes el audio (del móvil, de WhatsApp, de otra grabadora)? Pulsa "Subir audio", arriba,
     o arrástralo a la ventana: se guarda como una reunión más, con su proyecto y su fecha, y se
     transcribe solo. Si un archivo no se puede leer, lo dice y no guarda nada.
+  - ¿Está en el móvil? "Subir audio" > "Desde el móvil": eliges el proyecto y sale un código QR.
+    Escanéalo con la cámara del móvil, elige las grabaciones en la página que se abre y entran
+    solas. Hace falta que el móvil y el PC estén en la misma wifi y que Windows la tenga como
+    privada (Configuración > Red e Internet > Wi-Fi > tu red > Privada); en una pública o en la
+    de la empresa no se ofrece. El audio va directo del móvil al PC, sin pasar por internet. Cada
+    código vale 10 minutos y para un solo móvil. La primera vez, Windows pregunta si dejas usar la
+    red (puede decir "Python"): marca "Redes privadas" y pulsa "Permitir". En el iPhone, las Notas
+    de voz y los audios de WhatsApp se guardan antes en Archivos (Compartir > Guardar en Archivos).
   - Voces dobles: si una salida solo repite a otra (un dispositivo virtual, el «espejo» de un
     driver), la grabadora lo detecta sola en unos segundos y no suma la copia («igual que …: no se
     suma» en el medidor de ● Grabar). Si con altavoces el micro recoge la reunión, o una salida

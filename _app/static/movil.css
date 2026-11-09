@@ -1,0 +1,49 @@
+/* La página del móvil de «Subir audio › Desde el móvil» (movil.js). Marca Tenca: Boldo y Manrope; en modo oscuro,
+   como la app. Pensada para una mano: el botón grande arriba y la lista debajo. */
+@font-face { font-family: "Manrope"; src: url("manrope.woff2") format("woff2"); font-weight: 200 800; font-display: fallback; }
+@font-face { font-family: "Fraunces"; src: url("fraunces.woff2") format("woff2"); font-weight: 400 800; font-display: fallback; }
+:root {
+  --bg: #f4f1e8; --panel: #fff; --ink: #18211d; --ink-2: #38443e; --muted: #56615a; --line: #e2ddd0;
+  --accent: #1e5a46; --accent-strong: #164534; --accent-ink: #fff; --accent-soft: #e3eee8;
+  --ok: #3b6f00; --err: #c9281c; --warn: #a3490a; color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101613; --panel: #18201c; --ink: #e8ede9; --ink-2: #c9d1cb; --muted: #a2aca5; --line: #2a332e;
+    --accent: #7cc7a6; --accent-strong: #a3dcc2; --accent-ink: #0d1a14; --accent-soft: #1c3329;
+    --ok: #9fdc5c; --err: #f87171; --warn: #fbbf24; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif; }
+.m { max-width: 520px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom)); }
+.m-cab { display: flex; align-items: center; gap: 10px; }
+.m-logo { width: 30px; height: 30px; }
+.m-cab h1 { margin: 0; font: 650 26px/1.15 "Fraunces", Georgia, serif; letter-spacing: -.01em; }
+.m-estado { display: flex; align-items: center; gap: 7px; margin: 6px 0 18px; color: var(--ink-2); font-size: 15px; flex-wrap: wrap; }
+.m-estado b { color: var(--warn); font-variant-numeric: tabular-nums; }
+.m-punto { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); flex: none; }
+.m-estado.fin .m-punto { background: var(--err); }
+.m-elegir { position: relative; display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 60px;
+  border-radius: 14px; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 19px; cursor: pointer; }
+.m-elegir:active { background: var(--accent-strong); }
+.m-elegir.off { opacity: .45; pointer-events: none; }
+.m-elegir input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.m-elegir:focus-within { outline: 3px solid var(--accent-strong); outline-offset: 3px; }
+.m-elegir svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.m-ayuda { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+.m-ayuda p { margin: 0; }
+.m-ayuda p + p { margin-top: 6px; }
+.m-lista { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.m-item { padding: 12px 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+.m-nom { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+.m-sub { font-size: 14px; color: var(--muted); margin-top: 2px; }
+.m-item.ok .m-sub b { color: var(--ok); }
+.m-item.mal { border-color: color-mix(in srgb, var(--err) 45%, var(--line)); }
+.m-item.mal .m-sub { color: var(--err); }
+.m-tam { color: var(--muted); }
+.m-barra { height: 5px; border-radius: 5px; background: var(--line); margin-top: 8px; overflow: hidden; }
+.m-barra i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.m-pie { margin-top: 26px; text-align: center; font-size: 14px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .m-barra i { transition: none; } }

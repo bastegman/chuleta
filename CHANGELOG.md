@@ -58,6 +58,50 @@ Bernardo, msg 1386: «Lo que no quiero es sugerir Groq a un nuevo instalador». 
   Chromium, en ui-smoke; y, desde la integración, un settings.json con Groq como lo dejaba la versión anterior, igual
   al arrancar y después de «Guardar» en Ajustes sin tocar nada, con su clave y la adicional).
 
+### Subir audio desde el móvil con un código QR (09/11/2026)
+
+La lámina que validó Bernardo con sus cuatro decisiones por defecto (msg 1390: «1. Si»). Hecho por Steve en la rama
+`qr-movil`.
+
+- «Subir audio» abre un menú: «Desde este PC» (como antes) y «Desde el móvil». Con el móvil, la tarjeta de subir sin
+  archivos: eliges proyecto, carpeta e idioma (decisión 1) y «Mostrar el código» enseña un QR, cuánto le queda, lo que
+  va llegando («Llegando · 46 %», «En la cola») y cómo dejarlo («Dejar de recibir», «Listo»). «Cambiar» vuelve al plan
+  sin perder el código. Cerrar la tarjeta lo cierra; lo que esté llegando se guarda.
+- El móvil, sin instalar nada: una página «Enviar a Tenca» con «Elegir grabaciones», ayuda para iPhone y Android, y
+  cada audio con su progreso. Lleva el nombre y la fecha que propone el archivo, como al subirlo desde el PC
+  (`nombres-audio.js`, ahora compartido).
+- `movil.py`: mientras el código está en pantalla, un servidor aparte escucha solo en la IP de la wifi y solo sabe
+  servir esa página y recibir audios. Código de 128 bits en la ruta, un solo móvil (el primero que lo abre, por
+  cookie), 10 minutos, 2 GB por audio y nada de la API de la app (decisión 2). Lo recibido entra por `App.subir`, con
+  sus comprobaciones. Solo en una red que Windows tiene como privada (`Get-NetConnectionProfile`); en una pública o en
+  la de la empresa, la tarjeta dice por qué y cómo cambiarlo (decisión 3).
+- `_app/qrcodegen.py`: la librería de QR de Project Nayuki (MIT), copiada sin cambios con su licencia.
+- Revisión de contexto fresco (0 P0, 3 P1, 9 P2), arreglada con tests:
+  - «Dejar de recibir» ya no vacía la lista: lo recibido se sigue viendo, y lo que estaba llegando también, al
+    terminar.
+  - Soltar audios en la ventana con el código en pantalla ya no rompe la tarjeta: dice que hay que cerrarla antes.
+  - «Cambiar» › «Nuevo proyecto…» (o «Editar») y de vuelta ya no pierde el código.
+  - Esc mientras se abría el código ya no lo deja escuchando.
+  - Desde que un móvil abre el código, el PC lo dice y ofrece «Mostrar otro código», por si no era el tuyo o lo
+    abriste en otra app. Solo abrir la página ata el código; la cookie dura lo que el código.
+  - La red elegida es la que tiene la ruta a internet: un adaptador de Hyper-V o WSL marcado como privado ya no da un
+    QR al que el móvil no llega. Solo cuentan IPs de red local (RFC 1918).
+  - Cambiar de código es atómico, y uno nuevo empieza su lista desde cero.
+  - El nombre de un archivo largo se corta sin perder la extensión.
+  - El móvil avisa él mismo si un audio pasa de 2 GB.
+  - Nueva nota de ayuda para cuando se pulsó «Cancelar» en el aviso del cortafuegos.
+- Segunda revisión, solo del arreglo (0 P0, 0 P1, 6 P2), arreglada con tests:
+  - una red pública después de una privada ya no reutiliza la privada guardada;
+  - un doble clic en «Mostrar otro código» abre un solo código;
+  - un sondeo en vuelo ya no pinta el código anterior;
+  - cerrar la tarjeta mientras se abría cierra solo ese código;
+  - la métrica de la red es la efectiva de Windows (ruta + interfaz);
+  - el aviso al soltar audios es el correcto con otra ventana encima.
+- PowerShell en frío tardó más de 15 s en la CI windows-real (26 s con el tope nuevo): el tope es de 45 s, la red
+  buena se reutiliza 2 minutos y la tarjeta dice «Mirando la wifi…» mientras tanto.
+- Tests: `tests/test_movil.py` (la red, el QR y el servidor de la wifi) y `tests/test_ui_movil.py` (de punta a punta
+  con un iPhone emulado y un audio de WhatsApp de verdad, en ui-smoke).
+
 ### Idioma y traducción en pleno directo; oculta al compartir pantalla (09/11/2026)
 
 Ítems 12, 13a y 18 del backlog (msgs 1150-1152 y 1242). Rama `idioma-directo`.

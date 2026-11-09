@@ -77,7 +77,7 @@ async function grMontar(d) {
   d.addEventListener('click', grClick);
   d.addEventListener('change', grCambio);
   d.addEventListener('keydown', grTecla);
-  if (G.subir) return sbMontar(d);
+  if (G.subir) return G.subir.movil ? mvMontar(d) : sbMontar(d);
   const g = G;
   // a la vez: dispositivos (medidores), listas de vocabulario y la reunión en curso (Teams y, si está activado,
   // Outlook). La tarjeta espera a la reunión como mucho 2 s y se rellena una sola vez (D4)
@@ -511,7 +511,7 @@ function grMonitor() {
   api('/api/rec/monitor', { mic: a.mic, sys: a.sys }).catch(() => { });
 }
 async function grEmpezar() {
-  if (G?.subir) return sbSubir();
+  if (G?.subir) return G.subir.movil && typeof mvMostrar === 'function' ? mvMostrar() : sbSubir();
   const g = G, b = g && $('#rGo', g.d);
   if (!g || !b || b.disabled) return;
   b.disabled = true;
@@ -559,32 +559,7 @@ function elegirAudios(opts = {}) {
   inp.click();
 }
 
-/* el nombre y la fecha que propone el archivo: «WhatsApp Ptt 2026-11-08 at 10.15.32», «PTT-20261108-WA0003»,
-   «2026-11-08 10-15-32 - Comité» (de Tenca), «Nueva grabación 12»… Sin fecha en el nombre, la de cuándo se guardó */
-function sbDesdeArchivo(f) {
-  const stem = String(f.name || '').replace(/\.[^.]+$/, '');
-  const ok = (y, mo, d, h = 0, mi = 0, se = 0) => y >= 2000 && y < 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h < 24 && mi < 60 && se < 60;
-  let fecha = null, origen = 'archivo', resto = stem;
-  const m = /(20\d{2})-?(\d{2})-?(\d{2})(?:[ _T-]|\s+at\s+)(\d{2})[.:_-]?(\d{2})(?:[.:_-]?(\d{2}))?(?!\d)/i.exec(stem);
-  if (m && ok(+m[1], +m[2], +m[3], +m[4], +m[5], +(m[6] || 0))) {
-    fecha = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
-    origen = 'nombre';
-    resto = stem.slice(0, m.index) + ' ' + stem.slice(m.index + m[0].length);
-  } else {
-    const d = /(?:^|\D)(20\d{2})-?(\d{2})-?(\d{2})(?!\d)/.exec(stem);
-    if (d && ok(+d[1], +d[2], +d[3])) {  // solo el día (los de WhatsApp en Android): la hora, la del archivo
-      const t = new Date(f.lastModified || Date.now());
-      fecha = new Date(+d[1], d[2] - 1, +d[3], t.getHours(), t.getMinutes(), t.getSeconds());
-      origen = 'nombre';
-    }
-  }
-  if (!fecha) { fecha = new Date(f.lastModified || Date.now()); origen = f.lastModified ? 'guardado' : 'ahora'; }
-  let nombre = /^(PTT|AUD)-\d{8}-WA\d+$/i.test(stem) || /^WhatsApp (Ptt|Audio)\b/i.test(stem) ? 'Mensaje de voz de WhatsApp'
-    : resto.replace(/\s+/g, ' ').replace(/^[\s\-_·]+|[\s\-_·]+$/g, '');
-  // lo que pone la grabadora sin decir nada («AUDIO_», «REC 12», «Recording», «Grabación 3», «Voice 001»): sin nombre
-  if (/^(AUDIO|REC|VID|Recording|Grabaci[oó]n|Voice|Voz)?[\s_-]*\d*$/i.test(nombre)) nombre = '';
-  return { file: f, nombre: nombre.slice(0, 120), fecha: fecha.getTime(), origen };
-}
+/* el nombre y la fecha que propone el archivo: sbDesdeArchivo, en nombres-audio.js (lo usa también el móvil) */
 const SB_FECHA_ORIGEN = { nombre: 'del nombre del archivo', guardado: 'de cuándo se guardó el archivo', ahora: 'de ahora', tuya: 'cambiada por ti' };
 function sbFechaInput(ms) {  // «AAAA-MM-DDTHH:MM» en hora local, para <input type="datetime-local">
   const d = new Date(ms), z = n => String(n).padStart(2, '0');
@@ -607,17 +582,19 @@ async function abrirSubir(files, opts = {}) {
   // (seguir), al soltar más audios (anadir: se suman) y con «Elegir otro» (reemplazar: los nuevos en su lugar)
   const actual = G?.subir && !G.enviando ? G : null;
   const base = actual && (opts.seguir || opts.anadir || opts.reemplazar) ? actual : null;
+  // «Desde el móvil» (recibir.js): la misma tarjeta sin archivos; lo que llegue, con lo que se elija aquí
+  const movil = !!(opts.movil || base?.subir?.movil);
   let items = base && !opts.reemplazar ? base.subir.items : [];
   let rechazados = base && !opts.reemplazar ? base.subir.rechazados : [];
   if (files) {
     items = items.concat(files.filter(esAudio).map(sbDesdeArchivo));
     rechazados = rechazados.concat(files.filter(f => !esAudio(f)));
   }
-  if (!items.length) {
+  if (!items.length && !movil) {
     if (rechazados.length) toast(sbNoAudio(rechazados[0]), 'err');
     return;
   }
-  const varios = items.length > 1;
+  const varios = movil || items.length > 1;
   const pedido = base ? base.pedido : { cambios: {} };
   pedido.subir = true;
   pedido.varios = varios;
@@ -632,8 +609,12 @@ async function abrirSubir(files, opts = {}) {
     Object.assign(pedido, { nombre: it.nombre, archivo: it.nombre, fecha: it.fecha });
     tocado.nombre = false;
   }
+  // con el móvil, al volver de crear o editar un proyecto («Cambiar» › «Nuevo proyecto…»), el código sigue: su QR, lo
+  // recibido y si se estaba enseñando (revisor del QR, P1)
+  const antes = movil && base ? base.subir : {};
   G = { pedido, plan: null, tocado, recientes: [], seq: 0, abierto: null, pendiente: null, timer: null, devs: null,
-    sugIdx: -1, subir: { items, rechazados, fechaOrigen: nuevoUno ? items[0].origen : base?.subir?.fechaOrigen || items[0].origen } };
+    sugIdx: -1, subir: { ...antes, cerrada: false, abriendo: false, items, rechazados, movil, fechaOrigen: nuevoUno ? items[0].origen : base?.subir?.fechaOrigen || items[0]?.origen } };
+  if (movil) return abrirMovilCard(G);  // recibir.js
   const uno = items[0], total = items.reduce((n, it) => n + (it.file.size || 0), 0);
   const lista = varios
     ? `<div class="sb-lista" role="list">${items.map(it => `<div class="sb-item" role="listitem">${I.wave}<span class="sb-nom" title="${esc(it.file.name)}">${esc(nfc(it.file.name))}</span>`
@@ -684,6 +665,7 @@ async function abrirSubir(files, opts = {}) {
 /* soltar audios en la ventana: con otra ventana abierta encima (Grabar, Ajustes…), o mientras se sube, no */
 function sbNoSePuedeSoltar() {
   if (G?.subir && G.enviando) return 'Espera a que termine la subida que está en marcha.';
+  if (G?.subir?.movil && $('#modal .dialog.mvd')) return 'Para subir audios desde este PC, cierra antes la tarjeta del móvil.';
   const m = $('#modal');
   if (m && !m.classList.contains('hidden') && !$('.dialog.sb', m)) return 'Para subir audios, cierra antes esta ventana.';
   return '';
