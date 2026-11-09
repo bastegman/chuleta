@@ -948,7 +948,7 @@ def run(job, path, opts, write, log):
                     end_s = t0 + cut / SR
                     if new:
                         log(f"   directo: rehecho en {lang or 'el idioma detectado'} lo último ({len(redo['removed'])} "
-                            f"frases → {len(new)})")
+                            f"frases antes, {len(new)} ahora)")
                     else:  # no ha salido (un fallo de la nube, o nada): vuelve lo de antes, mejor que un hueco
                         back = back_of(redo["removed"], end_s)
                         if back:

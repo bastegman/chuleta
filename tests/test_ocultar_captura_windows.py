@@ -176,8 +176,8 @@ class OcultarAlCompartirWindowsTests(unittest.TestCase):
             res = json.load(f)
         with open(os.path.join(ART, "ocultar_captura.json"), "w", encoding="utf-8") as f:
             json.dump(res, f, ensure_ascii=False, indent=1)
-        print(f"\n   ocultar al compartir (build {res.get('build')}): marca {res.get('marca_al_abrir')} → "
-              f"{res.get('marca_quitada')} → {res.get('marca_puesta')}; magenta en la captura "
+        print(f"\n   ocultar al compartir (build {res.get('build')}): marca {res.get('marca_al_abrir')} -> "
+              f"{res.get('marca_quitada')} -> {res.get('marca_puesta')}; magenta en la captura "
               f"{(res.get('con_marca') or {}).get('magenta')} / {(res.get('sin_marca') or {}).get('magenta')} / "
               f"{(res.get('otra_vez_con_marca') or {}).get('magenta')}", file=sys.stderr)
         self.assertNotIn("error", res, res.get("error"))

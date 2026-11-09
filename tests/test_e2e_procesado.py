@@ -404,7 +404,7 @@ class TresModosE2E(unittest.TestCase):
             t0 = time.time()
             r = self.api("/api/notes", {"path": rel, "props": {"idioma": "es"}})
             info = (r.get("directo") or {}).get("idioma") or {}
-            print(f"   directo local, idioma → es: aviso {info}", flush=True)
+            print(f"   directo local, idioma -> es: aviso {info}", flush=True)
             self.assertIn(info.get("estado"), ("al_dia", "poniendose"), r)
             self.assertGreater(info.get("rehace_s", 0), 0, r)
             fin, hecho = time.time() + 300, ""
@@ -415,8 +415,8 @@ class TresModosE2E(unittest.TestCase):
                                   or "no se ha podido rehacer lo último" in x), "")
                 time.sleep(1)
             despues = self.texto(rel)
-            print(f"   rehecho a los {time.time() - t0:.0f} s: {despues!r} (antes {antes!r}) · {hecho.strip()}",
-                  flush=True)
+            print(f"   rehecho a los {time.time() - t0:.0f} s: {despues!a} (antes {antes!a}) | {hecho.strip()!a}",
+                  flush=True)  # !a: la consola de la CI de Windows es cp1252
             self.assertIn("rehecho en es lo último", hecho)
             self.assertNotEqual(despues, antes)
         finally:
