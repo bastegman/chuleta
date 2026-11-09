@@ -731,6 +731,23 @@ class CorregirMientrasSeMueveTests(Reunion):
         self.assertTrue(os.path.isfile(os.path.join(self.root, "Dest", "r.hablantes.txt")))
         self.assertFalse(os.path.exists(os.path.join(self.root, "r.hablantes.txt")))
 
+    def test_restaurar_el_original_con_el_movimiento_primero(self):
+        """«Restaurar el original» de la transcripcion (escribe .srt/.txt junto al audio): espera al movimiento y
+        restaura en la ruta nueva (RF5: dejaba el original en la vieja, borraba la copia y decia «ok»)."""
+        def editar(ana):
+            self.app._tx_save_lock = threading.Lock()
+            self.app.jobs.active_for = lambda rel, kinds=None: None
+            with mock.patch.object(server, "log"):
+                self.app.save_transcript({"path": "r.wav", "segments": [{"start": 0.5, "end": 9.5, "text": "EDITADO"}]})
+            self.assertTrue(os.path.isdir(server.backup_dir("r.wav")))
+        self.movimiento_primero(lambda app, ana: app.restore_transcript({"path": "r.wav"}), antes=editar)
+        with open(os.path.join(self.root, "Dest", "r.srt"), encoding="utf-8-sig") as f:
+            srt = f.read()
+        self.assertIn("frase de h1", srt)
+        self.assertNotIn("EDITADO", srt)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "r.srt")), "el original, huerfano en la ruta vieja")
+        self.assertFalse(os.path.isdir(server.backup_dir("Dest/r.wav")))
+
     def test_recordar_con_el_movimiento_en_medio(self):
         """«Recordar» toma la huella con la ruta de ahora: la reunion se mueve justo despues de guardar el nombre."""
         ana, res, real = self.preparar(), {}, self.app._not_the_user
@@ -754,6 +771,29 @@ class CorregirMientrasSeMueveTests(Reunion):
         with mock.patch.object(self.app, "_persona_for_speaker", y_se_mueve), mock.patch.object(server, "log"):
             self.corregir(self.NOMBRE, ana, res)
         self.assertEqual(self.resultado(res)["hablantes"]["h3"]["persona"], ana)
+
+
+class FusionarPersonasTests(Reunion):
+    """«Fusionar» (Ajustes › Voces): una reunion cuyo sidecar no se puede escribir (OneDrive, el antivirus) no deja la
+    fusion a medias ni da error: las demas se actualizan y la respuesta dice cuantas no (revision de la integracion
+    del 08/11/2026)."""
+
+    def test_una_reunion_bloqueada(self):
+        self.identificar(micro_en=None)
+        luis, ana = self.v.create("Luis")["id"], self.v.create("Ana")["id"]
+        self.app.voices_reassign({"path": "r.wav", "h": "h3", "persona": luis})
+        self.wav("s.wav", seconds=0.5)
+        voices.write_sidecar(os.path.join(self.root, "s.hablantes.json"), dict(self.leer()))
+        real = voices.write_sidecar
+
+        def bloqueado(path, data):
+            if path.endswith("s.hablantes.json"):
+                raise PermissionError(13, "en uso")
+            return real(path, data)
+        with mock.patch.object(voices, "write_sidecar", bloqueado), mock.patch.object(server, "log"):
+            r = self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertEqual((r["reuniones"], r["sin_actualizar"]), (1, 1))
+        self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], ana)
 
 
 class EvalScoreTests(unittest.TestCase):

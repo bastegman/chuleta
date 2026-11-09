@@ -5377,6 +5377,13 @@ class App:
         return {"ok": True, "tx_mtime": mt, "count": len(segs), "live": True}
 
     def restore_transcript(self, b):
+        """«Restaurar el original». Como save_transcript, con el candado que coge _move_now: si la reunion se esta
+        moviendo (B1c), espera y restaura en la ruta nueva; si no, dejaba el original en la carpeta vieja, borraba la
+        copia y respondia «ok» (revision de la integracion del 08/11/2026)."""
+        with self._tx_save_lock:
+            return self._restore_transcript(dict(b, path=alias_of(b.get("path"))))
+
+    def _restore_transcript(self, b):
         abs_path = safe(b.get("path"), "file")
         rel, base = rel_of(abs_path), os.path.splitext(abs_path)[0]
         bdir = backup_dir(rel)
@@ -6730,7 +6737,7 @@ class App:
         except ValueError:
             raise ApiError("Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
                            "«No soy yo»; si eres tú, «Soy yo».")
-        n = 0
+        n, fallidas = 0, []
         if removed:
             self.library.refresh(max_age=5)
             for a in list(self.library.flat):  # sin mirar a["_spk"]: en pleno movimiento el sidecar ya esta en la nueva
@@ -6746,12 +6753,17 @@ class App:
                     for i in data["hablantes"].values():
                         if i.get("persona") == removed:
                             i["persona"] = keep
-                    voices.write_sidecar(side, data)
+                    try:  # una reunion con el fichero abierto (OneDrive, el antivirus) no deja las demas a medias
+                        voices.write_sidecar(side, data)
+                    except OSError as e:
+                        fallidas.append(f"{display_rel(rel_of(abs_path))} ({e.__class__.__name__})")
+                        continue
                     self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: con el nombre que queda
                 n += 1
         self.library.at = 0
-        log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
-        return {"id": keep, "reuniones": n, "personas": v.public()}
+        log(f"🗣 personas fusionadas ({n} reuniones actualizadas)"
+            + (f"; sin actualizar: {', '.join(fallidas)}" if fallidas else ""))
+        return {"id": keep, "reuniones": n, "personas": v.public(), "sin_actualizar": len(fallidas)}
 
     def voices_forget(self, b):
         v = self.jobs.voices
