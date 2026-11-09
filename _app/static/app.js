@@ -2266,6 +2266,9 @@ function openSettings(opts) {
       try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
     };
     const fields = () => {
+      // con la nube de ahora, no la de cuando se abrió Ajustes: tras «Probar conexión», ir a otro proveedor y volver
+      // repintaba lo de antes, y «Guardar» lo guardaba (revisión 14)
+      const c = S.config.cloud || {}, P = S.config.providers || {};
       const p = $('#cProv', d).value, info = P[p];
       if (p === 'azure') {
         $('#cFields', d).innerHTML = `<label>Endpoint</label><input class="input" id="cAzEp" placeholder="https://<recurso>.openai.azure.com" value="${esc(c.azure_endpoint)}">
@@ -2365,10 +2368,8 @@ function openSettings(opts) {
         ajTarjeta();
         // la nube que se acaba de guardar ya no es «sin guardar»; la clave, guardada, se enseña como tal
         const k = $('#cKey', d);
-        if (k && k.value && k.value === enviado.cKey) {  // (si se ha vuelto a escribir mientras, se queda)
-          k.value = '';
-          if (S.config.cloud?.has_key) k.placeholder = `Guardada: ${S.config.cloud.api_key || ''} (escribe para cambiarla)`;
-        }
+        if (k && S.config.cloud?.has_key) k.placeholder = `Guardada: ${S.config.cloud.api_key || ''} (escribe para cambiarla)`;
+        if (k && k.value && k.value === enviado.cKey) k.value = '';  // (si se ha vuelto a escribir mientras, se queda)
         ponerAlDia(['cProv', 'cModel', 'cBase', 'cAzEp', 'cAzDep', 'cAzVer', 'cLiveModel', 'cLiveModelCustom', 'cChunk',
           'cPar', 'lPreset', 'pfPreset', '__claves'], enviado);
         marcar();

@@ -915,9 +915,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
     def test_ajustes_guardar_una_parte(self):
         """Revisiones 12 y 13 de B2: «Aplicar ahora» y «Probar conexión» guardan una parte de Ajustes, y lo guardado
         pasa a ser su punto de partida: no queda «Hay cambios sin guardar» por lo que acaban de guardar (proveedor,
-        modelo, clave, claves adicionales, motores), y la clave guardada se enseña como «Guardada: …». Lo demás sigue
-        contando: lo escrito antes y que no se manda, un motor cambiado a mano, lo que se escribe mientras se guarda y
-        todo si el guardado falla."""
+        modelo, clave, claves adicionales, motores), la clave guardada se enseña como «Guardada: …» y, si se va a otro
+        proveedor y se vuelve, sale lo guardado. Lo demás sigue contando: lo escrito antes y que no se manda, un motor
+        cambiado a mano (también antes de «Probar conexión»), lo que se escribe mientras se guarda (el modelo, una clave
+        adicional, la clave misma) y todo si el guardado falla."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
@@ -963,10 +964,9 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         otro = next(p for p in base["providers"] if p not in (base["cloud"]["provider"], "azure", "custom"))
         retenidas = []
 
-        def guardada(modelo):
-            c = {**base, "cloud": {**base["cloud"], "provider": otro, "model": modelo, "has_key": True,
-                                   "api_key": "gsk_…r13"}}
-            return c
+        def guardada(modelo, clave="gsk_…r13"):
+            nube = {**base["cloud"], "provider": otro, "model": modelo, "has_key": True, "api_key": clave}
+            return {**base, "cloud": nube}
         pg.route("**/api/cloud/test", lambda r: r.fulfill(json={"seconds": 0.4}))
 
         def probar(modelo, *, falla=False, retener=False):
@@ -989,12 +989,19 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         modelo = abrir_nube()
         pg.evaluate("document.querySelector('#dkAdd').click()")
         poner("#dkRows [data-xkey]:last-of-type", "gsk_adicional_r13")
+        poner("#cLiveModelCustom", "modelo-propio-r14")  # el del directo (Avanzado) también se manda
         aviso(True, "antes de probar")
         probar(modelo)
         pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
         self.assertEqual(pg.input_value("#cKey"), "")
         self.assertIn("Guardada: gsk_…r13", pg.get_attribute("#cKey", "placeholder"))
         aviso(False, "con todo lo que se ha mandado")
+        # a otro proveedor y de vuelta: lo guardado al probar, no lo de cuando se abrió Ajustes (revisión 14)
+        poner("#cProv", base["cloud"]["provider"])
+        poner("#cProv", otro)
+        self.assertEqual(pg.input_value("#cModel"), modelo)
+        self.assertIn("Guardada: gsk_…r13", pg.get_attribute("#cKey", "placeholder"))
+        aviso(False, "tras ir y volver de proveedor")
         pg.unroute("**/api/settings")
         pg.keyboard.press("Escape")
         # 3. lo escrito antes y que no se manda (el resumen) sigue contando, y editar una lista pregunta
@@ -1005,20 +1012,44 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         aviso(True, "el resumen escrito antes")
         pg.unroute("**/api/settings")
         pg.keyboard.press("Escape")
-        # 4. lo que se escribe mientras se guarda tampoco se da por guardado
-        modelo = abrir_nube()
-        probar(modelo, retener=True)
-        for _ in range(100):
-            if retenidas:
-                break
-            pg.wait_for_timeout(50)
-        self.assertTrue(retenidas)
-        otro_modelo = pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
-                                  ".find(v => v !== document.querySelector('#cModel').value)")
-        poner("#cModel", otro_modelo)
-        retenidas.pop().fulfill(json=guardada(modelo))
-        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+        # 4. lo que se escribe mientras se guarda tampoco se da por guardado: el modelo, una clave adicional, la clave
+        # misma (que no se vacía), y la clave borrada (el campo enseña la que se ha guardado)
+
+        def mientras(cambiar, clave="gsk_…r13"):
+            modelo = abrir_nube()
+            retenidas.clear()
+            probar(modelo, retener=True)
+            for _ in range(100):
+                if retenidas:
+                    break
+                pg.wait_for_timeout(50)
+            self.assertTrue(retenidas)
+            cambiar()
+            retenidas.pop().fulfill(json=guardada(modelo, clave))
+            pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+
+        def otro_modelo():
+            poner("#cModel", pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
+                                         ".find(v => v !== document.querySelector('#cModel').value)"))
+        mientras(otro_modelo)
         aviso(True, "el modelo cambiado mientras se guardaba")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+
+        def otra_adicional():
+            pg.evaluate("document.querySelector('#dkAdd').click()")
+            poner("#dkRows [data-xkey]:last-of-type", "gsk_mientras_r14")
+        mientras(otra_adicional)
+        aviso(True, "la clave adicional añadida mientras se guardaba")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        mientras(lambda: poner("#cKey", "gsk_otra_vez_r14"))
+        self.assertEqual(pg.input_value("#cKey"), "gsk_otra_vez_r14")  # no se vacía
+        aviso(True, "la clave escrita otra vez mientras se guardaba")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        mientras(lambda: poner("#cKey", ""), clave="gsk_…nva4")  # la guardada ahora es otra
+        self.assertIn("Guardada: gsk_…nva4", pg.get_attribute("#cKey", "placeholder"))
         pg.unroute("**/api/settings")
         pg.keyboard.press("Escape")
         # 5. si el guardado falla, nada se da por guardado (aquí, solo el modelo cambiado)
@@ -1030,6 +1061,44 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         probar(None, falla=True)
         pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('no se guarda')", timeout=5000)
         aviso(True, "el guardado falló")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        # 7. con Azure: el endpoint, el deployment y la versión también se mandan
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='procesado']")
+        poner("#cProv", "azure")
+        ep = "https://r14.openai.azure.com"
+        for sel, v in (("#cAzEp", ep), ("#cAzDep", "whisper-r14"), ("#cAzVer", "2024-06-01")):
+            poner(sel, v)
+        pg.fill("#cKey", "clave-azure-r14")
+        azure = {**base, "cloud": {**base["cloud"], "provider": "azure", "azure_endpoint": ep,
+                                   "azure_deployment": "whisper-r14", "azure_api_version": "2024-06-01",
+                                   "has_key": True, "api_key": "clav…r14"}}
+        pg.route("**/api/settings", lambda r: r.fulfill(json=azure))
+        pg.click("#cTest")
+        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+        aviso(False, "con Azure, todo lo mandado")
+        poner("#cAzEp", "https://otro-r14.openai.azure.com")  # y lo que se escriba después, cuenta
+        aviso(True, "el endpoint cambiado tras probar")
+        pg.unroute("**/api/settings")
+        pg.keyboard.press("Escape")
+        # 6. de «Solo en este PC», un motor a mano y la primera clave: «Probar» pone los motores en la nube (aquí, la
+        # respuesta simulada); el puesto por el servidor no cuenta y el de a mano sigue contando
+        pg.evaluate("b => api('/api/settings', b).then(setConfig)", {"procesado": "local"})
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='procesado']")
+        poner("#pfPreset", a_mano)
+        pg.check("#modal input[name='proc'][value='api']")
+        pg.fill("#cKey", "gsk_primera_r14")
+        en_nube = {**base, "procesado": "api", "preset": "nube", "live_preset": "nube",
+                   "cloud": {**base["cloud"], "has_key": True, "api_key": "gsk_…r14"}}
+        pg.route("**/api/settings", lambda r: r.fulfill(json=en_nube))
+        pg.click("#cTest")
+        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+        self.assertEqual((pg.input_value("#lPreset"), pg.input_value("#pfPreset")), ("nube", a_mano))
+        aviso(True, "el motor a mano")
+        poner("#pfPreset", "nube")
+        aviso(False, "con los motores que puso «Probar»")
         pg.unroute("**/api/settings")
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, [r for r in red if not (r.startswith("400") and r.endswith("/api/settings"))])

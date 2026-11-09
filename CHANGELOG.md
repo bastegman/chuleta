@@ -98,8 +98,10 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   «Guardar y seguir», «Descartar» y «Volver» (también con Escape o un clic fuera). Si no se puede guardar, se queda en
   Ajustes y lo dice. Sin cambios, se sigue sin preguntar. Cuentan también los destinos de «Copias en otras carpetas» y
   las claves adicionales del directo. Lo que ya guardaron «Aplicar ahora» o «Probar conexión» no cuenta: la clave
-  probada se enseña como «Guardada». Mientras esa pregunta o una confirmación están abiertas, el teclado no sale de
-  ellas, y al cerrarlas se vuelve a donde se estaba en Ajustes.
+  probada se enseña como «Guardada», y lo escrito mientras se guardaba sigue contando. Tras «Probar conexión», ir a
+  otro proveedor y volver enseña lo probado; antes volvía lo de cuando se abrió Ajustes, y «Guardar» lo guardaba.
+  Mientras esa pregunta o una confirmación están abiertas, el teclado no sale de ellas, y al cerrarlas se vuelve a
+  donde se estaba en Ajustes.
 - Al volver de esos subdiálogos, o al abrir Ajustes de cualquier forma, se ve lo guardado. Eso incluye una lista de
   «Proyecto al grabar» renombrada o borrada en su editor: sale con su nombre nuevo o en «Automático», y «Guardar»
   funciona. Antes, lo escrito se reponía al volver, y en cada revisión salía un caso en que lo repuesto ya no casaba
