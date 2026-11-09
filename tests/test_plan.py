@@ -554,6 +554,25 @@ class ServidorPlanTests(TempTree):
         self.assertEqual(resume({"procesado": "nada"}), "No se resume: todo se queda en este PC")  # no vale: se ignora
         self.assertEqual(a.settings.get()["procesado"], "local")
 
+    def test_config_rev(self):
+        """config_rev (revisión 7 de B2: Ajustes descarta lo escrito si la configuración cambió desde que se dejó):
+        sube con cada cambio de un ajuste, no con lo que no cambia nada ni con el estado interno (agente_comprobado), y
+        sube siempre con un guardado a propósito (/api/settings), aunque deje lo mismo."""
+        st = server.Store(os.path.join(self.tmp, "rev.json"), server.DEFAULT_SETTINGS)
+        r0 = st.rev
+        st.update(lambda d: d.update(language="pt"))
+        self.assertEqual(st.rev, r0 + 1)
+        st.update(lambda d: d.update(language="pt"))  # lo mismo: no es un cambio
+        st.update(lambda d: d.update(agente_comprobado=123.0))  # estado interno, no un ajuste
+        self.assertEqual(st.rev, r0 + 1)
+        a = self.app(language="es")
+        r = a.settings.rev
+        with mock.patch.object(server.App, "config", lambda s, q: {}):  # lo que devuelve no hace falta aquí
+            a.save_settings({"language": "es"})  # «Guardar» a propósito, sin cambiar nada
+        self.assertGreater(a.settings.rev, r)
+        import inspect
+        self.assertIn('"config_rev": getattr(self.settings, "rev", 0)', inspect.getsource(server.App.config))
+
     def test_carpetas_que_no_se_encuentran_o_que_faltan_se_dicen(self):
         """Revisión 3 de B2: con la carpeta de Ajustes guardada y perdida, el plan sigue con el resto de lo escrito (el
         contexto) y dice por qué graba en otra; un proyecto sin carpeta propia (listas de una carpeta conectada, sin

@@ -1757,6 +1757,8 @@ document.addEventListener('click', e => { if (!e.target.closest('#jobsPanel, #bt
 let modalResolve = null;
 function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
+  // se deja Ajustes por un subdiálogo (o se reabre): lo escrito allí vale para esta configuración (openSettings)
+  if ($('.dialog.aj', m)) S.ajBorradorRev = S.config?.config_rev;
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
   m.classList.remove('hidden');
   document.body.classList.toggle('aj-abierto', cls === 'aj');  // los avisos, arriba solo con Ajustes (su «Guardar» abajo)
@@ -1926,16 +1928,8 @@ const lAyuda = api => 'El motor con el que empieza cada directo se elige en Proc
    no, la última vista). Se llama también como manejador de clic: un Event no trae .sec. */
 // (rediseño B2, 07/11/2026) por lo que se hace: «Al grabar» primero; Vocabulario y Carpetas pasan a Proyectos; el
 // idioma y las instrucciones del resumen, a Resumen; Outlook y Teams, a Calendario y Teams; OBS, a Avanzado
-/* campos de Ajustes que decide también el asistente de «Configurar» (la nube) y los que reciben sus opciones después
-   de abrirse (listas de vocabulario y dispositivos): ver ponerBorrador y ajOlvidarAsistente */
-const AJ_NUBE = ['cProv', 'cKey', 'cModel', 'cBase', 'cAzEp', 'cAzDep', 'cAzVer'];
+/* los desplegables de Ajustes que reciben sus opciones después de abrirse (listas de vocabulario y dispositivos) */
 const AJ_OPCIONES_TARDE = ['pfVocab', 'agMic', 'agSys'];
-/* el asistente ha guardado: lo que él decide (el modo, la nube y los motores) ya no vuelve del borrador de Ajustes,
-   aunque coincida con lo de antes (revisión 6: guardar el mismo modo dejaba reaparecer «aún no aplicado») */
-function ajOlvidarAsistente() {
-  if (!S.ajBorrador) return;
-  for (const k of ['__proc', 'lPreset', 'pfPreset', ...AJ_NUBE]) delete S.ajBorrador[k];
-}
 const AJ_SECS = [['algrabar', 'Al grabar'], ['proyectos', 'Proyectos'], ['procesado', 'Procesado'], ['resumen', 'Resumen'],
   ['calendario', 'Calendario y Teams'], ['voces', 'Voces'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
 function openSettings(opts) {
@@ -1947,7 +1941,14 @@ function openSettings(opts) {
   // asistente, «Apagar» › «Cancelar»…), que llaman a openSettings() sin nada o con volver: true. Cualquier otra forma
   // de abrir Ajustes (⚙, la paleta, Inicio, la tarjeta, un error) es abrirlo de nuevo, sin lo de antes (revisiones 3 y
   // 4 de B2: un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto por otro camino)
+  // Y vuelve tal cual solo si la configuración no ha cambiado desde que se dejó Ajustes (config_rev, que el servidor
+  // sube con cada cambio, venga de donde venga: el asistente, una carpeta vinculada…): si cambió, se descarta entero y
+  // se dice (revisiones 5 a 7: reponer campo a campo traía cada vez un caso nuevo)
   if (opts && !(typeof opts === 'object' && !(opts instanceof Event) && opts.volver)) S.ajBorrador = null;
+  else if (S.ajBorrador && S.ajBorradorRev !== S.config.config_rev) {
+    S.ajBorrador = null;
+    toast('Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado.');
+  }
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
@@ -2069,21 +2070,16 @@ function openSettings(opts) {
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
     const inicial = foto();  // como viene de los ajustes guardados
     d.borradorAlAbrir = S.ajBorrador ? { ...S.ajBorrador } : null;  // ajustes.js: lo que no se pudo poner aún
-    // se repone lo escrito solo si lo guardado de lo que partía no ha cambiado entretanto: si no, manda lo guardado
-    // (revisión 5 de B2). Los campos de la nube (AJ_NUBE) dependen del proveedor y la clave no se pinta: no se comparan
-    // uno a uno; cuando el asistente guarda, los quita del borrador él (configurar.js, ajOlvidarAsistente)
-    const valor = x => x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value;
+    // lo escrito antes de un subdiálogo, tal cual (openSettings ya ha comprobado que la configuración es la misma)
     const ponerBorrador = xs => {
       if (!S.ajBorrador) return;
-      const base = S.ajBorradorBase || {};
       xs.forEach(x => {
         if (!(x.id in S.ajBorrador)) return;
         const v = S.ajBorrador[x.id];
-        if (!AJ_NUBE.includes(x.id) && base.campos && x.id in base.campos && valor(x) !== base.campos[x.id]) return;
-        // un desplegable sin esa opción (una carpeta vinculada quitada en el subdiálogo) se queda en lo guardado: si
-        // no, se quedaba en blanco y «Guardar» mandaba «» (revisión 6). Los que reciben sus opciones después (listas y
-        // dispositivos) las reponen al recibirlas (ajustes.js)
-        if (x.tagName === 'SELECT' && !AJ_OPCIONES_TARDE.includes(x.id) && ![...x.options].some(o => o.value === v)) return;
+        // un desplegable sin esa opción (una carpeta vinculada o una lista quitadas en el subdiálogo) se queda en lo
+        // guardado: si no, se quedaba en blanco y «Guardar» mandaba «» (revisiones 6 y 7). Los que reciben sus opciones
+        // después (listas y dispositivos) lo reponen al recibirlas, si entonces está (ajustes.js)
+        if (x.tagName === 'SELECT' && ![...x.options].some(o => o.value === v)) return;
         if (x.type === 'checkbox' || x.type === 'radio') x.checked = v; else x.value = v;
       });
     };
@@ -2099,9 +2095,13 @@ function openSettings(opts) {
       // por otro camino, como «Usarlo en» en la tarjeta)
       S.ajBorrador = cambios ? Object.fromEntries(Object.entries(ahora).filter(([k, v]) => v !== inicial[k])) : null;
       if (S.ajBorrador && procSinAplicar()) S.ajBorrador.__proc = $('input[name="proc"]:checked', d).value;  // y el modo
-      // y de qué se partía: si al volver lo guardado ya es otro, no se repone (ponerBorrador)
-      S.ajBorradorBase = cambios ? { campos: Object.fromEntries(Object.keys(S.ajBorrador).filter(k => k in inicial)
-        .map(k => [k, inicial[k]])), proc: S.config.procesado } : null;
+      // lo del borrador anterior que aún espera sus opciones (los dispositivos, las listas) y no has tocado: sigue en el
+      // borrador, para la próxima vuelta (revisión 7: con dos vueltas antes de llegar la lista, el micro se perdía)
+      const pend = Object.fromEntries(AJ_OPCIONES_TARDE.map(id => [id, d.borradorAlAbrir?.[id], $('#' + id, d)])
+        .filter(([id, v, el]) => v != null && el && !el.dataset.tocado && !d.ajOpcionesListas?.[id]
+          && ![...el.options].some(o => o.value === v))
+        .map(([id, v]) => [id, v]));
+      if (cambios || Object.keys(pend).length) S.ajBorrador = { ...pend, ...(S.ajBorrador || {}) };
       $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
     };
     d.ajMarcar = marcar;
@@ -2264,8 +2264,7 @@ function openSettings(opts) {
     ponerBorrador(tarde);
     // el modo marcado y sin aplicar, también (con su aviso y sus campos, que pinta su «change»)
     // (o el que pide quien abre: «Revisar en Ajustes» del asistente con «Con tu cuenta de Claude» elegido, revisión 6)
-    const pedido = (opts && typeof opts === 'object' && opts.proc) || (S.ajBorradorBase?.proc === S.config.procesado
-      && S.ajBorrador?.__proc);
+    const pedido = (opts && typeof opts === 'object' && opts.proc) || S.ajBorrador?.__proc;
     const proc = pedido && $(`input[name="proc"][value="${pedido}"]`, d);
     if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); }
     if (S.ajBorrador) marcar();

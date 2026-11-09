@@ -474,7 +474,6 @@ async function wzGuardar(despues) {
     localStorage.setItem('procElegido', '1');
     const volver = W.volver;
     W.guardado = true;
-    if (typeof ajOlvidarAsistente === 'function') ajOlvidarAsistente();  // lo que acaba de guardar no lo pisa Ajustes
     closeModal(true);
     toast(`Guardado: ${esc(modoNombre(c.procesado))}. ${esc(modoLinea(c.live_preset || 'medium'))}.`);
     if (c.descarga) modelosRefrescar(4000);
