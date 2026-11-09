@@ -298,12 +298,16 @@ class ServidorPlanTests(TempTree):
         a = self.app(project_folders={"Alfa": "Alfa/Reuniones"})
         self.sug.update(vocab="Alfa/Vocabulario/General.txt")
         a.rec_start = lambda b: {"path": "Alfa/Reuniones/2026-11-09 Comité/x.wav", "workstream": None,
-                                 "carpeta": "Alfa/Reuniones/2026-11-09 Comité"}
+                                 "carpeta": "Alfa/Reuniones/2026-11-09 Comité", "aviso": "el directo no ha arrancado"}
         with mock.patch.object(server, "cue"), mock.patch.object(server, "notify") as nt:
             a.rec_toggle({"source": "hotkey"})
         texto = nt.call_args[0][1]
         self.assertIn("Comité de seguimiento → Alfa › General", texto)
-        self.assertIn(" · se guarda en \\Alfa\\Reuniones\\2026-11-09 Comité\\ · Ctrl+Alt+R para parar", texto)
+        # como en la tarjeta (ruta_txt) y al final, detrás de lo que avisa rec_start: repite el nombre de la reunión y,
+        # si el aviso de Windows corta (400 caracteres), se pierde esto y no lo de antes (revisión de 5e770fc)
+        self.assertEqual(texto.count("se guarda en"), 1)
+        self.assertTrue(texto.endswith(" · Ctrl+Alt+R para parar · el directo no ha arrancado · se guarda en "
+                                       "Chuleta\\Alfa\\Reuniones\\2026-11-09 Comité\\"), texto)
         # sin proyecto, el resumen ya es la carpeta: no se repite
         self.sug.update(vocab="")
         b = self.app(perfil={"folder": None}, rec_folder="Alfa/Reuniones")

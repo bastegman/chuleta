@@ -4288,11 +4288,13 @@ class App:
                 # delante: el aviso de Windows corta lo que no cabe
                 del_plan = "".join(f"{a} · " for a in dict.fromkeys(x["aviso"] for x in p["lineas"] if x.get("aviso")))
                 # con proyecto, el resumen dice el proyecto y no la carpeta: la de la reunión, también (sin tarjeta,
-                # es lo único que dice dónde se guarda; revisión de la fusión de ux-grabar)
-                donde = (f" · se guarda en {display_rel(r['carpeta'])}"
+                # es lo único que dice dónde se guarda; revisión de la fusión de ux-grabar), escrita como en la
+                # tarjeta y al final: repite el nombre de la reunión y, si el aviso no cabe, es lo que se corta
+                links = {k: l["name"] for k, l in LINKS.items()}
+                donde = (f" · se guarda en {grabar_plan.ruta_txt(r['carpeta'], links)}"
                          if p["proyecto"].get("vocab") and r.get("carpeta") is not None else "")
-                notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + donde + " · Ctrl+Alt+R para parar"
-                       + (f" · {r['aviso']}" if r.get("aviso") else ""))
+                notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + " · Ctrl+Alt+R para parar"
+                       + (f" · {r['aviso']}" if r.get("aviso") else "") + donde)
                 return dict(r, recording=True, plan=p)
             except ApiError as e:
                 cue("error")
@@ -5412,7 +5414,7 @@ class App:
     def vocab_link_remove(self, b):
         """POST /api/vocab/link/remove {rel}: deja de leer esa carpeta. No borra ni mueve nada de ella. El tema fijo del
         perfil y el ultimo elegido, si eran de alli, vuelven a «automatico» y a ninguno, y sus workstreams pierden la
-        carpeta principal y el idioma asignados (como al borrar un tema o desvincular una carpeta)."""
+        carpeta principal asignada (como al borrar un tema o desvincular una carpeta) y el idioma asignado."""
         rel = str(b.get("rel") or b.get("path") or "")
         vid = rel[len(VLINK):].split("/")[0] if rel.startswith(VLINK) else ""
         if vid not in VOCAB_LINKS:

@@ -338,7 +338,7 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
             self.assertEqual(len(n), 1)
             del n[:]
             a.grabar_plan_api({"nombre": "Kickoff", "vocab": self.b["id"]})
-        self.assertLessEqual(len(n), 3)
+        self.assertEqual(len(n), 1)
         self.assertEqual(len([k for k in res["workstreams"] if k.startswith(server.VLINK)]), 7)
 
 
