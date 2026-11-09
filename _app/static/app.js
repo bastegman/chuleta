@@ -1639,6 +1639,7 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'k' && !e.altKey) { e.preventDefault(); const g = $('#gq'); if (g && $('#modal').classList.contains('hidden')) { g.focus(); g.select(); } return; }  // la caja de búsqueda de arriba (su kbd dice Ctrl K)
   if ((e.ctrlKey || e.metaKey) && k === 'f' && $('#tq')) { e.preventDefault(); $('#tq').focus(); $('#tq').select(); return; }
   if (e.key === 'Escape') {
+    if (cerrarSobre(false)) return;  // la confirmación de encima, sola (Ajustes sigue debajo)
     if (!$('#modal').classList.contains('hidden')) return closeModal(false);
     if (!$('#jobsPanel').classList.contains('hidden')) return $('#jobsPanel').classList.add('hidden');
     if (typing) el.blur();
@@ -1757,16 +1758,7 @@ document.addEventListener('click', e => { if (!e.target.closest('#jobsPanel, #bt
 let modalResolve = null;
 function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
-  // se deja Ajustes por un subdiálogo: se toma el borrador, con la huella de lo guardado de sus claves según el
-  // servidor (incluye lo que Ajustes mismo haya guardado, aunque no haya pedido /api/config después; lo que guarde el
-  // subdiálogo va después, tras un clic tuyo). openSettings la compara al volver; pintar Ajustes la gasta, así que
-  // repintarlo desde dentro no compara nada. Una confirmación (ask) no es salir: lo que hagas tras «Activar» o
-  // «Quitar» es de Ajustes (revisión 9: activar las voces descartaba lo escrito)
-  if (cls === 'aj') S.ajHuella = null;
-  else if ($('.dialog.aj', m)) {
-    const ids = Object.keys(S.ajBorrador || {});
-    S.ajHuella = cls === 'ask' ? null : api('/api/config').then(c => ({ ids, huella: ajHuella(c, ids) }), () => null);
-  }
+  cerrarSobre(false);  // una confirmación de encima no se queda sobre otro diálogo (p. ej. Ctrl+Alt+R mientras tanto)
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
   m.classList.remove('hidden');
   document.body.classList.toggle('aj-abierto', cls === 'aj');  // los avisos, arriba solo con Ajustes (su «Guardar» abajo)
@@ -1775,9 +1767,8 @@ function openModal(html, onOpen, cls = '') {
   f && f.focus();
   return new Promise(r => { modalResolve = r; });
 }
-let modalCierres = 0;  // openSettings: si se cierra el modal mientras vuelve a Ajustes, no se abre solo
 function closeModal(v) {
-  modalCierres++;
+  cerrarSobre(false);
   if (S.modalCleanup) { const f = S.modalCleanup; S.modalCleanup = null; f(); }
   $('#modal').classList.add('hidden');
   $('#modal').innerHTML = '';
@@ -1785,10 +1776,48 @@ function closeModal(v) {
   r && r(v);
 }
 $('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(false); });
+/* Una confirmación encima de Ajustes, sin cerrarlo: lo escrito sigue en el formulario. Antes la confirmación ocupaba
+   el hueco de Ajustes y lo escrito se reponía al volver, un mecanismo que en cada revisión traía un fallo nuevo
+   (revisiones 5 a 10 de B2). Escape y un clic fuera la cierran a ella sola. */
+let sobreResolve = null, sobreFoco = null;
+function abrirSobre(html, onOpen) {
+  let m = $('#modalSobre');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modalSobre';
+    m.className = 'modal sobre hidden';
+    m.addEventListener('mousedown', e => { if (e.target === m) cerrarSobre(false); });
+    document.body.append(m);
+  }
+  cerrarSobre(false);  // (una a la vez)
+  sobreFoco = document.activeElement;
+  m.innerHTML = `<div class="dialog" role="alertdialog" aria-modal="true">${html}</div>`;
+  const dlg = $('.dialog', m), h = $('h3', dlg);
+  if (h) { h.id = 'sobreTitulo'; dlg.setAttribute('aria-labelledby', 'sobreTitulo'); }
+  m.classList.remove('hidden');
+  onOpen && onOpen(dlg);
+  ($('button.primary', dlg) || $('button', dlg))?.focus();
+  return new Promise(r => { sobreResolve = r; });
+}
+function cerrarSobre(v) {
+  const m = $('#modalSobre');
+  if (!m || m.classList.contains('hidden')) return false;
+  m.classList.add('hidden');
+  m.innerHTML = '';
+  const r = sobreResolve, f = sobreFoco;
+  sobreResolve = sobreFoco = null;
+  if (f && document.body.contains(f)) f.focus();
+  r && r(v);
+  return true;
+}
 function ask(title, html, ok = 'Aceptar') {
-  return openModal(`<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`, d => {
-    d.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) closeModal(b.dataset.m === 'ok'); });
-  }, 'ask');
+  const encima = !!$('#modal .dialog.aj');  // con Ajustes abierto, encima de Ajustes
+  const cuerpo = `<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`;
+  const enlazar = d => d.addEventListener('click', e => {
+    const b = e.target.closest('[data-m]');
+    if (b) (encima ? cerrarSobre : closeModal)(b.dataset.m === 'ok');
+  });
+  return encima ? abrirSobre(cuerpo, enlazar) : openModal(cuerpo, enlazar);
 }
 
 function flatFolders() {
@@ -1938,66 +1967,13 @@ const lAyuda = api => 'El motor con el que empieza cada directo se elige en Proc
    no, la última vista). Se llama también como manejador de clic: un Event no trae .sec. */
 // (rediseño B2, 07/11/2026) por lo que se hace: «Al grabar» primero; Vocabulario y Carpetas pasan a Proyectos; el
 // idioma y las instrucciones del resumen, a Resumen; Outlook y Teams, a Calendario y Teams; OBS, a Avanzado
-/* los desplegables de Ajustes que reciben sus opciones después de abrirse (listas de vocabulario y dispositivos) */
-const AJ_OPCIONES_TARDE = ['pfVocab', 'agMic', 'agSys'];
-/* de qué ajuste guardado (en /api/config) sale cada campo que el borrador de Ajustes puede reponer, y de qué depende:
-   la clave, el modelo y las direcciones, del proveedor; los motores, del modo. La huella de lo escrito es la de esos
-   valores y solo la de esos: lo que no está en el borrador no lo descarta (revisión 9). Un campo nuevo de Ajustes va
-   aquí (lo comprueba test_ajustes_cada_campo_tiene_su_ajuste) */
-const AJ_GUARDADO = {
-  __proc: ['procesado'], sLang: ['language'], pfFolder: ['perfil.folder'], pfVocab: ['perfil.vocab'],
-  pfContext: ['perfil.context'], agMic: ['rec_mic'], agSys: ['rec_sys'], agDirecto: ['rec_directo'],
-  agPorReunion: ['carpeta_por_reunion'], lMeet: ['meeting_detect'], sPrompt: ['prompt'],
-  agModelo: ['agente.tipo', 'agente.modelo'], lPreset: ['live_preset', 'procesado'], pfPreset: ['preset', 'procesado'],
-  cProv: ['cloud.provider'], cKey: ['cloud.provider', 'cloud.api_key', 'cloud.has_key'],
-  cModel: ['cloud.provider', 'cloud.model'], cBase: ['cloud.provider', 'cloud.base_url'],
-  cAzEp: ['cloud.provider', 'cloud.azure_endpoint'], cAzDep: ['cloud.provider', 'cloud.azure_deployment'],
-  cAzVer: ['cloud.provider', 'cloud.azure_api_version'], cLiveModel: ['cloud.provider', 'cloud.live_model'],
-  cLiveModelCustom: ['cloud.provider', 'cloud.live_model_custom'], cChunk: ['cloud.chunk_minutes'],
-  cPar: ['cloud.parallel'], sAuto: ['summary.auto'], sAutoAg: ['summary.auto'], sAutoLocal: ['summary.local'],
-  sModel: ['summary.model'], sSumLang: ['summary.lang'], sExtra: ['summary.extra'], rnOutlook: ['outlook_on'],
-  rnAviso: ['rec_aviso'], lAuto: ['live_auto'], lFinal: ['live_final_pass'], sThreads: ['threads'],
-};
-function ajHuella(c, ids) {
-  const leer = ruta => ruta.split('.').reduce((o, k) => (o == null ? undefined : o[k]), c) ?? null;
-  return JSON.stringify([...ids].sort().map(id => [id, (AJ_GUARDADO[id] || []).map(leer)]));
-}
 const AJ_SECS = [['algrabar', 'Al grabar'], ['proyectos', 'Proyectos'], ['procesado', 'Procesado'], ['resumen', 'Resumen'],
   ['calendario', 'Calendario y Teams'], ['voces', 'Voces'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
 function openSettings(opts) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  // lo escrito y sin guardar (S.ajBorrador) solo vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el
-  // asistente, «Apagar» › «Cancelar»…), que llaman a openSettings() sin nada o con volver: true. Cualquier otra forma
-  // de abrir Ajustes (⚙, la paleta, Inicio, la tarjeta, un error) es abrirlo de nuevo, sin lo de antes (revisiones 3 y
-  // 4 de B2: un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto por otro camino).
-  // Y vuelve tal cual solo si, mientras se estaba fuera, no ha cambiado lo guardado de ninguna de sus claves (la huella
-  // de openModal, con AJ_GUARDADO), venga de donde venga el cambio: si cambió, se descarta entero y se dice (revisiones
-  // 5 a 7: reponerlo campo a campo traía cada vez un caso nuevo; 8 y 9: una revisión de toda la configuración lo
-  // descartaba por cosas que no estaban en él). Al volver se pide siempre la configuración, haya algo escrito o no: pone
-  // S.config al día (revisión 8: con una lista renombrada en su editor, Ajustes la daba por perdida y «Guardar»
-  // fallaba). Repintar Ajustes desde dentro («Probar otra vez», «Importar listas…») no es haber salido: lo escrito
-  // vuelve sin más
-  const vuelve = !(opts && !(typeof opts === 'object' && !(opts instanceof Event) && opts.volver));
-  if (!vuelve) { S.ajBorrador = null; S.ajVolviendo = null; }
-  else if (S.ajVolviendo) return S.ajVolviendo;  // ya está volviendo («Cancelar» dos veces): una sola vuelta
-  else if (S.ajHuella) {
-    const base = S.ajHuella, cierres = modalCierres;
-    S.ajHuella = null;
-    const vuelta = S.ajVolviendo = Promise.all([base, api('/api/config')]).then(([b, c]) => {
-      setConfig(c);
-      return !!(S.ajBorrador && b && b.ids.length && ajHuella(c, b.ids) !== b.huella);
-    }, () => false).then(descartar => {  // sin respuesta no se sabe si cambió: lo escrito se queda
-      if (S.ajVolviendo !== vuelta) return;  // entretanto se abrió Ajustes de nuevo
-      S.ajVolviendo = null;
-      if (modalCierres !== cierres) return;  // y si se cerró (Escape), no vuelve a abrirse solo
-      if (descartar) {
-        S.ajBorrador = null;
-        toast('Los ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado.');
-      }
-      return openSettings(opts);
-    });
-    return vuelta;
-  }
+  // lo escrito y sin guardar no sale de Ajustes: las confirmaciones van encima (ask) y, antes de abrir un subdiálogo
+  // (una lista, el asistente), «Tienes cambios sin guardar» (d.ajAntesDeSalir). Así, cada vez que se abre, Ajustes
+  // pinta lo guardado (revisión 10 de B2: el borrador que se reponía al volver traía un fallo nuevo en cada revisión)
   const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
     || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
   S.ajSec = sec;
@@ -2112,8 +2088,7 @@ function openSettings(opts) {
     };
     d.irSec = irSec;
     // «Hay cambios sin guardar» de verdad: se compara con cómo se abrió. Lo que se guarda solo (Voces, personas) o no
-    // es de «Guardar» (el vocabulario del instalador) no cuenta. Si un subdiálogo (Voces, vocabulario, carpeta,
-    // Apagar, el asistente) reabre Ajustes, lo escrito y sin guardar vuelve (S.ajBorrador).
+    // es de «Guardar» (el vocabulario del instalador) no cuenta.
     // agProy: solo elige qué plan enseñar; data-se-guarda-solo: lo que guarda al momento (Outlook con su estado)
     const NO_CUENTA = new Set(['vzOn', 'xVocab', 'agProy']);
     const campos = () => $$('.aj-main input[id], .aj-main select[id], .aj-main textarea[id]', d)
@@ -2121,43 +2096,24 @@ function openSettings(opts) {
         && x.type !== 'button');
     const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
     const inicial = foto();  // como viene de los ajustes guardados
-    d.borradorAlAbrir = S.ajBorrador ? { ...S.ajBorrador } : null;  // ajustes.js: lo que no se pudo poner aún
-    // lo escrito antes de un subdiálogo, tal cual (openSettings ya ha comprobado que lo guardado de sus claves no ha
-    // cambiado)
-    const ponerBorrador = xs => {
-      if (!S.ajBorrador) return;
-      xs.forEach(x => {
-        if (!(x.id in S.ajBorrador)) return;
-        const v = S.ajBorrador[x.id];
-        // un desplegable sin esa opción (una carpeta vinculada o una lista quitadas en el subdiálogo) se queda en lo
-        // guardado: si no, se quedaba en blanco y «Guardar» mandaba «» (revisiones 6 y 7). Los que reciben sus opciones
-        // después (listas y dispositivos) lo reponen al recibirlas, si entonces está (ajustes.js)
-        if (x.tagName === 'SELECT' && ![...x.options].some(o => o.value === v)) return;
-        if (x.type === 'checkbox' || x.type === 'radio') x.checked = v; else x.value = v;
-      });
-    };
-    ponerBorrador(campos());
     // «Dónde se procesan» marcado y sin aplicar también lo es: «Guardar» lo aplica (revisión 2 de B2, P1-2)
     const procSinAplicar = () => {
       const v = $('input[name="proc"]:checked', d)?.value;
       return !!v && v !== (S.config.procesado || 'local');
     };
-    const marcar = () => {
-      const ahora = foto(), cambios = Object.keys(ahora).some(k => ahora[k] !== inicial[k]) || procSinAplicar();
-      // solo lo cambiado: al volver de un subdiálogo se repone eso, no la foto entera (que pisaría lo guardado entretanto
-      // por otro camino, como «Usarlo en» en la tarjeta)
-      S.ajBorrador = cambios ? Object.fromEntries(Object.entries(ahora).filter(([k, v]) => v !== inicial[k])) : null;
-      if (S.ajBorrador && procSinAplicar()) S.ajBorrador.__proc = $('input[name="proc"]:checked', d).value;  // y el modo
-      // lo del borrador anterior que aún espera sus opciones (los dispositivos, las listas) y no has tocado: sigue en el
-      // borrador, para la próxima vuelta (revisión 7: con dos vueltas antes de llegar la lista, el micro se perdía)
-      const pend = Object.fromEntries(AJ_OPCIONES_TARDE.map(id => [id, d.borradorAlAbrir?.[id], $('#' + id, d)])
-        .filter(([id, v, el]) => v != null && el && !el.dataset.tocado && !d.ajOpcionesListas?.[id]
-          && ![...el.options].some(o => o.value === v))
-        .map(([id, v]) => [id, v]));
-      if (cambios || Object.keys(pend).length) S.ajBorrador = { ...pend, ...(S.ajBorrador || {}) };
-      $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
-    };
+    const hayCambios = () => { const ahora = foto(); return Object.keys(ahora).some(k => ahora[k] !== inicial[k]) || procSinAplicar(); };
+    const marcar = () => { $('.aj-pend', d).textContent = hayCambios() ? 'Hay cambios sin guardar' : ''; };
     d.ajMarcar = marcar;
+    // antes de salir de Ajustes a un subdiálogo (una lista, el asistente) con cambios sin guardar: encima, «Guardar y
+    // seguir», «Descartar» o «Volver» (Escape y un clic fuera también vuelven). true: se puede seguir
+    d.ajAntesDeSalir = async () => {
+      if (!hayCambios()) return true;
+      const r = await abrirSobre(`<h3>Tienes cambios sin guardar</h3><div><p>Si sigues sin guardarlos, se pierden.</p></div>
+        <div class="btns"><button class="btn" data-m="volver">Volver</button><button class="btn" data-m="descartar">Descartar</button><button class="btn primary" data-m="guardar">Guardar y seguir</button></div>`,
+      x => x.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) cerrarSobre(b.dataset.m); }));
+      if (r === 'descartar') return true;
+      return r === 'guardar' ? guardar(false) : false;
+    };
     document.body.classList.add('aj-abierto');
     setTimeout(() => $('.aj-nav [data-sec].on', d)?.focus(), 0);  // el foco, dentro del diálogo (no en ⚙)
     d.addEventListener('click', e => {
@@ -2176,13 +2132,15 @@ function openSettings(opts) {
       const x = e.target.closest('[data-cfg]');
       if (!x || typeof abrirConfigurar !== 'function') return;
       e.preventDefault();
-      const volver = () => openSettings({ sec: 'procesado', volver: true });
-      abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver, empezar: true } : { volver });  // «Probar»: ya
+      const volver = () => openSettings({ sec: 'procesado' });
+      d.ajAntesDeSalir().then(ok => {
+        if (ok) abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver, empezar: true } : { volver });  // «Probar»: ya
+      });
     });
     // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
     function ajTarjeta() { const t = $('.cfg-estado', d); if (t && typeof cfgEstadoHtml === 'function') t.outerHTML = cfgEstadoHtml(); }
-    // la confirmación ocupa el hueco de Ajustes, como un subdiálogo: con «Cancelar» se vuelve con lo no guardado
-    $('#sOff', d).onclick = () => { marcar(); confirmShutdown(true); };
+    // la confirmación va encima de Ajustes: con «Cancelar», Ajustes sigue ahí, con lo escrito
+    $('#sOff', d).onclick = () => confirmShutdown();
     // «Arrancar con Windows» (la bandeja deja /api/inicio-windows): se aplica al marcarla, como en el menú del icono;
     // null = no se puede (fuera de Windows o una copia sin instalar)
     const ini = $('#sInicioWin', d);
@@ -2249,7 +2207,6 @@ function openSettings(opts) {
     S.modalCleanup = () => {  // al cerrar Ajustes (Cancelar, Esc, fuera) con el cambio sin aplicar: que se sepa
       document.body.classList.remove('aj-abierto');
       if (!document.body.contains(d)) return;  // otro diálogo ocupó el hueco
-      S.ajBorrador = null;  // se cierra Ajustes (no un subdiálogo): lo escrito sin guardar se descarta
       const v = procPendiente();
       if (v) toast(`No se ha aplicado ${procNombre[v]}: sigue ${procNombre[S.config.procesado] || 'la opción de antes'}. Para cambiarlo, ⚙ Ajustes → «Aplicar ahora».`, 'err');
     };
@@ -2310,17 +2267,14 @@ function openSettings(opts) {
     if (typeof bindAjProyectos === 'function') bindAjProyectos(d);
     if (typeof bindAjCalendario === 'function') bindAjCalendario(d);
     // los campos que se pintan después de la foto (los de la nube, según el proveedor): su valor de ahora es el de
-    // partida, y el borrador también vale para ellos. Antes contaban siempre: deshacer un cambio seguía diciendo «Hay
-    // cambios sin guardar» (revisión 2 de B2)
+    // partida. Antes contaban siempre: deshacer un cambio seguía diciendo «Hay cambios sin guardar» (revisión 2 de B2)
     const tarde = campos().filter(x => !(x.id in inicial));
     tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
-    ponerBorrador(tarde);
-    // el modo marcado y sin aplicar, también (con su aviso y sus campos, que pinta su «change»)
-    // (o el que pide quien abre: «Revisar en Ajustes» del asistente con «Con tu cuenta de Claude» elegido, revisión 6)
-    const pedido = (opts && typeof opts === 'object' && opts.proc) || S.ajBorrador?.__proc;
+    // el modo que pide quien abre, marcado y sin aplicar (con su aviso y sus campos, que pinta su «change»): «Revisar
+    // en Ajustes» del asistente con «Con tu cuenta de Claude» elegido (revisión 6)
+    const pedido = opts && typeof opts === 'object' && opts.proc;
     const proc = pedido && $(`input[name="proc"][value="${pedido}"]`, d);
-    if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); }
-    if (S.ajBorrador) marcar();
+    if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); marcar(); }
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -2349,8 +2303,7 @@ function openSettings(opts) {
       if ('seGuardaSolo' in ($('#rnOutlook', d)?.dataset || {})) delete out.outlook_on;
       return out;
     };
-    // como se pintaron con lo guardado (la foto inicial, antes de reponer el borrador): un motor repuesto cuenta como
-    // cambiado y «Guardar» lo manda (revisión 4 de B2)
+    // como se pintaron con lo guardado (la foto inicial): «Guardar» manda el motor solo si se ha cambiado aquí
     for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = String(inicial[el.id] ?? el.value); }
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
@@ -2375,12 +2328,27 @@ function openSettings(opts) {
         : `<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta de ${esc(APP_NAME)}${S.config.root ? ` (<code>${esc(S.config.root)}</code>)` : ''}.</div>`;
     };
     drawLinks();
+    d.ajDibujarEnlaces = drawLinks;  // también tras «Otra carpeta (fuera de Chuleta)…» (perfil.js)
     $('#lnAdd', d).onclick = async () => { if (await linkFolder()) drawLinks(); };
-    // la confirmacion usa el mismo hueco que Ajustes: al responder, se vuelve a Ajustes
-    d.addEventListener('click', async e => { const u = e.target.closest('[data-unlink]'); if (u) { await unlinkFolder(u.dataset.unlink); openSettings(); } });
-    loadVocab(S.config.language ?? 'es-en').then(() => {
+    // «quitar»: la confirmación va encima y, si se quita, la lista y «Reuniones sin proyecto», al día aquí mismo (si
+    // era la elegida sin guardar, vuelve a lo guardado: ya no se puede elegir)
+    d.addEventListener('click', async e => {
+      const u = e.target.closest('[data-unlink]');
+      if (!u || !await unlinkFolder(u.dataset.unlink)) return;
+      drawLinks();
+      const f = $('#pfFolder', d);
+      if (f && typeof perfilFolderOpts === 'function') {
+        const v = f.value, sigue = v === PERFIL_AUTO || flatFolders().some(x => x.path === v);
+        f.innerHTML = perfilFolderOpts(sigue ? v : (S.config.perfil?.folder ?? PERFIL_AUTO));
+        f.dataset.prev = f.value;
+        marcar();
+        d.ajPlanPedir?.();
+      }
+    });
+    // las listas, aquí mismo: al abrir y tras «Importar listas…» o «Probar otra vez» (ajustes.js), sin cerrar Ajustes
+    const pintarListas = () => {
       const box = $('#sVocab', d);
-      if (!box) return;
+      if (!box || !document.body.contains(box)) return;
       // agrupado por proyecto: cada uno con sus temas y un boton para anadir otro
       const groups = {};
       S.vocab.forEach(v => (groups[v.project] ||= []).push(v));
@@ -2392,12 +2360,15 @@ function openSettings(opts) {
         ${typeof perfilVocabEmptyHtml === 'function' && !S.vocab.length ? perfilVocabEmptyHtml() : ''}
         <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button>${typeof perfilImportar === 'function' ? `<button class="btn sm" type="button" id="sVocabImport">${I.folder}Importar listas de otra carpeta…</button>` : ''}</div>
         <div class="help">Cada tema es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>`;
-    });
+    };
+    d.ajPintarListas = pintarListas;
+    loadVocab(S.config.language ?? 'es-en').then(pintarListas);
     d.addEventListener('click', e => {
       const ed = e.target.closest('[data-vedit]'), nw = e.target.closest('[data-vnew]'), r = e.target.closest('[data-vdir]');
-      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', openSettings);
-      if (ed) openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit));
-      if (nw) openVocabEditor(null, openSettings, nw.dataset.vnew);
+      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', pintarListas);
+      // editar o crear una lista sale de Ajustes: antes, si hay algo sin guardar, se pregunta
+      if (ed) d.ajAntesDeSalir().then(ok => ok && openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit)));
+      if (nw) d.ajAntesDeSalir().then(ok => ok && openVocabEditor(null, openSettings, nw.dataset.vnew));
       if (r) api('/api/reveal', { path: r.dataset.vdir }).catch(err => toast(esc(err.message), 'err'));
     });
     $('#xExport', d).onclick = async () => {
@@ -2408,17 +2379,22 @@ function openSettings(opts) {
         res.innerHTML = `<span style="color:var(--ok)">✓ Creado en el escritorio (${(r.size / 1e6).toFixed(1).replace('.', ',')} MB${r.vocab ? ` · con ${r.vocab} listas de vocabulario` : ''})</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
     };
-    d.addEventListener('click', async e => {
+    // «Guardar» (cierra Ajustes) y «Guardar y seguir» (no lo cierra: lo que sigue ocupa su hueco). true si se guardó
+    const guardar = async (cerrar = true) => {
+      try {
+        const c = await api('/api/settings', collect());
+        setConfig(c); localStorage.setItem('procElegido', '1');
+        if (cerrar) closeModal(true);
+        toast('Ajustes guardados'); refreshView();
+        if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
+        return true;
+      } catch (err) { toast(esc(err.message), 'err'); return false; }
+    };
+    d.addEventListener('click', e => {
       const b = e.target.closest('[data-m]');
       if (!b) return;
       if (b.dataset.m === 'no') return closeModal(false);
-      try {
-        const c = await api('/api/settings', collect());
-        S.ajBorrador = null;
-        setConfig(c); localStorage.setItem('procElegido', '1'); closeModal(true); toast('Ajustes guardados'); refreshView();
-        if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
-      }
-      catch (err) { toast(esc(err.message), 'err'); }
+      guardar();
     });
   }, 'aj');
 }
@@ -2427,12 +2403,11 @@ function openSettings(opts) {
 $('#btnSettings').onclick = () => openSettings({ sec: 'algrabar' });
 
 /* ---------------------------------------------------------------- apagar */
-async function confirmShutdown(desdeAjustes = false) {
+async function confirmShutdown() {
   const busy = S.jobs.some(isActive);
   const ok = await ask(`Apagar ${APP_NAME}`, `<p>Se cierra la app del todo: la ventana y el motor que corre en segundo plano. El atajo Ctrl+Alt+R dejará de funcionar hasta que la vuelvas a abrir con el acceso directo.</p>${busy ? '<p><b>Hay transcripciones en marcha</b>: se cancelan (lo ya escrito se conserva) y podrás relanzarlas al volver.</p>' : ''}`, 'Apagar');
-  // desde Ajustes, la confirmación ocupa su hueco: al cancelar, se vuelve allí (con lo escrito). Desde el aviso de
-  // cerrar la ventana, no: Ajustes no estaba abierto (revisión 5 de B2)
-  if (!ok) return desdeAjustes ? openSettings() : undefined;
+  // desde Ajustes, la confirmación va encima: al cancelar, Ajustes sigue ahí, con lo escrito
+  if (!ok) return;
   try { await api('/api/apagar', {}); shutdownScreen(); }
   catch (err) { toast(esc(err.message), 'err'); }
 }

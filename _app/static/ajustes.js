@@ -42,13 +42,11 @@ function ajDispositivos(devs) {
 }
 /* Las listas de vocabulario, una sola petición por cada vez que se abre Ajustes (Al grabar y Proyectos las piden a la
    vez). loadVocab (notas.js) no falla: deja S.vocabError si no se han podido leer. */
-/* las listas de vocabulario se han leído alguna vez (bien, aunque no haya ninguna, o con error) */
-function listasLeidas() { return Array.isArray(S.vocabCarpetas) || !!S.vocabError; }
 function ajListas(d) {
   return d.ajListas || (d.ajListas = loadVocab(S.config?.language ?? 'es-en'));
 }
-/* sin las listas no se puede decir qué proyectos hay: una frase con «Probar otra vez» (reabre Ajustes en la misma
-   sección, con lo que no se haya guardado) en vez de «Todavía no hay proyectos» */
+/* sin las listas no se puede decir qué proyectos hay: una frase con «Probar otra vez» (las vuelve a pedir aquí mismo,
+   sin cerrar Ajustes) en vez de «Todavía no hay proyectos» */
 function ajListasFalloHtml(extra = '') {
   return `<div class="notice ag-sin-listas">No se han podido leer las listas de vocabulario${extra}. <button class="btn sm" type="button" data-aj-listas-otra>Probar otra vez</button></div>`;
 }
@@ -121,12 +119,13 @@ function bindAjAlGrabar(d) {
     }
   };
   box.addEventListener('click', e => { if (e.target.closest('[data-ag-reintentar]')) pedir(); });
-  // «Probar otra vez» de las listas (aquí o en Proyectos): Ajustes otra vez, en la misma sección y con lo no guardado
+  // «Probar otra vez» de las listas (aquí o en Proyectos): se vuelven a pedir aquí mismo, sin cerrar Ajustes (lo escrito
+  // sigue en el formulario); el bloque de las listas y Proyectos se rehacen con ellas
   d.addEventListener('click', e => {
     if (!e.target.closest('[data-aj-listas-otra]')) return;
     e.preventDefault();
-    d.ajMarcar?.();
-    openSettings({ sec: S.ajSec, volver: true });
+    d.ajListas = null;
+    ajListas(d).then(() => { d.ajPintarListas?.(); otraVez(); });
   });
   const como = $('.ag-como-btn', d), comoTxt = $('#agComo', d);
   if (como && comoTxt) como.onclick = () => { comoTxt.hidden = !comoTxt.hidden; como.setAttribute('aria-expanded', String(!comoTxt.hidden)); };
@@ -142,7 +141,6 @@ function bindAjAlGrabar(d) {
   // «Proyecto al grabar» fijo: el plan de arriba pasa a ese proyecto, para que se vea lo que cambia (el selector de
   // arriba elige qué plan enseñar y, si no, lo taparía)
   $('#pfVocab', d)?.addEventListener('change', e => {
-    e.target.dataset.tocado = '1';  // elegido por ti: el borrador de antes ya no lo pisa
     const v = e.target.value;
     if (v === PERFIL_AUTO || ![...proy.options].some(o => o.value === v)) return;
     proy.value = v;
@@ -157,25 +155,18 @@ function bindAjAlGrabar(d) {
   $$('input[name="proc"]', d).forEach(el => el.addEventListener('change', luego));
   // micrófono y audio del PC: los de Ajustes (lo de una reunión se cambia en su tarjeta). Con la lista de
   // dispositivos, sin cambiar lo elegido (ni lo que ya hayas tocado)
-  const c = S.config || {}, mic = $('#agMic', d), sys = $('#agSys', d), tocado = {};
+  const c = S.config || {}, mic = $('#agMic', d), sys = $('#agSys', d);
   const titulo = s => {  // el texto entero y, con el de Windows, cuál es ahora
     const x = s.options[s.selectedIndex];
     s.title = [x?.textContent, x?.title].filter(Boolean).join(' · ');
   };
-  mic.addEventListener('change', () => { tocado.mic = true; mic.dataset.tocado = '1'; titulo(mic); });
-  sys.addEventListener('change', () => { tocado.sys = true; sys.dataset.tocado = '1'; titulo(sys); });
+  mic.addEventListener('change', () => titulo(mic));
+  sys.addEventListener('change', () => titulo(sys));
   titulo(mic); titulo(sys);
-  const borrador = d.borradorAlAbrir || {};  // lo que había sin guardar al volver de un subdiálogo
-  const listos = () => { (d.ajOpcionesListas ||= {}).agMic = true; d.ajOpcionesListas.agSys = true; };
   api('/api/rec/devices').then(r => {
-    listos();  // micrófono y salida ya no esperan sus opciones (app.js, marcar)
     if (!document.body.contains(mic)) return;
-    // lo que ya estaba elegido sin guardar: lo de ahora o, si no lo has tocado desde que se abrió, el borrador (al
-    // abrir, su opción aún no existía y el valor no se pudo poner)
     const [m, s] = ajDispositivos(r);
-    const vm = !tocado.mic && borrador.agMic != null ? borrador.agMic : mic.value;
-    const vs = !tocado.sys && borrador.agSys != null ? borrador.agSys : sys.value;
-    const antes = [mic.value, sys.value];
+    const vm = mic.value, vs = sys.value, antes = [mic.value, sys.value];
     mic.innerHTML = m; sys.innerHTML = s;
     if ([...mic.options].some(x => x.value === vm)) mic.value = vm;
     if ([...sys.options].some(x => x.value === vs)) sys.value = vs;
@@ -184,7 +175,6 @@ function bindAjAlGrabar(d) {
     if (mic.value !== antes[0]) mic.dispatchEvent(new Event('change', { bubbles: true }));
     if (sys.value !== antes[1]) sys.dispatchEvent(new Event('change', { bubbles: true }));
   }).catch(err => {
-    listos();
     const av = $('#agDevsAviso', d);
     if (!av || !document.body.contains(av)) return;
     av.outerHTML = grDevsAviso(err.message).replace('<span ', '<span id="agDevsAviso" ');  // en una línea
@@ -197,20 +187,9 @@ function bindAjAlGrabar(d) {
     if (!document.body.contains(proy)) return;
     const antes = [...proy.options].map(o => o.value).join('|') + '#' + proy.value;
     listas();
-    const pv = $('#pfVocab', d), esperaba = !d.ajOpcionesListas?.pfVocab;
-    (d.ajOpcionesListas ||= {}).pfVocab = listasLeidas();  // ya no espera (app.js, marcar)
-    if (pv && typeof perfilVocabOpts === 'function') {
-      // con las listas ya aquí: lo que había (lo guardado o lo que has elegido) y, si no lo has tocado, lo escrito
-      // antes de un subdiálogo, solo si su lista existe; si no (borrada o renombrada allí), queda lo guardado y no un
-      // «Sin proyecto» que nadie eligió (revisión 7)
-      const antesV = pv.value, b = d.borradorAlAbrir?.pfVocab;
-      pv.innerHTML = perfilVocabOpts(antesV);
-      const valeB = b != null && (b === PERFIL_AUTO || b === '' || (S.vocab || []).some(v => v.id === b));
-      if (valeB && !pv.dataset.tocado && pv.value !== b) pv.value = b;
-      // y el borrador al día: lo que esperaba a las listas y no está en ellas ya no espera (revisión 8: si marcar()
-      // había corrido antes de llegar, se quedaba pendiente)
-      if (pv.value !== antesV || (esperaba && d.ajOpcionesListas.pfVocab)) d.ajMarcar?.();
-    }
+    const pv = $('#pfVocab', d);
+    // con las listas ya aquí, con lo que había (lo guardado o lo que has elegido)
+    if (pv && typeof perfilVocabOpts === 'function') pv.innerHTML = perfilVocabOpts(pv.value);
     const av = $('.ag-sin-listas', d);
     // aquí, en una línea (Al grabar tiene que caber en una pantalla); en Proyectos y en las listas, con su recuadro
     if (S.vocabError && !S.vocab?.length && !av) $('.ag-plan', d)?.insertAdjacentHTML('afterend', '<div class="ag-sin-listas help" style="margin-top:4px"><span class="warn-txt">No se han podido leer las listas de vocabulario: solo se puede comprobar «Sin proyecto».</span> <a href="#" data-aj-listas-otra>Probar otra vez</a></div>');
@@ -219,9 +198,6 @@ function bindAjAlGrabar(d) {
   };
   d.ajListasCambiadas = otraVez;
   d.ajPlanPedir = () => pedir();
-  // si las listas ya se habían leído (al volver de su editor, por ejemplo), «Proyecto al grabar» se ha pintado ya con
-  // ellas: no espera a la siguiente lectura
-  (d.ajOpcionesListas ||= {}).pfVocab = listasLeidas();
   ajListas(d).then(otraVez);
   // el primero, con la carpeta de cada proyecto: Proyectos la toma de aquí al abrir (una petición menos)
   d.ajPrimerPlan = pedir({ proyectos: true });
@@ -383,7 +359,8 @@ function bindAjProyectos(d) {
     if (listo) return cerrar(listo.closest('tr'));
     if (e.target.closest('[data-pj-lista]')) {
       const v = (S.vocab || []).find(x => x.id === e.target.closest('[data-pj-lista]').dataset.pjLista);
-      if (v) openVocabEditor(v, openSettings);
+      // editar la lista sale de Ajustes: antes, si hay algo sin guardar, se pregunta (app.js)
+      if (v && await d.ajAntesDeSalir?.() !== false) openVocabEditor(v, openSettings);
       return;
     }
     if (!pe && !we) return;

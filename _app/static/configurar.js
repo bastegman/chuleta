@@ -488,13 +488,12 @@ async function wzAccion(tipo, b) {
   if (tipo === 'abrir_url') return api('/api/acerca/abrir', { que: 'claves', proveedor: W.cloud.provider }).catch(() => window.open(b.dataset.url, '_blank'));
   // con Claude, el modelo se elige en Ajustes › Procesado (el paso 2 no lo tiene); con la API, la clave y la dirección,
   // en el paso 2
-  // a una sección de Ajustes: si el asistente se abrió desde Ajustes, es una vuelta (con lo escrito allí) y su cierre
-  // ya no programa la vuelta a Procesado (que acababa ganando a «Avanzado»)
+  // a una sección de Ajustes: si el asistente se abrió desde Ajustes, su cierre ya no programa la vuelta a Procesado
+  // (que acababa ganando a «Avanzado»)
   const aAjustes = (sec, proc) => {
-    const v = !!W.volver;
     W.volver = null;
     closeModal(false);
-    return openSettings({ sec, volver: v, proc });
+    return openSettings({ sec, proc });
   };
   // con «Con tu cuenta de Claude» elegido y sin guardar: Ajustes la enseña marcada, con su selector de modelo
   if (tipo === 'procesado' && W.modo === 'agente') return aAjustes('procesado', W.modo);

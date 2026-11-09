@@ -398,6 +398,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .jitem .s.err { color: var(--err); }
 .jitem .pbar { height: 4px; }
 .modal { position: fixed; inset: 0; background: rgba(20, 14, 12, .42); display: flex; align-items: flex-start; justify-content: center; padding-top: 8vh; z-index: 50; }
+.modal.sobre { z-index: 55; padding-top: 18vh; }  /* una confirmación encima de Ajustes, sin cerrarlo */
+.modal.sobre .dialog { width: 460px; }
 .dialog { width: 560px; max-width: calc(100vw - 40px); max-height: 84vh; overflow-y: auto; background: var(--panel); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px 24px 22px; border: 1px solid var(--line); }
 .dialog h3 { margin: -20px -24px 18px; padding: 15px 24px; font-size: 16px; font-weight: 650; border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: var(--radius-lg) var(--radius-lg) 0 0; position: sticky; top: -20px; z-index: 2; letter-spacing: -.01em; }
 .dialog h3 > svg { width: 18px; height: 18px; margin-right: 8px; vertical-align: -4px; color: var(--muted); }

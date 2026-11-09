@@ -89,23 +89,19 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
 - «Workstream» y «proyecto» en vez de «tema»: en el editor de listas, en la página de la reunión y en el directo
   («Proyecto»), en la frase de «Probar» («proyecto sugerido»), en el LEEME, en «Incluir mis listas de vocabulario» y en
   los errores de las listas («Ese workstream ya no existe»).
-- Lo escrito y sin guardar en Ajustes vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el asistente,
-  «Apagar» › «Cancelar» o Escape), y solo eso: lo cambiado, también el motor y el modo marcado sin aplicar, y «Guardar»
-  lo guarda. Vuelve tal cual si mientras tanto no ha cambiado lo guardado de nada de lo escrito, ni de aquello de lo
-  que depende (la clave y el modelo, del proveedor; los motores, del modo). Si cambió (el asistente guardó otro modo o
-  proveedor, se renombró la lista de «Proyecto al grabar» que habías elegido…), se descarta entero y se dice: «Los
-  ajustes cambiaron en otra parte: tus cambios sin guardar se han descartado». Lo que no está en lo escrito no lo
-  descarta: lo último usado al grabar, la velocidad medida, las voces o un guardado que deja lo mismo («Probar» ›
-  «Terminar»). Lo que Ajustes mismo guardó antes de salir y lo que haces tras confirmar un aviso lanzado desde Ajustes
-  («Activar» las voces, «Quitar» una carpeta vinculada) es de Ajustes, y repintarlo desde dentro («Probar otra vez»,
-  «Importar listas…») no es salir. «Cancelar» dos veces vuelve una sola vez, y Escape mientras vuelve no lo reabre.
-  Al volver, aunque no hubiera nada escrito, Ajustes enseña lo de ahora (una lista renombrada, con su nombre nuevo).
-  Si la opción escrita ya no existe al volver (una lista borrada en su editor), queda lo guardado; un micrófono o una
-  lista que aún no han llegado se siguen esperando. Abrir Ajustes de cualquier otra forma (⚙, la paleta, Inicio, la
-  tarjeta de grabar, un error, el aviso de cerrar la ventana) lo abre de nuevo, sin lo de antes.
-  Desde el asistente abierto en Ajustes, «Revisar en Ajustes» e «Ir a Avanzado» vuelven con lo escrito, y a esa sección
-  («Revisar en Ajustes» con «Con tu cuenta de Claude» marcada). Antes un borrador abandonado volvía después y «Guardar»
-  deshacía lo guardado entretanto con «Usarlo en»; y un motor repuesto se veía pero no se guardaba.
+- Lo escrito y sin guardar no sale de Ajustes. Las confirmaciones («Apagar», «Activar» las voces, «Quitar» una
+  carpeta vinculada) se abren encima, sin cerrarlo, y con «Cancelar» o Escape Ajustes sigue como estaba. «Probar otra
+  vez» de las listas e «Importar listas…» se hacen ahí mismo. Lo que cambian (las carpetas vinculadas, «Reuniones sin
+  proyecto», las listas, las voces) se pone al día sin tocar lo escrito.
+- Antes de abrir algo que ocupa el sitio de Ajustes (editar o crear una lista, «Editar la lista» de Proyectos, el
+  asistente con «Probar» o «Cambiar…») con cambios sin guardar, se pregunta: «Tienes cambios sin guardar», con
+  «Guardar y seguir», «Descartar» y «Volver» (también con Escape o un clic fuera). Si no se puede guardar, se queda en
+  Ajustes y lo dice. Sin cambios, se sigue sin preguntar.
+- Al volver de esos subdiálogos, o al abrir Ajustes de cualquier forma, se ve lo guardado. Antes, lo escrito se
+  reponía al volver, y en cada revisión salía un caso en que lo repuesto ya no casaba con lo guardado. El último: una
+  API key escrita volvía oculta tras guardar otro modo en el asistente, y «Guardar» la mandaba.
+- Desde el asistente abierto en Ajustes, «Revisar en Ajustes» e «Ir a Avanzado» llevan a esa sección. «Revisar en
+  Ajustes» la abre con «Con tu cuenta de Claude» marcada.
 - La carpeta de las reuniones sin proyecto que no se encuentra no tira el resto de lo escrito en el plan (el contexto),
   y el plan dice por qué graba en otra («No se encuentra la carpeta de las reuniones sin proyecto (…): se guarda
   aquí»). Un proyecto sin carpeta propia (con sus listas en una carpeta conectada) lo dice en su línea, con dónde
@@ -126,14 +122,13 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   y al guardar se dice por qué.
 - Si no se puede calcular el plan o la carpeta de cada proyecto, Ajustes lo dice en una frase con «Probar otra vez»,
   sin texto técnico ni una tabla que parezca correcta.
-- Al abrir Ajustes, el foco va a la sección abierta: a 900×600 el plan ya no se queda fuera de la vista. El micrófono
-  elegido sin guardar se conserva al volver de un subdiálogo (editar una lista, el asistente…).
+- Al abrir Ajustes, el foco va a la sección abierta: a 900×600 el plan ya no se queda fuera de la vista.
 - Accesibilidad: cada desplegable y casilla de Ajustes y de los paneles «Cambiar» de la tarjeta tiene su nombre para
   un lector de pantalla (los de la tabla de Proyectos dicen de qué proyecto son, y cada «Editar», cuál edita). Los
-  avisos de abajo («Guardado», «Los ajustes cambiaron en otra parte…») también se leen en voz alta.
+  avisos de abajo («Ajustes guardados» y los demás) también se leen en voz alta.
 - «Otra carpeta (fuera de Chuleta)…» en «Reuniones sin proyecto» cuenta como cambio sin guardar: lo dice «Hay cambios
-  sin guardar» y vuelve tras un subdiálogo. Antes la carpeta se vinculaba y se enseñaba elegida, pero al volver de
-  editar una lista se quedaba en «Automática» sin avisar.
+  sin guardar» y la carpeta sale ya en la lista de carpetas vinculadas, con su «quitar». Antes se vinculaba y se
+  enseñaba elegida sin avisar de que faltaba guardarla.
 - Si la app no puede leer la lista de micrófonos y salidas, Ajustes y la tarjeta de grabar lo dicen en una frase
   («No se ha podido leer la lista de micrófonos y salidas de audio») en vez de callarlo o de enseñar el final del error
   de la grabadora, que queda al pasar el ratón.
