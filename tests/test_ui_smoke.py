@@ -504,12 +504,15 @@ class InterfazEnNavegadorTests(unittest.TestCase):
     def test_ajustes_modo_sin_aplicar_y_filas_que_no_cambian(self):
         """Revisión 2 de B2: la opción marcada en «Dónde se procesan» y sin aplicar llega al plan y es «sin guardar»,
         porque «Guardar» la aplica (P1-2); y al recalcular, solo cambian las filas del plan que cambian: un lector de
-        pantalla no vuelve a leer el plan entero (P2-4)."""
+        pantalla no vuelve a leer el plan entero (P2-4). Lo que se guarda solo y llega después de abrir («Arrancar con
+        Windows», ya activado) no cuenta como cambio."""
         pg, errores, red = self.pagina()
+        pg.route("**/api/inicio-windows", lambda r: r.fulfill(json={"activado": True}))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#agFilas .gr-fila[data-fila='resume']", timeout=10000)
+        pg.wait_for_function("document.querySelector('#sInicioWin').checked", timeout=5000)
         self.assertIsNone(pg.get_attribute(".ag-plan", "aria-live"))
         self.assertEqual(pg.get_attribute("#agFilas", "aria-live"), "polite")
         antes = pg.evaluate("api('/api/config')")["procesado"]
