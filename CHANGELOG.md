@@ -25,18 +25,24 @@ La app pasa a llamarse **Tenca** (Bernardo, msg 1249). Lo de abajo, con «Chulet
   su carpeta; el primer `Chuleta.lnk` de esa instalación en el escritorio y en el menú Inicio pasa a llamarse
   `Tenca.lnk` y los que sobren se quitan (nunca dos); «Arrancar con Windows», si estaba puesto, queda como una sola
   copia `Tenca.lnk` en la carpeta Inicio de Windows; la entrada «Chuleta» de Aplicaciones instaladas se quita después
-  de escribir la de «Tenca»; y `ABRIR CHULETA.bat` (o `ABRIR NOTAS.bat`) de la raíz se quita si es de la app. Lo que
-  apunta a otra copia de la app en otra carpeta se queda y se dice; un acceso directo que no es de la app no se toca.
+  de escribir la de «Tenca» (solo si es de la app: la de otro programa que se llame igual no se toca); y
+  `ABRIR CHULETA.bat` (o `ABRIR NOTAS.bat`) de la raíz se quita si es de la app. Si «Arrancar con Windows» estaba
+  desactivado en el Administrador de tareas (Aplicaciones de inicio), sigue desactivado. Lo que apunta a otra copia de
+  la app en otra carpeta se queda y se dice; un acceso directo que no es de la app no se toca.
   Al final dice «Chuleta ahora se llama Tenca: tus reuniones, voces y ajustes siguen donde estaban».
 - **No se mueve nada**: la carpeta de las reuniones conserva su nombre (`%USERPROFILE%\Chuleta`; renombrarla rompería
   OBS, los accesos del usuario y los anclajes) y los datos siguen en `%LOCALAPPDATA%\AudiosApp` (ajustes, claves,
   voces). Las reuniones y listas de vocabulario con `proyecto: Chuleta` siguen siendo de la raíz
-  (`APP_FORMER_NAMES`). Una reinstalación tras desinstalar Chuleta vuelve a su carpeta.
+  (`APP_FORMER_NAMES`), y la carpeta y el idioma asignados a ese proyecto en Ajustes pasan a «Tenca» al arrancar (se
+  guardaban por el nombre de la app). Una reinstalación tras desinstalar Chuleta vuelve a su carpeta.
 - **Anclajes de la barra de tareas**: Windows no deja que un programa los cambie. Siguen funcionando y agrupando la
   ventana (el AppUserModelID no cambia); el instalador detecta un «Chuleta» anclado de esta instalación y dice cómo
   volver a anclarla.
-- **La app** también migra «Arrancar con Windows»: si encuentra la copia `Chuleta.lnk` en la carpeta Inicio, la
-  sustituye por `Tenca.lnk` al arrancar; activarlo o desactivarlo desde la bandeja quita también la antigua.
+- **La app** también migra «Arrancar con Windows»: si encuentra en la carpeta Inicio la copia `Chuleta.lnk` de esta
+  instalación (lleva la ruta de su `_app`), la sustituye por `Tenca.lnk` al arrancar; activarlo o desactivarlo desde la
+  bandeja quita también la antigua. Un `Chuleta.lnk` que no es de esta copia, o un `Notas.lnk` (otro programa), no se
+  toca. **«Compartir Tenca»** no mete en el zip lo que la copia instalada conserva con el nombre anterior
+  (`ABRIR CHULETA.bat`, `Chuleta.bat`, `chuleta.ico`/`.png`).
 - **Desinstalador**: quita también los accesos directos y la entrada con el nombre anterior si son de esta instalación;
   su registro pasa a `%TEMP%\tenca-desinstalar.log`.
 - **No cambia, a propósito** (no lo ve el usuario y cambiarlo rompería algo): el AppUserModelID `Bernardo.Chuleta` (la

@@ -353,11 +353,16 @@ function Remove-Shortcuts {
     return $n
 }
 function Remove-Registro {
-    # la entrada de "Aplicaciones instaladas" (y la del nombre anterior, si quedara), si es la de esta carpeta
+    # la entrada de "Aplicaciones instaladas" (y la del nombre anterior, si quedara), si es la de esta carpeta. La del
+    # nombre anterior, solo si es de la app (su Publisher) y de esta carpeta: con ese nombre puede haber otro programa
     foreach ($key in @(@($UninstallKey) + $LegacyUninstallKeys)) {
         if (-not (Test-Path -LiteralPath $key)) { Log "sin entrada $key"; continue }
-        $loc = "$((Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).InstallLocation)"
+        $props = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+        $loc = "$($props.InstallLocation)"
         if ($loc -and -not (Same-Path $loc $Root)) { Log "la entrada $key es de $loc : se conserva"; continue }
+        if ($key -ne $UninstallKey -and ("$($props.Publisher)" -ne "Bernardo Stegmaier" -or -not $loc)) {
+            Log "la entrada $key no es de esta instalacion : se conserva"; continue
+        }
         try { Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction Stop; Log "borrada la entrada $key" }
         catch { Log "X no se pudo borrar $key : $($_.Exception.Message)"; $script:fallos += $key }
     }

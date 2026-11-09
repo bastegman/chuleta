@@ -24,6 +24,9 @@ APP_NAME = "Tenca"
 # alias de la raiz). La carpeta Inicio de Windows puede tener aun el acceso directo de «Arrancar con Windows» con el
 # nombre anterior (server.inicio_windows_*: se migra al de ahora).
 APP_FORMER_NAMES = ("Chuleta", "Notas")
+# los nombres anteriores que tuvieron «Arrancar con Windows» (llego el 07/11/2026, ya como Chuleta): en la carpeta
+# Inicio de Windows no hay copias de la app con otros nombres; un «Notas.lnk» de alli es de otro programa
+ARRANQUE_ANTIGUOS = ("Chuleta",)
 # AppUserModelID: identifica la ventana en la barra de tareas (agrupa, icono, anclar). La misma cadena va en el
 # acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. No lo ve el
 # usuario y NO cambia con el nombre: si cambiara, la ventana de Tenca saldria como un boton aparte junto al anclaje

@@ -632,14 +632,19 @@ function Register-App($appDir, $rootDir, $version) {
 }
 
 function Remove-RegistroAntiguo($rootDir) {
-    # la entrada de "Aplicaciones instaladas" con el nombre anterior ("Chuleta"): si es de esta carpeta, o de una que ya
-    # no tiene la app, sobra (si no, saldrian dos: la nueva y la vieja). Solo despues de escribir la nueva: si eso
-    # falla, la vieja sigue sirviendo para desinstalar. Si es de otra copia que sigue instalada, se queda y se dice
+    # la entrada de "Aplicaciones instaladas" con el nombre anterior ("Chuleta"), si es de la app (la puso este
+    # instalador: Publisher = $Publisher): si es de esta carpeta, o de una que ya no tiene la app, sobra (si no,
+    # saldrian dos: la nueva y la vieja). Solo despues de escribir la nueva: si eso falla, la vieja sigue sirviendo para
+    # desinstalar. Si es de otra copia que sigue instalada, se queda y se dice; la de otro programa no se toca
     foreach ($k in $LegacyUninstallKeys) {
         if (-not (Test-Path -LiteralPath $k)) { continue }
         $n = Split-Path -Leaf $k
-        $loc = ""
-        try { $loc = "$((Get-ItemProperty -LiteralPath $k -ErrorAction Stop).InstallLocation)".Trim() } catch {}
+        $loc, $pub = "", ""
+        try {
+            $props = Get-ItemProperty -LiteralPath $k -ErrorAction Stop
+            $loc, $pub = "$($props.InstallLocation)".Trim(), "$($props.Publisher)".Trim()
+        } catch {}
+        if ($pub -ne $Publisher) { Log-File "    se conserva la entrada $k (Publisher '$pub': no es de la app)"; continue }
         if ($loc -and -not (Same-Path $loc $rootDir) -and (Test-Instalacion $loc)) {
             Say "    Se conserva la entrada '$n' de Aplicaciones instaladas: es de otra copia ($loc)." Yellow
             continue
@@ -648,7 +653,7 @@ function Remove-RegistroAntiguo($rootDir) {
         try {
             [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree(($k -replace '^HKCU:\\', ''), $false)
             Say "    Quitada de Aplicaciones instaladas la entrada antigua '$n' (ahora es '$AppName')."
-            if (-not $script:antes) { $script:antes = $n }
+            if (-not $script:antes -and (Same-Path $loc $rootDir)) { $script:antes = $n }
         } catch { Say "    No se pudo quitar la entrada antigua '$n' de Aplicaciones instaladas ($($_.Exception.Message))." Yellow }
     }
 }
@@ -668,6 +673,21 @@ function Remove-LanzadoresAntiguos($rootDir) {
     }
 }
 
+function Copy-ArranqueAprobado($desde, $hacia, $clave = $null) {
+    # el Administrador de tareas (Aplicaciones de inicio) guarda si el usuario desactivo un acceso directo de la carpeta
+    # Inicio por su nombre de fichero (HKCU ...\Explorer\StartupApproved\StartupFolder, REG_BINARY; sin valor =
+    # activado). Al pasar de "$desde" a "$hacia" se copia su valor, para que lo desactivado siga desactivado, y se quita
+    # el del nombre viejo. Sin valor, nada. $clave: otra clave (los tests)
+    if (-not $clave) { $clave = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder" }
+    try {
+        $v = (Get-ItemProperty -LiteralPath $clave -Name $desde -ErrorAction Stop).$desde
+        if ($null -eq $v) { return }
+        $null = New-ItemProperty -LiteralPath $clave -Name $hacia -Value ([byte[]]$v) -PropertyType Binary -Force -ErrorAction Stop
+        Remove-ItemProperty -LiteralPath $clave -Name $desde -ErrorAction SilentlyContinue
+        Log-File "    StartupApproved: $desde -> $hacia ($(if ($v[0] -eq 3) { 'desactivado' } else { 'activado' }) en Aplicaciones de inicio)"
+    } catch {}
+}
+
 function Update-Arranque($progLnk, $appDir, $startup = $null) {
     # "Arrancar con Windows" (icono de la bandeja) = una copia del acceso directo del menu Inicio en la carpeta Inicio
     # de Windows (server.inicio_windows_poner). Si estaba puesto, con el nombre de ahora o con uno anterior, queda UNA
@@ -683,11 +703,15 @@ function Update-Arranque($progLnk, $appDir, $startup = $null) {
             Say "    Arrancar con Windows: sin el acceso directo del menú Inicio no se puede poner al día (se deja como estaba)." Yellow
             return
         }
+        $habia = Test-Path -LiteralPath $nuevo
         try { Copy-Item -LiteralPath $progLnk -Destination $nuevo -Force -ErrorAction Stop }
         catch {
             Say "    Arrancar con Windows: no se pudo poner al día $nuevo ($($_.Exception.Message)); se deja como estaba." Yellow
             return
         }
+        # si estaba desactivado en el Administrador de tareas con el nombre anterior, sigue desactivado
+        $previo = @($antiguos | Where-Object { $_.tipo -eq "esta" }) | Select-Object -First 1
+        if ($previo -and -not $habia) { Copy-ArranqueAprobado "$($previo.name).lnk" "$AppName.lnk" }
         Say "    Arrancar con Windows: sigue activado ($nuevo)." Green
     }
     Remove-LnkAntiguos $antiguos $startup
@@ -749,7 +773,9 @@ function Set-AccesoDirecto($dir, $appDir, $pyw, $sinConsola) {
         $lnk.Save()
         $null = Set-ShortcutAppId $lnkPath $AppId
         Say "    $lnkPath" Green
-        if ($antiguos.Count -and -not $script:antes) { $script:antes = $antiguos[0].name }
+        # solo uno de esta instalacion dice que era la app con otro nombre (uno roto es de una copia que ya no esta)
+        $deEsta = @($antiguos | Where-Object { $_.tipo -eq "esta" })
+        if ($deEsta.Count -and -not $script:antes) { $script:antes = $deEsta[0].name }
         Remove-LnkAntiguos $antiguos $dir
     } catch {
         Say "    No se pudo crear en $dir (usa $Launcher)" Yellow
@@ -983,7 +1009,9 @@ if ($Gui) {
     $borrable = if ($borrable) { " La carpeta descomprimida ya se puede borrar." } else { "" }
     $siguiente = $(if ($renombrada) { " $renombrada" } else { " Si es la primera vez: Ajustes > Dónde se procesan tus reuniones." })
     $anclaje = $(if ($script:anclados.Count) { " En la barra de tareas, desancla '$($script:anclados[0])' y ancla $AppName (cómo, en el detalle)." } else { "" })
-    Finish-Ui $true "Listo$ver. Instalada en $root.$borrable$siguiente$anclaje Para apagar $AppName del todo: Ajustes > Apagar $AppName."
+    # la etiqueta tiene sitio para unas cuatro lineas: quien ya la tenia (renombrada) sabe apagarla
+    $apagar = $(if ($renombrada) { "" } else { " Para apagar $AppName del todo: Ajustes > Apagar $AppName." })
+    Finish-Ui $true "Listo$ver. Instalada en $root.$borrable$siguiente$anclaje$apagar"
     $abrir = $script:ui.abrir
 }
 if ($abrir) {

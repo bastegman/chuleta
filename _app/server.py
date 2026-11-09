@@ -223,7 +223,19 @@ EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR TENCA.bat y 
 def export_code():
     """Todo el codigo de _app (.py, .bat y .ps1; sin subcarpetas ni python.txt): un modulo nuevo entra solo."""
     return sorted(n for n in os.listdir(APP_DIR)
-                  if n.endswith((".py", ".bat", ".ps1")) and os.path.isfile(os.path.join(APP_DIR, n)))
+                  if n.endswith((".py", ".bat", ".ps1")) and os.path.isfile(os.path.join(APP_DIR, n))
+                  and not de_un_nombre_anterior(n))
+
+
+def de_un_nombre_anterior(name):
+    """Un fichero que la app tenia con un nombre anterior (el «ABRIR ….bat» de la raiz, el .bat de _app y los
+    iconos). El instalador no borra nada de _app al actualizar, asi que en una copia instalada encima de Chuleta siguen
+    ahi; el paquete de «Compartir» no los lleva (saldria el nombre viejo, y dos lanzadores). notas.js no es uno: es la
+    funcion de tomar notas."""
+    from common import APP_FORMER_NAMES
+    viejos = {x.casefold() for n in APP_FORMER_NAMES
+              for x in (f"ABRIR {n}.bat", f"{n}.bat", f"{n}.ico", f"{n}.png")}
+    return name.casefold() in viejos
 
 
 def desktop_dir():
@@ -258,8 +270,9 @@ def build_package(dest, extra=(), version=None):
         return (("\ufeff" if path.endswith((".ps1", ".txt")) else "") + t).encode("utf-8")
 
     files = [(os.path.join(APP_DIR, n), root + "_app/" + n) for n in export_code()]
-    files += [(e.path, root + "_app/static/" + e.name) for e in os.scandir(STATIC_DIR) if e.is_file()]
-    templates = [e for e in os.scandir(EXPORT_DIR) if e.is_file()]
+    files += [(e.path, root + "_app/static/" + e.name) for e in os.scandir(STATIC_DIR)
+              if e.is_file() and not de_un_nombre_anterior(e.name)]
+    templates = [e for e in os.scandir(EXPORT_DIR) if e.is_file() and not de_un_nombre_anterior(e.name)]
     files += [(e.path, root + e.name) for e in templates]
     # las plantillas van tambien dentro de _app/export (con su {FECHA}): la copia instalada podra volver a exportar
     files += [(e.path, root + "_app/export/" + e.name) for e in templates]
@@ -2267,6 +2280,28 @@ def migrate_main_folders(d):
     return out
 
 
+def migrate_app_name(d):
+    """Lo que los ajustes guardan por el nombre del proyecto (la carpeta asignada, project_folders, y el idioma,
+    project_langs) lleva, para las listas de la raiz, el nombre que tenia la app («Chuleta»): pasa al de ahora, si aun
+    no tiene uno, para que la carpeta y el idioma asignados sigan valiendo tras el renombrado (09/11/2026). Se mira en
+    cada arranque (sin nada que cambiar, no cambia nada). Devuelve [(clave, nombre anterior)]."""
+    from common import APP_FORMER_NAMES
+    out = []
+    for key in ("project_folders", "project_langs"):
+        m = d.get(key)
+        if not isinstance(m, dict) or any(fold(k) == fold(APP_NAME) for k in m):
+            continue
+        for viejo in APP_FORMER_NAMES:  # del mas reciente al mas antiguo: el primero que haya
+            k = next((k for k in m if fold(k) == fold(viejo)), None)
+            if k is not None:
+                m = dict(m)
+                m[APP_NAME] = m.pop(k)
+                d[key] = m
+                out.append((key, k))
+                break
+    return out
+
+
 def settings_moved(d, old, new, folder=False, project=None):
     """Los ajustes que guardan rutas internas siguen a una carpeta o a un tema renombrados: carpeta y tema fijos del
     perfil, ultima carpeta y ultimo tema al grabar y la carpeta de cada proyecto. Si no, Ctrl+Alt+R se quedaba sin
@@ -3950,6 +3985,7 @@ DIAG_LINES = (
     "   movimiento pendiente de {t}: la carpeta {t} ya no existe, se queda donde está",
     "   movimiento pendiente de {t}: {e} Se reintenta en {n} s",
     "   carpeta principal de {t}: era la de una reunión ({t}); pasa a {t}",
+    "   {k}: la carpeta de la app se llamaba «{t}»; pasa a «{t}»",  # renombrado a Tenca (migrate_app_name)
     "   carpeta principal de {t}⟦ (workstream)⟧: {t}",
     "↺ {t}: transcripción original restaurada",
     "🔗 carpeta vinculada: {t}",
@@ -4236,6 +4272,12 @@ class App:
             self.settings.update(lambda d: cambios.extend(migrate_main_folders(d)))
             for k, old, new in cambios:
                 log(f"   carpeta principal de {k}: era la de una reunión ({old}); pasa a {new or 'la raíz'}")
+        renombrados = []  # los ajustes del proyecto de la raiz con el nombre anterior de la app (09/11/2026)
+        st0 = self.settings.get()
+        if any(isinstance(st0.get(k), dict) and st0[k] for k in ("project_folders", "project_langs")):
+            self.settings.update(lambda d: renombrados.extend(migrate_app_name(d)))
+        for k, viejo in renombrados:
+            log(f"   {k}: la carpeta de la app se llamaba «{viejo}»; pasa a «{APP_NAME}»")
         self._load_vocab_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
         self.transcripts = Transcripts()
@@ -8114,14 +8156,28 @@ def _startup_lnks():
     return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(startup, f"{APP_NAME}.lnk")
 
 
+def _lnk_apunta_a(path, carpeta):
+    """¿El acceso directo `path` es de esta copia de la app? Lo es si lleva la ruta de su carpeta _app (`carpeta`):
+    WScript.Shell la guarda en la carpeta de trabajo y en los argumentos («…\\_app\\server.py»), en UTF-16LE. Se busca
+    en las dos alineaciones del fichero y sin distinguir mayusculas; sin poder leerlo, no lo es."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(1 << 16)
+    except OSError:
+        return False
+    aguja = os.path.normcase(os.path.normpath(carpeta)).casefold()
+    return any(aguja in os.path.normcase(data[i:].decode("utf-16-le", "ignore")).casefold() for i in (0, 1))
+
+
 def _startup_antiguos(destino):
-    """Las copias de «Arrancar con Windows» con un nombre anterior de la app («Chuleta.lnk»...) que haya en la carpeta
-    Inicio de Windows: las puso la app con ese nombre (en esa carpeta solo las pone ella), siguen abriendola al entrar
-    y no deben quedar junto a la de ahora (la app se abriria dos veces). instalar.ps1 ya las migra; esto cubre lo que
-    quede (una instalacion que no pudo, o una copia puesta a mano)."""
-    from common import APP_FORMER_NAMES
+    """Las copias de «Arrancar con Windows» con el nombre anterior de la app («Chuleta.lnk») que haya en la carpeta
+    Inicio de Windows y sean de esta copia (llevan la ruta de su _app): siguen abriendola al entrar y no deben quedar
+    junto a la de ahora (se abriria dos veces). instalar.ps1 ya las migra; esto cubre lo que quede (una instalacion que
+    no pudo). Un acceso directo con ese nombre que no es de esta copia no se cuenta ni se toca."""
+    from common import ARRANQUE_ANTIGUOS
     carpeta = os.path.dirname(destino)
-    return [p for p in (os.path.join(carpeta, f"{n}.lnk") for n in APP_FORMER_NAMES) if os.path.isfile(p)]
+    return [p for p in (os.path.join(carpeta, f"{n}.lnk") for n in ARRANQUE_ANTIGUOS)
+            if os.path.isfile(p) and _lnk_apunta_a(p, APP_DIR)]
 
 
 def _startup_quitar(rutas):

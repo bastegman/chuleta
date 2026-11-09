@@ -17,7 +17,7 @@ import unittest
 import zipfile
 from unittest import mock
 
-from support import APP, REPO, server
+from support import APP, REPO, patched_paths, server
 import common
 from test_desinstalar import function_body, powershell, ps_text, run_ps_functions
 
@@ -31,6 +31,8 @@ VIEJO = re.compile(r"chuleta", re.I)
 INTERNOS = re.compile(r"X-Chuleta-Token|Bernardo\.Chuleta|\bCHULETA_[A-Z0-9_*]*")
 # PowerShell: las listas con los nombres anteriores, que el instalador y el desinstalador migran o quitan
 PS_LEGADO = re.compile(r"^\s*\$(LegacyNames|LegacyFolders|LegacyLaunchers|LegacyUninstallKeys|RootLaunchers)\s*=")
+# Python: las tuplas con los nombres anteriores (common.APP_FORMER_NAMES y el que tuvo «Arrancar con Windows»)
+LEGADO_PY = ("APP_FORMER_NAMES", "ARRANQUE_ANTIGUOS")
 # el aviso de la migración en el LEEME y el README (lo único que puede nombrar a Chuleta en un texto para el usuario)
 AVISO_LEEME = ("cuando se llamaba Chuleta o Notas", "Si venías de Chuleta (el nombre anterior)",
                "C:\\Users\\<tu usuario>\\Chuleta)", "...\\Chuleta si venías de ahí")
@@ -40,8 +42,8 @@ AVISO_README = ("app, «Chuleta» y «Notas»", "Instalada encima de Chuleta, no
 
 
 def py_cadenas(src):
-    """(línea, texto) de cada cadena de un .py que no es un docstring (con las partes literales de los f-strings), y
-    las que están dentro de `APP_FORMER_NAMES = (...)` aparte (son los nombres anteriores, a propósito)."""
+    """(línea, texto) de cada cadena de un .py que no es un docstring (con las partes literales de los f-strings), sin
+    las de `APP_FORMER_NAMES = (...)` y `ARRANQUE_ANTIGUOS = (...)` (son los nombres anteriores, a propósito)."""
     tree = ast.parse(src)
     docs, legado = set(), set()
     for node in ast.walk(tree):
@@ -49,7 +51,7 @@ def py_cadenas(src):
             first = node.body[0]
             if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
                 docs.add(id(first.value))
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "APP_FORMER_NAMES" for t in node.targets):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") in LEGADO_PY for t in node.targets):
             legado.update(id(n) for n in ast.walk(node.value))
     return [(n.lineno, n.value) for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs | legado]
@@ -222,18 +224,21 @@ class InstaladorTextoTests(unittest.TestCase):
         """El instalador solo quita accesos directos antiguos (Remove-LnkAntiguos), los .bat antiguos de la raíz
         (Remove-LanzadoresAntiguos) y la entrada antigua de Aplicaciones instaladas (Remove-RegistroAntiguo); nunca
         recorre ni mueve nada, y renombra solo en Set-AccesoDirecto."""
-        donde = {"Remove-Item": ["Remove-LnkAntiguos", "Remove-LanzadoresAntiguos"],
-                 "DeleteSubKeyTree": ["Remove-RegistroAntiguo"], "Rename-Item": ["Set-AccesoDirecto"]}
+        donde = {r"Remove-Item\b(?!Property)": ["Remove-LnkAntiguos", "Remove-LanzadoresAntiguos"],
+                 r"DeleteSubKeyTree": ["Remove-RegistroAntiguo"], r"Rename-Item": ["Set-AccesoDirecto"],
+                 r"Remove-ItemProperty": ["Copy-ArranqueAprobado"]}
         for orden, funciones in donde.items():
-            dentro = sum(function_body(self.ps1, f).count(orden) for f in funciones)
-            self.assertEqual(self.ps1.count(orden), dentro, orden)
+            dentro = sum(len(re.findall(orden, function_body(self.ps1, f))) for f in funciones)
+            self.assertEqual(len(re.findall(orden, self.ps1)), dentro, orden)
             self.assertGreater(dentro, 0, orden)
         for ln in self.ps1.split("\n"):
-            if "Remove-Item" in ln:
+            if re.search(r"Remove-Item\b(?!Property)", ln):
                 self.assertRegex(ln, r"Remove-Item -LiteralPath \$(x\.path|f) -Force -ErrorAction Stop")
         self.assertNotRegex(self.ps1, r"Remove-Item[^\n]*-Recurse")
         self.assertNotIn("Move-Item", self.ps1)
-        self.assertIn("foreach ($k in $LegacyUninstallKeys)", function_body(self.ps1, "Remove-RegistroAntiguo"))
+        reg = function_body(self.ps1, "Remove-RegistroAntiguo")
+        self.assertIn("foreach ($k in $LegacyUninstallKeys)", reg)
+        self.assertIn("if ($pub -ne $Publisher) {", reg)  # la de otro programa con ese nombre no se toca
 
     def test_lanzador_antiguo_solo_si_es_de_la_app(self):
         body = function_body(self.ps1, "Remove-LanzadoresAntiguos")
@@ -271,6 +276,9 @@ class InstaladorTextoTests(unittest.TestCase):
         reg = function_body(self.des, "Remove-Registro")
         self.assertIn("foreach ($key in @(@($UninstallKey) + $LegacyUninstallKeys))", reg)
         self.assertIn("if ($loc -and -not (Same-Path $loc $Root))", reg)  # la de otra copia se queda
+        # la del nombre anterior, solo si es de la app (su Publisher) y de esta carpeta
+        self.assertIn('if ($key -ne $UninstallKey -and ("$($props.Publisher)" -ne "Bernardo Stegmaier" -or -not $loc))',
+                      reg)
 
     def test_mensajes(self):
         self.assertIn('"$($script:antes) ahora se llama ${AppName}: tus reuniones, voces y ajustes siguen donde '
@@ -279,9 +287,17 @@ class InstaladorTextoTests(unittest.TestCase):
         self.assertIn("User Pinned\\TaskBar", function_body(self.ps1, "Report-Anclajes"))
 
 
+def lnk_de(carpeta, extra=b""):
+    """Los bytes de un acceso directo de la app (como los que crea WScript.Shell: la carpeta de trabajo y los argumentos
+    en UTF-16LE), con algo delante para que la ruta no empiece en un byte par."""
+    return (b"L\x00\x00\x00\x01" + extra + os.path.join(carpeta, "server.py").encode("utf-16-le") + b"\x00\x00"
+            + carpeta.encode("utf-16-le"))
+
+
 class ArranqueConNombreAnteriorTests(unittest.TestCase):
-    """server.inicio_windows_*: la copia de «Arrancar con Windows» con el nombre anterior (Chuleta.lnk) pasa a ser
-    Tenca.lnk y nunca quedan las dos (la app se abriría dos veces al entrar en Windows)."""
+    """server.inicio_windows_*: la copia de «Arrancar con Windows» con el nombre anterior (Chuleta.lnk) de ESTA copia de
+    la app pasa a ser Tenca.lnk y nunca quedan las dos (la app se abriría dos veces al entrar en Windows); un acceso
+    directo con ese nombre que no es de esta copia, o un Notas.lnk (en la época Notas no había arranque), no se toca."""
 
     def setUp(self):
         self.appdata = tempfile.mkdtemp(prefix="tenca-appdata-")
@@ -296,6 +312,8 @@ class ArranqueConNombreAnteriorTests(unittest.TestCase):
         self.origen = os.path.join(self.progs, "Tenca.lnk")
         self.destino = os.path.join(self.startup, "Tenca.lnk")
         self.viejo = os.path.join(self.startup, "Chuleta.lnk")
+        self.nuestro = lnk_de(server.APP_DIR)
+        self.ajeno = lnk_de(os.path.join(self.appdata, "otra", "_app"))
 
     def write(self, path, data):
         with open(path, "wb") as f:
@@ -307,37 +325,58 @@ class ArranqueConNombreAnteriorTests(unittest.TestCase):
 
     def test_al_arrancar_la_antigua_pasa_a_ser_la_nueva(self):
         self.write(self.origen, b"lnk-tenca")
-        self.write(self.viejo, b"lnk-chuleta")  # lo que dejó «Arrancar con Windows» de Chuleta
+        self.write(self.viejo, self.nuestro)  # lo que dejó «Arrancar con Windows» de Chuleta (esta copia)
         self.assertIs(server.inicio_windows_leer(), True)  # sigue activado: la antigua abre la app al entrar
         server.inicio_windows_al_dia()
         self.assertEqual(self.read(self.destino), b"lnk-tenca")
         self.assertFalse(os.path.exists(self.viejo))
         self.assertIs(server.inicio_windows_leer(), True)
 
+    def test_la_ruta_en_otra_alineacion_y_mayusculas(self):
+        self.write(self.origen, b"lnk-tenca")
+        self.write(self.viejo, lnk_de(server.APP_DIR.upper(), extra=b"x"))  # ruta en byte impar y en mayúsculas
+        server.inicio_windows_al_dia()
+        self.assertEqual(os.listdir(self.startup), ["Tenca.lnk"])
+
     def test_con_las_dos_queda_una(self):
         self.write(self.origen, b"lnk-tenca")
         self.write(self.destino, b"lnk-tenca")
-        self.write(os.path.join(self.startup, "Notas.lnk"), b"lnk-notas")
-        self.write(self.viejo, b"lnk-chuleta")
+        self.write(self.viejo, self.nuestro)
         server.inicio_windows_al_dia()
         self.assertEqual(sorted(os.listdir(self.startup)), ["Tenca.lnk"])
 
+    def test_lo_ajeno_no_se_toca_ni_cuenta(self):
+        """Revisión de 53d0103 (P0): un Notas.lnk de otro programa y un Chuleta.lnk de otra copia (u otro programa)
+        en la carpeta Inicio ni se borran ni encienden «Arrancar con Windows»."""
+        self.write(self.origen, b"lnk-tenca")
+        notas = os.path.join(self.startup, "Notas.lnk")
+        self.write(notas, self.nuestro)  # incluso con la ruta de la app: Notas nunca tuvo arranque
+        self.write(self.viejo, self.ajeno)
+        self.assertIs(server.inicio_windows_leer(), False)
+        server.inicio_windows_al_dia()
+        self.assertEqual(sorted(os.listdir(self.startup)), ["Chuleta.lnk", "Notas.lnk"])
+        self.assertEqual(self.read(self.viejo), self.ajeno)
+        self.assertIs(server.inicio_windows_poner(False), False)  # apagar tampoco los toca
+        self.assertEqual(sorted(os.listdir(self.startup)), ["Chuleta.lnk", "Notas.lnk"])
+        self.assertIs(server.inicio_windows_poner(True), True)
+        self.assertEqual(sorted(os.listdir(self.startup)), ["Chuleta.lnk", "Notas.lnk", "Tenca.lnk"])
+
     def test_sin_el_de_inicio_no_se_toca_la_antigua(self):
         """Sin Tenca.lnk en el menú Inicio no hay de qué copiar: la antigua es lo único que la abre al entrar."""
-        self.write(self.viejo, b"lnk-chuleta")
+        self.write(self.viejo, self.nuestro)
         server.inicio_windows_al_dia()
         self.assertTrue(os.path.exists(self.viejo))
         self.assertFalse(os.path.exists(self.destino))
 
     def test_desactivar_quita_tambien_la_antigua(self):
         self.write(self.origen, b"lnk-tenca")
-        self.write(self.viejo, b"lnk-chuleta")
+        self.write(self.viejo, self.nuestro)
         self.assertIs(server.inicio_windows_poner(False), False)
         self.assertEqual(os.listdir(self.startup), [])
 
     def test_activar_deja_solo_la_nueva(self):
         self.write(self.origen, b"lnk-tenca")
-        self.write(self.viejo, b"lnk-chuleta")
+        self.write(self.viejo, self.nuestro)
         self.assertIs(server.inicio_windows_poner(True), True)
         self.assertEqual(sorted(os.listdir(self.startup)), ["Tenca.lnk"])
         self.assertEqual(self.read(self.destino), b"lnk-tenca")
@@ -349,8 +388,83 @@ class ArranqueConNombreAnteriorTests(unittest.TestCase):
 
     def test_los_mensajes_tienen_plantilla(self):
         for msg in ("arrancar con Windows: sigue activado, ahora como «Tenca»",
-                    "arrancar con Windows: quitado el acceso directo antiguo «Chuleta»"):
+                    "arrancar con Windows: quitado el acceso directo antiguo «Chuleta»",
+                    "   project_folders: la carpeta de la app se llamaba «Chuleta»; pasa a «Tenca»"):
             self.assertNotIn("<texto>", server.diag_line(msg).replace("«<texto>»", ""), msg)
+
+
+class AjustesDelProyectoDeLaRaizTests(unittest.TestCase):
+    """Revisión de 53d0103 (P1): la carpeta y el idioma asignados al proyecto de las listas de la raíz se guardaban con
+    el nombre de la app («Chuleta»); tras el renombrado pasan a «Tenca» y siguen valiendo."""
+
+    def test_pasan_al_nombre_de_ahora(self):
+        d = {"project_folders": {"Chuleta": "Reuniones raiz", "Alfa": "Alfa/R"}, "project_langs": {"chuleta": "en"}}
+        self.assertEqual(server.migrate_app_name(d), [("project_folders", "Chuleta"), ("project_langs", "chuleta")])
+        self.assertEqual(d["project_folders"], {"Tenca": "Reuniones raiz", "Alfa": "Alfa/R"})
+        self.assertEqual(d["project_langs"], {"Tenca": "en"})
+        self.assertEqual(server.migrate_app_name(d), [])  # otra vez: nada
+
+    def test_no_pisa_lo_que_ya_tiene_el_nombre_nuevo(self):
+        d = {"project_folders": {"Chuleta": "vieja", "Tenca": "nueva"}}
+        self.assertEqual(server.migrate_app_name(d), [])
+        self.assertEqual(d["project_folders"], {"Chuleta": "vieja", "Tenca": "nueva"})
+
+    def test_el_mas_reciente_primero(self):
+        d = {"project_folders": {"Notas": "de Notas", "Chuleta": "de Chuleta"}}
+        server.migrate_app_name(d)
+        self.assertEqual(d["project_folders"], {"Notas": "de Notas", "Tenca": "de Chuleta"})
+        d = {"project_langs": {"Notas": "de"}, "otra": 1}
+        server.migrate_app_name(d)
+        self.assertEqual(d, {"project_langs": {"Tenca": "de"}, "otra": 1})
+
+    def test_se_aplica_al_grabar(self):
+        """La carpeta asignada al proyecto de la raíz vale otra vez para rec_folder_origin y el idioma para el plan."""
+        import plan
+        v = {"id": "Vocabulario/General.txt", "project": server.APP_NAME, "name": "General",
+             "_abs": os.path.join(REPO, "Vocabulario", "General.txt")}
+        st = {"project_folders": {"Chuleta": "Reuniones raiz"}, "project_langs": {"Chuleta": "en"}}
+        server.migrate_app_name(st)
+        with mock.patch.object(server, "_usable_dir", return_value=True):
+            self.assertEqual(server.rec_folder_origin(v, st, [v]), ("Reuniones raiz", "proyecto"))
+        self.assertEqual(st["project_langs"].get(v["project"]), "en")
+        with open(plan.__file__, encoding="utf-8") as f:
+            self.assertIn('elif v and v["project"] in (st.get("project_langs") or {}):', f.read())
+
+    def test_el_arranque_lo_migra(self):
+        src = open(os.path.join(APP, "server.py"), encoding="utf-8").read()
+        init = src[src.index("class App:"):src.index("self.library = Library(")]
+        self.assertIn("renombrados.extend(migrate_app_name(d))", init)
+        self.assertLess(init.index("self._load_links()"), init.index("migrate_app_name"))
+
+
+class CompartirSinLoViejoTests(unittest.TestCase):
+    """Revisión de 53d0103 (P1): «Compartir Tenca» desde una copia instalada encima de Chuleta (el instalador no borra
+    nada de _app) no lleva al zip ABRIR CHULETA.bat, Chuleta.bat ni chuleta.ico/png."""
+
+    def test_el_zip_no_lleva_los_restos(self):
+        tmp = tempfile.mkdtemp(prefix="tenca-restos-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        app = os.path.join(tmp, "_app")
+        shutil.copytree(APP, app, ignore=shutil.ignore_patterns("__pycache__", "version.txt", "python.txt"))
+        restos = [("Chuleta.bat",), ("Notas.bat",), ("static", "chuleta.ico"), ("static", "chuleta.png"),
+                  ("static", "notas.ico"), ("export", "ABRIR CHULETA.bat"), ("export", "ABRIR NOTAS.bat")]
+        for parts in restos:
+            write(os.path.join(app, *parts), "@echo off\r\ncall \"%~dp0_app\\Chuleta.bat\" %*\r\n")
+        dest = os.path.join(tmp, "Tenca - instalador.zip")
+        with patched_paths(APP_DIR=app, STATIC_DIR=os.path.join(app, "static"), EXPORT_DIR=os.path.join(app, "export")):
+            server.build_package(dest, version="2026-11-09 · abc1234")
+        with zipfile.ZipFile(dest) as z:
+            names = z.namelist()
+        self.assertEqual([n for n in names if VIEJO.search(n) or re.search(r"(?i)/notas\.(bat|ico|png)$", n)], [])
+        for n in ("Tenca/ABRIR TENCA.bat", "Tenca/_app/Tenca.bat", "Tenca/_app/static/tenca.ico",
+                  "Tenca/_app/static/notas.js", "Tenca/_app/export/ABRIR TENCA.bat"):
+            self.assertIn(n, names)
+
+    def test_que_cuenta_como_nombre_anterior(self):
+        for n in ("ABRIR CHULETA.bat", "abrir chuleta.BAT", "Chuleta.bat", "chuleta.ico", "Notas.bat", "notas.png"):
+            self.assertTrue(server.de_un_nombre_anterior(n), n)
+        for n in ("notas.js", "ABRIR TENCA.bat", "Tenca.bat", "tenca.ico", "chuleta.txt", "server.py"):
+            self.assertFalse(server.de_un_nombre_anterior(n), n)
 
 
 def q(s):
@@ -426,7 +540,8 @@ class MigracionWindowsTests(unittest.TestCase):
     registro, con las funciones del instalador sobre carpetas y claves de prueba."""
 
     FUNCS = ["Same-Path", "Test-Instalacion", "Get-LnkInfo", "Get-LnkAntiguos", "Remove-LnkAntiguos",
-             "Set-ShortcutAppId", "Set-AccesoDirecto", "Update-Arranque", "Report-Anclajes", "Remove-RegistroAntiguo"]
+             "Set-ShortcutAppId", "Set-AccesoDirecto", "Copy-ArranqueAprobado", "Update-Arranque", "Report-Anclajes",
+             "Remove-RegistroAntiguo"]
 
     def setUp(self):
         self.base = os.path.realpath(tempfile.mkdtemp(prefix="tenca-mig-"))
@@ -502,6 +617,14 @@ class MigracionWindowsTests(unittest.TestCase):
         self.assertIn("pasa a llamarse 'Tenca'", out)
         self.assertNotIn("ya no abría nada", out)
 
+    def test_la_app_reconoce_su_lnk_de_verdad(self):
+        """server._lnk_apunta_a con un .lnk de verdad (WScript.Shell): la ruta de la _app va en UTF-16LE."""
+        lnk = os.path.join(self.base, "Inicio", "Chuleta.lnk")
+        self.lnk_app(lnk, self.app)
+        self.assertTrue(server._lnk_apunta_a(lnk, self.app))
+        self.assertTrue(server._lnk_apunta_a(lnk, self.app.upper()))
+        self.assertFalse(server._lnk_apunta_a(lnk, self.otra))
+
     def test_arranque_con_windows(self):
         progs, startup = os.path.join(self.base, "Programas"), os.path.join(self.base, "Inicio")
         self.lnk_app(os.path.join(progs, "Tenca.lnk"), self.app)
@@ -544,9 +667,10 @@ class MigracionWindowsTests(unittest.TestCase):
         self.addCleanup(borrar)
         root = os.path.dirname(self.app)
 
-        def entrada(loc):
+        def entrada(loc, pub="Bernardo Stegmaier"):
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + "\\Chuleta") as k:
                 winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, loc)
+                winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, pub)
 
         def existe():
             try:
@@ -554,7 +678,8 @@ class MigracionWindowsTests(unittest.TestCase):
                 return True
             except OSError:
                 return False
-        cuerpo = "$LegacyUninstallKeys = @(" + q("HKCU:\\" + base + "\\Chuleta") + "); Remove-RegistroAntiguo "
+        cuerpo = ("$Publisher = 'Bernardo Stegmaier'; $LegacyUninstallKeys = @(" + q("HKCU:\\" + base + "\\Chuleta")
+                  + "); Remove-RegistroAntiguo ")
         entrada(os.path.dirname(self.otra))  # de otra copia que sigue instalada: se queda
         out = self.ps(cuerpo + q(root))
         self.assertTrue(existe(), out)
@@ -563,9 +688,38 @@ class MigracionWindowsTests(unittest.TestCase):
         out = self.ps(cuerpo + q(root))
         self.assertFalse(existe(), out)
         self.assertIn("Quitada de Aplicaciones instaladas la entrada antigua 'Chuleta'", out)
+        entrada(root, pub="Otra Empresa S.A.")  # otro programa que se llama igual: no se toca
+        self.ps(cuerpo + q(root))
+        self.assertTrue(existe())
         entrada(os.path.join(self.base, "ya-no-esta"))  # de una carpeta sin la app: sobra
         self.ps(cuerpo + q(root))
         self.assertFalse(existe())
+
+    def test_arranque_desactivado_en_el_administrador_de_tareas_sigue_desactivado(self):
+        """Revisión de 53d0103 (P2): Aplicaciones de inicio guarda «desactivado» por nombre de fichero
+        (StartupApproved\\StartupFolder): el valor de Chuleta.lnk pasa a Tenca.lnk."""
+        import winreg
+        clave = "Software\\TencaTest-%d\\StartupFolder" % os.getpid()
+
+        def borrar():
+            for sub in (clave, clave.rpartition("\\")[0]):
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
+                except OSError:
+                    pass
+        self.addCleanup(borrar)
+        desactivado = bytes([3, 0, 0, 0]) + bytes(range(8))
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, clave) as k:
+            winreg.SetValueEx(k, "Chuleta.lnk", 0, winreg.REG_BINARY, desactivado)
+        out = self.ps("Copy-ArranqueAprobado 'Chuleta.lnk' 'Tenca.lnk' " + q("HKCU:\\" + clave))
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave) as k:
+            self.assertEqual(winreg.QueryValueEx(k, "Tenca.lnk")[0], desactivado, out)
+            with self.assertRaises(FileNotFoundError):
+                winreg.QueryValueEx(k, "Chuleta.lnk")
+        self.ps("Copy-ArranqueAprobado 'Nada.lnk' 'Otra.lnk' " + q("HKCU:\\" + clave))  # sin valor: nada
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave) as k:
+            with self.assertRaises(FileNotFoundError):
+                winreg.QueryValueEx(k, "Otra.lnk")
 
 
 if __name__ == "__main__":

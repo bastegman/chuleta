@@ -195,7 +195,7 @@ class InstaladorEmpresaTests(unittest.TestCase):
         self.assertIn("$Sistema = -not $NoShortcut -and -not $Desktop", self.ps1)
         # el instalador solo quita lo que sobra con un nombre anterior (accesos directos, .bat de la raiz y la entrada
         # antigua; test_tenca.InstaladorTextoTests) y no mueve nada: las grabaciones se quedan donde estan
-        self.assertEqual(self.ps1.count("Remove-Item"), 2)
+        self.assertEqual(len(re.findall(r"Remove-Item\b(?!Property)", self.ps1)), 2)
         self.assertNotIn("Move-Item", self.ps1)
 
     def test_p2_16_solo_desbloquea_el_paquete(self):
