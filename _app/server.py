@@ -688,7 +688,8 @@ def scan(dirs=None):
                     # el prefijo de las grabadoras y los móviles (AUDIO_, VID-, REC…) va delante de la fecha; el
                     # nombre que pone la app, detrás: solo se quita delante. Antes se quitaba de todo, y «… - Audio
                     # de WhatsApp» quedaba en «de WhatsApp» y «Recursos humanos», en «ursos humanos» (09/11/2026)
-                    antes = re.sub(r"^(AUDIO|VID|REC)(?:[-_ ]+|$)", "", stem[:m.start()].strip(" -_·"), flags=re.I)
+                    antes = re.sub(r"^(AUDIO|VID|REC)$", "", stem[:m.start()].strip(" -_·"), flags=re.I)  # solo
+                    antes = re.sub(r"^(AUDIO|VID|REC)[-_ ]+", "", antes)  # delante de un nombre, en mayúsculas
                     label = (antes + " " + stem[m.end():]).strip(" -_·")
                     label = re.sub(r"^_?\d{2,6}$", "", label)
                 tx_mtime = 0

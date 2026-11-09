@@ -421,6 +421,8 @@ class EtiquetaTests(unittest.TestCase):
                    "audio_2026-11-08_10-15-32.ogg": "", "Rec-2026-11-08-10-15-32.mp3": "",
                    "2026-11-08 10-15-32 - Audio.m4a": "Audio", "2026-11-08 10-15-32 - Rec.mp3": "Rec",
                    "REC_Comité 2026-11-08 10-15-32.wav": "Comité", "2026-11-08 10-15-32 - VID 12.mp4": "VID 12",
+                   "Audio de WhatsApp 2026-11-08 10-15-32.ogg": "Audio de WhatsApp",
+                   "Rec semanal 2026-11-08 10-15-32.m4a": "Rec semanal",
                    "VID-2026-11-08-10-15-32 Comité.mp4": "Comité"}
         for n in nombres:
             open(os.path.join(tmp, n), "wb").close()
@@ -786,6 +788,7 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         self.assertIn("«Nueva grabación 7.m4a» no parece un audio, o está dañado.", pg.inner_text("#sbError"))
         self.assertTrue(pg.locator("#modal .dialog.sb").is_visible())
         self.assertFalse(pg.locator("#rGo").is_disabled())
+        self.assertEqual(pg.evaluate("document.activeElement.id"), "grNombre")  # Intro reintenta
         self.captura(pg, "error")
         self.sin_errores()
 
@@ -873,8 +876,18 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         grande = os.path.join(self.s.tmp, "Entrevista larga.wav")
         wav24(grande, segundos=40)  # ~1,9 MB
         self.elegir(pg, "#btnSubir", grande)
+        # un panel abierto con un cambio: mientras sube, su «Quitar el cambio» no hace nada (revisión 3)
+        pg.click(".dialog.sb [data-gr-cambiar='idioma']")
+        pg.select_option("#grSelIdioma", "en")
+        pg.wait_for_function("G && G.pedido.cambios.idioma === 'en'", timeout=5000)
+        pg.click(".dialog.sb [data-gr-listo='idioma']")
+        pg.wait_for_selector(".dialog.sb [data-fila='idioma'].cambiado", timeout=5000)
+        pg.click(".dialog.sb [data-gr-cambiar='idioma']")  # ahora con «Quitar el cambio»
+        pg.wait_for_selector(".dialog.sb [data-gr-quitar='idioma']", timeout=5000)
         pg.click("#rGo")
         pg.wait_for_function("/Subiendo… [1-9]/.test(document.querySelector('#rGo').innerText)", timeout=15000)
+        pg.click(".dialog.sb [data-gr-quitar='idioma']")
+        self.assertEqual(pg.evaluate("G.pedido.cambios.idioma"), "en")
         # mientras sube, la tarjeta no se toca: ni otro archivo, ni otro proyecto, ni soltar más (revisión 2)
         for sel in ("[data-sb-otro]", "#grProy", "#grNombre", "#sbFecha", "[data-gr-cambiar='carpeta']"):
             self.assertTrue(pg.locator(f".dialog.sb {sel}").is_disabled(), sel)

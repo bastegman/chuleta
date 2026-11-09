@@ -352,6 +352,7 @@ async function grListo(k) {
 
 /* ---------------------------------------------------------------- eventos */
 function grClick(e) {
+  if (G?.enviando) return;  // subiendo un audio: la tarjeta no cambia (ni «Quitar el cambio» de un panel abierto)
   const c = e.target.closest('[data-gr-cambiar]');
   if (c) return grAbrirPanel(c.dataset.grCambiar);
   const l = e.target.closest('[data-gr-listo]');
@@ -393,7 +394,7 @@ function grClick(e) {
 }
 async function grCambio(e) {
   const x = e.target.closest('[data-gr]');
-  if (!x || !G) return;
+  if (!x || !G || G.enviando) return;
   G.tocado.algo = true;
   const k = x.dataset.gr, c = G.pedido.cambios;
   if (k === 'carpeta' && x.value === '__pick') {  // otra carpeta: se vincula y se elige
@@ -674,7 +675,7 @@ async function abrirSubir(files, opts = {}) {
       g.xhr.abort();
       toast(`Subida cancelada${resto}.`);
       setTimeout(() => refreshTree(true), 1500);  // si el servidor ya lo tenía entero (cuestión de milisegundos), se ve
-    } else toast(`«${esc(g.subir.items[g.enCurso || 0]?.file.name || '')}» ya había llegado: se termina de guardar${resto}.`);
+    } else toast(`«${esc(g.subir.items[g.enCurso || 0]?.file.name || '')}» ya había llegado: se está comprobando${resto}.`);
   };
 }
 
@@ -800,6 +801,7 @@ async function sbSubir() {
     const e = $('#sbError', g.d);
     e.innerHTML = fallidos.map(f => esc(f.msg)).join('<br>');
     e.classList.remove('hidden');
+    ($('#grNombre', g.d) || b).focus();  // Intro reintenta
     return;
   }
   if (g.cancelado || (fallidos.length && abierta)) {
