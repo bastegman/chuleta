@@ -170,7 +170,7 @@ function bindPerfilOuts(d) {
   const box = $('#pfOuts', d), add = $('#pfOutAdd', d);
   if (!box || !add) return;
   perfilOuts = (S.config.perfil?.outputs || []).map(o => ({ path: o.path, format: o.format || 'md', by_project: !!o.by_project }));
-  const draw = () => { box.innerHTML = perfilOutsHtml(perfilOuts); };
+  const draw = () => { box.innerHTML = perfilOutsHtml(perfilOuts); d.ajMarcar?.(); };  // (también tras elegir carpeta)
   box.addEventListener('click', e => { const b = e.target.closest('[data-out-del]'); if (b) { perfilOuts.splice(+b.dataset.outDel, 1); draw(); } });
   box.addEventListener('change', e => {
     const f = e.target.closest('[data-out-fmt]'), p = e.target.closest('[data-out-proj]');

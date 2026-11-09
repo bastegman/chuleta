@@ -205,6 +205,9 @@ function openVocabEditor(v, after = openSettings, project = '') {
         }
         await loadVocab(S.config.language ?? 'es-en');
         await refreshTree(true);
+        // renombrar o borrar una lista cambia lo guardado que la nombra («Proyecto al grabar», sus idiomas): quien abre
+        // después (Ajustes) lo pinta con lo de ahora (revisión 11: «(no se encuentra)» y «Guardar» con un 400)
+        setConfig(await api('/api/config'));
         after();
       } catch (err) { toast(esc(err.message), 'err'); }
     });

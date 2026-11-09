@@ -605,6 +605,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             pg.wait_for_selector(pregunta, timeout=5000)
             self.assertIn("Tienes cambios sin guardar", pg.inner_text(pregunta))
             self.assertTrue(pg.evaluate(visible, "#modal .dialog.aj"))  # Ajustes, debajo
+            # el foco no sale de ella: Tab y Mayús+Tab dan la vuelta dentro (revisión 11)
+            for tecla in ("Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab"):
+                pg.keyboard.press(tecla)
+                self.assertTrue(pg.evaluate("!!document.activeElement.closest('#modalSobre')"), tecla)
             if salir == "volver":
                 pg.click(f"{pregunta} [data-m='volver']")
             elif salir == "escape":
@@ -612,6 +616,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             else:
                 pg.mouse.click(5, 5)
             en_ajustes(otro, "Hay cambios sin guardar")
+            # y al cerrarla, el foco vuelve a Ajustes (no al cuerpo de la página, también con un clic fuera)
+            self.assertTrue(pg.evaluate("!!document.activeElement.closest('#modal .dialog.aj')"), salir)
             self.assertFalse(pg.evaluate(visible, "#modal #veName"))
         # «Descartar»: el editor; al volver, lo guardado
         editar()
@@ -639,6 +645,42 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("#modal [data-m='no']")
         pg.wait_for_selector("#modal .aj-nav", timeout=5000)
         en_ajustes(otro, "")
+        # quitar un destino de «Copias en otras carpetas» también es un cambio sin guardar, y pregunta (revisión 11)
+        destino = os.path.join(self.tmp, "copias-r11")
+        os.makedirs(destino, exist_ok=True)
+        pg.evaluate("p => api('/api/perfil', { outputs: [{ path: p, format: 'md', by_project: false }] }).then(r =>"
+                    " { S.config.perfil = r.perfil; })", destino)
+        self.addCleanup(pg.evaluate, "() => api('/api/perfil', { outputs: [] })")
+        pg.keyboard.press("Escape")
+        abrir()
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        pg.evaluate("document.querySelector('#pfOuts [data-out-del]').click()")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        editar()
+        pg.wait_for_selector(pregunta, timeout=5000)
+        pg.click(f"{pregunta} [data-m='descartar']")
+        pg.wait_for_selector("#modal #veName", timeout=5000)
+        pg.click("#modal [data-m='no']")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertTrue(pg.evaluate("!!document.querySelector('#pfOuts [data-out-del]')"))  # lo guardado, otra vez
+        # y una clave adicional del directo escrita (con «API externa»); una fila vacía, no
+        pg.keyboard.press("Escape")
+        pg.evaluate("b => api('/api/settings', b).then(setConfig)", {"procesado": "api"})
+        self.addCleanup(pg.evaluate, "p => api('/api/settings', { procesado: p })", cfg["procesado"])
+        abrir()
+        pg.evaluate("document.querySelector('#dkAdd').click()")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        pg.evaluate("() => { const k = [...document.querySelectorAll('#dkRows [data-xkey]')].pop();"
+                    " k.value = 'gsk_prueba'; k.dispatchEvent(new Event('input', { bubbles: true })); }")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        editar()
+        pg.wait_for_selector(pregunta, timeout=5000)
+        pg.click(f"{pregunta} [data-m='volver']")
+        pg.wait_for_function(f"!document.querySelector('{pregunta}')", timeout=5000)
+        pg.keyboard.press("Escape")
+        pg.evaluate("p => api('/api/settings', { procesado: p }).then(setConfig)", cfg["procesado"])
+        abrir()
         # «Nuevo proyecto» y «Editar la lista» de Proyectos también preguntan
         pg.select_option("#sLang", lang)
         pg.wait_for_selector("#sVocab [data-vnew]", state="attached", timeout=10000)
@@ -800,6 +842,53 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_function("document.querySelector('#vzModels')?.innerText.includes('Modelos listos')", timeout=5000)
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, [r for r in red if "/api/vocab" not in r and "/api/apagar" not in r])
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_lista_renombrada_o_borrada_en_su_editor(self):
+        """Revisión 11 de B2: renombrar o borrar en su editor la lista guardada como «Proyecto al grabar» cambia ese
+        ajuste en el servidor; al volver, Ajustes lo enseña así (con su nombre nuevo, o «Automático» si se borró) y
+        «Guardar» guarda. Antes volvía con la configuración vieja: «(no se encuentra)» y «Guardar» daba 400."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        uno = pg.evaluate("api('/api/vocab/save', { project: 'Cliente R11', name: 'Legal', terms: 'x' })")["id"]
+        self.addCleanup(pg.evaluate, "() => Promise.allSettled(['Legal', 'Legal 2'].map(n =>"
+                        " api('/api/vocab/delete', { id: `Cliente R11/Vocabulario/${n}.txt` })))")
+        self.addCleanup(pg.evaluate, "() => api('/api/perfil', { vocab: null })")
+        pg.evaluate("loadVocab(S.config.language ?? 'es-en')")
+
+        def ajustes():
+            pg.click("#btnSettings")
+            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+            pg.wait_for_selector("#sVocab [data-vedit]", state="attached", timeout=10000)
+
+        def guardar():
+            pg.click("#modal .aj-pie [data-m='ok']")
+            pg.wait_for_function("!document.querySelector('#modal .aj-nav')", timeout=5000)
+            return pg.evaluate("api('/api/config')")["perfil"]["vocab"]
+        ajustes()
+        pg.select_option("#pfVocab", uno)
+        self.assertEqual(guardar(), uno)
+        dos = "Cliente R11/Vocabulario/Legal 2.txt"
+        for accion, queda in (("renombrar", dos), ("borrar", None)):
+            ajustes()
+            lista = uno if accion == "renombrar" else dos
+            pg.evaluate("id => document.querySelector(`#sVocab [data-vedit='${id}']`).click()", lista)
+            pg.wait_for_selector("#modal #veName", timeout=5000)  # sin nada escrito: sin preguntar
+            if accion == "renombrar":
+                pg.fill("#veName", "Legal 2")
+                pg.click("#modal [data-m='ok']")
+            else:
+                pg.click("#modal [data-m='del']")
+            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+            pg.wait_for_function("v => document.querySelector('#pfVocab').value === v", arg=queda or "__auto",
+                                 timeout=5000)
+            self.assertNotIn("no se encuentra", pg.inner_text("#pfVocab"), accion)
+            self.assertEqual(pg.inner_text(".aj-pend"), "", accion)
+            self.assertEqual(guardar(), queda, accion)
+            self.assertFalse(pg.evaluate("document.querySelector('#toasts').innerText.includes('ya no existe')"))
+        err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)
 

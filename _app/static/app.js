@@ -1786,7 +1786,22 @@ function abrirSobre(html, onOpen) {
     m = document.createElement('div');
     m.id = 'modalSobre';
     m.className = 'modal sobre hidden';
-    m.addEventListener('mousedown', e => { if (e.target === m) cerrarSobre(false); });
+    // un clic fuera la cierra sin llevar el foco al cuerpo de la página (vuelve a donde estaba, revisión 11)
+    m.addEventListener('mousedown', e => { if (e.target === m) { e.preventDefault(); cerrarSobre(false); } });
+    // es modal de verdad: Tab y Mayús+Tab dan la vuelta dentro, y el foco no se va a lo de debajo (revisión 11: con
+    // Tab se llegaba a «Grabar» o a ⚙, detrás, y Enter sacaba de Ajustes sin preguntar)
+    const enfocables = () => $$('button, [href], input, select, textarea', m).filter(x => !x.disabled && !x.hidden);
+    m.addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const fs = enfocables();
+      if (!fs.length) return;
+      e.preventDefault();
+      const i = fs.indexOf(document.activeElement);
+      fs[(i < 0 ? 0 : i + (e.shiftKey ? fs.length - 1 : 1)) % fs.length].focus();
+    });
+    document.addEventListener('focusin', e => {
+      if (!m.classList.contains('hidden') && !m.contains(e.target)) enfocables()[0]?.focus();
+    });
     document.body.append(m);
   }
   cerrarSobre(false);  // (una a la vez)
@@ -2094,14 +2109,24 @@ function openSettings(opts) {
     const campos = () => $$('.aj-main input[id], .aj-main select[id], .aj-main textarea[id]', d)
       .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && !('seGuardaSolo' in x.dataset) && x.type !== 'file'
         && x.type !== 'button');
-    const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
+    // y lo que no es un campo con id: los destinos de «Copias en otras carpetas» (perfil.js) y las claves adicionales
+    // del directo (directo.js) (revisión 11: quitar un destino no decía «Hay cambios sin guardar» ni preguntaba)
+    const otros = () => {
+      d.directoKeys?.stash();
+      // las claves, como las manda «Guardar» (collectDirectoSettings): una fila vacía no es un cambio
+      const claves = d.directoKeys && Object.fromEntries(Object.entries(d.directoKeys.state)
+        .map(([p, rs]) => [p, (rs || []).map(r => String(r.value || '').trim() || r.mask || '').filter(Boolean)]));
+      return { __destinos: typeof perfilOuts === 'undefined' ? '' : JSON.stringify(perfilOuts),
+        __claves: JSON.stringify(claves ?? null) };
+    };
+    const foto = () => ({ ...Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value])), ...otros() });
     const inicial = foto();  // como viene de los ajustes guardados
     // «Dónde se procesan» marcado y sin aplicar también lo es: «Guardar» lo aplica (revisión 2 de B2, P1-2)
     const procSinAplicar = () => {
       const v = $('input[name="proc"]:checked', d)?.value;
       return !!v && v !== (S.config.procesado || 'local');
     };
-    const hayCambios = () => { const ahora = foto(); return Object.keys(ahora).some(k => ahora[k] !== inicial[k]) || procSinAplicar(); };
+    const hayCambios = () => { const ahora = foto(); return Object.keys(inicial).some(k => ahora[k] !== inicial[k]) || procSinAplicar(); };
     const marcar = () => { $('.aj-pend', d).textContent = hayCambios() ? 'Hay cambios sin guardar' : ''; };
     d.ajMarcar = marcar;
     // antes de salir de Ajustes a un subdiálogo (una lista, el asistente) con cambios sin guardar: encima, «Guardar y
@@ -2270,6 +2295,9 @@ function openSettings(opts) {
     // partida. Antes contaban siempre: deshacer un cambio seguía diciendo «Hay cambios sin guardar» (revisión 2 de B2)
     const tarde = campos().filter(x => !(x.id in inicial));
     tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
+    Object.assign(inicial, otros());  // los destinos y las claves, ya pintados por sus bind*
+    // quitar o añadir un destino o una clave es un clic, no un «change»: el aviso se mira después de cada clic
+    d.addEventListener('click', e => { if (e.target.closest('.aj-main')) setTimeout(marcar, 0); });
     // el modo que pide quien abre, marcado y sin aplicar (con su aviso y sus campos, que pinta su «change»): «Revisar
     // en Ajustes» del asistente con «Con tu cuenta de Claude» elegido (revisión 6)
     const pedido = opts && typeof opts === 'object' && opts.proc;
