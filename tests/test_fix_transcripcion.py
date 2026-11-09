@@ -802,7 +802,8 @@ class InterfazModelosTests(unittest.TestCase):
 
     def test_ganchos_protegidos(self):
         app = static("app.js")
-        for fn in ("modelosHtml", "bindModelos", "motorHtml", "motorNotaHtml"):
+        # (motorNotaHtml era la reserva del diálogo Grabar de antes; la tarjeta de grabar.js no la usa: 07/11/2026)
+        for fn in ("modelosHtml", "bindModelos", "motorHtml"):
             self.assertRegex(app, rf"typeof {fn} === 'function'", fn)
         # «Dónde se procesan»: elegir no aplica (un clic de prueba no pasa un directo de la nube al PC); el cambio
         # pendiente se dice, con «Aplicar ahora», y al cerrar Ajustes sin aplicarlo se avisa

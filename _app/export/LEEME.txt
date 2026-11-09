@@ -28,11 +28,15 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
          carpeta nueva o vacía). Solo vale la primera vez: si ya la tienes instalada, se actualiza
          donde está.
 
-  3. Se abre Chuleta. Lo primero: ⚙ Ajustes > "Dónde se procesan tus reuniones". Elige una de tres:
+  3. Se abre Chuleta. Lo primero: "Configurar Chuleta" (en la portada; luego, en ⚙ Ajustes >
+     Procesado): eliges dónde se procesan tus reuniones y al final lo pruebas. Una de tres:
        - Solo en este PC: Whisper transcribe en tu ordenador y nada sale de él (sin resumen con IA).
        - Con tu cuenta de Claude: transcribe en tu PC y resume con Claude usando tu suscripción (personal o
-         de empresa) a través de Claude Code. Ajustes te guía: instalar Claude Code, iniciar sesión con tu
-         cuenta y pulsar "Comprobar". Chuleta no ve ni guarda tus credenciales.
+         de empresa) a través de Claude Code. El asistente te guía: "Abrir PowerShell", instalar Claude
+         Code con una línea, escribir claude en esa misma ventana y entrar con tu cuenta en el navegador
+         (si es la de tu empresa, con su inicio de sesión de siempre), y "Probar". Chuleta no ve ni
+         guarda tus credenciales. Si ya usas Claude Code en VS Code, encuentra esa copia y su sesión;
+         la app de escritorio de Claude no basta (su sesión es solo suya).
        - API externa: transcripción rápida en la nube y resumen con Groq (gratis: la API key se crea en
          console.groq.com/keys; deja el modelo whisper-large-v3, el más preciso), OpenAI, Azure OpenAI o la
          pasarela de tu empresa ("Otra, compatible con OpenAI": su URL base, la key y el modelo; en "Modelo
@@ -53,8 +57,8 @@ ACTUALIZAR A UNA VERSIÓN NUEVA
 
   Si la misma carpeta de reuniones la usan varias copias de Chuleta (en otro PC, o en una carpeta
   de OneDrive compartida), actualízalas todas a la vez: una copia de una versión anterior envía al
-  resumen con IA y a los destinos de salida los participantes que propuso Outlook o Teams aunque
-  no los hayas confirmado, y la del 30/10 (cuando se llamaba Notas) no entiende el idioma ni el
+  resumen con IA y a las copias en otras carpetas los participantes que propuso Outlook o Teams
+  aunque no los hayas confirmado, y la del 30/10 (cuando se llamaba Notas) no entiende el idioma ni el
   contexto de las reuniones nuevas y mezcla todas sus propiedades con las notas.
 
 
@@ -82,9 +86,14 @@ USO DIARIO
     los iconos ocultos, la flecha ^: arrástralo junto al reloj si lo quieres siempre a la vista).
     Si cierras la ventana, la app sigue ahí (Ctrl+Alt+R sigue funcionando): un clic en el icono o
     el acceso directo la vuelven a abrir. Para salir del todo: clic derecho en el icono > Salir
-    (o ⚙ Ajustes > Apagar Chuleta). En ese menú también está "Arrancar con Windows".
-  - ● Grabar (o Ctrl+Alt+R desde cualquier programa) empieza y para la grabación. Puedes elegir
-    grabar con o sin micro, y con o sin transcripción en directo.
+    (o ⚙ Ajustes > Ayuda > Apagar Chuleta). En ese menú también está "Arrancar con Windows".
+  - ● Grabar abre una tarjeta que dice qué va a pasar: la reunión (el nombre de Teams, de tu
+    calendario o el que escribas, con tus reuniones recientes como sugerencia), el proyecto y,
+    debajo, "Así se va a grabar": dónde se guarda, idioma, vocabulario, quién transcribe, quién
+    resume y el audio, cada línea con de dónde sale (esta reunión, el proyecto o Ajustes).
+    "Cambiar" pregunta si es solo para esta reunión, para todas las del proyecto o para todas.
+    Ctrl+Alt+R (desde cualquier programa) graba con eso mismo sin preguntar, y vuelve a pulsarlo
+    para parar.
   - Voces dobles: si una salida solo repite a otra (un dispositivo virtual, el «espejo» de un
     driver), la grabadora lo detecta sola en unos segundos y no suma la copia («igual que …: no se
     suma» en el medidor de ● Grabar). Si con altavoces el micro recoge la reunión, o una salida
@@ -94,18 +103,20 @@ USO DIARIO
     "📞 Teams en llamada · ● Tomar Notas".
   - Al detectar la llamada, abajo en el centro aparece un aviso pequeño con el nombre de la reunión y
     "● Grabar": púlsalo para empezar sin salir de Teams (se cierra solo a los 20 s o con ✕).
-  - Al grabar, la app propone el nombre, el tema y los participantes a partir de la ventana de la
-    reunión de Teams y, si lo activas en Ajustes > Reuniones, de tu calendario de Outlook
-    (clásico). Todo se lee en tu PC. Los participantes que propone se quedan en las notas de esa
-    reunión, marcados como sugeridos, y no van al resumen con IA ni a los destinos de salida hasta
-    que los confirmas en su página ("Confirmar"). El nombre que propone (el asunto de la cita o el
-    título de la reunión de Teams), si lo aceptas, es el nombre de la grabación: va como título
-    con el resumen y a los destinos de salida.
+  - Al grabar, la app propone el nombre, el proyecto y los participantes a partir de la ventana de
+    la reunión de Teams, de tus reuniones recientes y, si lo activas en Ajustes > Calendario y
+    Teams, de tu calendario de Outlook (clásico); sin calendario también funciona. El proyecto
+    sale de las veces anteriores que grabaste esa reunión, del título o de la última grabación,
+    siempre con el motivo a la vista. Todo se lee en tu PC. Los participantes que propone se
+    quedan en las notas de esa reunión, marcados como sugeridos, y no van al resumen con IA ni a
+    las copias en otras carpetas hasta que los confirmas en su página ("Confirmar"). El nombre que
+    propone (el asunto de la cita o el título de la reunión de Teams), si lo aceptas, es el nombre
+    de la grabación: va como título con el resumen y a las copias en otras carpetas.
   - Al parar, termina de transcribir. Si fue en la nube (lo normal en cuanto la conectas), hace
     también el resumen solo. Lo transcrito en local (si eliges un modelo local para el directo o
     para la cola) se resume con "Resumir esta reunión", o también solo si lo activas en Ajustes >
-    Resumen con IA (entonces su texto va al proveedor de la nube). Cada reunión tiene pestañas
-    Resumen / Transcripción / Notas; la transcripción se puede corregir en la propia página.
+    Procesado > Resumen con IA (entonces su texto va al proveedor de la nube). Cada reunión tiene
+    pestañas Resumen / Transcripción / Notas; la transcripción se puede corregir en su página.
     "Copiar para correo" (en la pestaña Resumen) copia el resumen como acta con formato:
     título, fecha, asistentes confirmados y el resumen, sin los minutos. Al pegarlo en Outlook
     o en Teams sale con negritas y listas; en el Bloc de notas, como texto limpio.
@@ -115,19 +126,27 @@ USO DIARIO
     transcribe en directo mientras graba.
   - Cada grabación va en su propia carpeta, "AAAA-MM-DD Nombre", dentro de la carpeta principal
     de su proyecto (sin asignar, la del proyecto: la que tiene su carpeta Vocabulario; si sus
-    listas vienen de una carpeta conectada, la última que elegiste a mano para él). Lo grabado
-    antes se queda donde está. Mover o renombrar la reunión mueve su carpeta entera.
-    En pleno directo, "Se guarda en ... · Cambiar" elige otra carpeta: la grabación sigue y,
-    cuando terminan el directo, el repaso y el resumen, la reunión entera se mueve sola (hasta
-    entonces se puede deshacer; si cierras Chuleta antes, se mueve al volver a abrirla).
-  - Perfil de reunión (⚙ Ajustes > Perfil de reunión): la carpeta donde se guarda, el idioma
-    (por defecto se detecta solo; "Español + inglés", "Español + portugués" e "Inglés + portugués"
-    son para reuniones que mezclan dos), el tema de vocabulario y un contexto de una o dos frases
-    (de qué va, quién participa) con los que empieza cada grabación, también con Ctrl+Alt+R. En
-    ● Grabar se ajustan para esa reunión y se pueden guardar como perfil; en la página de la
-    reunión, idioma, tema y contexto se cambian sobre la marcha y el directo los usa desde el
-    siguiente trozo. El resumen también tiene en cuenta el contexto.
-  - Destinos de salida (en el mismo apartado): carpetas donde cada reunión se guarda además como
+    listas vienen de una carpeta conectada, la que le asignes en Ajustes > Proyectos o con
+    "Usarlo en" al grabar). Lo grabado antes se queda donde está. Mover o renombrar la reunión
+    mueve su carpeta entera. En pleno directo, "Se guarda en ... · Cambiar" elige otra carpeta: la
+    grabación sigue y, cuando terminan el directo, el repaso y el resumen, la reunión entera se
+    mueve sola (hasta entonces se puede deshacer; si cierras Chuleta antes, se mueve al volver a
+    abrirla). "Una carpeta por reunión" se apaga en Ajustes > Al grabar.
+  - ⚙ Ajustes abre en "Al grabar": arriba, "Así se graba ahora una reunión de [proyecto]", lo
+    mismo que usarán ● Grabar y Ctrl+Alt+R (cambia con lo que escribas, antes de guardar); debajo,
+    las reglas: la carpeta de las reuniones sin proyecto, el idioma por defecto (se detecta solo;
+    "Español + inglés", "Español + portugués" e "Inglés + portugués" son para reuniones que
+    mezclan dos), el proyecto al grabar, un contexto de una o dos frases (de qué va, quién
+    participa), el micrófono y el audio del PC, el texto en directo y "Llamada detectada" (te
+    avisa si estás en una llamada y no grabas; el aviso flotante con "Grabar" está en Calendario y
+    Teams). En la página de la reunión, idioma y contexto se cambian sobre la marcha y el directo
+    los usa desde el siguiente trozo. El resumen también tiene en cuenta el contexto.
+  - Ajustes > Proyectos: una tabla con la carpeta y el idioma de cada proyecto y workstream, los
+    que se usarán al grabar. En negro, lo asignado; en gris, lo heredado: sin carpeta asignada,
+    la del proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. Con "Editar", lo
+    que cambies en la fila se guarda al momento (también la carpeta de cada workstream). Debajo,
+    las listas de vocabulario, las carpetas fuera de Chuleta y las copias en otras carpetas.
+  - Copias en otras carpetas (en Ajustes > Proyectos): carpetas donde cada reunión se guarda además como
     documento (.md con propiedades, resumen, notas y transcripción; .txt; o Word .docx), por
     ejemplo un vault de Obsidian o la carpeta de documentos del proyecto en OneDrive, con
     subcarpeta por proyecto si quieres. No vale la carpeta Chuleta, una carpeta vinculada ni una
@@ -136,12 +155,12 @@ USO DIARIO
     archivo ajeno ni uno que hayas cambiado allí (lo que no se ha podido escribir sale como aviso
     en ese mismo apartado). Los participantes sin confirmar no van. Al borrar una reunión, sus
     documentos que nadie haya cambiado allí van también a la papelera.
-  - Vocabulario por proyecto y tema: en Ajustes > Vocabulario (o en ● Grabar > Nuevo) creas un
-    proyecto y sus temas, cada uno con su lista de nombres, siglas y productos separados por
-    comas (los más importantes primero). Al grabar eliges el proyecto y el tema y Whisper los
+  - Vocabulario por proyecto y workstream: en Ajustes > Proyectos (o en ● Grabar > Proyecto)
+    creas un proyecto y sus workstreams, cada uno con su lista de nombres, siglas y productos
+    separados por comas (los más importantes primero). Al grabar eliges el workstream y Whisper los
     escribe bien. Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan
     fuera. Si ya tienes tus listas en una carpeta (en OneDrive, por ejemplo), "Usar las listas
-    de una carpeta…" la conecta: cada .txt es un tema (términos separados por comas o uno
+    de una carpeta…" la conecta: cada .txt es un workstream (términos separados por comas o uno
     por línea) y se lee en vivo al grabar, sin copiarlo. Valen los .txt sueltos (el proyecto
     es el nombre de la carpeta), una subcarpeta Vocabulario o una carpeta por proyecto con su
     Vocabulario dentro. Quitarla no borra nada. Un archivo "solo en línea" de OneDrive se
@@ -171,8 +190,8 @@ QUIÉN HABLA (opcional)
     transcripción con el nombre de quien habla y «Exportar con hablantes» guarda
     <grabación>.hablantes.txt junto al audio. El .txt y el .srt no cambian.
   - Privacidad: las voces se separan y se reconocen en tu PC, y las huellas no salen de él. Los
-    nombres que pongas van con la transcripción: al resumen con IA (si lo usas) y a los destinos
-    de salida. Por reunión se guarda <grabación>.hablantes.json junto al audio (tramos y
+    nombres que pongas van con la transcripción: al resumen con IA (si lo usas) y a las copias en
+    otras carpetas. Por reunión se guarda <grabación>.hablantes.json junto al audio (tramos y
     «Persona N», sin datos de voz). Las huellas de voz que decidas recordar van a
     %LOCALAPPDATA%\AudiosApp\voces.json, cifrado con tu cuenta de Windows, fuera de OneDrive,
     máximo 5 por persona, y se borran con «Olvidar». Una huella de voz es un dato biométrico:
@@ -194,7 +213,7 @@ PRIVACIDAD
     también se resumen solas las reuniones transcritas en local.
   - El resumen automático solo envía las reuniones transcritas en la nube. Lo transcrito en local
     solo se envía al proveedor si lo resumes a mano o si marcas "Resumir también las reuniones
-    transcritas en local" en Ajustes > Resumen con IA. De cada reunión, el resumen envía el
+    transcritas en local" en Ajustes > Procesado > Resumen con IA. De cada reunión, el resumen envía el
     título, la fecha y la duración, la transcripción (con quién habla), tus notas, el contexto,
     los participantes confirmados y tus instrucciones; el audio, no. Si actualizas desde una
     versión que sí enviaba lo transcrito en local y te afectaba, Inicio te lo avisa una vez, con
@@ -212,7 +231,7 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
 SI TE SIRVE
 ----------------------------------------------------------------------------------
   - Chuleta es gratis. Si te ayuda en el día a día, puedes invitar al autor a un café por PayPal desde
-    ⚙ Ajustes > Acerca de > "invitar al autor a un café", o en este enlace:
+    ⚙ Ajustes > Ayuda > Acerca de > "invitar al autor a un café", o en este enlace:
     https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR
 
 
@@ -225,7 +244,7 @@ SI ALGO FALLA
   - Registro del desinstalador: %TEMP%\chuleta-desinstalar.log.
   - Si el acceso directo no abre nada, ABRIR CHULETA.bat arranca la app con una ventana de consola
     donde se ven los mensajes (ciérrala para apagar).
-  - Para pedir ayuda: ⚙ Ajustes > Acerca de > "Copiar diagnóstico" copia solo datos técnicos: la
+  - Para pedir ayuda: ⚙ Ajustes > Ayuda > "Copiar diagnóstico" copia solo datos técnicos: la
     versión, el sistema, el motor y el modelo y, de las últimas líneas del registro, lo fijo de
     cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas y personas
     y las rutas salen como <texto>, y las claves no van. Revísalo antes de pegarlo y no lo

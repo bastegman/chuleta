@@ -535,7 +535,9 @@ class InterfazProcesadoTests(unittest.TestCase):
         self.assertIn('id="sAutoAg"', app)  # el resumen automatico se puede apagar tambien con el agente
         self.assertIn("se resumen solas; se desactiva aquí debajo", app)
         self.assertIn("? $('#sAutoAg', d) : $('#sAuto', d)).checked", app)
-        self.assertIn("Pro, Max, Ultra, Team o Enterprise, o una de Console", app)
+        self.assertIn("Pro, Max, Ultra, Team, Enterprise o Console", app)
+        self.assertIn("Login successful", app)  # el inicio de sesión en el navegador (claude-empresa, msg 1261)
+        self.assertIn('id="agPs"', app)  # «Abrir PowerShell» también aquí: el paso 1 lo nombra
         self.assertIn("localStorage.setItem('procElegido', '1')", app)
         self.assertIn('id="agModelo"', app)
         self.assertIn("procesado: $('input[name=\"proc\"]:checked', d)?.value", app)

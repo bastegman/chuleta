@@ -85,7 +85,7 @@ function welcomeCard(all) {
   }
   return `<div class="card welcome"><div class="wi">${I.spark}</div><div>
     <b>${all.length ? 'Conecta la nube para ir mucho más rápido' : `Bienvenido a ${APP_NAME}`}</b>
-    <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Transcripción en la nube: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
+    <ol>${key ? '' : '<li><b>Conecta Groq</b> (o la API de tu empresa) en ⚙ Ajustes → Procesado: una reunión de 1 h se transcribe en un par de minutos y se resume sola.</li>'}
     ${elegir ? '<li><b>Elige dónde se procesan tus reuniones</b> en ⚙ Ajustes: solo en este PC (como ahora), con tu cuenta de Claude o con una API externa. Las dos últimas resumen con IA y avisan de lo que sale del PC.</li>' : ''}
     ${all.length ? '' : '<li><b>Graba</b> con el botón <b>● Grabar</b> de arriba o con <b>Ctrl+Alt+R</b> desde cualquier programa: graba tu micro y el sonido del ordenador (Teams, Zoom…). También puedes arrastrar aquí audios que ya tengas, o guardar en esta carpeta las grabaciones de OBS.</li>'}</ol>
     ${key && !elegir ? '' : '<button class="btn sm primary" data-act="settings">' + I.gear + 'Abrir Ajustes</button>'}</div></div>`;
@@ -134,8 +134,13 @@ async function loadVocab(language) {
   try {
     const r = await api('/api/vocab' + (language != null ? '?language=' + enc(language) : ''));
     S.vocab = r.items; S.vocabLast = r.last; S.vocabCarpetas = r.carpetas || [];  // carpetas de listas conectadas
+    S.vocabError = null;
     return r;
-  } catch { return { items: S.vocab, last: S.vocabLast || '', carpetas: S.vocabCarpetas || [] }; }
+  } catch (err) {
+    // se sigue con las de antes (o ninguna) y se apunta: Ajustes no confunde «no se han podido leer» con «no hay»
+    S.vocabError = err.message || 'error';
+    return { items: S.vocab, last: S.vocabLast || '', carpetas: S.vocabCarpetas || [] };
+  }
 }
 function vocabOf(a) {
   const p = a.props || {};
@@ -166,11 +171,11 @@ function vocabFit(v) {
 /* crear / editar un workstream (y con el, un proyecto nuevo). after: a donde volver al terminar */
 function openVocabEditor(v, after = openSettings, project = '') {
   const isNew = !v, projects = [...new Set(S.vocab.map(x => x.project))];
-  openModal(`<h3>${I.book}${isNew ? (project ? `Nuevo tema en ${esc(project)}` : 'Nuevo proyecto o tema') : `${esc(v.project)} · ${esc(v.name)}`}</h3>
+  openModal(`<h3>${I.book}${isNew ? (project ? `Nuevo workstream en ${esc(project)}` : 'Nuevo proyecto o workstream') : `${esc(v.project)} · ${esc(v.name)}`}</h3>
     <div class="grid2">
       <div><label>Proyecto</label><input class="input" id="veProj" list="veProjs" value="${esc(v ? v.project : project)}" placeholder="p. ej. Proyecto Alfa, Comunidad de vecinos…" ${isNew ? 'autofocus' : ''}>
         <datalist id="veProjs">${projects.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
-      <div><label>Tema</label><input class="input" id="veName" value="${esc(v ? v.name : (project ? '' : 'General'))}" placeholder="p. ej. Legal, Finanzas, Tecnología…"></div>
+      <div><label>Workstream</label><input class="input" id="veName" value="${esc(v ? v.name : (project ? '' : 'General'))}" placeholder="p. ej. Legal, Finanzas, Tecnología…"></div>
     </div>
     <label>Descripción <span class="muted" style="font-weight:400">· opcional, se ve al elegirlo</span></label>
     <input class="input" id="veDesc" value="${esc(v ? v.desc || '' : '')}" placeholder="p. ej. Reunión semanal del equipo">
@@ -201,6 +206,9 @@ function openVocabEditor(v, after = openSettings, project = '') {
         }
         await loadVocab(S.config.language ?? 'es-en');
         await refreshTree(true);
+        // renombrar o borrar una lista cambia lo guardado que la nombra («Proyecto al grabar», sus idiomas): quien abre
+        // después (Ajustes) lo pinta con lo de ahora (revisión 11: «(no se encuentra)» y «Guardar» con un 400)
+        setConfig(await api('/api/config'));
         after();
       } catch (err) { toast(esc(err.message), 'err'); }
     });
@@ -218,7 +226,7 @@ main.addEventListener('change', e => {
   const a = curAudio();
   if (!a || e.target.dataset.prop !== 'workstream' || e.target.value === '__lost') return;
   const v = S.vocab.find(x => x.id === e.target.value);
-  saveProps(a, wsPatch(v)).then(() => toast(!v ? 'Sin tema: se usará el vocabulario general'
+  saveProps(a, wsPatch(v)).then(() => toast(!v ? 'Sin proyecto: se usará el vocabulario general'
     : liveJob(a) ? `🗂 ${esc(v.name)}: el directo usa este vocabulario desde el siguiente trozo`
     : (a.txt || a.srt) ? `🗂 ${esc(v.name)} guardado · se aplicará si la vuelves a transcribir` : `🗂 ${esc(v.name)}: se usará al transcribirla`));
 });
@@ -251,7 +259,7 @@ function propsHtml(a) {
     <div class="prow"><span class="pk">${I.clock}Duración</span><span class="pv">${fmtDur(estDuration(a))} <span class="muted">· ${fmtSize(a.size)} · ${esc(a.ext.slice(1).toUpperCase())}</span></span></div>
     <div class="prow"><span class="pk">${I.folder}Carpeta</span><span class="pv"><a href="${a.folder ? href('f', a.folder) : '#/'}">${esc(a.folder ? pathLabel(a.folder) : 'Sin clasificar')}</a>
       <button class="btn ghost sm" data-act="move" data-path="${esc(a.path)}">cambiar</button></span></div>
-    <div class="prow"><span class="pk">${I.topic}Tema</span><span class="pv">${wsSelect(a)}</span></div>
+    <div class="prow"><span class="pk">${I.topic}Proyecto</span><span class="pv">${wsSelect(a)}</span></div>
     ${typeof perfilPropsHtml === 'function' ? perfilPropsHtml(a) : ''}
     <div class="prow"><span class="pk">${I.state}Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
     <div class="prow"><span class="pk">${I.tag}Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
@@ -495,7 +503,7 @@ main.addEventListener('click', async e => {
     await api('/api/notes', { path: a.path, body });
     S.notes = null; a.has_notes = true;
     toast('Resumen añadido a 📝 Notas (ahí lo puedes editar)');
-  } else if (act.dataset.act === 'settings') openSettings();
+  } else if (act.dataset.act === 'settings') openSettings({ sec: 'procesado' });  // los avisos de Inicio son de Procesado
 });
 /* progreso del resumen y recarga al terminar (lo llama el sondeo de trabajos de app.js) */
 function onSummaryJobs(prev) {
@@ -898,7 +906,7 @@ main.addEventListener('click', e => {
 /* ---------------------------------------------------------------- busqueda rapida (Ctrl+P) */
 const ACTIONS = [
   ['<i class="recdot"></i>', 'Grabar ahora', () => openRec()], [I.list, 'Reuniones', () => go('r', '')], [I.calendar, 'Calendario', () => go('c', '')],
-  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings()], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
+  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar' })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
   [I.clipboard, 'Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
 function paletteItems(q) {
   const f = fold(q.trim()), out = [];
@@ -953,14 +961,14 @@ async function deleteItem(path) {
   if (!a && !d) return;
   // destinos de salida: sus documentos que nadie ha cambiado alli van tambien a la papelera; los editados se quedan
   const outs = a && (S.config.perfil?.outputs || []).length
-    ? ' También van a la papelera sus documentos en los destinos de salida que nadie haya cambiado allí; los que hayas editado se quedan donde están.' : '';
+    ? ' También van a la papelera sus copias en otras carpetas que nadie haya cambiado allí; las que hayas editado se quedan donde están.' : '';
   if (!await ask('¿Mandar a la papelera?', a
     ? `Se manda a la <b>papelera de Windows</b> la grabación con su transcripción y sus notas (.wav, .txt, .srt, .md). Se puede recuperar desde la papelera.${outs}`
     : 'Se manda a la <b>papelera de Windows</b>. Se puede recuperar desde ahí.', 'Mandar a la papelera')) return;
   if (S.playing === path) { audio.pause(); audio.removeAttribute('src'); audio.load(); S.playing = null; $('#player').classList.add('hidden'); document.body.classList.remove('playing'); }
   try {
     const r = await api('/api/delete', { path });
-    toast('🗑️ En la papelera de Windows' + (r.copias ? ` (con ${r.copias} ${r.copias === 1 ? 'documento' : 'documentos'} de los destinos de salida)` : ''));
+    toast('🗑️ En la papelera de Windows' + (r.copias ? ` (con ${r.copias} ${r.copias === 1 ? 'copia' : 'copias'} en otras carpetas)` : ''));
     const parent = (a || d).parent ? (a || d).parent.path : '';
     await refreshTree(true);
     go(parent ? 'f' : 'home', parent, null, true);
@@ -1004,6 +1012,12 @@ function renderMeetChip() {
   const c = $('#meetChip'), m = S.rec && S.rec.meeting;
   c.classList.toggle('hidden', !m || !!S.rec.recording);
   if (m) c.innerHTML = `${I.phone}${esc(m)} en llamada · <b><i class="recdot"></i>Tomar Notas</b>`;
+  // con qué grabaría: el mismo plan que Ctrl+Alt+R y la tarjeta (/api/grabar/plan), una vez por llamada
+  if (m && !S.rec.recording && S.meetPlanDe !== m) {
+    S.meetPlanDe = m;
+    api('/api/grabar/plan', {}).then(p => { c.title = `Graba: ${p.resumen}`; }).catch(() => { });
+  }
+  if (!m) S.meetPlanDe = null;
 }
 $('#meetChip').onclick = () => toggleRec();
 

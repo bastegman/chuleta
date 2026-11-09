@@ -398,6 +398,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .jitem .s.err { color: var(--err); }
 .jitem .pbar { height: 4px; }
 .modal { position: fixed; inset: 0; background: rgba(20, 14, 12, .42); display: flex; align-items: flex-start; justify-content: center; padding-top: 8vh; z-index: 50; }
+.modal.sobre { z-index: 55; padding-top: 18vh; }  /* una confirmación encima de Ajustes, sin cerrarlo */
+.modal.sobre .dialog { width: 460px; }
 .dialog { width: 560px; max-width: calc(100vw - 40px); max-height: 84vh; overflow-y: auto; background: var(--panel); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px 24px 22px; border: 1px solid var(--line); }
 .dialog h3 { margin: -20px -24px 18px; padding: 15px 24px; font-size: 16px; font-weight: 650; border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: var(--radius-lg) var(--radius-lg) 0 0; position: sticky; top: -20px; z-index: 2; letter-spacing: -.01em; }
 .dialog h3 > svg { width: 18px; height: 18px; margin-right: 8px; vertical-align: -4px; color: var(--muted); }
@@ -804,3 +806,153 @@ ol.pasos code { user-select: all; }
 .jitem .s.err .cfg-accion { margin-left: 8px; color: var(--ink-2); }
 .jobline .cfg-accion { margin-right: 8px; }
 body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen «Guardar» */
+
+/* ---------- Grabar: la tarjeta «Así se va a grabar» (grabar.js, rediseño B1 del 07/11/2026) ---------- */
+.dialog.gr { width: 760px; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.gr-cab { display: flex; align-items: center; gap: 10px; padding: 14px 24px 4px; }
+.gr-kicker { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: inline-flex; align-items: center; gap: 8px; }
+.gr-kicker .recdot { animation: none; width: 8px; height: 8px; }
+.gr-llamada { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 13px; background: var(--ok-soft); color: var(--ok); font-size: 12.5px; font-weight: 600; }
+.gr-llamada svg { width: 14px; height: 14px; }
+.gr-cuerpo { padding: 6px 24px 4px; overflow-y: auto; flex: 1; min-height: 0; }
+.gr-top { display: grid; grid-template-columns: 82px 1fr auto; align-items: center; gap: 8px 12px; }
+.gr-top > label { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
+.gr-nombre { position: relative; }
+.gr-nombre .input { width: 100%; height: 38px; font-size: 15px; font-weight: 500; }
+.gr-tag { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; min-width: 70px; }
+.gr-tag.de-reunion { color: var(--ok); }
+.gr-tag.archivo { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--warn); white-space: normal; }
+.gr-proyecto { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.gr-proy { width: auto !important; max-width: 100%; height: 32px; padding: 0 30px 0 12px; border-radius: 16px; border-color: var(--accent-line); background-color: var(--accent-soft); color: var(--accent); font-weight: 600; cursor: pointer; }
+.gr-proy.vacio { background-color: var(--panel-2); border-color: var(--line-2); color: var(--ink-2); }
+.gr-motivo { font-size: 12.5px; color: var(--muted); }
+.gr-asist { grid-column: 2 / -1; font-size: 12.5px; line-height: 1.45; }
+.gr-asist a { color: var(--accent); font-weight: 600; text-decoration: underline; }
+.gr-sug { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px; max-height: 280px; overflow-y: auto; }
+.gr-sug-i { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; text-align: left; border: 0; background: transparent; padding: 8px 10px; border-radius: 7px; cursor: pointer; }
+.gr-sug-i:hover, .gr-sug-i.on { background: var(--accent-soft); }
+.gr-sug-i small { color: var(--muted); white-space: nowrap; font-size: 12px; }
+.gr-sug-pie { font-size: 11.5px; color: var(--muted); padding: 6px 10px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+.gr-propuesta { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--ok-soft); color: var(--ok); font-size: 13px; }
+.gr-propuesta svg { width: 15px; height: 15px; }
+.gr-propuesta a { font-weight: 600; text-decoration: underline; margin-left: auto; }
+.gr-plan { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); overflow: hidden; }
+.gr-plan-h { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 9px 14px; border-bottom: 1px solid var(--line); }
+.gr-cargando { padding: 18px 14px; color: var(--muted); font-size: 13px; }
+.gr-fila { display: grid; grid-template-columns: 20px 104px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); min-height: 44px; }
+.gr-fila.cambiado { background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel)); }
+.gr-fila.abierta { background: var(--hover); }
+#grFilas > :last-child, #grFilas > .gr-fila:last-of-type:not(.abierta) { border-bottom: 0; }
+.gr-ic svg { width: 17px; height: 17px; color: var(--muted); }
+.gr-et { font-size: 13px; color: var(--muted); }
+.gr-v { min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.gr-v b { font-weight: 600; }
+.gr-ruta { font: 12.5px/1.35 var(--mono); color: var(--ink); background: none; padding: 0; }
+.gr-origen { font-size: 12px; color: var(--muted); background: var(--hover); border-radius: 11px; padding: 2px 9px; white-space: nowrap; max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
+.gr-origen.cambiado { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.gr-cambiar { border: 0; background: none; color: var(--accent); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 2px; border-radius: 6px; }
+.gr-cambiar:hover { text-decoration: underline; }
+.gr-panel { padding: 4px 14px 12px 48px; border-bottom: 1px solid var(--line); background: var(--hover); }
+.gr-panel .gr-l { margin: 10px 0 5px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.gr-panel select, .gr-panel .input { width: 100%; }
+.gr-panel .seg2 { margin-top: 10px; }
+.gr-panel .help { margin-top: 6px; }
+.gr-alcance { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line-2); font-size: 13px; }
+.gr-alcance-t { font-weight: 600; color: var(--ink-2); margin-right: 4px; }
+.gr-alcance label { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-weight: 400; font-size: 13px; color: var(--ink); cursor: pointer; }
+.gr-alcance input { accent-color: var(--accent); margin: 0; }
+.gr-panel-pie { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.gr-panel-pie .primary { margin-left: auto; }
+.gr-quitar { font-size: 12.5px; color: var(--muted); text-decoration: underline; }
+.gr-falta:empty { display: none; }
+.gr-falta .notice { margin: 0; border-radius: 0; border-width: 0 0 1px; }
+.gr-audio { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gr-aviso { display: block; font-size: 12px; color: var(--warn); margin-top: 2px; }
+.meter.gr-meter { display: inline-flex; width: 58px; margin: 0; gap: 0; vertical-align: middle; }
+.meter.gr-meter .ml, .meter.gr-meter .mdb, .meter.gr-meter .mdev { display: none; }
+.meter.gr-meter .mbar { width: 58px; height: 7px; }
+.meter.gr-meter.err .mbar { background: var(--err-soft); }
+.gr-anadir { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; border: 0; background: none; padding: 2px 0; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; }
+.gr-anadir svg { width: 15px; height: 15px; }
+.gr-anadir:hover { text-decoration: underline; }
+.gr-atajo { font-size: 12.5px; color: var(--muted); margin: 10px 0 6px; }
+.gr-atajo svg { width: 15px; height: 15px; margin-right: 6px; vertical-align: -3px; }
+.dialog.gr .btns.gr-pie { margin: 0; padding: 12px 24px 16px; border-top: 1px solid var(--line); align-items: center; flex: none; background: var(--panel); }
+.gr-pie .gr-hueco { flex: 1; }
+.gr-pie .muted { font-weight: 400; font-size: 12px; }
+.gr-pie kbd { margin-left: 4px; background: transparent; color: inherit; border-color: color-mix(in srgb, currentColor 45%, transparent); }
+@media (max-height: 700px) {
+  .gr-fila { min-height: 38px; padding-top: 5px; padding-bottom: 5px; }
+  .gr-plan { margin-top: 10px; }
+  .gr-cab { padding-top: 10px; }
+  .gr-atajo { margin: 8px 0 2px; }
+  .dialog.gr .btns.gr-pie { padding-top: 10px; padding-bottom: 12px; }
+}
+@media (max-width: 720px) {
+  .gr-fila { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  .gr-et { grid-column: 2; }
+  .gr-v { grid-column: 2; }
+  .gr-origen { grid-column: 2; justify-self: start; }
+  .gr-cambiar { grid-column: 3; grid-row: 1 / span 3; }
+  .gr-top { grid-template-columns: 1fr; }
+  .gr-proyecto { grid-column: 1; }
+}
+
+/* ---------- Ajustes › Al grabar, Proyectos y Calendario y Teams (ajustes.js, rediseño B2 y B3 del 07/11/2026) ---------- */
+.ag-cab h4 { margin: 2px 0 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.ag-plan { margin-top: 8px; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--panel-2); overflow: hidden; }
+.ag-plan-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.ag-plan-h select { width: auto !important; height: 30px; padding: 0 28px 0 12px; border-radius: 15px; border-color: var(--accent-line); background-color: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 13px; letter-spacing: 0; text-transform: none; }
+.ag-plan .gr-fila { min-height: 28px; padding-top: 2px; padding-bottom: 2px; }
+.ag-plan .gr-ruta, .ag-plan .gr-ctx { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ag-plan #agFilas > .gr-fila:last-child { border-bottom: 0; }
+a.gr-origen.ag-ir:hover { background: var(--accent-soft); color: var(--accent); }
+.ag-reglas { margin-top: 6px; }
+.ag-regla { display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: center; gap: 4px 16px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.ag-regla .ag-sub { display: block; margin-top: 1px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.ag-regla > label { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.ag-regla > div { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.ag-regla > div > select, .ag-regla > div > .input { width: auto !important; max-width: 100%; min-width: 220px; height: 32px; }
+.ag-regla #pfContext { flex: 1; }
+.ag-dos select { flex: 1; min-width: 0 !important; }
+.ag-dos .gr-aviso { flex-basis: 100%; margin-top: 0; }
+.ag-hint { font-size: 12.5px; color: var(--muted); }
+label.ag-sw { display: flex !important; align-items: center; gap: 9px; margin: 0; font-weight: 400 !important; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+label.ag-sw input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; flex: none; }
+details.ag-como { margin-top: 12px; }
+.ag-como-btn { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--accent); cursor: pointer; }
+.ag-como-btn:hover { text-decoration: underline; }
+#agComo { margin-top: 6px; }
+details.ag-como > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+details.ag-como > summary:hover { color: var(--ink-2); }
+.ag-pie { margin-top: 14px; }
+.ag-pie a, .ag-cab a, .dialog .help a[data-sec-ir], .dialog .help a[data-aj-listas-otra] { color: var(--accent); font-weight: 600; }
+.pj-tabla { width: 100%; margin-top: 14px; table-layout: fixed; }
+.pj-tabla th { text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.pj-tabla td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 13px; }
+.pj-tabla tr.pj-w td:first-child { padding-left: 22px; }
+.pj-tabla code { font: 12px var(--mono); overflow-wrap: anywhere; }
+.pj-her { color: var(--muted); }
+.pj-tabla select { width: 100%; height: 30px; }
+.pj-tabla tr.pj-ed .pj-acc .btn { display: block; width: 100%; }
+.pj-tabla .pj-estado { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ct-off { opacity: .55; }
+.pj-tabla tr.pj-ed td { background: var(--hover); }
+.ct-filas { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.ct-fila { display: grid; grid-template-columns: 110px auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.ct-fila:last-child { border-bottom: 0; }
+.ct-n { font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
+.ct-n svg { width: 16px; height: 16px; color: var(--muted); }
+.ct-estado { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: var(--hover); color: var(--ink-2); white-space: nowrap; }
+.ct-estado.ok { background: var(--ok-soft); color: var(--ok); }
+.ct-estado.aviso { background: var(--warn-soft); color: var(--warn); }
+.ct-estado.err { background: var(--err-soft); color: var(--err); }
+.ct-frase { font-size: 13px; color: var(--ink-2); }
+.ct-frase #rnEstado { margin-top: 0; font-size: inherit; color: inherit; }  /* el estado de Outlook, como la frase de Teams */
+.ct-acc:empty { display: none; }
+fieldset.ct-opciones { margin-top: 16px; }
+@media (max-width: 900px) {
+  .ag-regla { grid-template-columns: 1fr; }
+  .ct-fila { grid-template-columns: 90px auto minmax(0, 1fr); }
+  .ct-acc { grid-column: 3; }
+}

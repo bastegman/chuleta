@@ -248,15 +248,19 @@ class ParticipantesDeOutlookTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node no instalado")
     def test_js(self):
-        """El dialogo Grabar (reunionPrefill) une igual."""
-        m = re.search(r"^  d\.dataset\.rnParticipantes = (.+);$", read("reunion.js"), re.M)
-        self.assertIsNotNone(m, "reunionPrefill ya no une los participantes: si el dialogo nuevo (ux-grabar) los une "
-                                "en otro sitio, que use calendario.join_participants (plan.py) y probar alli lo mismo")
-        out = node(f"""const f = s => {m.group(1)};
-console.log(JSON.stringify([f({{participants: ['Stegmaier, Bernardo', 'García, Ana']}}),
-  f({{participants: ['Ana', 'Luis']}}), f({{}})]));
+        """La tarjeta de grabar (ux-grabar; sustituye al dialogo de reunionPrefill) recibe los participantes ya unidos
+        por el plan (plan.unir_participantes, igual que join_participants: test_plan) y los parte y los une igual."""
+        out = node(js_defs(read("grabar.js"), ["grPartes", "grSep"]) + """
+const p = grPartes('Stegmaier, Bernardo; García, Ana'), q = grPartes('Ana, Luis');
+console.log(JSON.stringify([p, p.join(grSep(p)), q, q.join(grSep(q)), grPartes('')]));
 """)
-        self.assertEqual(json.loads(out[0]), ["Stegmaier, Bernardo; García, Ana", "Ana, Luis", ""])
+        partes = ["Stegmaier, Bernardo", "García, Ana"]
+        self.assertEqual(json.loads(out[0]),
+                         [partes, "Stegmaier, Bernardo; García, Ana", ["Ana", "Luis"], "Ana, Luis", []])
+        import calendario
+        import plan
+        self.assertEqual(plan._unir_local(["Stegmaier, Bernardo", "García, Ana"]),
+                         calendario.join_participants(["Stegmaier, Bernardo", "García, Ana"]))
 
 
 class PistaDeParticipantesTests(Reunion):

@@ -25,7 +25,7 @@ TEXTO_MUESTRA = "Hola, esto es una prueba de Chuleta."  # lo que se resume si no
 OJO_MICRO = (" Ojo: no se ha oído tu voz. Revisa el micro en ● Grabar: la barra «Nivel» tiene que moverse al "
              "hablar.")
 AVISO_SIN_TEXTO = ("La transcripción funciona, pero no ha entendido la frase de prueba: revisa el idioma en "
-                   "Ajustes → Grabar.")
+                   "Ajustes › Al grabar.")
 
 
 class Cancelada(Exception):

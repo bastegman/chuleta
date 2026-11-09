@@ -1,11 +1,11 @@
 'use strict';
-/* Perfil de reunión: carpeta de destino, idioma, tema de vocabulario y contexto libre, con un perfil por defecto
-   (Ajustes → Perfil de reunión, o «Guardar como perfil por defecto» al grabar) y ajustes por reunión (diálogo
-   «● Grabar» y página de la reunión: el directo los relee en el siguiente trozo). También el selector de tema en
-   dos pasos (Proyecto / Tema) y la importación de listas de vocabulario de otra carpeta.
+/* Perfil de reunión: idioma y contexto de cada reunión (página de la reunión y directo, que los relee en el siguiente
+   trozo), lo de Ajustes (carpeta, contexto y destinos de salida) y la importación de listas de vocabulario de otra
+   carpeta. Lo que se usa al grabar ya no se calcula aquí: lo decide el servidor (/api/grabar/plan, grabar.js), el mismo
+   cálculo que Ctrl+Alt+R (antes la regla estaba aquí y en el servidor, dos veces).
    Se carga después de app.js y notas.js y usa sus utilidades ($, $$, api, esc, I, S, LANGS, langSelect, folderOpts,
-   liveFit, toast, loadVocab, refreshTree, linkFolder, openRec, openSettings). app.js y notas.js lo invocan con
-   `typeof x === 'function'`: sin este fichero la app funciona igual, con el selector de tema de siempre y sin perfil. */
+   liveFit, toast, loadVocab, refreshTree, linkFolder, openSettings). app.js y notas.js lo invocan con
+   `typeof x === 'function'`: sin este fichero la app funciona igual, sin perfil. */
 
 const PERFIL_AUTO = '__auto';  // valor del <select> para «automático» (null en el servidor)
 
@@ -30,126 +30,17 @@ function perfilLangOf(a) {
   return v || (S.config.language ?? '');
 }
 
-/* ---------------------------------------------------------------- precedencias */
-/* Qué se aplica a una grabación nueva y de dónde sale cada campo (igual que resolve_perfil en el servidor):
-   lo elegido en el diálogo > lo que fija el perfil > la sugerencia de la reunión en curso > lo último usado.
-   perfil: {folder, vocab, context, language} con null = automático; sug: {name, vocab}; last: {folder, vocab}. */
-function perfilResolve(perfil, sug, last, elegido) {
-  perfil = perfil || {}; sug = sug || {}; last = last || {}; elegido = elegido || {};
-  const out = {}, origen = {};
-  const pick = (k, cands) => {
-    for (const [o, v] of cands) if (v != null) { out[k] = v; origen[k] = o; return; }
-    out[k] = ''; origen[k] = 'ultimo';
-  };
-  pick('vocab', [['elegido', elegido.vocab], ['perfil', perfil.vocab], ['reunion', sug.vocab || null], ['ultimo', last.vocab || '']]);
-  pick('folder', [['elegido', elegido.folder], ['perfil', perfil.folder], ['ultimo', last.folder || '']]);
-  pick('language', [['elegido', elegido.language], ['perfil', perfil.language ?? '']]);
-  pick('context', [['elegido', elegido.context], ['perfil', perfil.context || '']]);
-  pick('name', [['elegido', elegido.name || null], ['reunion', sug.name || null], ['ultimo', '']]);
-  return { ...out, origen };
-}
-
-/* ---------------------------------------------------------------- tema en dos pasos (Proyecto / Tema) */
+/* ---------------------------------------------------------------- listas por proyecto */
 function perfilGroups(vocab) {
   const g = new Map();
   (vocab || []).forEach(v => { if (!g.has(v.project)) g.set(v.project, []); g.get(v.project).push(v); });
   return [...g.entries()];
 }
-/* Opciones del <select> Tema: TODAS las listas (así reunion.js y app.js pueden fijar cualquier id con .value),
-   ocultas las de otros proyectos. '' = sin vocabulario. */
-function perfilTemaOptions(vocab, proj, sel) {
-  return '<option value="">Sin vocabulario</option>' + (vocab || []).map(v =>
-    `<option value="${esc(v.id)}" data-proj="${esc(v.project)}"${v.id === sel ? ' selected' : ''}${v.project !== proj ? ' hidden' : ''}>${esc(v.name)}${v.desc ? ' · ' + esc(v.desc) : ''}</option>`).join('');
-}
 function perfilVocabEmptyHtml() {
-  return `<div class="help" style="margin-top:0">Todavía no hay listas. Si ya tienes tus listas en una carpeta (en OneDrive, por ejemplo), conéctala: cada archivo <code>.txt</code> es un tema, con los nombres, siglas y productos de esas reuniones separados por comas o uno por línea, los más importantes primero. También puedes crearlas aquí.</div>`;
+  return `<div class="help" style="margin-top:0">Todavía no hay listas. Si ya tienes tus listas en una carpeta (en OneDrive, por ejemplo), conéctala: cada archivo <code>.txt</code> es un workstream, con los nombres, siglas y productos de esas reuniones separados por comas o uno por línea, los más importantes primero. También puedes crearlas aquí.</div>`;
 }
 const VOCAB_CONECTAR = '__conectar';  // opción del <select> Proyecto: «Usar las listas de una carpeta…»
 const VOCAB_COPIAR_TITLE = 'Copia a la carpeta de la app las listas <Proyecto>\\Vocabulario\\*.txt de otra carpeta (la de un compañero, un USB, otra copia de la app…) sin pisar las que ya tengas. Para usar tus listas sin copiarlas, «Usar las listas de una carpeta…»';
-/* Bloque «Tema» del diálogo Grabar. sel: id de la lista preseleccionada ('' = sin vocabulario). */
-function perfilTemaHtml(sel) {
-  const vocab = S.vocab || [];
-  const label = `<label>${I.topic}Tema <span class="muted" style="font-weight:400">· el vocabulario que recibe Whisper</span></label>`;
-  if (!vocab.length) {
-    return `${label}${perfilVocabEmptyHtml()}
-      <div class="row" style="gap:8px;margin-top:8px"><button class="btn sm" type="button" id="rVocabConectar" title="Elige la carpeta donde tienes tus listas: se leen al grabar, sin copiarlas">${I.folder}Usar las listas de una carpeta…</button>
-        <button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button>
-        <button class="btn ghost sm" type="button" id="rVocabImport" title="${esc(VOCAB_COPIAR_TITLE)}">Copiar listas de otra carpeta…</button></div>`;
-  }
-  const cur = vocab.find(v => v.id === sel), proj = cur ? cur.project : '';
-  return `${label}
-    <div class="row pf-tema" style="gap:6px;flex-wrap:nowrap">
-      <select id="rProj" title="Proyecto"><option value="">Sin vocabulario</option>${perfilGroups(vocab).map(([p]) => `<option value="${esc(p)}"${p === proj ? ' selected' : ''}>${esc(p)}</option>`).join('')}<option value="${VOCAB_CONECTAR}">Usar las listas de una carpeta…</option></select>
-      <select id="rVocab" title="Tema del proyecto">${perfilTemaOptions(vocab, proj, sel)}</select>
-      <button class="btn sm" type="button" id="rVocabNew" title="Crear un proyecto o tema nuevo con su lista de nombres y siglas">${I.plus}Nuevo…</button>
-    </div><div class="help" id="rVocabFit"></div>`;
-}
-/* Enlaza Proyecto ↔ Tema (se llama antes de que app.js ponga su onchange en #rVocab, así «sync» corre primero). */
-function perfilBindTema(d) {
-  const proj = $('#rProj', d), tema = $('#rVocab', d), vocab = S.vocab || [];
-  if (!proj || !tema) return;
-  const sync = () => {
-    const v = vocab.find(x => x.id === tema.value);
-    if (v && proj.value !== v.project) proj.value = v.project;
-    if (!tema.value) proj.value = '';
-    [...tema.options].forEach(o => { o.hidden = !!o.value && o.dataset.proj !== proj.value; });
-    proj.dataset.prev = proj.value;
-  };
-  proj.dataset.prev = proj.value;
-  proj.onchange = () => {
-    if (proj.value === VOCAB_CONECTAR) {  // como «Otra carpeta…» en Carpeta: no es un proyecto, abre el selector
-      proj.value = proj.dataset.prev || '';
-      vocabConectar(openRec);
-      return;
-    }
-    proj.dataset.prev = proj.value;
-    const first = vocab.find(v => v.project === proj.value);
-    tema.value = first ? first.id : '';
-    sync();
-    tema.dispatchEvent(new Event('change'));  // app.js: carpeta del proyecto y cuánto le cabe a Whisper
-  };
-  tema.addEventListener('change', sync);
-  sync();
-}
-
-/* ---------------------------------------------------------------- diálogo Grabar: idioma y contexto de ESTA reunión */
-function perfilCamposHtml(language, context) {
-  return `<div class="grid2">
-      <div><label>${I.globe}Idioma de la reunión</label>${langSelect('rLang', language)}</div>
-      <div><label>${I.text}Contexto <span class="muted" style="font-weight:400">· opcional</span></label><input class="input" id="rCtx" maxlength="500" value="${esc(context || '')}" placeholder="De qué va y quién participa, en una o dos frases" autocomplete="off"></div>
-    </div>
-    <div class="row pf-save"><button class="btn ghost sm" type="button" id="rPerfilSave" title="Guarda la carpeta, el idioma, el tema y el contexto de arriba como perfil por defecto: Ctrl+Alt+R y las próximas grabaciones empezarán así">${I.check}Guardar como perfil por defecto</button>
-      <span class="muted" style="font-size:12px">Idioma, tema y contexto van con esta reunión: los usan Whisper y el resumen, y se cambian sobre la marcha en su página.</span></div>`;
-}
-function perfilBindRec(d) {
-  perfilBindTema(d);
-  // tema fijo en el perfil (y que siga existiendo): la sugerencia de Teams no lo pisa
-  const fijo = S.config.perfil?.vocab;
-  if (fijo != null && (fijo === '' || (S.vocab || []).some(v => v.id === fijo))) d.dataset.pfVocab = '1';
-  const imp = $('#rVocabImport', d);
-  if (imp) imp.onclick = () => perfilImportar($('#rProj', d)?.value || '', openRec);
-  const con = $('#rVocabConectar', d);
-  if (con) con.onclick = () => vocabConectar(openRec);
-  const save = $('#rPerfilSave', d);
-  if (save) save.onclick = async () => {
-    const body = { language: $('#rLang', d)?.value ?? '', context: $('#rCtx', d)?.value.trim() || '' };
-    const folder = $('#rFolder', d)?.value;
-    if (folder != null && folder !== '__pick') body.folder = folder;
-    if ($('#rVocab', d)) body.vocab = $('#rVocab', d).value;
-    save.disabled = true;
-    try {
-      const r = await api('/api/perfil', body);
-      S.config.perfil = r.perfil; S.config.language = S.selLang = r.perfil.language;
-      toast('Perfil por defecto guardado · Ctrl+Alt+R y las próximas grabaciones empiezan así');
-    } catch (err) { toast(esc(err.message), 'err'); }
-    save.disabled = false;
-  };
-}
-/* Lo que el diálogo manda a /api/rec/start además de lo de siempre. */
-function perfilRecExtra(d) {
-  const c = $('#rCtx', d);
-  return c ? { contexto: c.value.trim() } : {};
-}
 
 /* ---------------------------------------------------------------- importar listas de otra carpeta */
 /* Selector de carpetas de Windows (o pegar la ruta) → POST /api/vocab/import → recarga y vuelve a `after`. */
@@ -193,7 +84,7 @@ async function vocabConectar(after) {
 function vocabConectadaText(r) {
   const n = r.listas || 0, s = (r.avisos || []).length;
   const listas = `${n} ${n === 1 ? 'lista' : 'listas'}`;
-  const salta = s ? ` · ${s} ${s === 1 ? 'se salta' : 'se saltan'}: lo ves en Ajustes › Vocabulario` : '';
+  const salta = s ? ` · ${s} ${s === 1 ? 'se salta' : 'se saltan'}: lo ves en Ajustes › Proyectos` : '';
   if (r.ya) return `«${esc(r.name)}» ya estaba conectada · ${listas}${salta}`;
   return `${I.check}Conectada «${esc(r.name)}» · ${listas} · se leen al grabar, sin copiarlas${salta}`;
 }
@@ -215,10 +106,10 @@ function vocabAvisoText(a) {
   if (a.motivo === 'grande') return `«${a.lista}» pesa ${a.kb} KB: no parece una lista (se leen hasta 64 KB)`;
   return `«${a.lista}»: ${a.motivo}`;
 }
-/* Ajustes › Vocabulario: las carpetas conectadas, con cuántas listas dan, lo que se salta, «Abrir» y «quitar». */
+/* Ajustes › Proyectos (Listas de vocabulario): las carpetas conectadas, con cuántas listas dan, lo que se salta, «Abrir» y «quitar». */
 function vocabCarpetasHtml(carpetas) {
   carpetas = carpetas || [];
-  const ayuda = `<div class="help">Cada <code>.txt</code> es un tema, con los términos separados por comas o uno por línea. Valen tres formas: los <code>.txt</code> sueltos (el proyecto es el nombre de la carpeta), una subcarpeta <code>Vocabulario</code>, o una carpeta por proyecto con su <code>Vocabulario</code> dentro. Lo que cambies en esos archivos se usa en la siguiente grabación. Quitar una carpeta no borra nada.</div>`;
+  const ayuda = `<div class="help">Cada <code>.txt</code> es un workstream, con los términos separados por comas o uno por línea. Valen tres formas: los <code>.txt</code> sueltos (el proyecto es el nombre de la carpeta), una subcarpeta <code>Vocabulario</code>, o una carpeta por proyecto con su <code>Vocabulario</code> dentro. Lo que cambies en esos archivos se usa en la siguiente grabación. Quitar una carpeta no borra nada.</div>`;
   if (!carpetas.length) return `<div class="help" style="margin-top:0">Ninguna. Con «Usar las listas de una carpeta…» eliges la carpeta donde ya tienes tus listas (en OneDrive, por ejemplo) y ${esc(APP_NAME)} las lee de allí, sin copiarlas.</div>${ayuda}`;
   // la ruta, debajo del nombre y partible por cualquier sitio: una ruta larga de OneDrive no ensancha Ajustes
   return `<table class="vtable vc-carpetas">${carpetas.map(c => `<tr><td style="width:100%">${I.folder}${esc(nfc(c.name))}
@@ -246,51 +137,91 @@ function perfilSavedText(prop, live, transcribed) {
   return transcribed ? `${que} guardado · se aplicará si la vuelves a transcribir (y al resumen)` : `${que} guardado · se usará al transcribirla`;
 }
 
-/* ---------------------------------------------------------------- Ajustes: Perfil de reunión */
-function perfilVocabOptions(vocab, sel) {
-  const opt = (v, l) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
-  return opt(PERFIL_AUTO, 'Automático · el que sugiera la reunión en curso (Teams/Outlook) o el último elegido')
-    + opt('', 'Sin vocabulario · el general de Ajustes')
-    + perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => opt(v.id, v.name + (v.desc ? ' · ' + v.desc : ''))).join('')}</optgroup>`).join('');
+/* ---------------------------------------------------------------- Ajustes (rediseño B2, 07/11/2026)
+   El «Perfil de reunión» de antes era un bloque de 466 palabras con grabar, resumir, motores y destinos mezclados.
+   Ahora cada pieza va a su sección: las reglas de grabar a «Al grabar» (ajustes.js), los motores a «Procesado», el
+   idioma y las instrucciones del resumen a «Resumen» y los destinos de salida a «Proyectos». Los ids no cambian (los
+   lee collect() de app.js y collectPerfilSettings). */
+const perfilOpt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+/* Opciones de «Reuniones sin proyecto» y de «Proyecto al grabar», con lo guardado aunque ahora no salga. */
+function perfilFolderOpts(sel) {
+  const hay = sel === PERFIL_AUTO || flatFolders().some(f => f.path === sel);
+  return perfilOpt(PERFIL_AUTO, 'Automática · la última usada', sel)
+    + (hay ? '' : `<option value="${esc(sel)}" selected>${esc(perfilCarpetaTxt(sel))}${S.tree ? ' (no se encuentra)' : ''}</option>`)
+    + folderOpts(sel);
 }
-/* Ajustes abierto y las listas han cambiado (quitar una carpeta de listas): #pfVocab, otra vez con las que hay. Se queda
-   lo elegido si sigue existiendo; si no, lo guardado (el servidor ya lo ha puesto en automático). Si no, «Guardar»
-   mandaba el tema quitado y daba «Ese tema de vocabulario ya no existe» (revisión de la integración, 09/11/2026). */
+function perfilVocabOpts(sel) {
+  const vocab = S.vocab || [], hay = sel === PERFIL_AUTO || sel === '' || vocab.some(v => v.id === sel);
+  const falta = S.vocabError ? 'no se han podido leer las listas' : 'no se encuentra';
+  return perfilOpt(PERFIL_AUTO, 'Automático · con su motivo', sel) + perfilOpt('', 'Sin proyecto', sel)
+    + (hay ? '' : `<option value="${esc(sel)}" selected>${esc(perfilListaTxt(sel))} (${falta})</option>`)
+    + perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => perfilOpt(v.id, `${pr} › ${v.name}`, sel)).join('')}</optgroup>`).join('');
+}
+/* Ajustes abierto y las listas han cambiado (quitar una carpeta de listas, vocabDesconectar): «Proyecto al grabar»,
+   otra vez con las que hay. Se queda lo elegido si sigue existiendo; si no, lo guardado (el servidor ya lo ha puesto en
+   automático). Si no, «Guardar» mandaba la lista quitada y daba «Ese workstream ya no existe» (aeea430, de la
+   integración; aquí con las opciones de Ajustes, perfilVocabOpts) */
 function perfilVocabRedraw(d) {
   const v = $('#pfVocab', d);
   if (!v) return;
   const vocab = S.vocab || [], p = (S.config || {}).perfil || {};
   const vale = v.value === PERFIL_AUTO || v.value === '' || vocab.some(x => x.id === v.value);
-  v.innerHTML = perfilVocabOptions(vocab, vale ? v.value : (p.vocab == null ? PERFIL_AUTO : p.vocab));
+  v.innerHTML = perfilVocabOpts(vale ? v.value : (p.vocab == null ? PERFIL_AUTO : p.vocab));
 }
-function perfilFieldsetHtml() {
-  const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [], presets = c.presets || [];
+/* Una carpeta guardada, en palabras: la vinculada por su nombre y el resto de la ruta con «\». */
+function perfilCarpetaTxt(rel) {
+  const l = (S.config?.links || []).find(x => rel === x.rel || rel.startsWith(x.rel + '/'));
+  const resto = l ? rel.slice(l.rel.length) : rel;
+  return (l ? nfc(l.name) : '') + resto.replace(/\//g, '\\');
+}
+/* Una lista guardada que ya no sale entre las listas, en palabras: «Proyecto › Workstream». */
+function perfilListaTxt(id) {
+  const partes = String(id).replace(/^:v[^/]*\//, '').split('/');
+  const n = (partes.pop() || '').replace(/\.txt$/i, '');
+  return partes.length ? `${partes[0]} › ${n}` : n;
+}
+/* Al grabar: reuniones sin proyecto, idioma por defecto, proyecto si no se elige y contexto. Filas de una línea.
+   Una carpeta o una lista guardadas que ahora no salen (una vinculada desconectada, OneDrive sin conexión, las listas
+   sin poder leerse) se enseñan tal cual y elegidas: si no, el desplegable enseñaba «Automática» y cualquier «Guardar»
+   las borraba sin avisar (revisión 2 de B2, P1-3). */
+function perfilReglasHtml() {
+  const c = S.config || {}, p = c.perfil || {};
   const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
-  const opt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<div class="ag-regla"><label for="pfFolder">Reuniones sin proyecto<small class="ag-sub">y de proyectos sin carpeta propia</small></label><div><select id="pfFolder">${perfilFolderOpts(folderSel)}</select></div></div>
+    <div class="ag-regla"><label for="sLang">Idioma por defecto<small class="ag-sub">si el proyecto no tiene el suyo</small></label><div>${langSelect('sLang', c.language ?? 'es-en')}</div></div>
+    <div class="ag-regla"><label for="pfVocab">Proyecto al grabar<small class="ag-sub">la reunión, su título o la última</small></label><div><select id="pfVocab">${perfilVocabOpts(vocabSel)}</select></div></div>
+    <div class="ag-regla"><label for="pfContext">Contexto</label><div><input class="input" id="pfContext" maxlength="500" value="${esc(p.context || '')}" placeholder="Opcional: de qué van tus reuniones y quién participa" autocomplete="off"></div></div>`;
+}
+/* Procesado: con qué motor empieza el directo y con cuál se transcribe después. */
+function perfilMotoresHtml() {
+  const c = S.config || {}, presets = c.presets || [];
   const prov = c.providers?.[c.cloud?.provider]?.label || 'nube';
-  return `<fieldset><legend>${I.clipboard}Perfil de reunión</legend>
-      <div class="help" style="margin-top:4px">Con lo que empieza cada grabación (● Grabar y Ctrl+Alt+R). En el diálogo de grabar se ajusta para una reunión concreta y, desde ahí, se puede guardar como perfil.</div>
+  return `<fieldset><legend>${I.monitor}Motores</legend>
       <div class="grid2">
-        <div><label>${I.folder}Carpeta de destino</label><select id="pfFolder">${opt(PERFIL_AUTO, 'Automática · la última usada (o la del proyecto del tema)', folderSel)}${folderOpts(folderSel)}</select></div>
-        <div><label>${I.globe}Idioma de la reunión</label>${langSelect('sLang', c.language ?? 'es-en')}</div>
+        <div><label for="lPreset">Motor del directo</label><select id="lPreset">${presets.map(pr => perfilOpt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join('')}</select></div>
+        <div><label for="pfPreset">Motor al transcribir después</label><select id="pfPreset">${presets.map(pr => perfilOpt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('')}</select></div>
       </div>
-      <label>${I.topic}Tema de vocabulario</label>
-      <select id="pfVocab">${perfilVocabOptions(vocab, vocabSel)}</select>
-      <label>${I.text}Contexto de las reuniones <span class="muted" style="font-weight:400">· opcional, una o dos frases</span></label>
-      <textarea id="pfContext" rows="2" maxlength="500" placeholder="p. ej. Reuniones semanales del proyecto Alfa con el equipo del cliente: seguimiento de la migración y del plan de pruebas">${esc(p.context || '')}</textarea>
-      <div class="help"><b>Español + inglés</b>, <b>Español + portugués</b> e <b>Inglés + portugués</b> detectan el idioma cada pocos segundos pero solo entre esos dos y dejan cada frase en su idioma; si una reunión es solo en uno, fijarlo es algo más preciso. El contexto lo recibe Whisper detrás del vocabulario (si no cabe todo, se recorta antes que el vocabulario) y lo tiene en cuenta el resumen.</div>
-      <div class="grid2">
-        <div><label>Idioma del resumen</label><select id="sSumLang">${[['es', 'Español'], ['en', 'Inglés'], ['same', 'El de la reunión']].map(([v, l]) => opt(v, l, c.summary?.lang || 'es')).join('')}</select></div>
-        <div><label>Motor del directo</label><select id="lPreset">${presets.map(pr => opt(pr.id, `${pr.live_label} · ~${String(pr.live_speed).replace('.', ',')}× · ${liveFit(pr)[1]}`, c.live_preset || 'medium')).join('')}</select></div>
-      </div>
-      <label>Instrucciones extra para el resumen (opcional)</label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(c.summary?.extra || '')}</textarea>
-      <label>Motor al transcribir después <span class="muted" style="font-weight:400">· «Solo grabar», «Volver a transcribir» y audios que arrastres</span></label>
-      <select id="pfPreset">${presets.map(pr => opt(pr.id, `${pr.label} · ${pr.engine === 'cloud' ? prov : pr.model}`, c.preset)).join('')}</select>
-      <label>${I.copy}Destinos de salida <span class="muted" style="font-weight:400">· opcional: cada reunión, como documento, en otras carpetas</span></label>
+      <div class="help">El de después es el de «Solo grabar», «Volver a transcribir» y los audios que arrastres. El del directo se puede cambiar en mitad de la grabación desde su pantalla.</div>
+    </fieldset>`;
+}
+/* Resumen: en qué idioma y con qué instrucciones (quién resume se elige en Procesado). */
+function perfilResumenHtml() {
+  const c = S.config || {};
+  return `<fieldset><legend>${I.spark}Resumen</legend>
+      <label for="sSumLang">Idioma del resumen</label><select id="sSumLang">${[['es', 'Español'], ['en', 'Inglés'], ['same', 'El de la reunión']].map(([v, l]) => perfilOpt(v, l, c.summary?.lang || 'es')).join('')}</select>
+      <label for="sExtra">Instrucciones extra para el resumen <span class="muted" style="font-weight:400">· opcional</span></label><textarea id="sExtra" placeholder="p. ej. Céntrate en riesgos, dependencias y fechas">${esc(c.summary?.extra || '')}</textarea>
+      <div class="help">Quién resume y si lo hace solo al terminar se elige en <a href="#" data-sec-ir="procesado">Procesado</a>.</div>
+    </fieldset>`;
+}
+/* Proyectos: copias de cada reunión, como documento, en otras carpetas (los «destinos de salida»). */
+function perfilSalidasHtml() {
+  const p = (S.config || {}).perfil || {};
+  return `<fieldset><legend>${I.copy}Copias en otras carpetas</legend>
+      <div class="help" style="margin-top:4px">Opcional: cada reunión, como documento, en un vault de Obsidian, una biblioteca de SharePoint sincronizada o la carpeta de documentos del proyecto.</div>
       <div id="pfOuts">${perfilOutsHtml(p.outputs || [])}</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="pfOutAdd">${I.plus}Añadir carpeta…</button></div>
       <div id="pfAvisos"></div>
-      <div class="help">Una carpeta fuera de ${esc(APP_NAME)}: un vault de Obsidian, una biblioteca de SharePoint sincronizada, la de documentos del proyecto en OneDrive… No vale la carpeta de ${esc(APP_NAME)}, una carpeta vinculada ni una con grabaciones: allí cada documento chocaría con las notas de su reunión. Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>; si ese nombre ya lo usa otra reunión o un fichero tuyo, como <code>&lt;fecha&gt; - &lt;nombre&gt; (código).md</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)} en este PC; uno ajeno, uno nuestro que hayas cambiado allí o uno de otro PC que no coincida se deja como está (abajo verás el aviso). Al borrar una reunión, sus documentos que nadie haya cambiado van también a la papelera.</div>
+      <details class="ag-como"><summary>¿Cómo funciona?</summary><div class="help">Una carpeta fuera de ${esc(APP_NAME)}: no vale la carpeta de ${esc(APP_NAME)}, una carpeta vinculada ni una con grabaciones: allí cada documento chocaría con las notas de su reunión. Al terminar la transcripción y el resumen, y al guardar cambios en las notas o en la transcripción, cada reunión se escribe allí como <code>&lt;fecha&gt; - &lt;nombre&gt;.md</code> (un documento con propiedades, resumen, notas y transcripción con minutos), <code>.txt</code> o <code>.docx</code>; si ese nombre ya lo usa otra reunión o un fichero tuyo, como <code>&lt;fecha&gt; - &lt;nombre&gt; (código).md</code>. El audio y los originales se quedan donde se graban: nunca se mueve nada, y solo se sobrescriben los documentos que generó ${esc(APP_NAME)} en este PC; uno ajeno, uno nuestro que hayas cambiado allí o uno de otro PC que no coincida se deja como está (abajo verás el aviso). Al borrar una reunión, sus documentos que nadie haya cambiado van también a la papelera.</div></details>
     </fieldset>`;
 }
 /* ---------------------------------------------------------------- destinos de salida (lista editable de Ajustes) */
@@ -307,7 +238,7 @@ function bindPerfilOuts(d) {
   const box = $('#pfOuts', d), add = $('#pfOutAdd', d);
   if (!box || !add) return;
   perfilOuts = (S.config.perfil?.outputs || []).map(o => ({ path: o.path, format: o.format || 'md', by_project: !!o.by_project }));
-  const draw = () => { box.innerHTML = perfilOutsHtml(perfilOuts); };
+  const draw = () => { box.innerHTML = perfilOutsHtml(perfilOuts); d.ajMarcar?.(); };  // (también tras elegir carpeta)
   box.addEventListener('click', e => { const b = e.target.closest('[data-out-del]'); if (b) { perfilOuts.splice(+b.dataset.outDel, 1); draw(); } });
   box.addEventListener('change', e => {
     const f = e.target.closest('[data-out-fmt]'), p = e.target.closest('[data-out-proj]');
@@ -341,7 +272,7 @@ function perfilAvisoText(accion) {
 }
 function perfilAvisosHtml(avisos) {
   if (!avisos || !avisos.length) return '';
-  return `<div class="notice" style="margin-top:8px">Documentos sin escribir en los destinos:<ul style="margin:6px 0 0 18px;padding:0">${avisos.slice(0, 8).map(a =>
+  return `<div class="notice" style="margin-top:8px">Copias que no se han podido escribir:<ul style="margin:6px 0 0 18px;padding:0">${avisos.slice(0, 8).map(a =>
     `<li><code title="${esc(a.path)}">${esc(a.path)}</code> · ${esc(perfilAvisoText(a.accion))}</li>`).join('')}</ul></div>`;
 }
 function bindPerfilSettings(d) {
@@ -356,8 +287,10 @@ function bindPerfilSettings(d) {
       fsel.value = fsel.dataset.prev || PERFIL_AUTO;
       const rel = await linkFolder();  // se vincula y pasa a ser la carpeta fija
       if (rel && document.body.contains(fsel)) {
-        fsel.innerHTML = `<option value="${PERFIL_AUTO}">Automática · la última usada (o la del proyecto del tema)</option>` + folderOpts(rel);
+        fsel.innerHTML = `<option value="${PERFIL_AUTO}">Automática · la última usada</option>` + folderOpts(rel);
         fsel.dataset.prev = rel;
+        d.ajMarcar?.();  // es un cambio sin guardar como otro (revisión 8: no salía «Hay cambios sin guardar»)
+        d.ajDibujarEnlaces?.();  // y ya es una carpeta vinculada: sale en su lista, con «quitar»
       }
     };
   }

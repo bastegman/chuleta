@@ -179,8 +179,10 @@ class ExplicarClaudeTests(unittest.TestCase):
             ex = explicar.explicar(e)
             self.assertEqual(ex["frase"], str(e), texto)  # la frase de engines, tal cual
             self.assertIn(trozo, ex["frase"], texto)
-            self.assertEqual(ex["accion"]["tipo"], accion, texto)
-            self.assertIn(ex["accion"]["etiqueta"], ("Probar otra vez", "Abrir PowerShell"))
+            # con la frase de claude-empresa («pide acceso a … IT»), el diagnóstico para IT en vez de PowerShell
+            esperada = "diagnostico" if "pide acceso a quien gestiona" in ex["frase"] else accion
+            self.assertEqual(ex["accion"]["tipo"], esperada, texto)
+            self.assertIn(ex["accion"]["etiqueta"], ("Probar otra vez", "Abrir PowerShell", "Copiar diagnóstico"))
             self.assertTrue(ex["frase"].endswith("y vuelve a probar."), ex["frase"])  # vale en Ajustes y en «Probar»
         # sin sesión sigue con la frase y el botón de Steve
         ex = explicar.explicar(self.error("Not logged in · Please run /login"))

@@ -10,6 +10,159 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Ajustes por lo que haces: «Al grabar» primero, «Proyectos» y «Calendario y Teams» (07/11/2026)
+Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configurado es lo que se usa (msg 1196).
+- Ajustes abre en **«Al grabar»**: arriba, «Así se graba ahora una reunión de [proyecto]», el mismo cálculo que la
+  tarjeta de grabar y Ctrl+Alt+R, que cambia al momento con lo que escribas debajo aunque aún no lo hayas guardado.
+  Debajo, solo las reglas, una por línea: reuniones sin proyecto, idioma por defecto, proyecto al grabar, contexto,
+  micrófono y audio del PC, texto en directo y «Llamada detectada». La ayuda larga, plegada.
+- **«Proyectos»** junta lo que antes eran Vocabulario y Carpetas: una tabla con la carpeta y el idioma de cada proyecto
+  y workstream, que dice si son suyos o heredados («la del proyecto», «el de Al grabar») y se edita en la propia fila;
+  las listas de vocabulario, las carpetas fuera de la app y las copias en otras carpetas (los antiguos destinos de
+  salida).
+- Cada cosa a su sección: los motores a **Procesado**, el idioma y las instrucciones del resumen a **Resumen**, OBS a
+  **Avanzado** y Outlook y el aviso flotante a **Calendario y Teams**, que dice en una frase si Teams funciona (y la
+  reunión que ve ahora) y el estado de Outlook.
+- La tabla de **Proyectos** dice la carpeta que se usará de verdad, del mismo cálculo que la tarjeta de grabar: la
+  asignada, en negro; sin asignar, en gris, «su carpeta» (la que tiene su `Vocabulario`), «la de Al grabar» o «la
+  última usada», con la ruta; y si la asignada ya no existe, lo avisa. Antes decía «la última usada» aunque se fuera a
+  usar la del proyecto. Al editarla, «Sin asignar» dice cuál quedaría.
+- Con las ramas de esta semana: la tarjeta de grabar ofrece «Usar las listas de una carpeta…» en Proyecto y en el
+  panel del vocabulario (vocab-carpeta); «Se guarda en» enseña la carpeta «AAAA-MM-DD Nombre» que se creará dentro de
+  la del proyecto (carpetas); y «Con tu cuenta de Claude» dice qué copia respondió («Claude Code de VS Code»), con qué
+  modelo y, si la cuenta no deja el elegido, el aviso (claude-empresa).
+- «Con tu cuenta de Claude», en Ajustes › Procesado y en el paso 2 de «Configurar»: «Abrir PowerShell», la línea para
+  instalar, `claude` en esa misma ventana y el inicio de sesión en el navegador (con el de tu empresa, si es la suya),
+  hasta «Login successful». Que la copia de VS Code también vale y la app de escritorio de Claude no basta.
+- Botones de los errores de Claude Code: «pide acceso a … (IT)» lleva «Copiar diagnóstico» (PowerShell no lo arregla);
+  «ha caducado», «Abrir PowerShell» con el programa suelto y «Probar otra vez» con la copia de VS Code; «no puede usar
+  el modelo elegido», «Revisar en Ajustes».
+- Un solo nombre para los antiguos destinos de salida: «copias en otras carpetas», como en Ajustes, también en la
+  tarjeta de grabar, al confirmar participantes, al borrar una reunión y en «Copiar diagnóstico».
+- **Calendario y Teams**, sin repetir nada: Outlook sale una vez, en su fila, con «Activar» o «Desactivar» y, activado,
+  «Probar»; mientras no se guarde, lo dice («Se activa al pulsar Guardar»). Con el estado del calendario (`GET
+  /api/calendario/estado`), la frase es ese estado, el chip toma su color (en aviso si dice que algo falla),
+  «Activar» y «Desactivar» guardan al momento (y «Guardar» ya no los pisa mientras Outlook pregunta) y «Probar con mi
+  calendario» se puede usar antes de activarlo. Fuera de Windows no se ofrece activarlo. La ayuda larga, plegada en
+  «¿Cómo funciona?», bajo las filas de Teams y Outlook; el aviso flotante, en su recuadro «Aviso al detectar una
+  llamada» (se llamaba «Reuniones»). El aviso flotante dice que depende
+  de «Llamada detectada» (Al grabar) y, con ella apagada, no se puede marcar: era una segunda casilla casi igual que no
+  decía de cuál colgaba. La línea de Teams ya no consulta Outlook cada vez que se abre Ajustes.
+- «Llamada detectada» (Al grabar) vuelve a decir lo que hace: «avisarme si estoy en una llamada y no estoy
+  grabando». Decía «aviso con «Grabar»», que es el aviso flotante, otro ajuste.
+- «Al grabar» cabe en una pantalla a 1500×920 (antes 828 px para 655), también con «Una carpeta por reunión» y con
+  contexto: las pistas de cada regla van bajo su nombre, «¿Cómo funciona?» en la línea de arriba, sin la línea del pie
+  (repetía el enlace a Proyectos), y la carpeta y el contexto del plan en una línea (enteros, al pasar el ratón). El
+  micrófono y la salida llevan nombres cortos («El de Windows», «Todo lo que suena»), y cuál es ahora el de Windows, al
+  pasar el ratón. Los avisos de esa pantalla, en una línea.
+- En la tabla de Proyectos, editar una fila ya no cambia los anchos de la tabla ni corta los desplegables por la
+  mitad.
+- Un nombre de reunión escrito con signos que no admite un archivo (`\ / : * ? " < > |`, p. ej. «Comité: Q4») ya no
+  hace fallar «Empezar a grabar» con «Nombre no válido»: se graba sin esos signos y la tarjeta dice antes cómo se
+  guardará («se guarda como «Comité Q4»»). Ctrl+Alt+R, igual.
+- En **Proyectos**, lo que cambias en una fila se guarda al momento («Guardando…», «Carpeta guardada», «Idioma
+  guardado» en la propia fila) y «Listo» la cierra. Antes hacía falta el «Guardar» de la fila, y el «Guardar» de abajo
+  la perdía diciendo «Ajustes guardados». Dos cambios seguidos, o cambiar de fila enseguida, ya no pierden el primero.
+  Ahora también se elige la carpeta de cada workstream, y una carpeta asignada que ya no existe se avisa también al
+  editarla. En negro, lo asignado; en gris, lo heredado.
+- **«Así se graba ahora»** cambia también con lo que aún no has guardado en otras secciones (los motores de
+  Procesado, resumir al terminar, el vocabulario de las reuniones sin proyecto y «Una carpeta por reunión») y se
+  recalcula al volver de Proyectos. También con la opción marcada en «Dónde se procesan» aunque aún no la hayas
+  aplicado: «Guardar» la aplica, así que cuenta como «Hay cambios sin guardar». «Transcribe» dice que sale de Ajustes ›
+  Procesado, donde están los motores (o de Al grabar, si es «Texto en directo» apagado). Sin reunión, la carpeta de la
+  reunión se enseña como «AAAA-MM-DD Nombre de la reunión», no con la hora de ese minuto. Al recalcular, solo cambian
+  las líneas que cambian (un lector de pantalla no vuelve a leer el plan entero).
+- Si no se pueden leer las listas de vocabulario (OneDrive sin conexión, por ejemplo), Al grabar, Proyectos y las
+  listas lo dicen con «Probar otra vez»; antes Proyectos decía «Todavía no hay proyectos. Crea uno…».
+- La carpeta de las reuniones sin proyecto y el proyecto al grabar guardados, si ahora no se encuentran (una carpeta
+  vinculada desconectada, una lista que no se lee), se ven como «(no se encuentra)» y se conservan con cualquier
+  «Guardar». Antes el desplegable enseñaba «Automática» y el «Guardar» de otra sección los borraba sin avisar.
+- ⚙ abre siempre en «Al grabar». Al volver de editar una lista o del asistente, en la sección en la que estabas. Un
+  enlace de dentro (el origen de una línea del plan, «Proyectos» en la ayuda) lleva el foco a esa sección.
+- Deshacer un cambio en Ajustes ya quita «Hay cambios sin guardar»: los campos de la nube, que se pintan después,
+  contaban siempre como cambiados.
+- Los idiomas se llaman igual en el plan y en los desplegables, en español («Portugués», «Alemán», «Solo inglés»,
+  «Detectar el idioma»); el desplegable añade a veces una aclaración entre paréntesis («(mezcla)»). Antes decían
+  «Português» o «Deutsch» en un sitio y «Portugués» o «Alemán» en otro, e «Inglés» frente a «Solo inglés».
+- Los asistentes de una cita de Outlook de empresa («Apellido, Nombre») se unen con «; », como en el resto de la app:
+  con «, » eran el doble de personas en la tarjeta y en la pista de quién habla.
+- «Workstream» y «proyecto» en vez de «tema»: en el editor de listas, en la página de la reunión y en el directo
+  («Proyecto»), en la frase de «Probar» («proyecto sugerido»), en el LEEME, en «Incluir mis listas de vocabulario» y en
+  los errores de las listas («Ese workstream ya no existe»).
+- Lo escrito y sin guardar no sale de Ajustes. Las confirmaciones («Apagar», «Activar» las voces, «Quitar» una
+  carpeta vinculada) se abren encima, sin cerrarlo, y con «Cancelar» o Escape Ajustes sigue como estaba. «Probar otra
+  vez» de las listas e «Importar listas…» se hacen ahí mismo. Lo que cambian (las carpetas vinculadas, «Reuniones sin
+  proyecto», las listas, las voces) se pone al día sin tocar lo escrito.
+- Antes de abrir algo que ocupa el sitio de Ajustes (editar o crear una lista, «Editar la lista» de Proyectos, el
+  asistente con «Probar» o «Cambiar…») con cambios sin guardar, se pregunta: «Tienes cambios sin guardar», con
+  «Guardar y seguir», «Descartar» y «Volver» (también con Escape o un clic fuera). Si no se puede guardar, se queda en
+  Ajustes y lo dice. Sin cambios, se sigue sin preguntar. Cuentan también los destinos de «Copias en otras carpetas» y
+  las claves adicionales del directo. Lo que ya guardaron «Aplicar ahora» o «Probar conexión» no cuenta: la clave
+  probada se enseña como «Guardada», y lo escrito mientras se guardaba sigue contando. Tras «Probar conexión», ir a
+  otro proveedor y volver enseña lo probado; antes volvía lo de cuando se abrió Ajustes, y «Guardar» lo guardaba.
+  Mientras esa pregunta o una confirmación están abiertas, el teclado no sale de ellas, y al cerrarlas se vuelve a
+  donde se estaba en Ajustes.
+- Al volver de esos subdiálogos, o al abrir Ajustes de cualquier forma, se ve lo guardado. Eso incluye una lista de
+  «Proyecto al grabar» renombrada o borrada en su editor: sale con su nombre nuevo o en «Automático», y «Guardar»
+  funciona. Antes, lo escrito se reponía al volver, y en cada revisión salía un caso en que lo repuesto ya no casaba
+  con lo guardado. El último: una API key escrita volvía oculta tras guardar otro modo en el asistente, y «Guardar» la
+  mandaba.
+- Desde el asistente abierto en Ajustes, «Revisar en Ajustes» e «Ir a Avanzado» llevan a esa sección. «Revisar en
+  Ajustes» la abre con «Con tu cuenta de Claude» marcada.
+- La carpeta de las reuniones sin proyecto que no se encuentra no tira el resto de lo escrito en el plan (el contexto),
+  y el plan dice por qué graba en otra («No se encuentra la carpeta de las reuniones sin proyecto (…): se guarda
+  aquí»). Un proyecto sin carpeta propia (con sus listas en una carpeta conectada) lo dice en su línea, con dónde
+  asignársela («Ajustes › Proyectos o, al grabar, con «Cambiar» y «Todas las de …»»). Estos avisos salen en Ajustes, en
+  la tarjeta de grabar y, delante y sin repetirse, en el aviso de Windows de Ctrl+Alt+R.
+- «Proyecto al grabar» fijo cambia también el proyecto del plan de arriba, para que se vea su efecto.
+- En la fila que se edita en Proyectos, la carpeta va con su ruta («Alfa › Reuniones»): cerrado, el desplegable decía
+  solo «Reuniones».
+- Con «API externa» y sin su clave, el plan lo dice en «Transcribe» y «Resume» («Falta la API key»). Los errores que
+  mandaban a «Ajustes ⚙ → Transcripción en la nube» mandan a «Procesado».
+- Al abrir Ajustes, una sola petición del plan para «Al grabar» y la tabla de Proyectos. «Vocabulario de las reuniones
+  sin proyecto» tiene nombre para un lector de pantalla.
+- «Activar» y «Desactivar» de Outlook dicen a un lector de pantalla qué activan; con el teclado, el foco sigue en el
+  botón tras activar.
+- Con la copia de Claude Code de VS Code y una organización que no admite API keys, el botón es «Probar otra vez»
+  (se entra en el panel de VS Code), no «Abrir PowerShell».
+- No se puede dejar en Ajustes «Sin micrófono» y «Sin el audio del PC» a la vez (no se grabaría nada): el plan lo avisa
+  y al guardar se dice por qué.
+- Si no se puede calcular el plan o la carpeta de cada proyecto, Ajustes lo dice en una frase con «Probar otra vez»,
+  sin texto técnico ni una tabla que parezca correcta.
+- Al abrir Ajustes, el foco va a la sección abierta: a 900×600 el plan ya no se queda fuera de la vista.
+- Accesibilidad: cada desplegable y casilla de Ajustes y de los paneles «Cambiar» de la tarjeta tiene su nombre para
+  un lector de pantalla (los de la tabla de Proyectos dicen de qué proyecto son, y cada «Editar», cuál edita). Los
+  avisos de abajo («Ajustes guardados» y los demás) también se leen en voz alta.
+- «Otra carpeta (fuera de Chuleta)…» en «Reuniones sin proyecto» cuenta como cambio sin guardar: lo dice «Hay cambios
+  sin guardar» y la carpeta sale ya en la lista de carpetas vinculadas, con su «quitar». Antes se vinculaba y se
+  enseñaba elegida sin avisar de que faltaba guardarla.
+- Si la app no puede leer la lista de micrófonos y salidas, Ajustes y la tarjeta de grabar lo dicen en una frase
+  («No se ha podido leer la lista de micrófonos y salidas de audio») en vez de callarlo o de enseñar el final del error
+  de la grabadora, que queda al pasar el ratón.
+
+### Grabar: una tarjeta que dice qué va a pasar, y lo mismo con Ctrl+Alt+R (07/11/2026)
+Lo que pidió: grabar «no es nada amigable» y no estaba claro si lo que se configura es lo que de verdad se usa
+(msg 1196).
+- «● Grabar» abre una tarjeta: la reunión (el nombre sale de Teams, de Outlook o de lo que escribas, con tus reuniones
+  recientes como sugerencia), el proyecto › workstream y, debajo, **«Así se va a grabar»**: dónde se guarda, idioma,
+  vocabulario, quién transcribe, quién resume y el audio, cada línea con **de dónde sale** (esta reunión, el
+  workstream, el proyecto o Ajustes). Sustituye al formulario de 15 controles.
+- «Cambiar» en cada línea pregunta **para qué reuniones**: solo esta (lo de siempre por defecto), todas las del proyecto
+  o todas (Ajustes). Sustituye a «Guardar como perfil por defecto», que mezclaba las dos cosas. Lo que se cambia solo
+  para una reunión ya no pasa a ser el predeterminado de la siguiente.
+- El proyecto se propone, en este orden, por la misma reunión grabada antes, por el título y por la última grabación,
+  siempre con el motivo a la vista («como la última «Comité» (vie 30 oct)»). «La última usada» ya no es un valor por
+  defecto escondido.
+- **Un solo cálculo** en la app (`/api/grabar/plan`) para la tarjeta, Ctrl+Alt+R y el aviso de Teams: lo que enseña la
+  tarjeta es exactamente lo que se manda a grabar, y Ctrl+Alt+R graba con el mismo plan (sin los cambios de esa
+  reunión). Antes la regla estaba escrita dos veces, una en la página y otra en el servidor. El aviso de Windows al
+  empezar con Ctrl+Alt+R dice la reunión, el proyecto y el idioma.
+- La reunión de Teams u Outlook que llega tarde se espera como mucho 2 s; si ya has escrito o elegido algo, se propone
+  («Teams dice «…» · Usar») y no lo pisa.
+- Desarrollo y CI: `tests/test_plan.py` (capas, origen de cada valor, el orden del proyecto, «Usarlo en» y la prueba de
+  paridad Ctrl+Alt+R = tarjeta) y `test_ui_smoke.test_tarjeta_de_grabar` (en Chromium a 900×600: cabe, no pisa lo
+  escrito y el cuerpo de /api/rec/start es el plan pintado).
+
 ### Calendario de Outlook: funciona con el clásico y, si no puede, dice por qué (07/11/2026)
 Lo que vio: «La conexión al calendario no está funcionando» (msg 1196), con el Outlook clásico (msg 1210).
 - **Las citas se leían con una hora de más (dos en verano)**, así que la reunión en curso quedaba fuera de la hora
@@ -18,8 +171,9 @@ Lo que vio: «La conexión al calendario no está funcionando» (msg 1196), con 
   la hora local. Ahora se toma la hora tal cual. «Probar» la compara con la UTC de la cita y con la de Windows.
 - **«Probar con mi calendario» prueba la conexión**, no solo si hay una reunión ahora: lee la agenda de hoy y dice
   «Outlook clásico: conectado · próxima reunión 10:00» (en verde aunque no haya reunión), con los pasos debajo.
-- **El estado, siempre a la vista** debajo de la casilla (`GET /api/calendario/estado`), en una frase: conectado, o la
-  causa y qué hacer. Con la casilla apagada y el Outlook clásico instalado ofrece «Activar». Las otras causas: el
+- **El estado, siempre a la vista** en la fila de Outlook de Ajustes → Calendario y Teams (`GET
+  /api/calendario/estado`), en una frase: conectado, o la causa y qué hacer. Apagado y con el Outlook clásico
+  instalado, ofrece «Activar». Las otras causas: el
   clásico cerrado, el Outlook nuevo, sin Outlook clásico, falta pywin32, Outlook abierto como administrador u Outlook
   con un aviso abierto.
 - **Asistentes y aviso de seguridad de Outlook.** El organizador, los asistentes y el cuerpo de una cita están
@@ -69,7 +223,8 @@ proyecto o workstream» (msg 1158).
   del perfil; sin tema, la fija del perfil o la última. Ctrl+Alt+R, el aviso de Teams y el diálogo usan la misma regla,
   y el aviso de Ctrl+Alt+R dice dónde se guarda.
 - Un proyecto cuyas listas vienen de una carpeta conectada no tiene carpeta en el árbol: su carpeta principal es la
-  última que elegiste a mano para él. Si no, Ctrl+Alt+R y el aviso de Teams con su tema grababan en la última carpeta
+  última que elegiste a mano para él, también en la tarjeta de grabar (salvo con «solo esta reunión»), o la que le
+  asignes en Ajustes → Proyectos. Si no, Ctrl+Alt+R y el aviso de Teams con su tema grababan en la última carpeta
   usada, que podía ser la de otro proyecto. Si el proyecto también está en el árbol, sus listas conectadas graban en
   la carpeta del proyecto, como las demás. La app ya no toma una carpeta de listas conectada por la carpeta de su
   proyecto, tampoco si queda dentro de una carpeta vinculada (antes las reuniones caían dentro solas y luego no se
@@ -88,12 +243,13 @@ proyecto o workstream» (msg 1158).
   app y no hay otra grabación dentro: una carpeta tuya que se llame igual se queda como está. Nunca se pisa un archivo
   y, si uno está en uso, no se mueve nada (antes podía quedarse a medias). Borrarla quita su carpeta si se queda vacía;
   llevarla a la carpeta que contiene la suya la saca de ella.
-- Se puede apagar en `settings.json` (`"carpeta_por_reunion": false`); el interruptor en Ajustes llega con su rediseño.
+- Se puede apagar en Ajustes → Al grabar («Una carpeta por reunión») o en `settings.json` (`"carpeta_por_reunion":
+  false`).
 
 ### Vocabulario desde una carpeta conectada (07/11/2026)
 Lo que pidió: «me gustaría poder conectar a una carpeta, no tener que pegarlo o escribirlo ahí mismo» (msg 1148).
-- **«Usar las listas de una carpeta…»** (Ajustes → Vocabulario; en ● Grabar, al final del selector de proyecto y, sin
-  listas, como botón): eliges la carpeta donde ya tienes tus listas y la app las lee de allí **en vivo**, sin copiarlas.
+- **«Usar las listas de una carpeta…»** (Ajustes → Proyectos; en ● Grabar, al final del selector de proyecto y, sin
+  listas, en el panel del vocabulario): eliges la carpeta donde ya tienes tus listas y la app las lee de allí **en vivo**, sin copiarlas.
   Lo que cambies en esos `.txt` vale desde la siguiente grabación (en directo, desde el siguiente trozo). Ajustes
   enseña cada carpeta con cuántas listas da, «Abrir» y «quitar» (no borra nada). Si el tema del perfil salía de la
   carpeta que quitas, vuelve a «Automático» también en Ajustes, y «Guardar» funciona (antes daba «Ese tema de
@@ -743,6 +899,10 @@ Lo que falló en la primera prueba de la versión del 01/11/2026 en un portátil
   (P2-37).
 
 ### Desarrollo y CI
+- `ui-smoke` en Windows (08/11/2026): el 400 de `/api/rec/devices` se permite cuando no está instalado `soundcard`
+  (el job no lo instala en ningún sistema), no según el sistema operativo. Hasta ahora pasaba en Windows solo porque
+  el diálogo de grabar se cerraba antes de que llegara esa respuesta; Ajustes › Al grabar la pide al abrirse y la
+  espera. Los fallos de esos tests dicen ya la URL que contestó con error.
 - **Workflows de Windows también en main** (P2-38): `lookfeel-e2e` (E2E del instalador y del desinstalador),
   `reunion-windows` (escritorio: ventana de Teams simulada, aviso flotante) y `windows-real`, nuevo (la suite con el
   formato regional `es-ES`, la ventana real ante `WM_QUERYENDSESSION` y `WM_ENDSESSION` y sin WebView2, y el aviso con

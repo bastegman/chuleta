@@ -230,9 +230,14 @@ function bindVocesSettings(d) {
         <ul><li>Se descargan dos modelos (≈47 MB, una sola vez) a <code>%LOCALAPPDATA%\\AudiosApp\\models\\voces</code>.</li>
         <li>Las huellas van a <code>%LOCALAPPDATA%\\AudiosApp\\voces.json</code>, cifrado con tu cuenta de Windows, fuera de OneDrive, y se pueden olvidar en cualquier momento.</li>
         <li>Una huella de voz es un <b>dato biométrico</b>: solo se guarda si marcas que tienes el consentimiento de esa persona. Ese consentimiento es responsabilidad tuya.</li></ul>`, 'Activar');
-      openSettings();
-      if (!ok) return;
-      try { const st = await api('/api/voces/activar', { on: true }); S.config.voices = { enabled: true, models_ready: st.models.ready }; toast('🗣 Voces activadas' + (st.models.ready ? '' : ': descargando modelos…')); openSettings(); }
+      if (!ok) return;  // (la confirmación va encima de Ajustes: lo escrito sigue ahí, también al activar)
+      try {
+        const st = await api('/api/voces/activar', { on: true });
+        S.config.voices = { enabled: true, models_ready: st.models.ready };
+        e.target.checked = true;
+        toast('🗣 Voces activadas' + (st.models.ready ? '' : ': descargando modelos…'));
+        poll();
+      }
       catch (err) { toast(esc(err.message), 'err'); }
     } else {
       try { await api('/api/voces/activar', { on: false }); S.config.voices = { enabled: false, models_ready: S.config.voices?.models_ready }; toast('Voces desactivadas (las personas guardadas se conservan hasta que las olvides)'); draw({ enabled: false }); }

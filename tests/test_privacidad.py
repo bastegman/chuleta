@@ -545,14 +545,16 @@ class ParticipantesTextosTests(unittest.TestCase):
         # el asunto de la cita sí sale (como nombre de la grabación y título del resumen y de los destinos)
         self.assertNotIn("no se envía a ningún sitio", js)
         self.assertIn("El nombre que se sugiere al grabar (el asunto de la cita o el título de la reunión de Teams), "
-                      "si lo aceptas, es el nombre de la grabación: va como título al resumen con IA y a los destinos "
-                      "de salida.", js)
+                      "si lo aceptas, es el nombre de la grabación: va como título al resumen con IA y a las copias en "
+                      "otras carpetas.", js)
         self.assertNotIn("(irán a las notas de la reunión)`", js)
-        for s in ("como participantes <b>sugeridos</b>: no van al resumen con IA ni a los destinos de salida hasta "
-                  "que los confirmes o los edites", "no se envían al resumen ni a los destinos hasta que los confirmes",
-                  "function reunionParticipantesHtml(a)", "function reunionParticipantesGuardados(a)",
-                  "data-rn-confirmar", "saveProps(a, { participantes:"):
+        for s in ("como participantes <b>sugeridos</b>: no van al resumen con IA ni a las copias en otras carpetas "
+                  "hasta que los confirmes o los edites", "function reunionParticipantesHtml(a)",
+                  "function reunionParticipantesGuardados(a)", "data-rn-confirmar", "saveProps(a, { participantes:"):
             self.assertIn(s, js, s)
+        # al grabar, la tarjeta (grabar.js, 07/11/2026) lo dice con los asistentes de la cita, y deja quitarlos
+        self.assertIn("Irán a las notas de la reunión como sugeridos: no se envían al resumen ni a las copias en otras "
+                      "carpetas hasta que los confirmes.", static("grabar.js"))
         self.assertNotRegex(js, r"[\U0001F300-\U0001FAFF\u2600-\u26FF]")
         self.assertEqual(notas.count("${window.reunionParticipantesHtml?.(a) || ''}"), 1)
         self.assertEqual(notas.count(".then(() => window.reunionParticipantesGuardados?.(a))"), 1)

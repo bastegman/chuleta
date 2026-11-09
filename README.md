@@ -12,7 +12,7 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de respaldo de otras cuentas
   del mismo proveedor, si las añades); con «Modo seguir» y, si quieres, traducción al español en una columna.
 - **Corregir** la transcripción en la propia página y **tomar notas** por reunión (bloques, propiedades, etiquetas,
-  estado, participantes, tema).
+  estado, participantes, proyecto).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio. Al terminar se hace
   solo si la reunión se transcribió en la nube; lo transcrito en local, a mano o si lo permites en Ajustes.
   «Copiar para correo» lo copia como acta con formato (título, fecha, asistentes confirmados y el resumen, sin
@@ -21,25 +21,28 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   suscripción a través de Claude Code, con el paso a paso dentro de la app) o con una API externa; las dos últimas,
   con su aviso.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
-- **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas. Las listas se escriben en la app o
-  se leen de una carpeta tuya («Usar las listas de una carpeta…»: cada `.txt` es un tema y se lee en vivo, sin
-  copiarlo); «Copiar listas de otra carpeta…» las copia a la de la app.
+- **Vocabulario** por proyecto y workstream para que Whisper escriba bien nombres y siglas. Las listas se escriben en
+  la app o se leen de una carpeta tuya («Usar las listas de una carpeta…»: cada `.txt` es un workstream y se lee en
+  vivo, sin copiarlo); «Copiar listas de otra carpeta…» las copia a la de la app.
 - **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin
-  asignar, la del proyecto: la que tiene su `Vocabulario`; si sus listas vienen de una carpeta conectada, la última
-  que elegiste a mano para él). Lo grabado antes se queda donde está. En pleno directo,
+  asignar, la del proyecto: la que tiene su `Vocabulario`; si sus listas vienen de una carpeta conectada, la que le
+  asignes en Ajustes → Proyectos o con «Usarlo en» al grabar). Lo grabado antes se queda donde está. En pleno directo,
   «Se guarda en … · Cambiar» elige otra: la reunión entera se mueve sola cuando terminan el directo, el repaso y el
   resumen (con «Deshacer» hasta entonces, y aunque cierres la app antes).
-- **Perfil de reunión**: carpeta de destino, idioma (también mezclas español + inglés / portugués), tema de
-  vocabulario y un contexto de una o dos frases con los que empieza cada grabación, también con `Ctrl+Alt+R`; se
-  ajustan por reunión al grabar y sobre la marcha en su página (el directo los usa desde el siguiente trozo).
-- **Destinos de salida**: cada reunión, además, como documento (`.md` con propiedades, resumen, notas y transcripción;
-  `.txt`; o `.docx`) en las carpetas que elijas (un vault de Obsidian, la de documentos del proyecto en OneDrive, una
-  biblioteca de SharePoint sincronizada…; no la de Chuleta, ni una vinculada, ni una con grabaciones), al terminar y
-  al guardar cambios, sin mover el original ni pisar nada ajeno. Si un nombre ya lo usa otra reunión o un fichero
-  tuyo, el documento va a `<nombre> (<código>).md`.
-- **Reunión en curso**: al grabar, la app sugiere el nombre, el tema y los participantes a partir de la ventana de
-  reunión de Teams y, si lo activas, de la cita de tu calendario de Outlook (clásico); los participantes quedan como
-  sugeridos hasta que los confirmas. Al detectar una llamada aparece un aviso flotante con «Grabar».
+- **Grabar con una tarjeta que dice qué va a pasar**: la reunión, el proyecto y «Así se va a grabar» (dónde se
+  guarda, idioma, vocabulario, quién transcribe y resume, el audio), cada línea con de dónde sale: esta reunión, el
+  proyecto o Ajustes. «Cambiar» pregunta para qué reuniones. `Ctrl+Alt+R` y el aviso de Teams graban con el mismo
+  plan, que calcula la app una sola vez. Ajustes abre en «Al grabar» con ese plan arriba y las reglas debajo; idioma
+  y contexto se cambian también sobre la marcha en la página de la reunión.
+- **Copias en otras carpetas** (los destinos de salida): cada reunión, además, como documento (`.md` con propiedades,
+  resumen, notas y transcripción; `.txt`; o `.docx`) en las carpetas que elijas (un vault de Obsidian, la de documentos
+  del proyecto en OneDrive, una biblioteca de SharePoint sincronizada…; no la de Chuleta, ni una vinculada, ni una con
+  grabaciones), al terminar y al guardar cambios, sin mover el original ni pisar nada ajeno. Si un nombre ya lo usa otra
+  reunión o un fichero tuyo, el documento va a `<nombre> (<código>).md`.
+- **Reunión en curso**: al grabar, la app sugiere el nombre, el proyecto y los participantes a partir de la ventana
+  de reunión de Teams, de tus reuniones recientes y, si lo activas, de la cita de tu calendario de Outlook (clásico);
+  los participantes quedan como sugeridos hasta que los confirmas. Al detectar una llamada aparece un aviso flotante
+  con «Grabar».
 - **Quién habla** (opcional): separa las voces de cada reunión en tu PC (sherpa-onnx), etiqueta «Persona 1»,
   «Persona 2», «Tú»… en la transcripción, deja ponerles nombre y, con consentimiento, recordarlas en las próximas
   reuniones. El resumen usa esos nombres.
@@ -51,7 +54,7 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    «Desbloquear» → Aceptar: así Windows no marca `INSTALAR.bat` como bajado de Internet y no sale el aviso «Unknown
    publisher» («Windows protegió su PC»; si sale igual, «Más información» → «Ejecutar de todas formas»: el instalador
    no lleva firma digital, nada más). Descomprímelo donde sea (Descargas vale). El zip lo
-   crea una copia que ya funciona (⚙ Ajustes → Compartir Chuleta → «Crear instalador para otra persona») o
+   crea una copia que ya funciona (⚙ Ajustes → Ayuda → Compartir Chuleta → «Crear instalador para otra persona») o
    `scripts/build_zip.py` (ver «Generar el zip instalable»); el repositorio se descarga entero con Code → Download
    ZIP.
 2. Doble clic en `INSTALAR.bat`. Copia la app a su carpeta propia, `%USERPROFILE%\Chuleta` (fuera de Descargas y de
@@ -61,10 +64,13 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    «Chuleta» en el escritorio y en el menú Inicio y la añade a **Aplicaciones instaladas**
    (`HKCU\…\Uninstall\Chuleta`, sin administrador). Al terminar dice dónde ha quedado; la carpeta descomprimida ya se
    puede borrar.
-3. Se abre Chuleta. Lo primero, en ⚙ Ajustes → «Dónde se procesan tus reuniones», elige una de las tres opciones:
+3. Se abre Chuleta. Lo primero, «Configurar Chuleta», en la portada (más tarde está en ⚙ Ajustes → Procesado): eliges
+   una de las tres opciones y al final lo pruebas todo:
    **Solo en este PC** (Whisper transcribe en tu ordenador, nada sale de él, sin resumen con IA), **Con tu cuenta de
    Claude** (transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de Claude
-   Code: la app te guía paso a paso, instalar, iniciar sesión y «Comprobar», y no ve ni guarda tus credenciales) o
+   Code: la app te guía paso a paso, «Abrir PowerShell», instalar, escribir `claude` y entrar con tu cuenta en el
+   navegador, con el inicio de sesión de tu empresa si es la suya, y «Probar»; no ve ni guarda tus credenciales, y
+   también encuentra la copia de Claude Code de VS Code con su sesión) o
    **API externa** (Groq, OpenAI, Azure OpenAI o cualquier API compatible con OpenAI: transcripción rápida en la nube
    y resumen, con tu API key; con la primera key, la nube pasa a ser lo predeterminado para la cola y para el
    directo). Las dos últimas avisan de que el contenido de la reunión sale del PC: el texto, a Anthropic con la
@@ -73,8 +79,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    y con la API lo transcrito en local no se envía solo al resumen: ver «Privacidad».
 4. Mientras está abierta, Chuleta tiene su icono en la bandeja del sistema (junto al reloj; la primera vez Windows lo
    pone en los iconos ocultos, la flecha `^`, y se puede arrastrar junto al reloj). Cerrar la ventana la deja ahí, en
-   segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando): un clic en el icono o el acceso directo la vuelven a
-   abrir. Para salir del todo: clic derecho en el icono → Salir (o ⚙ Ajustes → Apagar Chuleta). El mismo menú tiene
+   segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando): un clic en el icono o el acceso directo la vuelven a abrir.
+   Para salir del todo: clic derecho en el icono → Salir (o ⚙ Ajustes → Ayuda → Apagar Chuleta). El mismo menú tiene
    «Arrancar con Windows» (copia el acceso directo del menú Inicio en la carpeta Inicio de Windows; apagado por
    defecto). Sin WebView2 (la app se abre en Edge) no hay icono: se apaga desde Ajustes.
 5. Para actualizar, descomprime el zip nuevo y ejecuta su `INSTALAR.bat`: encuentra la instalación anterior (por
@@ -120,46 +126,46 @@ El manual completo está en `LEEME.txt`.
   hooks ni servidores MCP. Elegir esa opción, con su aviso, es el consentimiento: también se resumen solas las
   reuniones transcritas en local (las de los últimos 3 días).
 - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que configures. El resumen
-  automático solo envía las reuniones transcritas enteras en la nube. Las transcritas en local solo se envían si
-  marcas «Resumir también las reuniones transcritas en local» en Ajustes → Resumen con IA, o si las resumes a mano. De
-  cada reunión, el resumen envía el título (o el nombre del archivo), la fecha y la duración, la transcripción con
-  quién habla, las notas, el contexto, los participantes confirmados y tus instrucciones; el audio, no. Antes de
-  grabar o enviar reuniones de trabajo, confirma que lo permiten la política de tu empresa y el acuerdo con tu
-  cliente, si lo hay.
+  automático solo envía las reuniones transcritas enteras en la nube. Las transcritas en local solo se envían si marcas
+  «Resumir también las reuniones transcritas en local» en Ajustes → Procesado → Resumen con IA, o si las resumes a mano.
+  De cada reunión, el resumen envía el título (o el nombre del archivo), la fecha y la duración, la transcripción con
+  quién habla, las notas, el contexto, los participantes confirmados y tus instrucciones; el audio, no. Antes de grabar
+  o enviar reuniones de trabajo, confirma que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo
+  hay.
 - La reunión en curso se lee en el propio PC: el título de la ventana de Teams siempre, y la cita de Outlook clásico
-  (por COM) solo si lo activas en Ajustes → Reuniones, donde una frase dice si funciona y, si no, por qué. Los
+  (por COM) solo si lo activas en Ajustes → Calendario y Teams, donde una frase dice si funciona y, si no, por qué. Los
   asistentes, la app sola solo los lee si «Probar con mi calendario» ha visto que Outlook los da sin preguntar; si
-  pregunta, solo al pulsar «Probar». Los asistentes sugeridos se escriben en la cabecera del `.md`
-  de esa grabación como sugeridos, con una nota detrás de los nombres
-  (`participantes: Ana, Luis (sugeridos por Outlook, sin confirmar)`), y no van al resumen con IA ni a los destinos de
-  salida hasta que los confirmas o editas en la página de la reunión (puedes borrarlos ahí). Las grabaciones de antes
-  no llevan la nota: sus participantes cuentan como confirmados. El nombre que se sugiere al grabar (el asunto de la
-  cita o el título de la reunión de Teams), si lo aceptas, es el nombre de la grabación: va como título al resumen con
-  IA y a los destinos.
+  pregunta, solo al pulsar «Probar». Los asistentes sugeridos se escriben en la cabecera del
+  `.md` de esa grabación como sugeridos, con una nota detrás de los nombres (`participantes: Ana, Luis (sugeridos por
+  Outlook, sin confirmar)`), y no van al resumen con IA ni a las copias en otras carpetas hasta que los confirmas o
+  editas en la página de la reunión (puedes borrarlos ahí). Las grabaciones de antes no llevan la nota: sus
+  participantes cuentan como confirmados. El nombre que se sugiere al grabar (el asunto de la cita o el título de la
+  reunión de Teams), si lo aceptas, es el nombre de la grabación: va como título al resumen con IA y a las copias en
+  otras carpetas.
 - Si la misma carpeta de reuniones la usan varias copias de Chuleta (otro PC, una carpeta de OneDrive compartida),
   actualízalas todas a la vez: una versión anterior toma los participantes sugeridos por confirmados (con la nota) y
   los envía a su resumen y a sus destinos, y la del 30/10 no conoce `idioma` ni `contexto` y, con ellos, toma la
   cabecera del `.md` entera por notas.
 - «Quién habla» es opcional y funciona en local: por reunión se escribe `<grabación>.hablantes.json` junto al audio
   (tramos y «Persona N», sin datos de voz); las huellas de voz que decidas recordar van a
-  `%LOCALAPPDATA%\AudiosApp\voces.json`, cifrado con DPAPI, máximo 5 por persona, y se pueden olvidar una a una o
-  todas. Una huella de voz es un dato biométrico: la app solo la guarda si marcas que tienes el consentimiento de esa
-  persona. Los nombres que les pongas van con la transcripción, al resumen con IA y a los destinos de salida. Los
-  modelos (≈47 MB) se descargan de los releases de sherpa-onnx al activar la opción, con su sha256 comprobado:
-  segmentación pyannote 3.0 (MIT) y TitaNet-S (`titanet_small`, NVIDIA NeMo; su ficha en NGC remite a la licencia del
-  NeMo Toolkit, Apache-2.0; el `.onnx` lo publica el proyecto sherpa-onnx).
-- Los destinos de salida escriben texto (nunca audio) en las carpetas que tú elijas, sin los participantes sugeridos
-  que no hayas confirmado: si están sincronizadas (OneDrive, SharePoint), ese texto sale de tu PC por esa vía. Al
-  borrar una reunión, sus documentos que nadie haya cambiado allí van también a la papelera.
+  `%LOCALAPPDATA%\AudiosApp\voces.json`, cifrado con DPAPI, máximo 5 por persona, y se pueden olvidar una a una o todas.
+  Una huella de voz es un dato biométrico: la app solo la guarda si marcas que tienes el consentimiento de esa persona.
+  Los nombres que les pongas van con la transcripción, al resumen con IA y a las copias en otras carpetas. Los modelos
+  (≈47 MB) se descargan de los releases de sherpa-onnx al activar la opción, con su sha256 comprobado: segmentación
+  pyannote 3.0 (MIT) y TitaNet-S (`titanet_small`, NVIDIA NeMo; su ficha en NGC remite a la licencia del NeMo Toolkit,
+  Apache-2.0; el `.onnx` lo publica el proyecto sherpa-onnx).
+- Las copias en otras carpetas escriben texto (nunca audio) en las carpetas que tú elijas, sin los participantes
+  sugeridos que no hayas confirmado: si están sincronizadas (OneDrive, SharePoint), ese texto sale de tu PC por esa vía.
+  Al borrar una reunión, sus documentos que nadie haya cambiado allí van también a la papelera.
 - Las listas de vocabulario (`<proyecto>/Vocabulario/*.txt` y las de las carpetas conectadas) suelen llevar nombres de
   personas y empresas: no se incluyen en el zip que genera la app salvo que lo marques, y este repositorio las ignora.
   Una carpeta conectada se lee donde está (nada se copia) y quitarla no borra nada.
 - La API local (`127.0.0.1:8765`) solo atiende a quien presenta el token de la sesión en marcha (ver «API local y
   token de sesión»): en un PC con varias sesiones de Windows a la vez (escritorio remoto, AVD, Citrix), otro usuario
   no puede leer tus reuniones ni manejar la grabadora.
-- «Copiar diagnóstico» (Ajustes → Acerca de) solo copia datos técnicos: la versión, el sistema, el motor y el modelo,
-  cómo es la carpeta de la app (sin su ruta), cuántas carpetas vinculadas y destinos hay y, de las últimas 30 líneas
-  de `server.log`, lo fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas,
+- «Copiar diagnóstico» (Ajustes → Ayuda) solo copia datos técnicos: la versión, el sistema, el motor y el modelo, cómo
+  es la carpeta de la app (sin su ruta), cuántas carpetas vinculadas y copias en otras carpetas hay y, de las últimas 30
+  líneas de `server.log`, lo fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas,
   proyectos, temas y personas, las rutas y el texto libre van como `<texto>`, y las claves no van. Revísalo antes de
   pegarlo y no lo publiques en un sitio público.
 - En `%LOCALAPPDATA%\AudiosApp` (fuera de OneDrive: no viaja con la carpeta de las reuniones) quedan, entre otros:
@@ -185,7 +191,7 @@ abre en Edge en modo app), `sherpa-onnx` y `pywin32` (importación perezosa); la
 (`_app/static`). No hay paso de build: el acceso directo lanza `pythonw.exe server.py` (sin consola) y
 `_app/Chuleta.bat` lo mismo con consola. El nombre visible de la app es `common.APP_NAME` (y `-AppName` en el
 instalador); por compatibilidad no cambian con él la carpeta de datos `AudiosApp`, la cabecera `X-Audios` ni las
-claves de los `.md`. La versión que se ve en Ajustes → Acerca de sale de `_app/version.txt` (lo escribe
+claves de los `.md`. La versión que se ve en Ajustes → Ayuda → Acerca de sale de `_app/version.txt` (lo escribe
 `scripts/build_zip.py`: `AAAA-MM-DD · sha`); en una copia de trabajo sin ese fichero se enseña la fecha y hora del
 código.
 
@@ -240,7 +246,7 @@ DPAPI con un doble, porque `crypt32` solo existe en Windows). En Windows, DPAPI 
 interfaz de voces aún no se han ejecutado a mano en Windows.
 
 Si algo no cuadra, abre un issue contando qué ha pasado, sin datos de tus reuniones: los issues de este repositorio
-son públicos. Lo que copia Ajustes → Acerca de → «Copiar diagnóstico» solo lleva datos técnicos (los nombres, las
+son públicos. Lo que copia Ajustes → Ayuda → «Copiar diagnóstico» solo lleva datos técnicos (los nombres, las
 rutas y el texto libre van como `<texto>`, y las claves no van), pero la propia app aconseja revisarlo y no publicarlo
 en un sitio público. `server.log` y `voces.log` sí llevan nombres de reuniones, carpetas y personas: no los pegues.
 
@@ -317,7 +323,7 @@ Rasteriza `_app/static/logo.svg` (y `design/logo-small.svg` para 16 y 20 px) con
 ## Invitar al autor a un café
 
 Chuleta es gratis. Si te sirve, puedes [invitar al autor a un café por PayPal](https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR). El mismo enlace está en
-Ajustes › Acerca de; no hay ventanas emergentes ni recordatorios.
+Ajustes › Ayuda › Acerca de; no hay ventanas emergentes ni recordatorios.
 
 ## Licencia
 

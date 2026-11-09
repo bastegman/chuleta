@@ -86,8 +86,8 @@ const presetIcon = p => !p ? '' : PRESET_ICONS[p.id] ? I[PRESET_ICONS[p.id]] : (
 
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const DIA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-const LANGS = [['es-en', 'Español + inglés (spanglish)'], ['', 'Detectar (cualquier idioma)'], ['es', 'Solo español'], ['en', 'Solo inglés'],
-  ['pt', 'Português'], ['fr', 'Français'], ['it', 'Italiano'], ['de', 'Deutsch'], ['ca', 'Català'],
+const LANGS = [['es-en', 'Español + inglés (spanglish)'], ['', 'Detectar el idioma (cualquiera)'], ['es', 'Solo español'], ['en', 'Solo inglés'],
+  ['pt', 'Portugués'], ['fr', 'Francés'], ['it', 'Italiano'], ['de', 'Alemán'], ['ca', 'Catalán'],
   ['es-pt', 'Español + portugués (mezcla)'], ['en-pt', 'Inglés + portugués (mezcla)']];
 const langSelect = (id, sel) => `<select id="${id}" title="Idioma de la reunión">${LANGS.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -306,7 +306,7 @@ function renderLiveHero(a) {
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
     <div id="directoBar"></div>
-    ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
+    ${S.vocab.length ? `<div class="lh-ws">${I.topic}Proyecto ${wsSelect(a)}</div>` : ''}
     ${typeof perfilLiveHtml === 'function' ? perfilLiveHtml(a) : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
     ${typeof modoLineaHtml === 'function' ? modoLineaHtml(sel, { cambiar: 'lh-modelos', abierto: S.lhModelos, falta: !j }) + prepHtml(j) : ''}
@@ -387,7 +387,7 @@ async function pollRec() {
 function onRecChange() {
   refreshTree(true); pollJobs(true);
   if (S.recLocal) { S.recLocal = false; return; }  // lo ha pedido esta misma pagina: ya avisa ella
-  if (S.rec.recording) toast('● Grabando con el perfil por defecto · <b>Ctrl+Alt+R</b> para parar · clic para ajustar idioma, tema y contexto', '', () => go('a', S.rec.path));
+  if (S.rec.recording) toast(`● Grabando${S.rec.resumen ? ` · ${esc(S.rec.resumen)}` : ''} · <b>Ctrl+Alt+R</b> para parar · clic para verla y cambiar el idioma o el contexto`, '', () => go('a', S.rec.path));
   else toast('■ Grabación guardada · la transcripción termina sola');
 }
 async function toggleRec() {
@@ -434,139 +434,12 @@ async function stopRec() {
 const folderOpts = sel => flatFolders().filter(f => fold(f.name) !== 'vocabulario')
   .map(f => `<option value="${esc(f.path)}"${f.path === sel ? ' selected' : ''}>${'  '.repeat(f.depth)}${esc(f.name)}</option>`).join('')
   + `<option value="__pick">Otra carpeta (fuera de ${esc(APP_NAME)})…</option>`;
-async function openRec() {
+/* «● Grabar»: la tarjeta «Así se va a grabar» (grabar.js, rediseño B1 del 07/11/2026). Lo que enseña y lo que se graba
+   sale de /api/grabar/plan, el mismo cálculo que Ctrl+Alt+R y el aviso de Teams */
+function openRec() {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  if (S.rec.recording) return stopRec();
-  recDialog = true;
-  // desde una carpeta: ahi; si no, la fija del perfil; si no, donde se grabo la ultima vez (con tema, la de su proyecto: applyVocab)
-  const pf = S.config.perfil || {};
-  const folder = S.route.kind === 'f' ? S.route.path : (pf.folder != null && S.folders.has(pf.folder)) ? pf.folder
-    : (S.folders.has(S.config.rec_folder) ? S.config.rec_folder : '');
-  openModal(`<h3><i class="recdot"></i>Nueva grabación</h3>
-    <div class="muted">Graba lo que suena en el ordenador (Teams, Zoom, el navegador…) y tu micrófono, mezclados, como OBS.</div>
-    <div class="notice info" style="margin-top:10px">${S.config.hotkey?.ok
-      ? I.keyboard + 'Atajo: <b>Ctrl+Alt+R</b> empieza a grabar desde cualquier programa (aunque estés en Teams) con el perfil de reunión por defecto (idioma, tema y contexto; se guarda en la carpeta de su proyecto, en una carpeta para esa reunión) y con los dispositivos y el motor del directo de la última grabación, siempre con micrófono y en directo; vuelve a pulsarlo para parar. Suena un pitido corto al empezar y al parar.'
-      : I.keyboard + `El atajo Ctrl+Alt+R solo funciona con ${esc(APP_NAME)} en primer plano: ${esc(S.config.hotkey?.error || 'no se pudo registrar en Windows')}.`}</div>
-    <div id="rForm"><div class="empty">Buscando dispositivos de audio…</div></div>
-    <div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary rec-go" id="rGo" disabled><i class="recdot"></i>Empezar a grabar</button></div>`, async d => {
-    d.addEventListener('click', e => { if (e.target.closest('[data-m="no"]')) closeModal(false); });
-    let devs, voc;
-    try { [devs, voc] = await Promise.all([api('/api/rec/devices'), loadVocab(S.config.language ?? 'es-en')]); }
-    catch (err) { $('#rForm', d).innerHTML = `<div class="notice">${esc(err.message)}</div>`; return; }
-    // tema: el que se acaba de crear desde este dialogo; si no, el fijo del perfil; si no, el ultimo usado
-    const want = S.vocabJustSaved || (pf.vocab != null ? pf.vocab : voc.last);
-    S.vocabJustSaved = null;
-    const lastWs = S.vocab.some(v => v.id === want) ? want : '';
-    // arriba, las opciones que siguen solas a los cascos; debajo, cada dispositivo por si hace falta fijarlo
-    const o = (v, label, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(label)}</option>`;
-    const defName = list => nfc((list.find(x => x.default) || {}).name || '—');
-    const mics = o('default', `Predeterminado de Windows (ahora: ${defName(devs.mics)})`, devs.mic)
-      + `<optgroup label="Fijar un micrófono">${devs.mics.map(x => o(x.id, nfc(x.name), devs.mic)).join('')}</optgroup>`
-      + o('none', 'Sin micrófono', devs.mic);
-    const outs = o('all', 'Todo lo que suena en el ordenador (todas las salidas) · recomendado', devs.sys)
-      + o('default', `Salida predeterminada de Windows (ahora: ${defName(devs.outputs)})`, devs.sys)
-      + `<optgroup label="Fijar una salida">${devs.outputs.map(x => o(x.id, nfc(x.name), devs.sys)).join('')}</optgroup>`
-      + o('none', 'No grabar el audio del ordenador', devs.sys);
-    const presets = S.config.presets.map(p => `<option value="${p.id}"${p.id === (S.config.live_preset || 'medium') ? ' selected' : ''}>${esc(p.live_label)} · ${liveFit(p)[1]}</option>`).join('');
-    $('#rForm', d).innerHTML = `
-      ${typeof perfilTemaHtml === 'function' ? perfilTemaHtml(lastWs) : `<label>${I.topic}Tema</label>${S.vocab.length
-        ? `<div class="row" style="gap:6px;flex-wrap:nowrap"><select id="rVocab" style="flex:1">${vocabOptions(lastWs)}</select><button class="btn sm" type="button" id="rVocabNew">${I.plus}Nuevo</button></div><div class="help" id="rVocabFit"></div>`
-        : `<div class="row" style="gap:8px"><button class="btn sm" type="button" id="rVocabNew">${I.plus}Crear un proyecto con su vocabulario</button></div>`}`}
-      <label class="chk"><input type="checkbox" id="rMicOn" checked><span>${I.mic}Grabar también mi micrófono <span class="muted" style="font-weight:400">· desmárcalo para grabar solo el audio del ordenador</span></span></label>
-      <div id="rMicBox"><select id="rMic">${mics}</select>
-      ${meterHtml('mic', 'Nivel')}</div>
-      <label>${I.volume}Audio del ordenador</label><select id="rSys">${outs}</select>
-      ${meterHtml('sys', 'Nivel')}
-      <div class="help">Con las opciones de arriba da igual que conectes o quites los cascos, incluso a mitad de la reunión: la grabación sigue con el dispositivo nuevo. Pon algo a sonar para ver que la barra se mueve.</div>
-      <div class="grid2">
-        <div><label>Nombre (opcional)</label><input class="input" id="rName" placeholder="p. ej. Reunión semanal del equipo"></div>
-        <div><label title="Donde se guardan el audio y la transcripción">Carpeta de destino</label><select id="rFolder" title="Donde se guardan el audio y la transcripción">${folderOpts(folder)}</select></div>
-      </div>
-      ${typeof perfilCamposHtml === 'function' ? perfilCamposHtml(S.config.language ?? 'es-en', pf.context) : langSelect('rLang', S.config.language ?? 'es-en')}
-      <label>${I.chat}Transcripción</label>
-      <div class="seg2" id="rMode">
-        <label class="on"><input type="radio" name="rMode" value="live" checked><b>Transcribir en directo</b><span>El texto va apareciendo mientras se habla</span></label>
-        <label><input type="radio" name="rMode" value="rec"><b>Solo grabar</b><span>Si el portátil va lento: la transcribes al terminar</span></label>
-      </div>
-      <div id="rMotor">${typeof modoLineaHtml === 'function' ? modoLineaHtml(S.config.live_preset || 'medium', { cambiar: 'r-cambiar', falta: true })
-        : typeof motorNotaHtml === 'function' ? motorNotaHtml(S.config.live_preset || 'medium') : ''}</div>
-      <div id="rLiveOpts"${typeof modoLineaHtml === 'function' ? ' class="hidden"' : ''}><label style="margin-top:8px">Modelo del directo</label><select id="rPreset">${presets}</select></div>
-      <div class="row" style="margin-top:12px"><button class="btn sm" data-m="consent" type="button">${I.clipboard}Copiar aviso de grabación</button><span class="muted" style="font-size:12px">para pegarlo en el chat de la reunión (español, inglés y portugués)</span></div>`;
-    if (typeof perfilBindRec === 'function') perfilBindRec(d);  // Proyecto/Tema, importar listas y «Guardar como perfil»
-    const micVal = () => $('#rMicOn', d).checked ? $('#rMic', d).value : 'none';
-    const monitor = () => api('/api/rec/monitor', { mic: micVal(), sys: $('#rSys', d).value }).catch(() => { });
-    $('#rMic', d).onchange = $('#rSys', d).onchange = monitor;
-    $('#rMicOn', d).onchange = () => { $('#rMicBox', d).classList.toggle('off', !$('#rMicOn', d).checked); monitor(); };
-    // la línea del modo: el motor del directo o, con «Solo grabar», el de la cola (configurar.js)
-    const motorRec = () => d.querySelector('[name=rMode]:checked').value === 'live' ? $('#rPreset', d).value : (S.config.preset || 'rapido');
-    const pintaMotor = () => {
-      if (typeof modoLineaHtml !== 'function') return;
-      const live = d.querySelector('[name=rMode]:checked').value === 'live', m = $('#rMotor', d);
-      m.dataset.preset = motorRec();
-      m.innerHTML = modoLineaHtml(m.dataset.preset, { cambiar: live ? 'r-cambiar' : '', abierto: !$('#rLiveOpts', d).classList.contains('hidden'), falta: true });
-    };
-    $('#rMotor', d).dataset.preset = motorRec();
-    $('#rMotor', d).addEventListener('click', e => {
-      if (!e.target.closest('[data-act="r-cambiar"]')) return;
-      e.preventDefault();
-      $('#rLiveOpts', d).classList.toggle('hidden');
-      pintaMotor();
-    });
-    d.pintaMotor = pintaMotor;  // al llegar el % de una descarga (configurar.js)
-    $('#rMode', d).onchange = () => { const live = d.querySelector('[name=rMode]:checked').value === 'live'; $$('#rMode label', d).forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#rLiveOpts', d).classList.toggle('off', !live); if (!live) $('#rLiveOpts', d).classList.add('hidden'); pintaMotor(); };
-    $('#rPreset', d).addEventListener('change', pintaMotor);
-    d.querySelector('[data-m="consent"]').onclick = () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión');
-    // workstream: cuanto le cabe a Whisper y, al elegirlo, se graba en la carpeta de su proyecto
-    const vocabSel = () => S.vocab.find(v => v.id === $('#rVocab', d)?.value);
-    const fsel = $('#rFolder', d);
-    fsel.dataset.prev = fsel.value;
-    const applyVocab = initial => {
-      const v = vocabSel(), fit = $('#rVocabFit', d);
-      if (fit) fit.innerHTML = vocabFit(v);
-      if (initial && S.route.kind === 'f') return;  // se abrio desde una carpeta: esa manda
-      // la misma regla que Ctrl+Alt+R (server.rec_folder_origin): con tema, la carpeta principal de su workstream o de
-      // su proyecto (asignada o la del proyecto); sin tema, la fija del perfil o la última
-      const fija = pf.folder != null && S.folders.has(pf.folder) ? pf.folder : null;
-      const ws = S.config.workstream_folders?.[v?.id];  // la de su workstream, si sigue existiendo (como el servidor)
-      const want = v ? (ws != null && S.folders.has(ws) ? ws : S.config.project_folders?.[v.project])
-        : (initial ? fija ?? (S.config.rec_folder || '') : undefined);
-      if (want != null && [...fsel.options].some(o => o.value === want)) fsel.value = fsel.dataset.prev = want;
-    };
-    fsel.onchange = async () => {
-      if (fsel.value !== '__pick') { fsel.dataset.prev = fsel.value; return; }
-      fsel.value = fsel.dataset.prev || '';
-      const rel = await linkFolder();
-      if (rel && document.body.contains(fsel)) { fsel.innerHTML = folderOpts(rel); fsel.dataset.prev = rel; }
-    };
-    $('#rVocabNew', d).onclick = () => openVocabEditor(null, openRec, vocabSel()?.project || '');
-    if ($('#rVocab', d)) {
-      $('#rVocab', d).onchange = () => applyVocab(false);
-      $('#rLang', d).onchange = async () => { await loadVocab($('#rLang', d).value); applyVocab(true); };  // la frase de estilo cambia con el idioma
-      applyVocab(true);
-    }
-    monitor();
-    pollRec();
-    window.reunionPrefill?.(d);  // nombre, tema y participantes de la reunión en curso (reunion.js)
-    $('#rGo', d).disabled = false;
-    $('#rGo', d).onclick = async () => {
-      $('#rGo', d).disabled = true;
-      try {
-        S.recLocal = true;
-        const r = await api('/api/rec/start', { mic: micVal(), sys: $('#rSys', d).value, name: $('#rName', d).value.trim(),
-          folder: $('#rFolder', d).value, live: d.querySelector('[name=rMode]:checked').value === 'live', preset: $('#rPreset', d).value,
-          language: $('#rLang', d).value, vocab: $('#rVocab', d)?.value || '', ...(window.reunionExtra?.(d) || {}),
-          ...(typeof perfilRecExtra === 'function' ? perfilRecExtra(d) : {}) });
-        S.config.live_preset = $('#rPreset', d).value;
-        recDialog = false;
-        closeModal(true);
-        toast((r.workstream ? `🗂 <b>${esc(r.workstream)}</b> · ` : '') + 'Grabando · el texto irá apareciendo en directo');
-        await refreshTree(true);
-        pollRec(); pollJobs(true);
-        go('a', r.path);
-      } catch (err) { S.recLocal = false; toast(esc(err.message), 'err'); $('#rGo', d).disabled = false; }
-    };
-  });
-  S.modalCleanup = () => { if (recDialog) { recDialog = false; api('/api/rec/monitor', { stop: true }).catch(() => { }); } };
+  if (typeof abrirGrabar === 'function') return abrirGrabar();
+  toast('No se ha podido cargar la tarjeta de grabar: recarga la página (Ctrl+R) o usa Ctrl+Alt+R.', 'err');
 }
 $('#btnRec').onclick = openRec;
 
@@ -1792,6 +1665,7 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'k' && !e.altKey) { e.preventDefault(); const g = $('#gq'); if (g && $('#modal').classList.contains('hidden')) { g.focus(); g.select(); } return; }  // la caja de búsqueda de arriba (su kbd dice Ctrl K)
   if ((e.ctrlKey || e.metaKey) && k === 'f' && $('#tq')) { e.preventDefault(); $('#tq').focus(); $('#tq').select(); return; }
   if (e.key === 'Escape') {
+    if (cerrarSobre(false)) return;  // la confirmación de encima, sola (Ajustes sigue debajo)
     if (!$('#modal').classList.contains('hidden')) return closeModal(false);
     if (!$('#jobsPanel').classList.contains('hidden')) return $('#jobsPanel').classList.add('hidden');
     if (typing) el.blur();
@@ -1914,14 +1788,17 @@ document.addEventListener('click', e => { if (!e.target.closest('#jobsPanel, #bt
 let modalResolve = null;
 function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
+  cerrarSobre(false);  // una confirmación de encima no se queda sobre otro diálogo (p. ej. Ctrl+Alt+R mientras tanto)
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
   m.classList.remove('hidden');
+  document.body.classList.toggle('aj-abierto', cls === 'aj');  // los avisos, arriba solo con Ajustes (su «Guardar» abajo)
   onOpen && onOpen($('.dialog', m));
   const f = $('.dialog [autofocus]', m) || $('.dialog input, .dialog button.primary', m);
   f && f.focus();
   return new Promise(r => { modalResolve = r; });
 }
 function closeModal(v) {
+  cerrarSobre(false);
   if (S.modalCleanup) { const f = S.modalCleanup; S.modalCleanup = null; f(); }
   $('#modal').classList.add('hidden');
   $('#modal').innerHTML = '';
@@ -1929,10 +1806,63 @@ function closeModal(v) {
   r && r(v);
 }
 $('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(false); });
+/* Una confirmación encima de Ajustes, sin cerrarlo: lo escrito sigue en el formulario. Antes la confirmación ocupaba
+   el hueco de Ajustes y lo escrito se reponía al volver, un mecanismo que en cada revisión traía un fallo nuevo
+   (revisiones 5 a 10 de B2). Escape y un clic fuera la cierran a ella sola. */
+let sobreResolve = null, sobreFoco = null;
+function abrirSobre(html, onOpen) {
+  let m = $('#modalSobre');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modalSobre';
+    m.className = 'modal sobre hidden';
+    // un clic fuera la cierra sin llevar el foco al cuerpo de la página (vuelve a donde estaba, revisión 11)
+    m.addEventListener('mousedown', e => { if (e.target === m) { e.preventDefault(); cerrarSobre(false); } });
+    // es modal de verdad: Tab y Mayús+Tab dan la vuelta dentro, y el foco no se va a lo de debajo (revisión 11: con
+    // Tab se llegaba a «Grabar» o a ⚙, detrás, y Enter sacaba de Ajustes sin preguntar)
+    const enfocables = () => $$('button, [href], input, select, textarea', m).filter(x => !x.disabled && !x.hidden);
+    m.addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const fs = enfocables();
+      if (!fs.length) return;
+      e.preventDefault();
+      const i = fs.indexOf(document.activeElement);
+      fs[(i < 0 ? 0 : i + (e.shiftKey ? fs.length - 1 : 1)) % fs.length].focus();
+    });
+    document.addEventListener('focusin', e => {
+      if (!m.classList.contains('hidden') && !m.contains(e.target)) enfocables()[0]?.focus();
+    });
+    document.body.append(m);
+  }
+  cerrarSobre(false);  // (una a la vez)
+  sobreFoco = document.activeElement;
+  m.innerHTML = `<div class="dialog" role="alertdialog" aria-modal="true">${html}</div>`;
+  const dlg = $('.dialog', m), h = $('h3', dlg);
+  if (h) { h.id = 'sobreTitulo'; dlg.setAttribute('aria-labelledby', 'sobreTitulo'); }
+  m.classList.remove('hidden');
+  onOpen && onOpen(dlg);
+  ($('button.primary', dlg) || $('button', dlg))?.focus();
+  return new Promise(r => { sobreResolve = r; });
+}
+function cerrarSobre(v) {
+  const m = $('#modalSobre');
+  if (!m || m.classList.contains('hidden')) return false;
+  m.classList.add('hidden');
+  m.innerHTML = '';
+  const r = sobreResolve, f = sobreFoco;
+  sobreResolve = sobreFoco = null;
+  if (f && document.body.contains(f)) f.focus();
+  r && r(v);
+  return true;
+}
 function ask(title, html, ok = 'Aceptar') {
-  return openModal(`<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`, d => {
-    d.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) closeModal(b.dataset.m === 'ok'); });
+  const encima = !!$('#modal .dialog.aj');  // con Ajustes abierto, encima de Ajustes
+  const cuerpo = `<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`;
+  const enlazar = d => d.addEventListener('click', e => {
+    const b = e.target.closest('[data-m]');
+    if (b) (encima ? cerrarSobre : closeModal)(b.dataset.m === 'ok');
   });
+  return encima ? abrirSobre(cuerpo, enlazar) : openModal(cuerpo, enlazar);
 }
 
 function flatFolders() {
@@ -2042,7 +1972,7 @@ function procesadoFieldsetHtml() {
   const opt = (v, titulo, texto, aviso) => `<label class="proc${mode === v ? ' on' : ''}"><input type="radio" name="proc" value="${v}"${mode === v ? ' checked' : ''}>
       <div><b>${titulo}</b><div class="help" style="margin-top:2px">${texto}</div>${aviso ? `<div class="notice proc-aviso">${I.info}${aviso}</div>` : ''}</div></label>`;
   const cuando = ag.comprobado ? new Date(ag.comprobado * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : '';
-  const estado = !ag.encontrado ? `${agLabel} no está instalado en este PC (o no está en el PATH)`
+  const estado = !ag.encontrado ? `Todavía no encuentro ${agLabel} en este PC`
     : cuando ? `${agLabel} ${esc(ag.version || '')} · comprobado el ${cuando}` : `${agLabel} encontrado · sin comprobar todavía`;
   return `<fieldset><legend>${I.monitor}${typeof cfgEstadoHtml === 'function' ? 'Cambiar de opción aquí' : 'Dónde se procesan tus reuniones'}</legend>
     ${typeof cfgEstadoHtml === 'function' ? '<div class="help" style="margin-top:0">Se aplica con «Aplicar ahora». Con «Cambiar…», arriba, el asistente te guía y lo prueba al final.</div>' : ''}
@@ -2057,33 +1987,40 @@ function procesadoFieldsetHtml() {
     ${typeof modelosHtml === 'function' ? modelosHtml() : ''}
     <div id="procAgente"${mode === 'agente' ? '' : ' hidden'}>
       <ol class="pasos">
-        <li><b>Instala ${agLabel}</b> (hace falta una cuenta Pro, Max, Ultra, Team o Enterprise, o una de Console). En Windows, abre PowerShell y ejecuta <code>irm https://claude.ai/install.ps1 | iex</code> (o <code>winget install Anthropic.ClaudeCode</code>). No hace falta ser administrador.</li>
-        <li><b>Inicia sesión</b>: abre una terminal nueva, escribe <code>claude</code> y sigue los pasos en el navegador con tu cuenta, la personal o la de tu empresa. Después puedes cerrar la terminal.</li>
-        <li><b>Comprueba</b>: ${esc(APP_NAME)} busca <code>claude</code> en este PC, lee su versión y le hace una petición mínima con tu cuenta.</li>
+        <li><b>Instala ${agLabel}</b> (una vez): pulsa «Abrir PowerShell», pega <code>irm https://claude.ai/install.ps1 | iex</code> y pulsa Intro (o <code>winget install Anthropic.ClaudeCode</code>). Tarda menos de un minuto y no hace falta ser administrador.</li>
+        <li><b>Entra con tu cuenta</b>: en esa misma ventana escribe <code>claude</code> y pulsa Intro. Se abre el navegador con el inicio de sesión de Claude: entra con tu cuenta (Pro, Max, Ultra, Team, Enterprise o Console); si es la de tu empresa, con su inicio de sesión de siempre. Cuando ponga «Login successful», pulsa Intro y cierra la ventana.</li>
+        <li><b>Comprueba</b>: ${esc(APP_NAME)} busca ${agLabel} en este PC, lee su versión y le hace una petición mínima con tu cuenta.</li>
       </ol>
+      <div class="help">¿Usas Claude Code en VS Code? ${esc(APP_NAME)} también encuentra esa copia y su sesión. La app de escritorio de Claude no basta: su sesión es solo suya.</div>
       <div class="grid2">
         <div><label>Modelo</label><select id="agModelo">${(ag.modelos || []).map(([v, l]) => `<option value="${esc(v)}"${v === ag.modelo ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
         <div><label>Estado</label><div class="help" style="margin-top:8px" id="agEstado">${estado}</div></div>
       </div>
-      <div class="row" style="margin-top:10px"><button class="btn sm" type="button" id="agCheck">Comprobar</button><span id="agRes" class="muted" style="font-size:12.5px"></span></div>
+      <div class="row" style="margin-top:10px"><button class="btn sm" type="button" id="agPs">Abrir PowerShell</button><button class="btn sm" type="button" id="agCheck">Comprobar</button><span id="agRes" class="muted" style="font-size:12.5px"></span></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:12px"><input type="checkbox" id="sAutoAg" ${S.config.summary?.auto !== false ? 'checked' : ''}> Resumir solo al terminar de transcribir (reuniones de los últimos 3 días)</label>
       <div class="help">Desmarcado, solo se resume a mano con «Resumir esta reunión». Cada resumen gasta cupo de tu suscripción.</div>
     </div>
   </fieldset>`;
 }
 
-/* la ayuda del directo en Ajustes › Grabar: con la API, la nube y su cupo; sin ella, solo el PC */
-const lAyuda = api => 'El motor con el que empieza cada directo se elige en «Perfil de reunión» y se puede cambiar en mitad de la grabación desde la propia pantalla. '
+/* la ayuda del directo en Ajustes › Avanzado (OBS): con la API, la nube y su cupo; sin ella, solo el PC */
+const lAyuda = api => 'El motor con el que empieza cada directo se elige en Procesado › Motores y se puede cambiar en mitad de la grabación desde la propia pantalla. '
   + (api ? 'En la nube el texto va unos 5–10 s por detrás; en local, unos 20–40 s. El repaso final tarda 1–2 min por hora de reunión (mientras tanto ves el texto del directo), gasta el doble de cupo de Groq y no se hace si has corregido el texto a mano.'
     : 'En este PC el texto va unos 20–40 s por detrás de lo que se dice.');
 /* Ajustes por secciones (07/11/2026, configurar.js): antes, un diálogo de 6 a 7,5 pantallas con «Guardar» al final.
    Todas las secciones están en el DOM (collect() lee de todas); solo se ve la elegida. opts.sec: la que se abre (si
    no, la última vista). Se llama también como manejador de clic: un Event no trae .sec. */
-const AJ_SECS = [['procesado', 'Procesado'], ['grabar', 'Grabar'], ['vocabulario', 'Vocabulario'], ['voces', 'Voces'],
-  ['carpetas', 'Carpetas'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
+// (rediseño B2, 07/11/2026) por lo que se hace: «Al grabar» primero; Vocabulario y Carpetas pasan a Proyectos; el
+// idioma y las instrucciones del resumen, a Resumen; Outlook y Teams, a Calendario y Teams; OBS, a Avanzado
+const AJ_SECS = [['algrabar', 'Al grabar'], ['proyectos', 'Proyectos'], ['procesado', 'Procesado'], ['resumen', 'Resumen'],
+  ['calendario', 'Calendario y Teams'], ['voces', 'Voces'], ['avanzado', 'Avanzado'], ['ayuda', 'Ayuda']];
 function openSettings(opts) {
   if (!S.config) return toast('La app aún está arrancando: espera unos segundos y vuelve a probar.', 'err');
-  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec) || S.ajSec || 'procesado';
+  // lo escrito y sin guardar no sale de Ajustes: las confirmaciones van encima (ask) y, antes de abrir un subdiálogo
+  // (una lista, el asistente), «Tienes cambios sin guardar» (d.ajAntesDeSalir). Así, cada vez que se abre, Ajustes
+  // pinta lo guardado (revisión 10 de B2: el borrador que se reponía al volver traía un fallo nuevo en cada revisión)
+  const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
+    || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
   S.ajSec = sec;
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
@@ -2091,9 +2028,27 @@ function openSettings(opts) {
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
     <div class="aj-grid">
-    <nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}">${l}</button>`).join('')}</nav>
+    <nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}"${id === sec ? ' autofocus' : ''}>${l}</button>`).join('')}</nav>
     <div class="aj-main">
     ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
+    <section data-secc="algrabar"${sec === 'algrabar' ? '' : ' hidden'}>
+    ${typeof ajAlGrabarHtml === 'function' ? ajAlGrabarHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
+    </section>
+    <section data-secc="proyectos"${sec === 'proyectos' ? '' : ' hidden'}>
+    ${typeof ajProyectosHtml === 'function' ? ajProyectosHtml() : ''}
+    <fieldset><legend>${I.book}Listas de vocabulario</legend>
+      <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
+      <label for="sPrompt">Vocabulario de las reuniones sin proyecto</label>
+      <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
+      <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
+    </fieldset>
+    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
+      <div id="sLinks"></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
+      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí, escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
+    </fieldset>
+    ${typeof perfilSalidasHtml === 'function' ? perfilSalidasHtml() : ''}
+    </section>
     <section data-secc="procesado"${sec === 'procesado' ? '' : ' hidden'}>
     ${typeof cfgEstadoHtml === 'function' ? cfgEstadoHtml() : ''}
     ${procesadoFieldsetHtml()}
@@ -2112,42 +2067,28 @@ function openSettings(opts) {
       <div class="notice" id="sAutoLocalAviso"${S.config.summary?.local ? '' : ' hidden'}>Si son reuniones de trabajo, asegúrate de que lo permiten la política de tu empresa y el acuerdo con tu cliente, si lo hay.</div>
       <label>Modelo</label><input class="input" id="sModel" list="sModels" value="${esc(S.config.summary?.model || '')}">
       <datalist id="sModels">${(S.config.summary?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-      <div class="help">El idioma del resumen y las instrucciones extra están en «Perfil de reunión». Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
+      <div class="help">El idioma del resumen y las instrucciones extra están en <a href="#" data-sec-ir="resumen">Resumen</a>. Usa el mismo proveedor y API key que la transcripción en la nube, y solo se envía el texto (no el audio). Lo que transcribes en local no sale del PC por el resumen automático salvo que marques la segunda casilla; a mano («Resumir esta reunión») se puede resumir siempre. Con el plan gratuito de Groq (~8K tokens por minuto) una reunión de 1 h se resume por partes en unos 3 minutos, y caben unas 7 reuniones largas al día.</div>
     </fieldset>
     </div>
+    ${typeof perfilMotoresHtml === 'function' ? perfilMotoresHtml() : ''}
     </section>
-    <section data-secc="grabar"${sec === 'grabar' ? '' : ' hidden'}>
-    <fieldset><legend><i class="recdot"></i>En directo (mientras graba OBS)</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
-      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${enApi ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lMeet" ${S.config.meeting_detect !== false ? 'checked' : ''}> Avisarme si estoy en una llamada (Teams, Zoom…) y no estoy grabando</label>
-      <div class="help" id="lAyuda">${esc(lAyuda(enApi))}</div>
-    </fieldset>
-    ${window.reunionFieldsetHtml?.() || ''}
-    ${typeof perfilFieldsetHtml === 'function' ? perfilFieldsetHtml() : `<fieldset><legend>${I.globe}Idioma de las reuniones</legend><label>Por defecto</label>${langSelect('sLang', S.config.language ?? 'es-en')}</fieldset>`}
+    <section data-secc="resumen"${sec === 'resumen' ? '' : ' hidden'}>
+    ${typeof perfilResumenHtml === 'function' ? perfilResumenHtml() : ''}
     </section>
-    <section data-secc="vocabulario"${sec === 'vocabulario' ? '' : ' hidden'}>
-    <fieldset><legend>${I.book}Vocabulario</legend>
-      <label>Por tema <span class="muted" style="font-weight:400">· se elige al grabar o en cada reunión</span></label>
-      <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
-      <label>General · para reuniones sin tema</label>
-      <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
-      <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
-    </fieldset>
+    <section data-secc="calendario"${sec === 'calendario' ? '' : ' hidden'}>
+    ${typeof ajCalendarioHtml === 'function' ? ajCalendarioHtml() : window.reunionFieldsetHtml?.() || ''}
     </section>
     <section data-secc="voces"${sec === 'voces' ? '' : ' hidden'}>
     ${vocesFieldsetHtml()}
     </section>
-    <section data-secc="carpetas"${sec === 'carpetas' ? '' : ' hidden'}>
-    <fieldset><legend>${I.folder}Carpetas fuera de ${esc(APP_NAME)}</legend>
-      <div id="sLinks"></div>
-      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="lnAdd">${I.plus}Añadir una carpeta…</button></div>
-      <div class="help">Por ejemplo la carpeta del proyecto en OneDrive. ${esc(APP_NAME)} la trata como suya: puedes grabar ahí (● Grabar → Carpeta), escuchar y transcribir sus audios, y la transcripción y las notas se guardan junto al audio. Quitarla de ${esc(APP_NAME)} no borra nada.</div>
-    </fieldset>
-    </section>
     <section data-secc="avanzado"${sec === 'avanzado' ? '' : ' hidden'}>
+    <fieldset><legend><i class="recdot"></i>Grabaciones de OBS</legend>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lAuto" ${S.config.live_auto ? 'checked' : ''}> Empezar a transcribir en cuanto OBS empiece a grabar</label>
+      <label id="lNube" style="display:flex;gap:8px;align-items:center;font-weight:500"${enApi ? '' : ' hidden'}><input type="checkbox" id="lFinal" ${S.config.live_final_pass !== false ? 'checked' : ''}> Al terminar un directo en la nube, repasar la grabación entera para mejorar el texto</label>
+      <div class="help" id="lAyuda">${esc(lAyuda(enApi))}</div>
+    </fieldset>
     <fieldset><legend>${I.monitor}Transcripción local</legend>
-      <label>Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
+      <label for="sThreads">Hilos de CPU</label><input class="input" id="sThreads" type="number" min="1" max="${S.config.cpu_count}" value="${S.config.threads}">
       <div class="help">Tu procesador tiene ${S.config.cpu_count} hilos. Con más hilos va más rápido, pero el portátil irá más justo mientras transcribe.</div>
     </fieldset>
     <div id="procApiAv"${enApi ? '' : ' hidden'}>
@@ -2162,7 +2103,7 @@ function openSettings(opts) {
     </section>
     <section data-secc="ayuda"${sec === 'ayuda' ? '' : ' hidden'}>
     <fieldset><legend>${I.package}Compartir ${esc(APP_NAME)}</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario por tema <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="xExport" type="button">Crear instalador para otra persona</button><span id="xRes" class="muted" style="font-size:12.5px"></span></div>
       <div class="help">Crea en el escritorio <b>${esc(APP_NAME)} - instalador.zip</b> con la app completa y un INSTALAR.bat. No lleva tus grabaciones, notas, ajustes ni tu API key: la otra persona conecta su propio proveedor. Compártelo por un enlace de OneDrive o Teams (el correo suele bloquear los .zip con .bat).<br>
         <b>Para actualizar a alguien que ya lo tiene</b>: mándale el zip nuevo y que ejecute su INSTALAR.bat. El instalador cierra la versión abierta y actualiza la que ya tenía, en su carpeta de siempre (con sus grabaciones).</div>
@@ -2174,9 +2115,9 @@ function openSettings(opts) {
         Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code><br>
         ${esc(APP_NAME)} es gratis. Si te sirve, puedes <a href="${esc(ac.donar || '#')}" id="aDonar">invitar al autor a un café</a> (PayPal).</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
-      <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas y destinos hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
+      <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas vinculadas y copias en otras carpetas hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
     </fieldset>
-    <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:10px"><input type="checkbox" id="sInicioWin" disabled> Arrancar ${esc(APP_NAME)} al iniciar Windows <span class="muted" id="sInicioWinNota" style="font-weight:400">· lo mismo que «Arrancar con Windows» en el menú del icono de la bandeja</span></label>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:10px"><input type="checkbox" id="sInicioWin" data-se-guarda-solo disabled> Arrancar ${esc(APP_NAME)} al iniciar Windows <span class="muted" id="sInicioWinNota" style="font-weight:400">· lo mismo que «Arrancar con Windows» en el menú del icono de la bandeja</span></label>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
       <span class="muted" style="font-size:12.5px">Cerrar la ventana no apaga la app: sigue en segundo plano para Ctrl+Alt+R.</span></div>
     </section>
@@ -2192,26 +2133,45 @@ function openSettings(opts) {
     };
     d.irSec = irSec;
     // «Hay cambios sin guardar» de verdad: se compara con cómo se abrió. Lo que se guarda solo (Voces, personas) o no
-    // es de «Guardar» (el vocabulario del instalador) no cuenta. Si un subdiálogo (Voces, vocabulario, carpeta,
-    // Apagar, el asistente) reabre Ajustes, lo escrito y sin guardar vuelve (S.ajBorrador).
-    const NO_CUENTA = new Set(['vzOn', 'xVocab']);
+    // es de «Guardar» (el vocabulario del instalador) no cuenta.
+    // agProy: solo elige qué plan enseñar; data-se-guarda-solo: lo que guarda al momento (Outlook con su estado)
+    const NO_CUENTA = new Set(['vzOn', 'xVocab', 'agProy']);
     const campos = () => $$('.aj-main input[id], .aj-main select[id], .aj-main textarea[id]', d)
-      .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && x.type !== 'file' && x.type !== 'button');
-    const foto = () => Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value]));
-    const inicial = foto();  // como viene de los ajustes guardados
-    if (S.ajBorrador) {
-      campos().forEach(x => {
-        if (!(x.id in S.ajBorrador)) return;
-        if (x.type === 'checkbox' || x.type === 'radio') x.checked = S.ajBorrador[x.id]; else x.value = S.ajBorrador[x.id];
-      });
-    }
-    const marcar = () => {
-      const ahora = foto(), cambios = Object.keys(ahora).some(k => ahora[k] !== inicial[k]);
-      S.ajBorrador = cambios ? ahora : null;
-      $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
+      .filter(x => x.name !== 'proc' && !NO_CUENTA.has(x.id) && !('seGuardaSolo' in x.dataset) && x.type !== 'file'
+        && x.type !== 'button');
+    // y lo que no es un campo con id: los destinos de «Copias en otras carpetas» (perfil.js) y las claves adicionales
+    // del directo (directo.js) (revisión 11: quitar un destino no decía «Hay cambios sin guardar» ni preguntaba)
+    const otros = () => {
+      d.directoKeys?.stash();
+      // las claves, como las manda «Guardar» (collectDirectoSettings): una fila vacía no es un cambio
+      const claves = d.directoKeys && Object.fromEntries(Object.entries(d.directoKeys.state)
+        .map(([p, rs]) => [p, (rs || []).map(r => String(r.value || '').trim() || r.mask || '').filter(Boolean)]));
+      return { __destinos: typeof perfilOuts === 'undefined' ? '' : JSON.stringify(perfilOuts),
+        __claves: JSON.stringify(claves ?? null) };
     };
+    const foto = () => ({ ...Object.fromEntries(campos().map(x => [x.id, x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value])), ...otros() });
+    const inicial = foto();  // como viene de los ajustes guardados
+    // «Dónde se procesan» marcado y sin aplicar también lo es: «Guardar» lo aplica (revisión 2 de B2, P1-2)
+    const procSinAplicar = () => {
+      const v = $('input[name="proc"]:checked', d)?.value;
+      return !!v && v !== (S.config.procesado || 'local');
+    };
+    // solo lo que está en las dos fotos: un campo que deja de contar (pasa a guardarse solo, como Outlook al activarlo)
+    // no es un cambio, y uno que aparece después ya tiene su valor de partida («tarde»). (En la fusión con el
+    // calendario, Outlook activado daba «Hay cambios sin guardar» sin haber cambiado nada.)
+    const hayCambios = () => { const ahora = foto(); return Object.keys(inicial).some(k => k in ahora && ahora[k] !== inicial[k]) || procSinAplicar(); };
+    const marcar = () => { $('.aj-pend', d).textContent = hayCambios() ? 'Hay cambios sin guardar' : ''; };
     d.ajMarcar = marcar;
-    if (S.ajBorrador) marcar();
+    // antes de salir de Ajustes a un subdiálogo (una lista, el asistente) con cambios sin guardar: encima, «Guardar y
+    // seguir», «Descartar» o «Volver» (Escape y un clic fuera también vuelven). true: se puede seguir
+    d.ajAntesDeSalir = async () => {
+      if (!hayCambios()) return true;
+      const r = await abrirSobre(`<h3>Tienes cambios sin guardar</h3><div><p>Si sigues sin guardarlos, se pierden.</p></div>
+        <div class="btns"><button class="btn" data-m="volver">Volver</button><button class="btn" data-m="descartar">Descartar</button><button class="btn primary" data-m="guardar">Guardar y seguir</button></div>`,
+      x => x.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) cerrarSobre(b.dataset.m); }));
+      if (r === 'descartar') return true;
+      return r === 'guardar' ? guardar(false) : false;
+    };
     document.body.classList.add('aj-abierto');
     setTimeout(() => $('.aj-nav [data-sec].on', d)?.focus(), 0);  // el foco, dentro del diálogo (no en ⚙)
     d.addEventListener('click', e => {
@@ -2219,8 +2179,11 @@ function openSettings(opts) {
       if (!x) return;
       e.preventDefault();
       irSec(x.dataset.sec || x.dataset.secIr);
+      // desde un enlace de dentro (el origen de una línea del plan, «Proyectos»…), el foco a su sección en el menú: si
+      // no, con el teclado caía en el cuerpo de la página, fuera del diálogo (revisión 2 de B2)
+      if (x.dataset.secIr) $(`.aj-nav [data-sec="${x.dataset.secIr}"]`, d)?.focus();
     });
-    const pendiente = e => { if (e.target.closest('.aj-main') && e.target.name !== 'proc' && !NO_CUENTA.has(e.target.id)) marcar(); };
+    const pendiente = e => { if (e.target.closest('.aj-main') && !NO_CUENTA.has(e.target.id)) marcar(); };
     d.addEventListener('input', pendiente);
     d.addEventListener('change', pendiente);
     d.addEventListener('click', e => {  // la tarjeta de estado (configurar.js): «Probar» y «Cambiar…» abren el asistente
@@ -2228,11 +2191,14 @@ function openSettings(opts) {
       if (!x || typeof abrirConfigurar !== 'function') return;
       e.preventDefault();
       const volver = () => openSettings({ sec: 'procesado' });
-      abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver, empezar: true } : { volver });  // «Probar»: ya
+      d.ajAntesDeSalir().then(ok => {
+        if (ok) abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver, empezar: true } : { volver });  // «Probar»: ya
+      });
     });
     // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
     function ajTarjeta() { const t = $('.cfg-estado', d); if (t && typeof cfgEstadoHtml === 'function') t.outerHTML = cfgEstadoHtml(); }
-    $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
+    // la confirmación va encima de Ajustes: con «Cancelar», Ajustes sigue ahí, con lo escrito
+    $('#sOff', d).onclick = () => confirmShutdown();
     // «Arrancar con Windows» (la bandeja deja /api/inicio-windows): se aplica al marcarla, como en el menú del icono;
     // null = no se puede (fuera de Windows o una copia sin instalar)
     const ini = $('#sInicioWin', d);
@@ -2293,12 +2259,13 @@ function openSettings(opts) {
         d.modelosPoll?.();
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);
         ajTarjeta();
+        ponerAlDia(['lPreset', 'pfPreset']);  // el servidor ha puesto los motores del modo
+        marcar();  // el modo ya está aplicado: deja de ser «sin guardar»
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ No se ha podido aplicar: ${esc(err.message)}</span>`; }
     });
     S.modalCleanup = () => {  // al cerrar Ajustes (Cancelar, Esc, fuera) con el cambio sin aplicar: que se sepa
       document.body.classList.remove('aj-abierto');
       if (!document.body.contains(d)) return;  // otro diálogo ocupó el hueco
-      S.ajBorrador = null;  // se cierra Ajustes (no un subdiálogo): lo escrito sin guardar se descarta
       const v = procPendiente();
       if (v) toast(`No se ha aplicado ${procNombre[v]}: sigue ${procNombre[S.config.procesado] || 'la opción de antes'}. Para cambiarlo, ⚙ Ajustes → «Aplicar ahora».`, 'err');
     };
@@ -2312,11 +2279,16 @@ function openSettings(opts) {
       const timer = setInterval(tic, 1000);
       try {
         const r = await api('/api/agente/comprobar', { tipo: S.config.agente?.tipo || 'claude', modelo: $('#agModelo', d)?.value });
-        res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)</span>`;
-        $('#agEstado', d).textContent = `${S.config.agente?.label || 'Claude Code'} ${r.version} · comprobado ahora`;
+        // origen: «Claude Code de VS Code» si es la copia de la extensión; modelo_usado y aviso: si la cuenta no deja
+        // el modelo elegido, Claude Code usa su predeterminado y lo dice (rama claude-empresa, 08/11/2026)
+        const quien = r.origen || S.config.agente?.label || 'Claude Code';
+        res.innerHTML = `<span style="color:var(--ok)">✓ ${esc(quien)} ${esc(r.version)} responde (${String(r.seconds).replace('.', ',')} s)${r.modelo_usado && !r.aviso ? ` · modelo ${esc(r.modelo_usado)}` : ''}</span>`
+          + (r.aviso ? `<span class="warn-txt" style="display:block;margin-top:4px">${esc(r.aviso)}</span>` : '');
+        $('#agEstado', d).textContent = `${quien} ${r.version} · comprobado ahora`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span> <span class="muted">(tras ${seg()} s)</span>`; }
       finally { clearInterval(timer); btn.disabled = false; }
     };
+    $('#agPs', d).onclick = () => api('/api/abrir-powershell', {}).catch(err => toast(esc(err.message), 'err'));
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
     $('#aDonar', d).onclick = e => { e.preventDefault(); if (ac.donar) api('/api/acerca/abrir', { que: 'donar' }).catch(() => window.open(ac.donar, '_blank')); };
@@ -2324,6 +2296,9 @@ function openSettings(opts) {
       try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
     };
     const fields = () => {
+      // con la nube de ahora, no la de cuando se abrió Ajustes: tras «Probar conexión», ir a otro proveedor y volver
+      // repintaba lo de antes, y «Guardar» lo guardaba (revisión 14)
+      const c = S.config.cloud || {}, P = S.config.providers || {};
       const p = $('#cProv', d).value, info = P[p];
       if (p === 'azure') {
         $('#cFields', d).innerHTML = `<label>Endpoint</label><input class="input" id="cAzEp" placeholder="https://<recurso>.openai.azure.com" value="${esc(c.azure_endpoint)}">
@@ -2350,6 +2325,36 @@ function openSettings(opts) {
     if (typeof bindDirectoSettings === 'function') bindDirectoSettings(d);
     window.bindReunionSettings?.(d);
     if (typeof bindPerfilSettings === 'function') bindPerfilSettings(d);
+    if (typeof bindAjAlGrabar === 'function') bindAjAlGrabar(d);  // ajustes.js: el plan arriba, las reglas debajo
+    if (typeof bindAjProyectos === 'function') bindAjProyectos(d);
+    if (typeof bindAjCalendario === 'function') bindAjCalendario(d);
+    // los campos que se pintan después de la foto (los de la nube, según el proveedor): su valor de ahora es el de
+    // partida. Antes contaban siempre: deshacer un cambio seguía diciendo «Hay cambios sin guardar» (revisión 2 de B2)
+    const tarde = campos().filter(x => !(x.id in inicial));
+    tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
+    Object.assign(inicial, otros());  // los destinos y las claves, ya pintados por sus bind*
+    // tras guardar una parte desde aquí («Aplicar ahora», «Probar conexión»), lo guardado es el nuevo punto de partida
+    // de esos campos (revisión 12: seguía «Hay cambios sin guardar» con todo guardado, y editar una lista preguntaba).
+    // Los motores, con lo que pinta motoresRefrescar como guardado (dataset.ini): si se habían cambiado aquí, siguen
+    // contando. Lo demás, con lo que se mandó (de, una foto de antes de guardar): lo escrito mientras se guardaba no se
+    // da por guardado (revisión 13)
+    const ponerAlDia = (ids, de = null) => {
+      ids.forEach(id => {
+        const el = $('#' + id, d);
+        if (!el) return;
+        inicial[id] = 'ini' in el.dataset ? el.dataset.ini : de && id in de ? de[id]
+          : el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+      });
+      if (ids.includes('__claves')) inicial.__claves = de ? de.__claves : otros().__claves;
+    };
+    // quitar o añadir un destino o una clave es un clic, no un «change»: el aviso se mira después de cada clic (de
+    // cualquiera: el de quitar una fila la saca del DOM antes de llegar aquí, revisión 12)
+    d.addEventListener('click', () => setTimeout(marcar, 0));
+    // el modo que pide quien abre, marcado y sin aplicar (con su aviso y sus campos, que pinta su «change»): «Revisar
+    // en Ajustes» del asistente con «Con tu cuenta de Claude» elegido (revisión 6)
+    const pedido = opts && typeof opts === 'object' && opts.proc;
+    const proc = pedido && $(`input[name="proc"][value="${pedido}"]`, d);
+    if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); marcar(); }
     const collect = () => {
       const p = $('#cProv', d).value;
       const cloud = { provider: p, chunk_minutes: +$('#cChunk', d).value, parallel: +$('#cPar', d).value };
@@ -2364,6 +2369,7 @@ function openSettings(opts) {
         cloud, threads: +$('#sThreads', d).value, prompt: $('#sPrompt', d).value.trim(), language: $('#sLang', d).value,
         live_auto: $('#lAuto', d).checked, live_preset: $('#lPreset', d)?.value, meeting_detect: $('#lMeet', d).checked,
         live_final_pass: $('#lFinal', d).checked, ...(window.reunionCollect?.(d) || {}),
+        ...(typeof ajAlGrabarCollect === 'function' ? ajAlGrabarCollect(d) : {}),
         ...(typeof collectPerfilSettings === 'function' ? collectPerfilSettings(d) : {}),
         summary: { auto: ($('input[name="proc"]:checked', d)?.value === 'agente' ? $('#sAutoAg', d) : $('#sAuto', d)).checked, local: $('#sAutoLocal', d).checked, model: $('#sModel', d).value, lang: $('#sSumLang', d)?.value, extra: $('#sExtra', d)?.value } };
       // los motores, solo si se han cambiado aquí: un selector sin tocar, pintado con el modo de antes, devolvía el directo
@@ -2372,20 +2378,31 @@ function openSettings(opts) {
         const el = $(id, d);
         if (el && el.value === el.dataset.ini) delete out[k];
       }
+      // lo que se guarda solo (Outlook con su estado: «Activar» guarda al momento y Outlook puede tardar en contestar)
+      // no lo pisa «Guardar» con lo que haya en la casilla (revisión 3 de B2)
+      if ('seGuardaSolo' in ($('#rnOutlook', d)?.dataset || {})) delete out.outlook_on;
       return out;
     };
-    for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = el.value; }
+    // como se pintaron con lo guardado (la foto inicial): «Guardar» manda el motor solo si se ha cambiado aquí
+    for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = String(inicial[el.id] ?? el.value); }
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
       res.textContent = 'Probando…';
       try {
         // guarda el modo elegido y la nube (para probar con la clave escrita), no el resto del formulario: «Cancelar»
         // no deshace un guardado, y el resto sigue siendo «cambios sin guardar» (revisión del 07/11/2026)
-        const x = collect();
+        const x = collect(), enviado = foto();  // lo que se manda (si se guarda, el nuevo punto de partida)
         setConfig(await api('/api/settings', { procesado: x.procesado, cloud: x.cloud }));
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
         procPintar();  // «Probar conexión» guarda: el modo elegido ya está aplicado
         ajTarjeta();
+        // la nube que se acaba de guardar ya no es «sin guardar»; la clave, guardada, se enseña como tal
+        const k = $('#cKey', d);
+        if (k && S.config.cloud?.has_key) k.placeholder = `Guardada: ${S.config.cloud.api_key || ''} (escribe para cambiarla)`;
+        if (k && k.value && k.value === enviado.cKey) k.value = '';  // (si se ha vuelto a escribir mientras, se queda)
+        ponerAlDia(['cProv', 'cModel', 'cBase', 'cAzEp', 'cAzDep', 'cAzVer', 'cLiveModel', 'cLiveModelCustom', 'cChunk',
+          'cPar', 'lPreset', 'pfPreset', '__claves'], enviado);
+        marcar();
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
@@ -2397,47 +2414,65 @@ function openSettings(opts) {
         : `<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta de ${esc(APP_NAME)}${S.config.root ? ` (<code>${esc(S.config.root)}</code>)` : ''}.</div>`;
     };
     drawLinks();
+    d.ajDibujarEnlaces = drawLinks;  // también tras «Otra carpeta (fuera de Chuleta)…» (perfil.js)
     $('#lnAdd', d).onclick = async () => { if (await linkFolder()) drawLinks(); };
-    // la confirmacion usa el mismo hueco que Ajustes: al responder, se vuelve a Ajustes
-    d.addEventListener('click', async e => { const u = e.target.closest('[data-unlink]'); if (u) { await unlinkFolder(u.dataset.unlink); openSettings(); } });
+    // «quitar»: la confirmación va encima y, si se quita, la lista y «Reuniones sin proyecto», al día aquí mismo (si
+    // era la elegida sin guardar, vuelve a lo guardado: ya no se puede elegir)
+    d.addEventListener('click', async e => {
+      const u = e.target.closest('[data-unlink]');
+      if (!u || !await unlinkFolder(u.dataset.unlink)) return;
+      drawLinks();
+      $('#lnAdd', d)?.focus();  // su «quitar» ya no existe: el foco, en «Añadir» (no en el cuerpo de la página)
+      const f = $('#pfFolder', d);
+      if (f && typeof perfilFolderOpts === 'function') {
+        const v = f.value, sigue = v === PERFIL_AUTO || flatFolders().some(x => x.path === v);
+        f.innerHTML = perfilFolderOpts(sigue ? v : (S.config.perfil?.folder ?? PERFIL_AUTO));
+        f.dataset.prev = f.value;
+        marcar();
+        d.ajPlanPedir?.();
+      }
+    });
+    // las listas, aquí mismo: al abrir y tras «Importar listas…» o «Probar otra vez» (ajustes.js), sin cerrar Ajustes
     const drawVocab = () => {
       const box = $('#sVocab', d);
-      if (!box) return;
+      if (!box || !document.body.contains(box)) return;
       // agrupado por proyecto: cada uno con sus temas y un boton para anadir otro
       const groups = {};
       S.vocab.forEach(v => (groups[v.project] ||= []).push(v));
       const conectar = typeof vocabConectar === 'function';
       box.innerHTML = `${Object.entries(groups).map(([p, vs]) => `<div class="vproj"><b>${I.folder}${esc(p)}${vs.every(v => v.conectada) ? '<span class="muted" style="font-weight:400" title="Sus listas se leen de una carpeta conectada (abajo)"> · carpeta conectada</span>' : ''}</b>
-          <button class="btn ghost sm" type="button" data-vnew="${esc(p)}">${I.plus}Tema</button>
+          <button class="btn ghost sm" type="button" data-vnew="${esc(p)}">${I.plus}Workstream</button>
           <button class="btn ghost sm" type="button" data-vdir="${esc(vs[0].id.split('/').slice(0, -1).join('/'))}" title="Abrir su carpeta de listas">${I.ext}Carpeta</button></div>
         <table class="vtable">${vs.map(v => `<tr><td>${esc(v.name)}</td><td>${vocabFit(v)}</td>
           <td><button class="btn ghost sm" type="button" data-vedit="${esc(v.id)}">editar</button></td></tr>`).join('')}</table>`).join('')}
         ${typeof perfilVocabEmptyHtml === 'function' && !S.vocab.length ? perfilVocabEmptyHtml() : ''}
         <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button>${conectar ? `<button class="btn sm" type="button" id="sVocabConectar" title="Elige la carpeta donde tienes tus listas: se leen al grabar, sin copiarlas">${I.folder}Usar las listas de una carpeta…</button>` : ''}${typeof perfilImportar === 'function' ? `<button class="btn ghost sm" type="button" id="sVocabImport" title="${esc(typeof VOCAB_COPIAR_TITLE === 'string' ? VOCAB_COPIAR_TITLE : '')}">Copiar listas de otra carpeta…</button>` : ''}</div>
-        <div class="help">Cada tema es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>
+        <div class="help">Cada workstream es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>
         ${conectar ? `<label>Carpetas con tus listas <span class="muted" style="font-weight:400">· se leen en vivo al grabar: nada se copia</span></label><div id="sVocabCarpetas">${vocabCarpetasHtml(S.vocabCarpetas)}</div>` : ''}`;
     };
+    d.ajPintarListas = drawVocab;
     loadVocab(S.config.language ?? 'es-en').then(drawVocab);
     const redrawVocab = () => loadVocab(S.config.language ?? 'es-en').then(drawVocab);
     d.addEventListener('click', e => {
       const ed = e.target.closest('[data-vedit]'), nw = e.target.closest('[data-vnew]'), r = e.target.closest('[data-vdir]');
       const vo = e.target.closest('[data-vopen]'), vu = e.target.closest('[data-vunlink]');
-      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', openSettings);
+      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', drawVocab);
       if (e.target.closest('#sVocabConectar') && typeof vocabConectar === 'function') vocabConectar(redrawVocab);
       if (vu && typeof vocabDesconectar === 'function') {
         vocabDesconectar(vu.dataset.vunlink, () => {
           redrawVocab();
           if (typeof perfilVocabRedraw !== 'function') return;
           perfilVocabRedraw(d);
-          // lo guardado ha cambiado en el servidor (el tema, a automático): «inicial» y el borrador también, o un
-          // subdiálogo que reabra Ajustes devolvería el tema quitado y «Guardar» lo dejaría en «Sin vocabulario»
+          // lo guardado ha cambiado en el servidor (el tema, a automático): el punto de partida también, o «Hay
+          // cambios sin guardar» (y la pregunta antes de un subdiálogo) lo darían por cambiado sin serlo
           const g = S.config?.perfil?.vocab;
           inicial.pfVocab = g == null ? PERFIL_AUTO : g;
           marcar();
         });
       }
-      if (ed) openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit));
-      if (nw) openVocabEditor(null, openSettings, nw.dataset.vnew);
+      // editar o crear una lista sale de Ajustes: antes, si hay algo sin guardar, se pregunta
+      if (ed) d.ajAntesDeSalir().then(ok => ok && openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit)));
+      if (nw) d.ajAntesDeSalir().then(ok => ok && openVocabEditor(null, openSettings, nw.dataset.vnew));
       const rev = r ? r.dataset.vdir : vo ? vo.dataset.vopen : null;
       if (rev != null) api('/api/reveal', { path: rev }).catch(err => toast(esc(err.message), 'err'));
     });
@@ -2449,27 +2484,35 @@ function openSettings(opts) {
         res.innerHTML = `<span style="color:var(--ok)">✓ Creado en el escritorio (${(r.size / 1e6).toFixed(1).replace('.', ',')} MB${r.vocab ? ` · con ${r.vocab} listas de vocabulario` : ''})</span>`;
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ ${esc(err.message)}</span>`; }
     };
-    d.addEventListener('click', async e => {
+    // «Guardar» (cierra Ajustes) y «Guardar y seguir» (no lo cierra: lo que sigue ocupa su hueco). true si se guardó
+    const guardar = async (cerrar = true) => {
+      try {
+        const c = await api('/api/settings', collect());
+        setConfig(c); localStorage.setItem('procElegido', '1');
+        if (cerrar) closeModal(true);
+        toast('Ajustes guardados'); refreshView();
+        if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
+        return true;
+      } catch (err) { toast(esc(err.message), 'err'); return false; }
+    };
+    d.addEventListener('click', e => {
       const b = e.target.closest('[data-m]');
       if (!b) return;
       if (b.dataset.m === 'no') return closeModal(false);
-      try {
-        const c = await api('/api/settings', collect());
-        S.ajBorrador = null;
-        setConfig(c); localStorage.setItem('procElegido', '1'); closeModal(true); toast('Ajustes guardados'); refreshView();
-        if (c.descarga) toast(`Descargando el modelo ${esc(c.descarga)} de Whisper para transcribir en este PC: el progreso, en Ajustes`);
-      }
-      catch (err) { toast(esc(err.message), 'err'); }
+      guardar();
     });
   }, 'aj');
 }
-$('#btnSettings').onclick = openSettings;
+// ⚙ abre siempre en «Al grabar» (rediseño B2): lo que se usará al grabar, arriba. Volver de un subdiálogo (editar una
+// lista, el asistente…) sí vuelve a la sección en la que estabas (openSettings sin sección)
+$('#btnSettings').onclick = () => openSettings({ sec: 'algrabar' });
 
 /* ---------------------------------------------------------------- apagar */
 async function confirmShutdown() {
   const busy = S.jobs.some(isActive);
   const ok = await ask(`Apagar ${APP_NAME}`, `<p>Se cierra la app del todo: la ventana y el motor que corre en segundo plano. El atajo Ctrl+Alt+R dejará de funcionar hasta que la vuelvas a abrir con el acceso directo.</p>${busy ? '<p><b>Hay transcripciones en marcha</b>: se cancelan (lo ya escrito se conserva) y podrás relanzarlas al volver.</p>' : ''}`, 'Apagar');
-  if (!ok) return openSettings();  // la confirmacion ocupa el hueco de Ajustes: al cancelar, se vuelve
+  // desde Ajustes, la confirmación va encima: al cancelar, Ajustes sigue ahí, con lo escrito
+  if (!ok) return;
   try { await api('/api/apagar', {}); shutdownScreen(); }
   catch (err) { toast(esc(err.message), 'err'); }
 }

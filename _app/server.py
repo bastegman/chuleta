@@ -41,6 +41,7 @@ import calendario
 import engines
 import explicar
 import live
+import plan as grabar_plan
 import probar
 import salidas
 import voices
@@ -477,6 +478,11 @@ DEFAULT_SETTINGS = {
     "workstream_folders": {},
     # una carpeta por reunion, «AAAA-MM-DD Nombre», dentro de la principal (msg 1158): el audio y sus textos van dentro
     "carpeta_por_reunion": True,
+    # plan de grabacion (plan.py, 07/11/2026): idioma por proyecto y por workstream (id de su lista), y si al grabar se
+    # transcribe en directo por defecto (Ajustes › Al grabar; «Solo grabar» en la tarjeta vale para esa reunion)
+    "project_langs": {},
+    "workstream_langs": {},
+    "rec_directo": True,
     "favorites": [],          # [{"kind": "a"|"f", "path": ...}] (estilo Notion)
     "folder_icons": {},       # carpeta -> emoji
     "meeting_detect": True,   # avisar si Teams/Zoom/… usa el micro y no se esta grabando
@@ -503,7 +509,7 @@ DEFAULT_SETTINGS = {
     # un "agente": null escrito a mano no da el fichero por roto: agente_de lo resuelve)
     "agente": None,
     "voices_enabled": False,  # quien habla (diarizacion local + huellas de voz): opcional, apagado por defecto
-    # perfil de reunion por defecto (Ajustes > Perfil de reunion y «Guardar como perfil por defecto» al grabar).
+    # perfil de reunion por defecto (Ajustes › Al grabar, y «Usarlo en: todas» en la tarjeta de grabar).
     # None en folder/vocab = automatico, como siempre: la ultima carpeta usada (o la del proyecto del tema) y el tema
     # que sugiera la reunion en curso o el ultimo elegido. El idioma por defecto sigue siendo "language".
     "perfil": {"folder": None,    # carpeta de destino fija (ruta interna, "" = la raiz) o None
@@ -1841,24 +1847,28 @@ def resolve_perfil(st, sug=None, elegido=None, auto_folder=None):
     return dict(out, origen=origen)
 
 
-def check_perfil(b, known=None):
+def check_perfil(b, known=None, actual=None):
     """Valida lo que llega para el perfil (solo las claves presentes) y lo devuelve normalizado. `known`: los destinos
-    de salida ya guardados (se aceptan aunque ahora no esten disponibles; los nuevos tienen que existir)."""
-    out = {}
+    de salida ya guardados (se aceptan aunque ahora no esten disponibles; los nuevos tienen que existir). `actual`: el
+    perfil guardado; su carpeta y su lista, sin cambiar, se aceptan aunque ahora no se encuentren (una vinculada
+    desconectada, OneDrive sin conexion): Ajustes las devuelve tal cual con cualquier «Guardar» y no deben perderse ni
+    impedir guardar lo demas (revision 2 de B2, P1-3)."""
+    out, actual = {}, actual or {}
     if "folder" in b:
         rel = b["folder"]
         if rel is not None:
             rel = str(rel).replace("\\", "/").strip("/")
-            folder = safe(rel, "dir")
-            if in_app_dir(folder):
-                raise ApiError("No se puede grabar ahí")
+            if rel != actual.get("folder"):
+                folder = safe(rel, "dir")
+                if in_app_dir(folder):
+                    raise ApiError("No se puede grabar ahí")
         out["folder"] = rel
     if "vocab" in b:
         vid = b["vocab"]
         if vid is not None:
             vid = str(vid).strip()
-            if vid and not find_vocab(None, None, vid):
-                raise ApiError("Ese tema de vocabulario ya no existe.")
+            if vid and vid != actual.get("vocab") and not find_vocab(None, None, vid):
+                raise ApiError("Ese workstream ya no existe.")
         out["vocab"] = vid
     if "context" in b:
         out["context"] = " ".join(str(b["context"] or "").split())[:engines.ABOUT_CHARS]
@@ -2160,6 +2170,56 @@ def move_files(moves):
         raise err
 
 
+SIN_AUDIO = "Sin micrófono y sin el audio del PC no se graba nada: deja al menos uno de los dos."
+
+
+def ajustes_previstos(st, a):
+    """Los ajustes con lo que Ajustes › Al grabar tiene escrito y sin guardar (solo para enseñar el plan; no se guarda
+    nada). Se aceptan las claves de esa sección, validadas como al guardar; lo que no vale se ignora."""
+    st = copy.deepcopy(st)
+    lang = str(a.get("language") or "").strip().lower() if "language" in a else None
+    if lang is not None and (not lang or IDIOMA_RE.match(lang)):
+        st["language"] = lang
+    for k in ("rec_mic", "rec_sys"):
+        if isinstance(a.get(k), str) and a[k].strip():
+            st[k] = a[k].strip()[:300]
+    if "rec_directo" in a:
+        st["rec_directo"] = bool(a["rec_directo"])
+    if a.get("live_preset") in LIVE_PRESETS:
+        st["live_preset"] = a["live_preset"]
+    if a.get("preset") in engines.PRESETS_BY_ID:  # Procesado › Motores: el de después («Solo grabar»)
+        st["preset"] = a["preset"]
+    if a.get("procesado") in PROCESADOS:  # la opción marcada en Procesado, aplicada o no: «Guardar» también la aplica
+        st["procesado"] = a["procesado"]
+    s = a.get("summary") if isinstance(a.get("summary"), dict) else {}
+    for k, clave in (("auto", "summary_auto"), ("local", "summary_auto_local")):
+        if k in s:
+            st[clave] = bool(s[k])
+    if isinstance(a.get("prompt"), str):  # el vocabulario de las reuniones sin proyecto (Proyectos)
+        st["prompt"] = a["prompt"]
+    if "carpeta_por_reunion" in a:  # rama de carpetas: una carpeta por reunión
+        st["carpeta_por_reunion"] = a["carpeta_por_reunion"] is not False
+    if isinstance(a.get("perfil"), dict):
+        try:
+            claves = ("folder", "vocab", "context")
+            # con el perfil guardado como referencia: su carpeta o su lista, aunque ahora no se encuentren, no tiran el
+            # resto de lo escrito (el contexto) como «no vale» (revisión 3 de B2)
+            update_perfil(st, check_perfil({k: x for k, x in a["perfil"].items() if k in claves}, actual=perfil_de(st)))
+        except ApiError:
+            pass
+    return st
+
+
+def _con_o_sin(d, k, val):
+    """Copia del diccionario `d` con `k` = `val`, o sin `k` si `val` es None (vuelve a heredar)."""
+    out = dict(d or {})
+    if val is None:
+        out.pop(k, None)
+    else:
+        out[k] = val
+    return out
+
+
 def moved_rel(p, old, new, folder=False):
     """La ruta interna `p` despues de que `old` pase a ser `new` (con folder, tambien lo que hay dentro); None si no le
     afecta."""
@@ -2235,6 +2295,23 @@ def settings_moved(d, old, new, folder=False, project=None):
             k, m = moved_rel(vid, old, new, folder), moved_rel(rel, old, new, folder)
             wf[vid if k is None else k] = rel if m is None else m
         d["workstream_folders"] = wf
+    _idiomas_moved(d, old, new, folder, project)
+
+
+def _idiomas_moved(d, old, new, folder, project):
+    """Plan de grabacion: el idioma de cada workstream (por el id de su lista) y de cada proyecto (por su nombre)
+    siguen a un tema o a una carpeta renombrados."""
+    if d.get("workstream_langs"):
+        wl = {}
+        for vid, lang in d["workstream_langs"].items():
+            m = moved_rel(vid, old, new, folder)
+            wl[vid if m is None else m] = lang
+        d["workstream_langs"] = wl
+    pl = d.get("project_langs")
+    if pl and project and project[0] in pl and project[1] not in pl:
+        pl = dict(pl)
+        pl[project[1]] = pl.pop(project[0])
+        d["project_langs"] = pl
 
 
 def theme_moved(props, vid, new, lists, project, ambiguous=False, inside=False):
@@ -2332,7 +2409,7 @@ def import_vocab(src, project=None):
             if e.is_dir() and not e.name.startswith((".", "_")) and vocab_dir(e.path):
                 found.append((e.name, vocab_dir(e.path)))
     if not found:
-        raise ApiError("En esa carpeta no hay listas de vocabulario (<Proyecto>\\Vocabulario\\<Tema>.txt).")
+        raise ApiError("En esa carpeta no hay listas de vocabulario (<Proyecto>\\Vocabulario\\<Workstream>.txt).")
     existing = list_vocab()
     copied, skipped, projects = 0, 0, []
     for proj, folder in found:
@@ -3017,7 +3094,7 @@ class Jobs:
             return None
         # con Azure OpenAI: que el resumen aun no funciona ahi (no "configura la nube")
         return (engines.chat_missing(c)
-                or "El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+                or "El resumen necesita una API key de la nube (Ajustes ⚙ → Procesado).")
 
     def summary_ready(self):
         return self.summary_missing() is None
@@ -4194,28 +4271,292 @@ class App:
                            "la transcripción termina sola")
                     return dict(r, recording=False)
                 st = self.settings.get()
-                # nombre y tema: lo que mande el aviso flotante; si no, la reunión en curso (Teams/Outlook, sin
-                # esperar a COM: calendario.py); si no, el ultimo tema elegido (y la carpeta de su proyecto)
+                # el mismo plan que enseña la tarjeta de Grabar (plan.py): la reunión en curso (Teams/Outlook, sin
+                # esperar a COM: calendario.py) o la que vio el aviso flotante al abrirse, y de ahí proyecto,
+                # carpeta, idioma, vocabulario, motor y dispositivos, cada uno de su capa
                 sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
-                vid = perfil_vocab(st, b.get("vocab") or sug.get("vocab"))  # fijo en el perfil > reunion > ultimo
-                v = find_vocab(None, None, vid) if vid else None
+                if b.get("name") or b.get("vocab"):
+                    sug = dict(sug, name=b.get("name") or sug.get("name") or "",
+                               vocab=b.get("vocab") or sug.get("vocab") or "")
+                p = self.plan_grabar({}, st=st, sug=sug)
+                body = dict(p["rec"], resumen=p["resumen"])
+                if b.get("participantes"):
+                    body.update(participantes=b["participantes"], sugerido=b.get("sugerido") or sug.get("source") or "")
                 cue("start")  # antes de empezar: asi el pitido no queda grabado
-                r = self.rec_start({"mic": st.get("rec_mic") or "default", "sys": st.get("rec_sys") or "all",
-                                    "live": True, "preset": st.get("live_preset") or "medium",
-                                    "language": st.get("language") or "", "folder": self.rec_folder_for(v, st),
-                                    "vocab": v["id"] if v else "", "name": b.get("name") or sug.get("name") or "",
-                                    "participantes": b.get("participantes")
-                                    or calendario.join_participants(sug.get("participants")),
-                                    "sugerido": b.get("sugerido") or sug.get("source") or ""})
-                notify(f"● Grabando en {APP_NAME}", (f"{r['workstream']} · " if r.get("workstream") else "")
-                       + (f"→ {display_rel(r['carpeta'])} · " if r.get("carpeta") is not None else "")
-                       + "Pulsa Ctrl+Alt+R otra vez para parar" + (f" · {r['aviso']}" if r.get("aviso") else ""))
-                return dict(r, recording=True)
+                r = self.rec_start(body)
+                # lo que avisa el plan (la carpeta, un proyecto sin carpeta propia, la API key), también aquí y
+                # delante: el aviso de Windows corta lo que no cabe
+                del_plan = "".join(f"{a} · " for a in dict.fromkeys(x["aviso"] for x in p["lineas"] if x.get("aviso")))
+                notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + " · Ctrl+Alt+R para parar"
+                       + (f" · {r['aviso']}" if r.get("aviso") else ""))
+                return dict(r, recording=True, plan=p)
             except ApiError as e:
                 cue("error")
                 log(f"   no se pudo grabar (Ctrl+Alt+R): {e.msg}")  # el toast se va; el log se queda
                 notify("No se pudo grabar", e.msg)
                 raise
+
+    # --- plan de grabacion (plan.py): un solo calculo para la tarjeta, Ctrl+Alt+R, el aviso flotante e Inicio
+    def _motores(self, st):
+        mode = procesado_de(st)
+        cls = agente_de(st)[0]
+        return {"presets": {p["id"]: p for p in engines.PRESETS if not (p["engine"] == "cloud" and mode != "api")},
+                "procesado": mode, "agente": "Claude" if cls.tipo == "claude" else cls.label,
+                "proveedor": (engines.PROVIDERS.get((st.get("cloud") or {}).get("provider") or "groq") or {}).get(
+                    "label") or "la nube",
+                "resumen_auto": st.get("summary_auto", True) is not False,
+                "resumen_local": bool(st.get("summary_auto_local")),
+                "sin_clave": not ((st.get("cloud") or {}).get("api_key") or "").strip()}
+
+    # orígenes de la regla de carpetas (rama `carpetas`, rec_folder_origin) -> (origen, texto) de la tarjeta
+    _ORIGENES_REGLA = {"workstream": "workstream", "proyecto": "proyecto", "carpeta_proyecto": "proyecto",
+                       "perfil": "ajustes", "ultimo": "ultima", "raiz": "ajustes"}
+
+    def _carpeta_origen(self, st, full):
+        """(origen, texto) de la carpeta que ha decidido rec_folder_for. Con la regla de la rama de carpetas
+        (rec_folder_origin(v, st) -> (carpeta, origen), de módulo), manda la suya si da esa misma carpeta; si no (o
+        sin ella), se reconoce comparando con lo que hay en los ajustes."""
+        regla = globals().get("rec_folder_origin")
+
+        def texto(origen, v, rel):
+            if origen == "workstream":
+                return "carpeta del workstream"
+            if origen == "proyecto":
+                return f"carpeta de {v['project']}"
+            if origen == "ultima":
+                return "la última usada"
+            return f"la carpeta de {APP_NAME}" if not rel else "Ajustes › Al grabar"
+
+        def origen(v, rel):
+            rel = rel or ""
+            if callable(regla):
+                try:
+                    r_rel, o = regla(full.get(v["id"]) if v else None, st)
+                except Exception:
+                    log_exc()
+                else:
+                    o = self._ORIGENES_REGLA.get(o, "ajustes")
+                    if (r_rel or "") == rel and (v or o not in ("workstream", "proyecto")):
+                        return o, texto(o, v, rel)
+            if v:
+                wf = (st.get("workstream_folders") or {}).get(v["id"])
+                if wf is not None and wf == rel:
+                    return "workstream", texto("workstream", v, rel)
+                pf = (st.get("project_folders") or {}).get(v["project"])
+                if (pf is not None and pf == rel) or (v["id"] in full and rel == rel_of(_project_dir(full[v["id"]]))):
+                    return "proyecto", texto("proyecto", v, rel)
+            fija = perfil_folder(st)
+            if fija is not None and fija == rel:
+                return "ajustes", texto("ajustes", v, rel)
+            if rel and rel == (st.get("rec_folder") or ""):
+                return "ultima", texto("ultima", v, rel)
+            return "ajustes", texto("ajustes", v, rel)
+        return origen
+
+    def _carpeta_plan(self, v, st, full):
+        """La carpeta base de una grabación nueva: la que decide rec_folder_for. Con proyecto, si esa no es suya (la
+        fija de Ajustes, que es la de las reuniones sin proyecto, o la última usada, que puede ser la de otro cliente),
+        la del proyecto: la del workstream, la asignada al proyecto o, sin asignar, la carpeta del proyecto en el árbol
+        (la que contiene su Vocabulario; 11a′ del rediseño, msg 1158). Con la regla de la rama de carpetas
+        (rec_folder_origin), su rec_folder_for ya lo decide así y esto no hace nada: una sola regla."""
+        fv = full.get(v["id"]) if v else None
+        rel = self.rec_folder_for(fv, st)
+        if not fv or callable(globals().get("rec_folder_origin")):
+            return rel
+        # el mismo orden que la regla de la rama de carpetas: la del workstream, la asignada al proyecto, la del
+        # proyecto en el árbol; sin ninguna, la de rec_folder_for (la fija de Ajustes o la última usada)
+        for cand in ((st.get("workstream_folders") or {}).get(v["id"]),
+                     (st.get("project_folders") or {}).get(v["project"]), rel_of(_project_dir(fv))):
+            if cand is None:
+                continue
+            try:
+                if not in_app_dir(safe(cand, "dir")):
+                    return cand
+            except ApiError:
+                continue
+        return rel  # sin carpeta propia en la app (p. ej. listas de una carpeta conectada): lo de siempre, a la vista
+
+    def plan_grabar(self, pedido, st=None, sug=None, plantilla=False):
+        """El plan de una grabación nueva con el origen de cada valor (ver plan.py). `pedido`: lo elegido en la
+        tarjeta; `sug`: la reunión en curso (si no se da, la última lectura del vigilante o Teams al momento)."""
+        st = st or self.settings.get()
+        if sug is None:
+            sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
+        full, listas = {}, []
+        for v in list_vocab():
+            try:
+                terms = read_vocab(v["_abs"])[1]
+            except OSError:
+                terms = None
+            full[v["id"]] = v
+            listas.append({"id": v["id"], "project": v["project"], "name": v["name"],
+                           "n": len(terms) if terms is not None else None, "terms": terms or []})
+        lib = getattr(self, "library", None)
+        if lib is not None and hasattr(lib, "refresh") and getattr(lib, "tree", None) is None:
+            try:
+                lib.refresh(max_age=60)  # Ctrl+Alt+R nada más arrancar: el historial, aunque no se haya abierto la app
+            except Exception:
+                log_exc()
+        hist = grabar_plan.historial_de(list(getattr(lib, "flat", None) or []), listas)
+        p = grabar_plan.resolver(
+            st, listas, sug, hist, pedido,
+            carpeta_de=lambda v: self._carpeta_plan(v, st, full),
+            carpeta_origen=self._carpeta_origen(st, full),
+            sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
+            motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
+            carpeta_reunion=self._carpeta_reunion(st, plantilla))
+        # la carpeta de Ajustes (la de las reuniones sin proyecto) guardada que ahora no se encuentra (una vinculada
+        # desconectada): se graba en otra y se dice por qué en su línea (revisión 3 de B2)
+        fija = perfil_de(st)["folder"]
+        car = next((x for x in p["lineas"] if x["clave"] == "carpeta"), None)
+        if fija is not None and perfil_folder(st) is None and car and car["origen"] in ("ajustes", "ultima") \
+                and not car.get("aviso"):
+            links = {k: l["name"] for k, l in LINKS.items()}
+            ruta = grabar_plan.ruta_txt(fija, links)
+            car["aviso"] = f"No se encuentra la carpeta de las reuniones sin proyecto ({ruta}): se guarda aquí."
+        # un proyecto sin carpeta propia (sus listas vienen de una carpeta conectada y no se le ha asignado ninguna)
+        # graba en la de Ajustes o en la última usada, que puede ser la de otro cliente: se dice cómo fijarle una
+        proy = p["proyecto"].get("proyecto")
+        if proy and car and car["origen"] in ("ajustes", "ultima") and not car.get("aviso"):
+            car["aviso"] = (f"{proy} no tiene carpeta propia: asígnale una en Ajustes › Proyectos o, al grabar, con "
+                            f"«Cambiar» y «Todas las de {proy}».")
+        # un nombre escrito con \ / : * ? " < > | (p. ej. «Comité: Q4») no vale como nombre de archivo y rec_start lo
+        # rechazaría al empezar: se graba sin esos signos, como la carpeta de la reunión (rec_destino), y se dice
+        n = p["rec"].get("name") or ""
+        if n:
+            try:
+                clean_name(n)
+            except ApiError:
+                p["rec"]["name"] = p["nombre"]["archivo"] = calendario.nombre_archivo(n)
+        return p
+
+    PLANTILLA_REUNION = "AAAA-MM-DD Nombre de la reunión"
+
+    @classmethod
+    def _carpeta_reunion(cls, st, plantilla=False):
+        """La carpeta «AAAA-MM-DD Nombre» que creará rec_start dentro de la base, o None. Con la rama de carpetas
+        (B1b): su meeting_dir_preview, con el nombre como lo limpia rec_start (rec_destino hace lo mismo). Sin ella,
+        None: la grabación va en la base. plantilla (Ajustes › Al grabar, sin reunión): sin nombre, el patrón y no
+        «AAAA-MM-DD HH-MM» de ahora, que cambiaría cada minuto."""
+        previa = globals().get("meeting_dir_preview")
+        if not callable(previa):
+            return None
+
+        def reunion(base, nombre):
+            if plantilla and not nombre:
+                try:
+                    activa = previa(base or "", "", st) != (base or "")
+                except (ApiError, OSError):
+                    return None
+                return f"{base}/{cls.PLANTILLA_REUNION}".lstrip("/") if activa else None
+            label = ""
+            if nombre:
+                try:
+                    label = clean_name(nombre)
+                except ApiError:
+                    label = calendario.nombre_archivo(nombre)
+            try:
+                sub = previa(base or "", label, st)
+            except (ApiError, OSError):
+                return None
+            return sub if sub and sub != (base or "") else None
+        return reunion
+
+    def _carpetas_de_proyectos(self, st):
+        """Ajustes › Proyectos: la carpeta principal de cada proyecto y de cada workstream con su origen, con el mismo
+        cálculo que el plan (lo que dice la tabla es lo que se usará al grabar). `sin_asignar`: la que tendría el
+        proyecto si se le quita la suya (para la opción «Sin asignar» al editarla)."""
+        full = {v["id"]: v for v in list_vocab()}
+        links = {k: l["name"] for k, l in LINKS.items()}
+
+        def una(v, s):
+            rel = self._carpeta_plan(v, s, full)
+            o, t = self._carpeta_origen(s, full)(v, rel)
+            return {"rel": rel or "", "ruta": grabar_plan.ruta_txt(rel, links), "origen": o, "texto": t}
+        sin_ws = dict(st, workstream_folders={})
+        proyectos, workstreams = {}, {}
+        for v in full.values():
+            workstreams[v["id"]] = una(v, st)
+            if v["project"] not in proyectos:
+                pf = {k: x for k, x in (st.get("project_folders") or {}).items() if k != v["project"]}
+                proyectos[v["project"]] = dict(una(v, sin_ws), sin_asignar=una(v, dict(sin_ws, project_folders=pf)))
+        return {"proyectos": proyectos, "workstreams": workstreams}
+
+    def grabar_plan_api(self, b):
+        """POST /api/grabar/plan {nombre?, vocab?, participantes?, cambios?, recientes?}: lo que se va a usar al grabar,
+        línea a línea con su origen, y el cuerpo exacto de /api/rec/start (rec). Con recientes, también las reuniones
+        recientes para el autocompletado del nombre."""
+        pedido = {k: b[k] for k in ("nombre", "vocab", "participantes") if k in b}
+        if isinstance(b.get("cambios"), dict):
+            pedido["cambios"] = b["cambios"]
+        st = self.settings.get()
+        if isinstance(b.get("ajustes"), dict):  # Ajustes › Al grabar: cómo quedaría con lo que aún no se ha guardado
+            st = ajustes_previstos(st, b["ajustes"])
+        p = self.plan_grabar(pedido, st=st, plantilla=isinstance(b.get("ajustes"), dict))
+        if b.get("recientes"):
+            vs = list_vocab()
+            p["recientes"] = grabar_plan.recientes(grabar_plan.historial_de(
+                list(getattr(getattr(self, "library", None), "flat", None) or []), vs), {v["id"]: v for v in vs})
+        if b.get("proyectos"):  # Ajustes › Proyectos: la carpeta de cada uno, con lo que aún no se ha guardado
+            p["carpetas"] = self._carpetas_de_proyectos(st)
+        return p
+
+    def grabar_recordar(self, b):
+        """POST /api/grabar/recordar {clave, valor, alcance, vocab?}: «Cambiar» de la tarjeta (o de Ajustes) con «Usarlo
+        en» las del proyecto, las del workstream o todas (Ajustes). «Solo esta reunión» no guarda nada: va en el
+        pedido del plan. valor None en el proyecto o el workstream = quitarlo (vuelve a heredar)."""
+        clave, alcance, valor = b.get("clave"), b.get("alcance"), b.get("valor")
+        v = find_vocab(None, None, b.get("vocab")) if b.get("vocab") else None
+        if alcance not in ("proyecto", "workstream", "ajustes"):
+            raise ApiError("¿Para qué reuniones? Elige las del proyecto o todas.")
+        if alcance != "ajustes" and not v:
+            raise ApiError("Elige primero el proyecto de la reunión.")
+        sitio = {"proyecto": "project", "workstream": "workstream"}.get(alcance)
+        if clave == "idioma":
+            lang = None if valor is None else str(valor or "").strip().lower()
+            if lang and not IDIOMA_RE.match(lang):
+                raise ApiError("Idioma no válido: " + lang)
+            lang = "" if lang == "auto" else lang
+            if alcance == "ajustes":
+                cambios = {"language": lang or ""}
+            else:
+                k = v["id"] if sitio == "workstream" else v["project"]
+                cambios = {sitio + "_langs": lambda cur: _con_o_sin(cur, k, lang)}
+        elif clave == "carpeta":
+            rel = None if valor is None else str(valor or "").replace("\\", "/").strip("/")
+            if rel is not None and in_app_dir(safe(rel, "dir")):
+                raise ApiError("No se puede grabar ahí")
+            if alcance == "ajustes":
+                cambios = {"perfil": {"folder": rel}}
+            elif alcance == "workstream":  # Ajustes › Proyectos: la de un workstream (None: la del proyecto)
+                cambios = {"workstream_folders": lambda cur: _con_o_sin(cur, v["id"], rel)}
+            else:
+                cambios = {"project_folders": lambda cur: _con_o_sin(cur, v["project"], rel)}
+        elif clave in ("mic", "sys", "live", "preset", "contexto") and alcance == "ajustes":
+            if clave == "preset" and valor not in LIVE_PRESETS:
+                raise ApiError("Ese motor no existe.")
+            otro = self.settings.get().get("rec_sys" if clave == "mic" else "rec_mic")
+            if clave in ("mic", "sys") and valor == "none" and otro == "none":
+                raise ApiError(SIN_AUDIO)
+            if clave == "contexto":
+                cambios = {"perfil": check_perfil({"context": valor})}
+            elif clave == "live":
+                cambios = {"rec_directo": bool(valor)}
+            else:
+                key = {"mic": "rec_mic", "sys": "rec_sys", "preset": "live_preset"}[clave]
+                cambios = {key: str(valor or "")[:300] or ("all" if clave == "sys" else "default")}
+        else:
+            raise ApiError("Eso no se puede guardar así.")
+
+        def upd(d):
+            for k, x in cambios.items():
+                if k == "perfil":
+                    update_perfil(d, x)
+                else:  # los diccionarios por proyecto, sobre lo guardado en ese momento (dentro del cerrojo)
+                    d[k] = x(d.get(k)) if callable(x) else x
+        self.settings.update(upd)
+        log(f"   al grabar: {clave} para " + ("todas (Ajustes)" if alcance == "ajustes" else alcance))
+        return {"ok": True}
 
     # --- grabadora
     def _monitor_watchdog(self):
@@ -4253,7 +4594,7 @@ class App:
         out = {"recording": bool(r and r.alive()), "monitor": bool(m and m.alive()), "meeting": self.meeting,
                "build": BUILD}
         if r and r.alive():
-            out.update(path=rel_of(r.path), started=r.started, **r.status)
+            out.update(path=rel_of(r.path), started=r.started, resumen=getattr(self, "rec_resumen", ""), **r.status)
         elif m and m.alive():
             out.update(m.status)
         return out
@@ -4383,15 +4724,21 @@ class App:
                 def upd(d):
                     if "vocab" in b:
                         d["rec_vocab"] = v["id"] if v else ""
-                    # la ultima carpeta principal usada: la de las reuniones sin tema (rec_folder_origin). La de un
-                    # proyecto ya no se apunta al grabar: se asigna (/api/proyecto/carpeta) y, sin asignar, es la suya
-                    d["rec_folder"] = rel_of(folder)
-                    # salvo si no tiene «la suya» en el arbol (solo tiene listas de una carpeta de vocabulario
-                    # conectada: project_home): la elegida a mano pasa a ser su carpeta principal, como antes de la
-                    # carpeta por reunion. Sin esto, Ctrl+Alt+R y el aviso de Teams con su tema caian en la ultima
-                    # usada, que puede ser la de otro proyecto (revision de la integracion del 08/11/2026)
-                    if sin_casa:
+                    # la proxima vez (y con Ctrl+Alt+R) se graba en la misma carpeta. Desde el plan, solo la de una
+                    # reunion sin proyecto y si no se eligio «solo esta reunion»: la carpeta de un proyecto no pasa a
+                    # ser «la ultima usada» de las reuniones sin proyecto (revision de B1)
+                    if not b.get("plan") or (not v and b.get("recordar_carpeta", True)):
+                        d["rec_folder"] = rel_of(folder)
+                    # si el proyecto no tiene «la suya» en el arbol (solo tiene listas de una carpeta de vocabulario
+                    # conectada: project_home), la elegida a mano pasa a ser su carpeta principal (9f49590). Tambien
+                    # desde el plan: una eleccion explicita manda (decision de Claudia, 09/11/2026); pero no si en la
+                    # tarjeta se eligio «solo esta reunion» (recordar_carpeta), que tambien es explicita
+                    if sin_casa and b.get("recordar_carpeta", True):
                         d["project_folders"] = dict(d.get("project_folders") or {}, **{v["project"]: rel_of(folder)})
+                    if b.get("plan"):
+                        # desde el plan (tarjeta, Ctrl+Alt+R, aviso): lo demas de esta reunion no pasa a ser el
+                        # predeterminado; eso se guarda a proposito con «Usarlo en» (D1)
+                        return
                     # "solo grabar" y "sin micro" son para una grabacion concreta: no se quedan como
                     # predeterminado (la siguiente, y Ctrl+Alt+R, vuelven a transcribir y a grabar el micro)
                     if mic != "none":
@@ -4420,6 +4767,7 @@ class App:
                             carpetas_reunion().discard(rel_of(mdir))
                         except OSError:
                             pass
+        self.rec_resumen = " ".join(str(b.get("resumen") or "").split())[:300]  # lo que dice el plan (Inicio, toasts)
         log(f"● Grabando: {rel}" + (f" [{v['project']} · {v['name']}]" if v else "")
             + ("" if b.get("live") else " (solo grabar, sin transcribir)")
             + (f" · aviso: {'; '.join(avisos)}" if avisos else ""))
@@ -4641,6 +4989,9 @@ class App:
                 "project_folders_asignadas": dict(st.get("project_folders") or {}),
                 "workstream_folders": dict(st.get("workstream_folders") or {}),
                 "carpeta_por_reunion": por_reunion(st),
+                "project_langs": st.get("project_langs") or {}, "workstream_langs": st.get("workstream_langs") or {},
+                "rec_directo": st.get("rec_directo", True) is not False, "rec_mic": st.get("rec_mic") or "default",
+                "rec_sys": st.get("rec_sys") or "all",
                 "meeting_detect": bool(st.get("meeting_detect", True)),
                 "outlook_on": bool(st.get("outlook_on")), "rec_aviso": bool(st.get("rec_aviso", True)),
                 "summary": {"auto": bool(st.get("summary_auto", True)), "local": bool(st.get("summary_auto_local")),
@@ -4901,7 +5252,7 @@ class App:
         if vid:
             v = find_vocab(None, None, vid)
             if not v:
-                raise ApiError("Ese tema de vocabulario ya no existe.")
+                raise ApiError("Ese workstream ya no existe.")
             project = v["project"]
         if not project:
             raise ApiError("Falta el proyecto.")
@@ -4965,7 +5316,7 @@ class App:
         path = os.path.join(vdir, name + ".txt")
         moved = old and os.path.normcase(old["_abs"]) != os.path.normcase(path)
         if (not old or moved) and os.path.exists(path):
-            raise ApiError(f"Ya hay un tema «{name}» en {project}.")
+            raise ApiError(f"Ya hay un workstream «{name}» en {project}.")
         per_line = False
         if old:
             try:
@@ -5092,7 +5443,8 @@ class App:
         normalizados, sin guardar nada: asi la interfaz rechaza al momento una carpeta que no vale."""
         if b.get("comprobar"):
             return {"outputs": check_perfil({"outputs": b.get("outputs") or []})["outputs"]}
-        cambios = check_perfil(b, perfil_de(self.settings.get())["outputs"])
+        actual = perfil_de(self.settings.get())
+        cambios = check_perfil(b, actual["outputs"], actual)
         self.settings.update(lambda d: update_perfil(d, cambios))
         log("   perfil de reunión guardado: " + ", ".join(sorted(cambios)))
         return {"perfil": perfil_de(self.settings.get())}
@@ -5100,7 +5452,7 @@ class App:
     def vocab_delete(self, b):
         v = find_vocab(None, None, b.get("id"))
         if not v:
-            raise ApiError("Ese tema ya no existe.")
+            raise ApiError("Ese workstream ya no existe.")
         to_recycle_bin([v["_abs"]])  # a la papelera: se puede recuperar
 
         def upd(d):  # el ultimo tema elegido y el fijo del perfil, si eran este: el perfil vuelve a «automatico»
@@ -5294,8 +5646,11 @@ class App:
     def reunion_actual(self, q):
         """GET /api/reunion/actual: ventana de Teams, cita de Outlook (si está activado, o ?outlook=1 para probar)
         y la sugerencia de nombre, tema y participantes. Lo usan el botón «Probar» y el diálogo Grabar."""
-        return self.vigia.recordar(calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
-                                                             outlook=True if q.get("outlook") else None))
+        # ?outlook=0 (la línea de Teams en Ajustes): solo Teams, sin despertar a Outlook por COM, y sin guardarlo como
+        # la última lectura (la tarjeta y Ctrl+Alt+R usarían una sin la cita)
+        outlook = {"1": True, "0": False}.get(str(q.get("outlook") or ""))
+        r = calendario.reunion_actual(self.settings.get(), self._vocab_terms(), outlook=outlook)
+        return r if outlook is False else self.vigia.recordar(r)
 
     def calendario_estado(self, q):
         """GET /api/calendario/estado[?probar=1]: el calendario en una frase, {nivel, estado, frase, accion} (contrato
@@ -6060,9 +6415,15 @@ class App:
         return {"ok": True}
 
     def save_settings(self, b):
-        perfil = (check_perfil(b["perfil"], perfil_de(self.settings.get())["outputs"])  # valida antes de guardar
+        actual = perfil_de(self.settings.get())
+        perfil = (check_perfil(b["perfil"], actual["outputs"], actual)  # valida antes de guardar
                   if isinstance(b.get("perfil"), dict) else {})
         antes = procesado_de(self.settings.get())
+        cur = self.settings.get()
+        audio = [(b[k].strip() or defecto) if isinstance(b.get(k), str) else (cur.get(k) or defecto)
+                 for k, defecto in (("rec_mic", "default"), ("rec_sys", "all"))]
+        if audio == ["none", "none"]:
+            raise ApiError(SIN_AUDIO)
 
         def upd(d):
             for k in ("preset", "language", "prompt"):
@@ -6090,6 +6451,11 @@ class App:
                 d["live_auto"] = bool(b["live_auto"])
             if "carpeta_por_reunion" in b:  # una carpeta por reunion (encendida por defecto)
                 d["carpeta_por_reunion"] = b["carpeta_por_reunion"] is not False
+            if "rec_directo" in b:  # Ajustes › Al grabar: texto en directo (la tarjeta lo cambia por reunion)
+                d["rec_directo"] = bool(b["rec_directo"])
+            for k, defecto in (("rec_mic", "default"), ("rec_sys", "all")):
+                if isinstance(b.get(k), str):
+                    d[k] = b[k].strip()[:300] or defecto
             if "live_final_pass" in b:
                 d["live_final_pass"] = bool(b["live_final_pass"])
             if b.get("live_preset") in LIVE_PRESETS:
@@ -7114,6 +7480,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/live/traducir": a.live_translate,
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,
+                  "/api/grabar/plan": a.grabar_plan_api, "/api/grabar/recordar": a.grabar_recordar,
                   "/api/summarize": a.summarize,
                   "/api/favorite": a.favorite, "/api/folder-icon": a.folder_icon, "/api/delete": a.delete,
                   "/api/transcript/save": a.save_transcript, "/api/transcript/restore": a.restore_transcript,

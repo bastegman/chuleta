@@ -224,6 +224,9 @@ class ProyectoDeUnaCarpetaConectadaTests(TempTree):
         self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B", "proyecto"))
         rec(self.a, self, folder="Cliente B 2", vocab=self.b["id"], name="Seguimiento", plan=True)  # otra a mano
         self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B 2", "proyecto"))
+        # «solo esta reunión» en la tarjeta (recordar_carpeta: false) también es explícito: no la cambia
+        rec(self.a, self, folder="Cliente B", vocab=self.b["id"], name="Una vez", plan=True, recordar_carpeta=False)
+        self.assertEqual(server.rec_folder_origin(self.b, self.a.settings.get()), ("Cliente B 2", "proyecto"))
 
     def test_la_que_dio_la_regla_no_se_apunta(self):
         rec(self.a, self, folder="Alfa", vocab=self.alfa["id"], name="Comité")
