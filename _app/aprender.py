@@ -41,9 +41,10 @@ pela pelo sem seu sua tem tambem voce voces obrigado obrigada sim entao bom boa
 # dentro de un nombre de varias palabras («Banco del Norte», «Ruiz & Pardo»): valen en medio, no en los extremos
 ENLACES = {"de", "del", "la", "las", "los", "el", "y", "e", "&", "of", "the", "and", "da", "das", "do", "dos", "di",
            "von", "van", "der", "den", "le", "du"}
+CONJUNCIONES = {"y", "e", "and", "&"}
 ARTICULOS = {"el", "la", "los", "las", "the", "o", "a", "os", "as", "le", "les"}  # «El Molino Verde», «The Green Room»
 
-MAX_NUEVO = 4        # palabras del término corregido
+MAX_NUEVO = 5        # palabras del término corregido («Banco del Norte de Chile»)
 MAX_ANTES = 5        # palabras de lo que escribió Whisper («te ese a» → «TSA»)
 MAX_REGLA = 3        # una regla automática: como mucho 3 palabras de origen
 PARECIDO_PROPUESTA = 0.4  # por debajo es un cambio de redacción («el cliente» → «Orvalia»), no algo mal oído
@@ -190,13 +191,16 @@ def _juntar_nombres(ops, ta, tb):
         return fold(a) == fold(b) and b[:1].isupper() and not es_sigla(b) and fold(b) not in COMUNES
     solo_forma = lambda o: (o[0] == "replace" and o[2] - o[1] == o[4] - o[3] and all(  # noqa: E731
         nombre(ta[o[1] + k][0], tb[o[3] + k][0]) for k in range(o[2] - o[1])))
+    # «y», «e», «and» no: «ana y pedro» → «Ana y Pedro» son dos nombres, no uno
     enlaces = lambda o: (o[0] == "equal" and 0 < o[2] - o[1] <= 2  # noqa: E731
-                         and all(fold(t) in ENLACES for t, _, _ in ta[o[1]:o[2]]))
-    out = []
+                         and all(fold(t) in ENLACES - CONJUNCIONES for t, _, _ in ta[o[1]:o[2]]))
+    out, juntos = [], set()
     for o in ops:
-        if len(out) >= 2 and solo_forma(o) and solo_forma(out[-2]) and enlaces(out[-1]):
+        if (len(out) >= 2 and solo_forma(o) and (out[-2] in juntos or solo_forma(out[-2]))
+                and enlaces(out[-1])):  # y otra vez: «Banco del Norte de Chile»
             a = out[-2]
             out[-2:] = [("replace", a[1], o[2], a[3], o[4])]
+            juntos.add(out[-1])
         else:
             out.append(o)
     return out
@@ -240,6 +244,9 @@ def propuestas(original, actual, excluir=(), no=(), no_reglas=()):
                 continue  # solo tildes («Jose» → «José»): una errata, no un nombre que Whisper no conocía
             if not es_nombre([(t, a, b) for t, a, b in toks], ahora, minusculas):
                 continue
+            if fold(de) == fold(nuevo) and inicio_de_frase(ahora, toks[0][1]) and not (
+                    _forma_propia(toks[0][0]) or any(es_termino(t, ahora, a, minusculas) for t, a, _ in toks[1:])):
+                continue  # «efectivamente» → «Efectivamente» al empezar frase: solo la mayúscula de la frase
             k, kd = normal(nuevo), normal(de)
             if (kd, k) in excluir or k in no or parecido(de, nuevo) < PARECIDO_PROPUESTA:
                 continue
@@ -267,20 +274,25 @@ def propuestas(original, actual, excluir=(), no=(), no_reglas=()):
     return out[:MAX_PROPUESTAS]
 
 
+def regla_valida(de, termino):
+    """Lo que hace segura una regla sin mirar ninguna transcripción: pocas palabras, no todas corrientes, al menos 3
+    letras y, si solo cambian mayúsculas o tildes, una sigla o una palabra como «iPhone» («plan» → «Plan» no). Lo usan
+    las propuestas, el diccionario de Ajustes y la cola (una regla escrita a mano en settings.json, o de una versión
+    anterior, que no cumpla esto no se aplica)."""
+    toks = [t for t, _, _ in tokens(de)]
+    if not toks or len(toks) > MAX_REGLA or len(letras(de)) < 3 or not termino or de == termino:
+        return False
+    if all(fold(t) in COMUNES or fold(t) in ENLACES for t in toks):
+        return False
+    return letras(de) != letras(termino) or all(_forma_propia(t) for t, _, _ in tokens(termino))
+
+
 def regla_segura(de, termino, texto):
     """Cambiar `de` por `termino` sin preguntar en las próximas reuniones solo si: se parecen (lo mal oído, no otra
     forma de decirlo), son pocas palabras y no todas corrientes, tiene al menos 3 letras y en esta reunión lo corregiste
     en todas partes (si dejaste alguno, es que a veces está bien)."""
-    toks = [t for t, _, _ in tokens(de)]
-    if not toks or len(toks) > MAX_REGLA or len(letras(de)) < 3:
-        return False
-    if all(fold(t) in COMUNES or fold(t) in ENLACES for t in toks):
-        return False
-    if letras(de) == letras(termino) and not all(_forma_propia(t) for t, _, _ in tokens(termino)):
-        # solo cambian mayúsculas o tildes: «kpi» → «KPI» sí (una sigla no se escribe de otra forma), pero «plan» →
-        # «Plan» o «banco» → «Banco» no: cambiaría cada «plan» de las reuniones siguientes
-        return False
-    return parecido(de, termino) >= PARECIDO_REGLA and not queda(de, termino, texto)
+    # y, además, que se parezcan (lo mal oído, no otra forma de decirlo) y que no quede ninguno sin corregir
+    return regla_valida(de, termino) and parecido(de, termino) >= PARECIDO_REGLA and not queda(de, termino, texto)
 
 
 def _forma_propia(t):
@@ -325,11 +337,19 @@ def _dentro_de(texto, s, e, a):
     """El trozo [s, e) ya es parte de `a` escrito en el texto (sin mirar mayúsculas), como «HANA» dentro de «S/4 HANA».
     No cuenta el propio trozo: en una regla de solo mayúsculas («kpi» → «KPI») es `a` en minúsculas, no `a` escrito."""
     lo = max(0, s - len(a))
-    for m in re.finditer(re.escape(a), texto[lo:min(len(texto), e + len(a))], re.IGNORECASE):
-        i, j = lo + m.start(), lo + m.end()
+    zona, fa = _plano(texto[lo:min(len(texto), e + len(a))]), _plano(a)  # sin tildes ni mayúsculas, misma longitud
+    k = zona.find(fa)
+    while k != -1:
+        i, j = lo + k, lo + k + len(a)
         if i <= s and j >= e and (i, j) != (s, e):
             return True
+        k = zona.find(fa, k + 1)
     return False
+
+
+def _plano(s):
+    """Minúsculas y sin tildes, letra a letra (la misma longitud que `s`, como foldMap en app.js)."""
+    return "".join(unicodedata.normalize("NFD", c)[0].lower() if c else c for c in s)
 
 
 def _ocurrencias(texto, a):

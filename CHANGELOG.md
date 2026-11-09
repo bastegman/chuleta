@@ -13,7 +13,8 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
 ### Aprender de tus correcciones (09/11/2026)
 
 Ítem 17 del backlog, de la research de competencia (Quill: «remembers the substitution»), aprobada por Bernardo en el
-msg 1242. Hecho por Steve en la rama `aprender-correcciones`.
+msg 1242; las sustituciones, también en las reuniones futuras y en un diccionario personal reversible (msg 1390). Hecho
+por Steve en la rama `aprender-correcciones`, con tres revisiones de contexto fresco.
 
 - Al terminar de corregir una transcripción («Listo»), encima del texto: «¿Añadir «Orvalia» al vocabulario de
   Finanzas?». Solo nombres propios, siglas y términos (`aprender.py`: mayúsculas en mitad de frase, siglas, letras y
@@ -25,12 +26,14 @@ msg 1242. Hecho por Steve en la rama `aprender-correcciones`.
   conectada, con su misma codificación (UTF-8, UTF-16, la de Windows), sus saltos de línea y su estilo (comas o uno
   por línea). Si no puede escribir (solo lectura, abierta en otro programa, sin conexión, solo en OneDrive), lo dice
   en la propia fila. Si ya no le cabe a Whisper, también.
-- «Y cambiar «orbalia» por «Orvalia» en las próximas reuniones de <proyecto>», una casilla sin marcar: solo se ofrece
-  si es seguro (se parecen, no son palabras corrientes, lo corregiste en toda la reunión y, si solo cambian mayúsculas,
-  es una sigla o una palabra como «iPhone», nunca «plan» → «Plan»). Se aplica al terminar cada transcripción del proyecto
-  (antes de los documentos, las voces y el resumen), solo en frases que nadie ha tocado; va subrayado, con una barra
-  para deshacerlo en esa reunión y la pregunta de si dejar de hacerlo. «Restaurar original» lo quita todo. Las reglas
-  están en Ajustes › Proyectos, con «quitar», y siguen al proyecto si se renombra.
+- **Diccionario personal**: «Y en las próximas reuniones de <proyecto>, cambiar «orbalia» por «Orvalia» (se guarda en
+  tu diccionario)», una casilla marcada que se puede desmarcar. Solo se ofrece si es seguro (se parecen, no son
+  palabras corrientes, lo corregiste en toda la reunión y, si solo cambian mayúsculas, es una sigla o una palabra como
+  «iPhone», nunca «plan» → «Plan»). Se aplica al terminar cada transcripción del proyecto (antes de los documentos, las
+  voces y el resumen), solo en frases que nadie ha tocado; va subrayado, con una barra para deshacerlo en esa reunión
+  y la pregunta de si quitarlo también del diccionario. Nunca toca el audio ni la copia del original; «Restaurar
+  original» lo quita todo. El diccionario está en Ajustes › Proyectos: se ve, se cambia en la propia fila y se quita;
+  sigue al proyecto si se renombra.
 - Tests: `tests/test_aprender.py` y `tests/test_ui_aprender.py` (en ui-smoke, Ubuntu y Windows; la regla aplicada al
   transcribir, contra el Groq falso).
 

@@ -2751,7 +2751,9 @@ def aplicar_aprendido(rel, st):
 def _aplicar_aprendido(rel, todas):
     abs_path = safe(rel, "file")
     proyecto = proyecto_de_reunion(abs_path)
-    reglas = [r for r in todas if mismo_proyecto(r["proyecto"], proyecto)]
+    # las de su proyecto y que sigan siendo seguras (una escrita a mano en settings.json o de una version anterior,
+    # como «plan» → «Plan», no se aplica)
+    reglas = [r for r in todas if mismo_proyecto(r["proyecto"], proyecto) and aprender.regla_valida(r["de"], r["a"])]
     base = os.path.splitext(abs_path)[0]
     if not reglas or not os.path.isfile(base + ".srt"):
         return 0
@@ -4278,9 +4280,9 @@ class Jobs:
             if not isinstance(e, (engines.EngineError, ApiError)):
                 log_exc()
             if job.final_pass:  # se queda el texto del directo, y con el se resume
+                self._aprendido(job.path)  # como en _after_transcribe, antes de soltar la reunion (_final_pass_over)
                 self._final_pass_over(job.path)
                 log("   se mantiene el texto del directo")
-                self._aprendido(job.path)  # como en _after_transcribe: lo aprendido, antes de destinos y resumen
                 self.write_outputs(job.path)
                 self.auto_summary(job.path)
         finally:
@@ -4392,6 +4394,7 @@ DIAG_LINES = (
     "↺ {t}: {n} cambio⟦s⟧ aprendido⟦s⟧ deshecho⟦s⟧",
     "✦ aprendido: {t} en {t} ({n} regla⟦s⟧)",
     "✦ regla olvidada: {t}",
+    "✦ diccionario: {t}",
     "🔗 carpeta vinculada: {t}",
     "🔗 carpeta desvinculada (no se ha tocado nada): {t}",
     "🔤 vocabulario guardado: {t} ({n} términos)",
@@ -6398,7 +6401,13 @@ class App:
         out = {"propuestas": ps, "lista": v["id"] if v else "", "proyecto": v["project"] if v else "",
                "listas": [{"id": l["id"], "project": l["project"], "name": l["name"],
                            "conectada": bool(l.get("conectada"))} for l in listas]}
-        if not v and props.get("workstream"):  # tiene tema, pero su lista no esta (sin conexion, borrada, renombrada)
+        guardada = temas().get(rel) or ""
+        lid = guardada[len(VLINK):].split("/")[0] if guardada.startswith(VLINK) else ""
+        sin_carpeta = [k for k, l in list(VOCAB_LINKS.items()) if not os.path.isdir(l["path"])
+                       and (k == lid or fold(l["name"]) == fold(props.get("proyecto") or ""))]
+        if not v and props.get("workstream") and sin_carpeta:
+            # su lista esta en una carpeta conectada que ahora no se encuentra (VPN, red, disco): no se elige otra por
+            # el; si nunca tuvo lista o se borro, como siempre: el vocabulario general, que es el que uso Whisper
             out["lista"] = None
             out["falta"] = {"proyecto": props.get("proyecto") or "", "workstream": props["workstream"]}
         return out
@@ -6457,18 +6466,17 @@ class App:
                     guardar_registro(rel_of(abs_path), reg)
         except OSError:
             log_exc()
-        if seguras:
+        if reglas:
             def upd(d):
                 a = aprendido_de(d)
-                for x in seguras:
+                for x in reglas:  # una por lo que escribio Whisper y proyecto: la nueva sustituye a la vieja
                     kd = aprender.normal(x["texto"])
-                    if kd in quiere:  # una regla por lo que escribio Whisper y proyecto: la nueva sustituye a la vieja
-                        a["reglas"] = [r for r in a["reglas"] if not (aprender.normal(r["de"]) == kd
-                                                                      and mismo_proyecto(r["proyecto"], proyecto))]
-                        a["reglas"].append({"de": x["texto"], "a": termino, "proyecto": proyecto, "at": ahora})
-                    elif [kd, aprender.normal(termino)] not in a["no_reglas"]:
-                        a["no_reglas"].append([kd, aprender.normal(termino)])
+                    a["reglas"] = [r for r in a["reglas"] if not (aprender.normal(r["de"]) == kd
+                                                                  and mismo_proyecto(r["proyecto"], proyecto))]
+                    a["reglas"].append({"de": x["texto"], "a": termino, "proyecto": proyecto, "at": ahora})
                 d["aprendido"] = a
+            # la casilla desmarcada no se apunta como un «no» para siempre (no se veria en ningun sitio): en esta
+            # reunion ya no se pregunta (respondidas) y, si lo vuelves a corregir en otra, se vuelve a ofrecer
             self.settings.update(upd)
         self.library.at = 0
         n = len(reglas)
@@ -6518,6 +6526,54 @@ class App:
     def aprender_reglas(self, q):
         """GET /api/aprender/reglas: las reglas aprendidas y lo que dijiste que no se propusiera (Ajustes ›
         Proyectos)."""
+        return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
+
+    def aprender_regla(self, b):
+        """POST /api/aprender/regla {antes: {de, proyecto} | null, de, a, proyecto}: cambiar una entrada del diccionario
+        personal desde Ajustes (lo que escribio Whisper, lo correcto o el proyecto). Lo ya cambiado en reuniones
+        anteriores no se toca: cada una sigue con su «Deshacer»."""
+        de, a = aprender.termino_valido(b.get("de")), aprender.termino_valido(b.get("a"))
+        if not de or not a:
+            raise ApiError("Escribe lo que pone Whisper y lo correcto (sin comas ni punto y coma).")
+        if de == a:
+            raise ApiError("Lo que pone Whisper y lo correcto son iguales: no habría nada que cambiar.")
+        toks = [t for t, _, _ in aprender.tokens(de)]
+        if not toks or len(toks) > aprender.MAX_REGLA or len(aprender.letras(de)) < 2:
+            raise ApiError("Lo que pone Whisper tiene que ser una palabra, o como mucho tres.")
+        if all(aprender.fold(t) in aprender.COMUNES or aprender.fold(t) in aprender.ENLACES for t in toks):
+            raise ApiError(f"«{de}» es una palabra muy corriente: cambiaría muchas frases que están bien. Pon algo más "
+                           "concreto.")
+        if not aprender.regla_valida(de, a):  # solo mayúsculas en una palabra corriente («plan» → «Plan»), o muy corta
+            raise ApiError(f"Cambiar «{de}» por «{a}» tocaría frases que están bien: si solo cambian las mayúsculas, "
+                           "vale para siglas (KPI) o nombres como iPhone. Pon algo más concreto.")
+        proyecto = str(b.get("proyecto") or "")
+        antes = b.get("antes") if isinstance(b.get("antes"), dict) else None
+        conocidos = {v["project"] for v in list_vocab()} | {""}
+        if antes:
+            conocidos.add(str(antes.get("proyecto") or ""))
+        if not any(mismo_proyecto(proyecto, p) for p in conocidos):
+            raise ApiError("Ese proyecto ya no existe. Elige otro.")
+        k, ka = aprender.normal(de), aprender.normal(str((antes or {}).get("de") or ""))
+        pa = str((antes or {}).get("proyecto") or "")
+        err = []
+
+        def upd(d):
+            ap = aprendido_de(d)
+            es_la = lambda r: antes and aprender.normal(r["de"]) == ka and mismo_proyecto(r["proyecto"], pa)  # noqa
+            if any(not es_la(r) and aprender.normal(r["de"]) == k and mismo_proyecto(r["proyecto"], proyecto)
+                   for r in ap["reglas"]):
+                err.append(f"Ya tienes «{de}» en tu diccionario para ese proyecto.")
+                return
+            if antes and not any(es_la(r) for r in ap["reglas"]):
+                err.append("Esa entrada ya no está en tu diccionario.")
+                return
+            ap["reglas"] = [r for r in ap["reglas"] if not es_la(r)]
+            ap["reglas"].append({"de": de, "a": a, "proyecto": proyecto, "at": time.time()})
+            d["aprendido"] = ap
+        self.settings.update(upd)
+        if err:
+            raise ApiError(err[0])
+        log(f"✦ diccionario: {de} → {a}")
         return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
 
     def aprender_olvidar(self, b):
@@ -8271,6 +8327,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/transcript/save": a.save_transcript, "/api/transcript/restore": a.restore_transcript,
                   "/api/aprender/anadir": a.aprender_anadir, "/api/aprender/no": a.aprender_no,
                   "/api/aprender/deshacer": a.aprender_deshacer, "/api/aprender/olvidar": a.aprender_olvidar,
+                  "/api/aprender/regla": a.aprender_regla,
                   "/api/export": a.export_package, "/api/link/pick": a.link_pick, "/api/link/add": a.link_add,
                   "/api/link/remove": a.link_remove, "/api/vocab/save": a.vocab_save,
                   "/api/vocab/delete": a.vocab_delete, "/api/vocab/check": a.vocab_check,

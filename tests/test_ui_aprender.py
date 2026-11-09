@@ -185,8 +185,10 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         pg.wait_for_selector("#txBody .s", timeout=10000)
 
     def captura(self, pg, nombre, sel=None):
-        if self.art:
+        if self.art:  # sin los avisos de abajo ni el ratón encima de un botón: lo que se quiere enseñar
             os.makedirs(self.art, exist_ok=True)
+            pg.evaluate("() => document.querySelectorAll('#toasts > *').forEach(t => t.remove())")
+            pg.mouse.move(0, 0)
             (pg.locator(sel) if sel else pg).screenshot(path=os.path.join(self.art, f"aprender_{nombre}.png"))
 
     def sin_errores(self):
@@ -230,17 +232,22 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.assertEqual(card.locator(".apr-term").all_text_contents(), ["Orvalia", "TSA"])  # ni «Lo que» ni «Juan»
         f0 = card.locator(".apr-fila[data-k='0']")
         self.assertIn("Whisper escribió «orbalia» (2 veces)", f0.text_content())
-        self.assertFalse(f0.locator("input[type=checkbox]").is_checked())  # la regla, solo si la marcas tú
-        self.assertIn("Y cambiar «orbalia» por «Orvalia» en las próximas reuniones de Cliente Alfa",
-                      f0.locator(".apr-regla").text_content())
+        # marcada: Bernardo quiere que lo que confirma valga también en las futuras (msg 1390); la casilla lo dice
+        self.assertTrue(f0.locator("input[type=checkbox]").is_checked())
+        self.assertIn("Y en las próximas reuniones de Cliente Alfa, cambiar «orbalia» por «Orvalia» (se guarda en tu "
+                      "diccionario)", f0.locator(".apr-regla").text_content())
         self.assertEqual(pg.input_value("#aprLista"), "Cliente Alfa/Vocabulario/Finanzas.txt")
         self.assertFalse(pg.evaluate("!!document.activeElement.closest('#aprBox')"))  # no roba el foco
         pg.mouse.move(0, 0)
         self.captura(pg, "01_propuesta", ".apr-card")
-        f0.locator("input[type=checkbox]").check()
+        card.locator(".apr-fila[data-k='1'] input[type=checkbox]").uncheck()  # la de TSA, desmarcada
+        pg.select_option("#aprLista", "Cliente Alfa/Vocabulario/Operaciones.txt")  # repinta la tarjeta
+        pg.select_option("#aprLista", FIN)
+        self.assertFalse(card.locator(".apr-fila[data-k='1'] input[type=checkbox]").is_checked())  # no se pierde
         f0.locator("[data-act='apr-si']").click()
         pg.wait_for_selector(".apr-fila.hecha", timeout=10000)
-        self.assertIn("«Orvalia» añadido a Finanzas (Cliente Alfa). Si vuelve a salir «orbalia», lo cambiará Tenca.",
+        self.assertFalse(card.locator(".apr-fila:not(.hecha) input[type=checkbox]").is_checked())  # tampoco aquí
+        self.assertIn("«Orvalia» añadido a Finanzas (Cliente Alfa). En tu diccionario: «orbalia» → «Orvalia».",
                       card.locator(".apr-fila.hecha").text_content())
         self.assertEqual(self.leer(FIN), b"# Comit\xc3\xa9 de finanzas\nSAP, S/4HANA, cierre trimestral, Orvalia\n")
         self.assertIn(("orbalia", "Orvalia", "Cliente Alfa"), self.reglas())
@@ -256,17 +263,33 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.abrir(pg, rel)
         pg.wait_for_timeout(500)
         self.assertEqual(pg.locator(".apr-card").count(), 0)
-        # Ajustes › Proyectos: lo que corrige solo, y «quitar»
+        # Ajustes › Proyectos: el diccionario personal, para ver, cambiar y quitar
         pg.evaluate("() => openSettings({sec: 'proyectos'})")
         pg.wait_for_selector("#sAprendido table", timeout=10000)
+        self.assertIn("Tu diccionario personal", pg.locator("#sAprendido > label").text_content())
         fila = pg.locator("#sAprendido tr", has_text="«orbalia» → Orvalia")
         self.assertIn("Cliente Alfa", fila.text_content())
         pg.locator("#sAprendido").scroll_into_view_if_needed()
         self.captura(pg, "03_ajustes")
+        fila.locator("[data-apr-editar]").click()
+        self.assertEqual(pg.evaluate("document.activeElement.id"), "aprDicA")
+        pg.fill("#aprDicDe", "el")  # una palabra corriente: no, y dice por qué, sin perder lo escrito
+        pg.click("[data-apr-guardar]")
+        pg.wait_for_selector("#sAprendido .apr-err", timeout=5000)
+        self.assertIn("muy corriente", pg.locator("#sAprendido .apr-err").text_content())
+        self.assertEqual(pg.input_value("#aprDicDe"), "el")
+        self.captura(pg, "03b_cambiar_error", "#sAprendido")
+        pg.fill("#aprDicDe", "orbalia")
+        pg.fill("#aprDicA", "Orvalia SA")
+        pg.keyboard.press("Enter")  # Intro guarda
+        pg.wait_for_selector("#sAprendido tr:has-text('«orbalia» → Orvalia SA')", timeout=5000)
+        self.assertIn(("orbalia", "Orvalia SA", "Cliente Alfa"), self.reglas())
+        self.assertFalse(pg.locator("#modal").is_hidden())  # Escape o Intro en la fila no cierran Ajustes
+        fila = pg.locator("#sAprendido tr", has_text="«orbalia» → Orvalia SA")
         fila.locator("[data-apr-olvidar]").click()
         pg.wait_for_function("() => !document.querySelector('#sAprendido').textContent.includes('orbalia')",
                              timeout=5000)
-        self.assertNotIn(("orbalia", "Orvalia", "Cliente Alfa"), self.reglas())
+        self.assertNotIn(("orbalia", "Orvalia SA", "Cliente Alfa"), self.reglas())
         # y lo que dijo que no, con su «quitar»
         no = pg.locator("#sAprendido .apr-no-lista")
         self.assertIn("No te propone añadir: «TSA»", no.text_content())
@@ -278,9 +301,13 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
 
     def test_lista_conectada_que_no_se_puede_escribir(self):
         rel, base = self.reunion("Contrato", [s.replace("tesa", "dpo") for s in SEGS])  # (TSA: dicho que no arriba)
+        # ya está en el diccionario para Cliente Alfa: con su lista (Finanzas) no se ofrece otra vez; con la de otro
+        # proyecto, sí (el filtro reglas_en de aprQue, en el navegador)
+        self.post("/api/aprender/regla", {"de": "dpo", "a": "DPO", "proyecto": "Cliente Alfa"})
         pg = self.pagina()
         self.abrir(pg, rel)
         self.corregir(pg, ("dpo", "DPO"))
+        self.assertEqual(pg.locator(".apr-card .apr-regla").count(), 0)
         legal = pg.evaluate("S.apr.data.listas.find(l => l.name === 'Legal').id")
         pg.select_option("#aprLista", legal)
         card = pg.locator(".apr-card")
@@ -305,6 +332,7 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
             self.assertEqual(f.read(), b"Contrato marco\r\nNDA\r\nDPO\r\n")
         self.assertIn(("dpo", "DPO", "Listas compartidas"), self.reglas())
         self.post("/api/aprender/olvidar", {"de": "dpo", "proyecto": "Listas compartidas"})
+        self.post("/api/aprender/olvidar", {"de": "dpo", "proyecto": "Cliente Alfa"})
         self.sin_errores()
 
     def test_la_lista_de_la_reunion_sin_conexion(self):
@@ -324,7 +352,7 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
             card = pg.locator(".apr-card")
             card.wait_for(timeout=10000)
             self.assertIn("No encuentro la lista «Legal» de Listas compartidas de esta reunión",
-                          card.locator(".apr-err").text_content())
+                          card.locator(".apr-falta").text_content())
             self.assertEqual(card.locator(".apr-tit").text_content(), "¿Añadir «GDPR» al vocabulario?")
             self.assertTrue(card.locator("[data-act='apr-si']").is_disabled())
             self.assertEqual(pg.input_value("#aprLista"), "-")
@@ -387,7 +415,7 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         pg = self.pagina()
         self.abrir(pg, rel)
         pg.wait_for_selector(".apr-bar", timeout=10000)
-        self.assertIn("Tenca ha corregido lo que ya le enseñaste", pg.locator(".apr-bar").text_content())
+        self.assertIn("Corregido con tu diccionario personal", pg.locator(".apr-bar").text_content())
         self.assertIn("«fake Groq» → FakeGroq", pg.locator(".apr-bar").text_content())
         w = pg.locator("#txBody .apr-w")
         self.assertEqual(w.count(), 1)
@@ -413,7 +441,7 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         pg.click("[data-act='tx-done']")
         pg.wait_for_selector(".apr-bar", timeout=5000)
         pg.click("[data-act='apr-deshacer']")
-        pg.wait_for_selector(".apr-bar:has-text('¿Dejar de cambiarlo')", timeout=10000)
+        pg.wait_for_selector(".apr-bar:has-text('¿Quitarlo también de tu diccionario')", timeout=10000)
         self.assertEqual(pg.locator("#txBody .apr-w").count(), 0)
         self.assertIn("This is the fake Groq transcription.", pg.locator("#txBody").text_content())
         self.assertIn(b"This is the fake Groq transcription.", self.leer(os.path.splitext(rel)[0] + ".srt"))
@@ -421,7 +449,7 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.captura(pg, "07_deshecha", ".apr-bar")
         self.assertIn(("fake Groq", "FakeGroq", "Cliente Alfa"), self.reglas())  # deshacer no la olvida
         pg.click("[data-act='apr-olvidar']")
-        pg.wait_for_selector(".apr-bar:has-text('ya no se cambia')", timeout=5000)
+        pg.wait_for_selector(".apr-bar:has-text('ya no está en tu diccionario')", timeout=5000)
         self.assertNotIn(("fake Groq", "FakeGroq", "Cliente Alfa"), self.reglas())
         self.sin_errores()
 

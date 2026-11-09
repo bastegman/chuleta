@@ -86,6 +86,18 @@ class PropuestasTests(unittest.TestCase):
         self.assertEqual(sorted(terminos(ps)), sorted(["iPhone", "B2B", "M365", "KPIs", "SuccessFactors",
                                                        "Banco del Norte"]))
 
+    def test_dos_nombres_con_y_son_dos_y_los_largos_enteros(self):
+        """Revisión 2: «y», «e», «and» no unen dos nombres en uno; y un nombre largo se junta entero."""
+        self.assertEqual(terminos(A.propuestas(segs("con ana y pedro hoy"), segs("con Ana y Pedro hoy"))),
+                         ["Ana", "Pedro"])
+        self.assertEqual(terminos(A.propuestas(segs("el banco del norte de chile"),
+                                               segs("el Banco del Norte de Chile"))), ["Banco del Norte de Chile"])
+
+    def test_la_mayuscula_de_la_frase_no_es_un_nombre(self):
+        """Revisión 2: «efectivamente» → «Efectivamente» al empezar frase es la mayúscula de la frase."""
+        self.assertEqual(A.propuestas(segs("efectivamente el cliente lo pidió", "obviamente sí"),
+                                      segs("Efectivamente el cliente lo pidió", "Obviamente sí")), [])
+
     def test_nombre_de_varias_palabras(self):
         ps = A.propuestas(segs("hablamos con ruiz and pardo ayer"), segs("hablamos con Ruiz & Pardo ayer"))
         self.assertEqual(terminos(ps), ["Ruiz & Pardo"])
@@ -153,6 +165,9 @@ class ReglaSeguraTests(unittest.TestCase):
         # solo mayúsculas en una palabra corriente: cambiaría cada «plan» o «banco» de las reuniones siguientes
         self.assertFalse(A.regla_segura("plan", "Plan", ""))
         self.assertFalse(A.regla_segura("banco", "Banco", ""))
+        casos = (("plan", "Plan"), ("kpi", "KPI"), ("el", "Él"), ("x", "y"), ("orbalia", "Orvalia"),
+                 ("orbalia", "orbalia"))
+        self.assertEqual([A.regla_valida(*x) for x in casos], [False, True, False, False, True, False])
         self.assertFalse(A.regla_segura("son a e", "Orvalia", ""))  # palabras corrientes
         self.assertFalse(A.regla_segura("ap", "AP", ""))  # menos de 3 letras
         self.assertFalse(A.regla_segura("el cliente", "Orvalia", ""))  # no se parecen
@@ -177,6 +192,12 @@ class AplicarTests(unittest.TestCase):
                          [("orbalia", "Orvalia"), ("ORBALIA", "Orvalia"), ("tesa", "TSA")])
         for x in h:
             self.assertEqual(t[x["pos"]:x["pos"] + len(x["a"])], x["a"])
+
+    def test_lo_correcto_con_otras_tildes_tampoco(self):
+        """Revisión 2: «Telefonica Tech» ya contiene «Telefónica Tech» sin la tilde: no se duplica «Tech»."""
+        self.assertEqual(A.aplicar("con Telefonica Tech", [{"de": "telefonica", "a": "Telefónica Tech"}]),
+                         ("con Telefonica Tech", []))
+        self.assertEqual(A._plano("Ñandú ß"), "nandu ß")
 
     def test_no_encadena(self):
         t, h = A.aplicar("uno dos", [{"de": "uno", "a": "dos"}, {"de": "dos", "a": "tres"}])
@@ -463,8 +484,8 @@ class ServidorTests(TempTree):
         out = self.app.aprender_anadir({"path": rel, "termino": "TSA", "lista": fin["id"], "reglas": []})
         self.assertEqual(out["reglas"], 0)
         self.assertEqual(self.app.aprender_get({"path": rel})["propuestas"], [])
-        # sin la casilla, la regla no se vuelve a ofrecer en ninguna reunión
-        self.assertEqual(server.aprendido_de(self.app.settings.get())["no_reglas"], [["tesa", "tsa"]])
+        # la casilla desmarcada no es un «no» para siempre que no se vea (revisión 2): solo no se pregunta aquí
+        self.assertEqual(server.aprendido_de(self.app.settings.get())["no_reglas"], [])
         self.assertEqual(server.registro_aprendido(rel)["respondidas"], ["orvalia", "tsa"])
 
     def test_solo_lo_que_se_propone(self):
@@ -585,6 +606,12 @@ class ServidorTests(TempTree):
         r = self.app.aprender_get({"path": rel})
         self.assertIsNone(r["lista"])
         self.assertEqual(r["falta"], {"proyecto": "Listas", "workstream": "Legal"})
+        # un tema que nunca tuvo lista no es «sin conexión»: el vocabulario general, que es el que usó Whisper
+        rel2 = "Cliente Alfa/r2.wav"
+        self.reunion(rel2, ["con tesa"], proyecto="Cliente Alfa", workstream="Marketing")
+        self.corregir(rel2, ["con TSA"])
+        r2 = self.app.aprender_get({"path": rel2})
+        self.assertEqual((r2["lista"], r2.get("falta")), ("", None))
         with self.assertRaises(server.ApiError) as cm:
             self.app.aprender_anadir({"path": rel, "termino": "TSA", "lista": lid, "reglas": []})
         self.assertIn("No encuentro tu carpeta de listas «Listas»: ¿sin conexión", cm.exception.msg)
@@ -651,6 +678,54 @@ class ServidorTests(TempTree):
             with self.assertRaises(OSError):
                 server.aplicar_aprendido(rel, self.app.settings.get())
         self.assertEqual(self.textos(b), ["con orbalia"])  # sin registro, sin cambio: nunca uno sin su marca
+
+    def test_el_audio_y_el_original_no_se_tocan_nunca(self):
+        """Msg 1390: «nunca se toca el audio ni el original guardado», ni al aplicar ni al deshacer."""
+        rel = "Cliente Alfa/r1.wav"
+        b = self.reunion(rel, ["con orbalia"])
+        self.corregir(rel, ["con orbalia, dijo"])  # la copia del original ya existe (corrección a mano)
+        self.write("Cliente Alfa/r1.srt", srt_text([(0.0, 4.0, "con orbalia, dijo"), (5.0, 9.0, "y orbalia")]))
+        bdir = server.backup_dir(rel)
+        antes = {f: open(os.path.join(bdir, f), "rb").read() for f in os.listdir(bdir)}
+        with open(b + ".wav", "rb") as f:
+            audio = f.read()
+        self.reglas(REGLA)
+        self.assertEqual(server.aplicar_aprendido(rel, self.app.settings.get()), 1)
+        server.deshacer_aprendido(rel, "orbalia", "Orvalia")
+        for f, contenido in antes.items():
+            with open(os.path.join(bdir, f), "rb") as g:
+                self.assertEqual(g.read(), contenido, f)
+        with open(b + ".wav", "rb") as f:
+            self.assertEqual(f.read(), audio)
+
+    def test_una_regla_que_no_es_segura_no_se_aplica(self):
+        """Revisión 2: una regla de solo mayúsculas en una palabra corriente («plan» → «Plan»), de settings.json o de
+        una versión anterior, no se aplica."""
+        rel = "Cliente Alfa/r1.wav"
+        b = self.reunion(rel, ["el plan de hoy con orbalia"])
+        self.reglas(dict(REGLA, de="plan", a="Plan"), REGLA)
+        self.assertEqual(server.aplicar_aprendido(rel, self.app.settings.get()), 1)
+        self.assertEqual(self.textos(b), ["el plan de hoy con Orvalia"])
+
+    def test_diccionario_cambiar_una_entrada(self):
+        self.reglas(REGLA)
+        out = self.app.aprender_regla({"antes": {"de": "orbalia", "proyecto": "Cliente Alfa"}, "de": "orbalía",
+                                       "a": "Orvalia SA", "proyecto": ""})
+        self.assertEqual(out["reglas"], [{"de": "orbalía", "a": "Orvalia SA", "proyecto": ""}])
+        for b, msg in (({"de": "el", "a": "Él"}, "muy corriente"), ({"de": "plan", "a": "Plan"}, "tocaría frases"),
+                       ({"de": "x", "a": "x"}, "son iguales"), ({"de": "a, b", "a": "c"}, "sin comas"),
+                       ({"de": "tesa", "a": "TSA", "proyecto": "No existe"}, "ya no existe"),
+                       ({"de": "orbalía", "a": "Otra", "proyecto": ""}, "Ya tienes «orbalía»")):
+            with self.subTest(b=b), self.assertRaises(server.ApiError) as cm:
+                self.app.aprender_regla(dict({"proyecto": "Cliente Alfa"}, **b))
+            self.assertIn(msg, cm.exception.msg)
+        with self.assertRaises(server.ApiError) as cm:  # la entrada que se cambiaba ya no está
+            self.app.aprender_regla({"antes": {"de": "nada", "proyecto": ""}, "de": "tesa", "a": "TSA",
+                                     "proyecto": ""})
+        self.assertIn("ya no está", cm.exception.msg)
+        # una nueva (sin «antes»), en un proyecto que existe
+        out = self.app.aprender_regla({"de": "tesa", "a": "TSA", "proyecto": "cliente alfa"})
+        self.assertIn({"de": "tesa", "a": "TSA", "proyecto": "cliente alfa"}, out["reglas"])
 
     def test_restaurar_el_original_se_lleva_lo_de_tenca(self):
         rel = "Cliente Alfa/r1.wav"
