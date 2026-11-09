@@ -35,7 +35,7 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
   vivo, sin copiarlo); «Copiar listas de otra carpeta…» las copia a la de la app.
 - **Aprende de tus correcciones**: si corriges un nombre o una sigla en una transcripción, al pulsar «Listo» te propone
   añadirlo al vocabulario de esa reunión (o a otra lista, también a una carpeta conectada; si no puede escribir allí,
-  dice por qué). Las erratas y los cambios de redacción no cuentan. Si dejas marcado «Y cambiar…», en las próximas
+  dice por qué). Las erratas y los cambios de redacción no cuentan. Si marcas «Y cambiar…», en las próximas
   reuniones de ese proyecto cambia lo que escribió Whisper, solo en frases que nadie ha tocado, subrayado y con
   «Deshacer». Nada se aprende sin tu clic y nada sale del PC.
 - **Una carpeta por reunión** (`AAAA-MM-DD Nombre`) dentro de la carpeta principal de su proyecto o workstream (sin

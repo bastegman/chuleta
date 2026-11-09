@@ -18,13 +18,16 @@ msg 1242. Hecho por Steve en la rama `aprender-correcciones`.
 - Al terminar de corregir una transcripción («Listo»), encima del texto: «¿Añadir «Orvalia» al vocabulario de
   Finanzas?». Solo nombres propios, siglas y términos (`aprender.py`: mayúsculas en mitad de frase, siglas, letras y
   cifras, mayúsculas por dentro; parecido por letras o por cómo suena), nunca erratas, tildes ni cambios de redacción.
-  Sin ventanas ni foco robado: «Ahora no» la deja para otro día y «No» no la vuelve a proponer.
+  Sin ventanas ni foco robado: «Ahora no» la deja hasta la próxima vez que abras Tenca, y «No» no la vuelve a
+  proponer (se puede deshacer en Ajustes › Proyectos). Lo ya contestado en una reunión no se pregunta otra vez en ella.
+  Si la lista de la reunión no se encuentra (carpeta conectada sin conexión), lo dice y no elige otra por ti.
 - Con «Añadir», el término va al final de la lista de la reunión o de la que elijas, también de una carpeta de listas
   conectada, con su misma codificación (UTF-8, UTF-16, la de Windows), sus saltos de línea y su estilo (comas o uno
   por línea). Si no puede escribir (solo lectura, abierta en otro programa, sin conexión, solo en OneDrive), lo dice
   en la propia fila. Si ya no le cabe a Whisper, también.
-- «Y cambiar «orbalia» por «Orvalia» en las próximas reuniones de <proyecto>»: solo se ofrece si es seguro (se parecen, no
-  son palabras corrientes y lo corregiste en toda la reunión). Se aplica al terminar cada transcripción del proyecto
+- «Y cambiar «orbalia» por «Orvalia» en las próximas reuniones de <proyecto>», una casilla sin marcar: solo se ofrece
+  si es seguro (se parecen, no son palabras corrientes, lo corregiste en toda la reunión y, si solo cambian mayúsculas,
+  es una sigla o una palabra como «iPhone», nunca «plan» → «Plan»). Se aplica al terminar cada transcripción del proyecto
   (antes de los documentos, las voces y el resumen), solo en frases que nadie ha tocado; va subrayado, con una barra
   para deshacerlo en esa reunión y la pregunta de si dejar de hacerlo. «Restaurar original» lo quita todo. Las reglas
   están en Ajustes › Proyectos, con «quitar», y siguen al proyecto si se renombra.

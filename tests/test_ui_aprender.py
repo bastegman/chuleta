@@ -230,13 +230,14 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.assertEqual(card.locator(".apr-term").all_text_contents(), ["Orvalia", "TSA"])  # ni «Lo que» ni «Juan»
         f0 = card.locator(".apr-fila[data-k='0']")
         self.assertIn("Whisper escribió «orbalia» (2 veces)", f0.text_content())
-        self.assertTrue(f0.locator("input[type=checkbox]").is_checked())
+        self.assertFalse(f0.locator("input[type=checkbox]").is_checked())  # la regla, solo si la marcas tú
         self.assertIn("Y cambiar «orbalia» por «Orvalia» en las próximas reuniones de Cliente Alfa",
                       f0.locator(".apr-regla").text_content())
         self.assertEqual(pg.input_value("#aprLista"), "Cliente Alfa/Vocabulario/Finanzas.txt")
         self.assertFalse(pg.evaluate("!!document.activeElement.closest('#aprBox')"))  # no roba el foco
         pg.mouse.move(0, 0)
         self.captura(pg, "01_propuesta", ".apr-card")
+        f0.locator("input[type=checkbox]").check()
         f0.locator("[data-act='apr-si']").click()
         pg.wait_for_selector(".apr-fila.hecha", timeout=10000)
         self.assertIn("«Orvalia» añadido a Finanzas (Cliente Alfa). Si vuelve a salir «orbalia», lo cambiará Tenca.",
@@ -266,6 +267,13 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         pg.wait_for_function("() => !document.querySelector('#sAprendido').textContent.includes('orbalia')",
                              timeout=5000)
         self.assertNotIn(("orbalia", "Orvalia", "Cliente Alfa"), self.reglas())
+        # y lo que dijo que no, con su «quitar»
+        no = pg.locator("#sAprendido .apr-no-lista")
+        self.assertIn("No te propone añadir: «TSA»", no.text_content())
+        no.locator("[data-apr-sino]").click()
+        pg.wait_for_function("() => !document.querySelector('#sAprendido .apr-no-lista')", timeout=5000)
+        self.assertEqual(self.get("/api/aprender/reglas")["no"], [])
+        self.post("/api/aprender/no", {"termino": "TSA"})  # como estaba, para los demás tests
         self.sin_errores()
 
     def test_lista_conectada_que_no_se_puede_escribir(self):
@@ -290,12 +298,42 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.assertIn("No puedo escribir en «Legal.txt»: es de solo lectura", card.locator(".apr-err").text_content())
         self.captura(pg, "04_solo_lectura", ".apr-card")
         self.assertNotIn(("dpo", "DPO", "Listas compartidas"), self.reglas())
+        card.locator(".apr-regla input").check()
         card.locator("[data-act='apr-si']").click()  # con permiso, otra vez: entra en su línea, con su CRLF
         pg.wait_for_selector(".apr-fila.hecha", timeout=10000)
         with open(lista, "rb") as f:
             self.assertEqual(f.read(), b"Contrato marco\r\nNDA\r\nDPO\r\n")
         self.assertIn(("dpo", "DPO", "Listas compartidas"), self.reglas())
         self.post("/api/aprender/olvidar", {"de": "dpo", "proyecto": "Listas compartidas"})
+        self.sin_errores()
+
+    def test_la_lista_de_la_reunion_sin_conexion(self):
+        """Su lista está en la carpeta conectada y esta no está (VPN, disco): lo dice y no elige otra por su cuenta."""
+        rel, base = self.reunion("Sin conexión", [s.replace("tesa", "gdpr") for s in SEGS],
+                                 proyecto="Listas compartidas", workstream="Legal")
+        pg = self.pagina()
+        self.abrir(pg, rel)
+        pg.click("[data-act='tx-edit']")
+        self.reemplazar(pg, "gdpr", "GDPR")
+        pg.wait_for_selector("#saveState:has-text('Guardado')", timeout=10000)
+        fuera = self.ext + " (sin conexión)"
+        os.rename(self.ext, fuera)
+        try:
+            pg.fill("#tq", "")
+            pg.click("[data-act='tx-done']")
+            card = pg.locator(".apr-card")
+            card.wait_for(timeout=10000)
+            self.assertIn("No encuentro la lista «Legal» de Listas compartidas de esta reunión",
+                          card.locator(".apr-err").text_content())
+            self.assertEqual(card.locator(".apr-tit").text_content(), "¿Añadir «GDPR» al vocabulario?")
+            self.assertTrue(card.locator("[data-act='apr-si']").is_disabled())
+            self.assertEqual(pg.input_value("#aprLista"), "-")
+            self.captura(pg, "08_sin_conexion", ".apr-card")
+            pg.select_option("#aprLista", FIN)
+            self.assertTrue(card.locator("[data-act='apr-si']").is_enabled())
+            self.assertEqual(card.locator(".apr-tit").text_content(), "¿Añadir «GDPR» al vocabulario de Finanzas?")
+        finally:
+            os.rename(fuera, self.ext)
         self.sin_errores()
 
     def test_ahora_no_teclado_y_ventana_estrecha(self):
@@ -356,6 +394,17 @@ class AprenderEnLaInterfazTests(unittest.TestCase):
         self.assertEqual(w.text_content(), "FakeGroq")
         self.assertEqual(w.get_attribute("title"), "Lo cambió Tenca: Whisper escribió «fake Groq»")
         self.assertEqual(pg.locator(".apr-card").count(), 0)  # lo que cambió Tenca no se propone como tuyo
+        # la búsqueda cuenta igual con el subrayado: «fake groq» son dos trozos pegados, un solo resaltado (como
+        # hlTerms sin subrayado), con lo que cambió Tenca dentro
+        pg.fill("#tq", "fake groq")
+        pg.wait_for_function("() => S.tq === 'fake groq'", timeout=5000)
+        self.assertEqual(pg.locator("#txBody mark").count(), 1)
+        self.assertEqual(pg.locator("#tqn").text_content().split("/")[-1], "1")
+        self.assertEqual(pg.locator("#txBody mark .apr-w").text_content(), "FakeGroq")
+        self.assertEqual(pg.evaluate("() => (hlTerms(S.tx.segs[0].text, termsOf(S.tq)).match(/<mark>/g) || []).length"),
+                         1)
+        pg.fill("#tq", "")
+        pg.wait_for_function("() => S.tq === ''", timeout=5000)
         pg.locator("#aTabs").scroll_into_view_if_needed()
         self.captura(pg, "06_aplicada")
         # al editar, sin subrayado ni barra (el texto es tuyo); al terminar, vuelven

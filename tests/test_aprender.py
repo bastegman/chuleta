@@ -8,10 +8,11 @@ import json
 import os
 import shutil
 import stat
+import types
 import unittest
 from unittest import mock
 
-from support import TempTree, bare_jobs, server, srt_text  # noqa: F401  (support prepara sys.path)
+from support import TempTree, bare_jobs, engines, server, srt_text  # noqa: F401  (support prepara sys.path)
 import aprender  # noqa: E402
 
 A = aprender
@@ -25,11 +26,13 @@ def terminos(ps):
     return [p["termino"] for p in ps]
 
 
-def accionables(r):
-    """Las propuestas que la interfaz enseña con la lista de la reunión: el término no está en ella, o hay una regla
-    segura que aún no tienes (como aprQue en aprender.js)."""
-    return [p for p in r["propuestas"] if not (r["lista"] in p["en"] if r["lista"] else p["en_general"])
-            or any(x["regla"] for x in p["antes"])]
+def accionables(r, lista=None):
+    """Las propuestas que la interfaz enseña con la lista de la reunión (o `lista`): el término no está en ella, o hay
+    una regla segura que aún no tienes en el proyecto de esa lista (como aprQue en aprender.js)."""
+    lista = r["lista"] if lista is None else lista
+    proy = next((l["project"] for l in r["listas"] if l["id"] == lista), "") if lista else ""
+    return [p for p in r["propuestas"] if not (lista in p["en"] if lista else p["en_general"])
+            or any(x["regla"] and not any(A.fold(pr) == A.fold(proy) for pr in x["reglas_en"]) for x in p["antes"])]
 
 
 # ----------------------------------------------------------------------------- qué vale la pena proponer
@@ -80,8 +83,8 @@ class PropuestasTests(unittest.TestCase):
                                "el sucess factors", "con el banco del norte"),
                           segs("con el iPhone", "el B2B", "con M365", "las KPIs",
                                "el SuccessFactors", "con el Banco del Norte"))
-        self.assertEqual(sorted(terminos(ps)), sorted(["iPhone", "B2B", "M365", "KPIs", "SuccessFactors", "Banco",
-                                                       "Norte"]))
+        self.assertEqual(sorted(terminos(ps)), sorted(["iPhone", "B2B", "M365", "KPIs", "SuccessFactors",
+                                                       "Banco del Norte"]))
 
     def test_nombre_de_varias_palabras(self):
         ps = A.propuestas(segs("hablamos con ruiz and pardo ayer"), segs("hablamos con Ruiz & Pardo ayer"))
@@ -90,6 +93,16 @@ class PropuestasTests(unittest.TestCase):
         self.assertEqual(terminos(ps), ["El Molino Verde"])
         ps = A.propuestas(segs("habló jose"), segs("habló José"))  # un nombre que Whisper escribió en minúscula
         self.assertEqual(terminos(ps), ["José"])
+
+    def test_mayusculas_al_empezar_frase_y_minusculas_del_original(self):
+        """Lo que Whisper escribió en minúsculas (el original) no cuenta como «palabra corriente»: solo lo corregido."""
+        ps = A.propuestas(segs("microsoft teams lo dijo"), segs("Microsoft Teams lo dijo"))
+        self.assertEqual(terminos(ps), ["Microsoft Teams"])
+
+    def test_inicios_repetidos_no_se_comparan(self):
+        o = [{"start": 1.0, "text": "con orbalia"}, {"start": 1.0, "text": "y orbalia"}, {"start": 2.0, "text": "tesa"}]
+        n = [{"start": 1.0, "text": "con Orvalia"}, {"start": 1.0, "text": "y Orvalia"}, {"start": 2.0, "text": "TSA"}]
+        self.assertEqual(terminos(A.propuestas(o, n)), ["TSA"])
 
     def test_dos_correcciones_juntas_son_dos(self):
         ps = A.propuestas(segs("con la orbalia tesa"), segs("con la Orvalia TSA"))
@@ -136,6 +149,10 @@ class ReglaSeguraTests(unittest.TestCase):
         self.assertTrue(A.regla_segura("orbalia", "Orvalia", "todo con Orvalia"))
         self.assertFalse(A.regla_segura("orbalia", "Orvalia", "con Orvalia y orbalia"))  # quedó uno sin corregir
         self.assertTrue(A.regla_segura("sap", "SAP", "con SAP"))  # solo mayúsculas: vale (lo correcto no cuenta)
+        self.assertTrue(A.regla_segura("iphone", "iPhone", ""))
+        # solo mayúsculas en una palabra corriente: cambiaría cada «plan» o «banco» de las reuniones siguientes
+        self.assertFalse(A.regla_segura("plan", "Plan", ""))
+        self.assertFalse(A.regla_segura("banco", "Banco", ""))
         self.assertFalse(A.regla_segura("son a e", "Orvalia", ""))  # palabras corrientes
         self.assertFalse(A.regla_segura("ap", "AP", ""))  # menos de 3 letras
         self.assertFalse(A.regla_segura("el cliente", "Orvalia", ""))  # no se parecen
@@ -167,6 +184,9 @@ class AplicarTests(unittest.TestCase):
 
     def test_lo_ya_correcto_no_se_toca(self):
         self.assertEqual(A.aplicar("con SAP", [{"de": "sap", "a": "SAP"}]), ("con SAP", []))
+        # una regla de solo mayúsculas sí cambia lo que está en minúsculas (revisión 1: no se aplicaba nunca)
+        t, h = A.aplicar("hablamos del kpi y del KPI", [{"de": "kpi", "a": "KPI"}])
+        self.assertEqual((t, [x["de"] for x in h]), ("hablamos del KPI y del KPI", ["kpi"]))
         t, h = A.aplicar("con S/4 HANA y hana", [{"de": "hana", "a": "S/4 HANA"}])
         self.assertEqual(t, "con S/4 HANA y S/4 HANA")
         self.assertEqual(len(h), 1)
@@ -438,12 +458,14 @@ class ServidorTests(TempTree):
             self.assertEqual(f.read(), "# Comité\nSAP, S/4HANA, Orvalia\n")
         self.assertEqual(self.app.aprender_reglas({})["reglas"],
                          [{"de": "orbalia", "a": "Orvalia", "proyecto": "Cliente Alfa"}])
-        # ya no se propone (está en la lista y la regla, aprendida); TSA, sin regla: no se vuelve a proponer la regla
-        self.assertEqual(terminos(accionables(self.app.aprender_get({"path": rel}))), ["TSA"])
+        # ya contestada en esta reunión: no se vuelve a proponer en ella; TSA sí, hasta que la contestas
+        self.assertEqual(terminos(self.app.aprender_get({"path": rel})["propuestas"]), ["TSA"])
         out = self.app.aprender_anadir({"path": rel, "termino": "TSA", "lista": fin["id"], "reglas": []})
         self.assertEqual(out["reglas"], 0)
-        self.assertEqual(accionables(self.app.aprender_get({"path": rel})), [])
+        self.assertEqual(self.app.aprender_get({"path": rel})["propuestas"], [])
+        # sin la casilla, la regla no se vuelve a ofrecer en ninguna reunión
         self.assertEqual(server.aprendido_de(self.app.settings.get())["no_reglas"], [["tesa", "tsa"]])
+        self.assertEqual(server.registro_aprendido(rel)["respondidas"], ["orvalia", "tsa"])
 
     def test_solo_lo_que_se_propone(self):
         rel = "Cliente Alfa/r1.wav"
@@ -467,12 +489,37 @@ class ServidorTests(TempTree):
         self.assertEqual(r["lista"], "")
         self.app.aprender_no({"termino": "TSA"})
         self.assertEqual(terminos(self.app.aprender_get({"path": rel})["propuestas"]), ["Orvalia"])
+        self.assertEqual(self.app.aprender_reglas({})["no"], ["TSA"])  # como lo escribiste, para Ajustes
+        self.assertEqual(self.app.aprender_olvidar({"no": "tsa"})["no"], [])  # «quitar»: se vuelve a proponer
+        self.assertEqual(terminos(self.app.aprender_get({"path": rel})["propuestas"]), ["Orvalia", "TSA"])
+        self.app.aprender_no({"termino": "TSA"})
         self.app.settings.update(lambda d: d.update(prompt="SAP, TSA"))
         out = self.app.aprender_anadir({"path": rel, "termino": "Orvalia", "lista": "", "reglas": ["orbalia"]})
         self.assertEqual(out["prompt"], "SAP, TSA, Orvalia")
         self.assertEqual(self.app.settings.get()["prompt"], "SAP, TSA, Orvalia")
         self.assertEqual(server.aprendido_de(self.app.settings.get())["reglas"][0]["proyecto"], "")
-        self.assertEqual(accionables(self.app.aprender_get({"path": rel})), [])
+        self.assertEqual(self.app.aprender_get({"path": rel})["propuestas"], [])
+
+    def test_al_vocabulario_general_desde_una_reunion_con_tema_no_se_repite(self):
+        """Revisión 1: tras añadirlo al vocabulario general, al volver a la reunión se proponía otra vez para su
+        lista."""
+        rel = "Cliente Alfa/r1.wav"
+        self.reunion(rel, ["con orbalia"])
+        self.corregir(rel, ["con Orvalia"])
+        self.app.aprender_anadir({"path": rel, "termino": "Orvalia", "lista": "", "reglas": []})
+        self.assertEqual(self.app.aprender_get({"path": rel})["propuestas"], [])
+
+    def test_regla_de_otro_proyecto_se_ofrece_en_este(self):
+        rel = "Cliente Alfa/r1.wav"
+        self.reunion(rel, ["con orbalia"])
+        self.corregir(rel, ["con Orvalia"])
+        self.reglas(dict(REGLA, proyecto="Otro"))
+        r = self.app.aprender_get({"path": rel})
+        self.assertEqual(r["propuestas"][0]["antes"][0]["reglas_en"], ["Otro"])
+        self.assertEqual(terminos(accionables(r)), ["Orvalia"])
+        self.app.aprender_anadir({"path": rel, "termino": "Orvalia", "lista": r["lista"], "reglas": ["orbalia"]})
+        self.assertEqual(sorted(x["proyecto"] for x in self.app.aprender_reglas({})["reglas"]),
+                         ["Cliente Alfa", "Otro"])
 
     def test_regla_cuando_el_termino_ya_estaba_en_la_lista(self):
         rel = "Cliente Alfa/r1.wav"
@@ -520,6 +567,28 @@ class ServidorTests(TempTree):
             self.assertEqual(f.read(), b"Contrato marco\r\nNDA\r\nTSA\r\n")
         self.assertEqual(server.aprendido_de(self.app.settings.get())["reglas"][0]["proyecto"], "Listas")
 
+    def test_la_lista_de_la_reunion_sin_conexion(self):
+        """Revisión 1: con su carpeta de listas sin conexión, la propuesta se iba en silencio al vocabulario general
+        y «Añadir» decía «ya no existe»."""
+        ext = os.path.join(self.tmp, "OneDrive", "Listas")
+        os.makedirs(ext)
+        with open(os.path.join(ext, "Legal.txt"), "w", encoding="utf-8") as f:
+            f.write("NDA\n")
+        vid = server.link_id(ext)
+        server.VOCAB_LINKS[vid] = {"name": "Listas", "path": ext}
+        rel = "Cliente Alfa/r1.wav"
+        self.reunion(rel, ["con tesa"], proyecto="Listas", workstream="Legal")
+        self.corregir(rel, ["con TSA"])
+        lid = self.app.aprender_get({"path": rel})["lista"]
+        self.assertEqual(lid, server.VLINK + vid + "/Legal.txt")
+        shutil.move(ext, ext + " (sin conexión)")
+        r = self.app.aprender_get({"path": rel})
+        self.assertIsNone(r["lista"])
+        self.assertEqual(r["falta"], {"proyecto": "Listas", "workstream": "Legal"})
+        with self.assertRaises(server.ApiError) as cm:
+            self.app.aprender_anadir({"path": rel, "termino": "TSA", "lista": lid, "reglas": []})
+        self.assertIn("No encuentro tu carpeta de listas «Listas»: ¿sin conexión", cm.exception.msg)
+
     def test_motivos(self):
         v = {"_abs": os.path.join(self.tmp, "no", "existe", "Legal.txt")}
         self.assertIn("No encuentro la carpeta de «Legal.txt»", server.motivo_lista(FileNotFoundError(), v))
@@ -552,7 +621,36 @@ class ServidorTests(TempTree):
         self.assertIsNone(self.app.transcript({"path": rel})["aprendido"])
         with self.assertRaises(server.ApiError):
             self.app.aprender_deshacer({"path": rel, "de": "orbalia", "a": "Orvalia"})
-        self.assertEqual(self.app.aprender_olvidar({"de": "Orbalia", "proyecto": "cliente alfa"}), {"reglas": []})
+        self.assertEqual(self.app.aprender_olvidar({"de": "Orbalia", "proyecto": "cliente alfa"}),
+                         {"reglas": [], "no": []})
+
+    def test_marcas_en_unidades_de_javascript(self):
+        rel = "Cliente Alfa/r1.wav"
+        self.reunion(rel, ["👍 con orbalia"])
+        self.reglas(REGLA)
+        server.aplicar_aprendido(rel, self.app.settings.get())
+        m = self.app.transcript({"path": rel})["aprendido"]["marcas"][0]
+        self.assertEqual((m["pos"], m["len"]), (len("👍 con ".encode("utf-16-le")) // 2, 7))  # 7, no 6
+
+    def test_dos_frases_con_el_mismo_inicio_no_se_tocan(self):
+        """Revisión 1: se cambiaban sin marca ni «Deshacer» (las marcas van por el inicio de la frase)."""
+        rel = "Cliente Alfa/r1.wav"
+        b = self.reunion(rel, ["x"])
+        with open(b + ".srt", "w", encoding="utf-8") as f:
+            f.write(srt_text([(10.0, 11.0, "con orbalia"), (10.0, 12.0, "y orbalia"), (13.0, 14.0, "otra orbalia")]))
+        self.reglas(REGLA)
+        self.assertEqual(server.aplicar_aprendido(rel, self.app.settings.get()), 1)
+        self.assertEqual(self.textos(b), ["con orbalia", "y orbalia", "otra Orvalia"])
+        self.assertEqual(len(self.app.transcript({"path": rel})["aprendido"]["marcas"]), 1)
+
+    def test_el_registro_va_antes_que_el_texto(self):
+        rel = "Cliente Alfa/r1.wav"
+        b = self.reunion(rel, ["con orbalia"])
+        self.reglas(REGLA)
+        with mock.patch.object(server, "guardar_registro", side_effect=OSError("disco lleno")):
+            with self.assertRaises(OSError):
+                server.aplicar_aprendido(rel, self.app.settings.get())
+        self.assertEqual(self.textos(b), ["con orbalia"])  # sin registro, sin cambio: nunca uno sin su marca
 
     def test_restaurar_el_original_se_lleva_lo_de_tenca(self):
         rel = "Cliente Alfa/r1.wav"
@@ -600,6 +698,57 @@ class ServidorTests(TempTree):
                 ("✦ regla olvidada: orbalia → Orvalia", "✦ regla olvidada: <texto>"),
                 ("↺ Comité.wav: 1 cambio aprendido deshecho", "↺ <texto>: 1 cambio aprendido deshecho")):
             self.assertEqual(server.diag_line(linea), esperado)
+
+
+class ColaTests(TempTree):
+    """Jobs._run de verdad con un motor de mentira, como test_privacidad: la regla llega al texto al terminar una
+    transcripción y también cuando el repaso final falla y se queda el texto del directo (revisión 1)."""
+    REL = "Cliente Alfa/r.wav"
+
+    def setUp(self):
+        super().setUp()
+        self.write("Cliente Alfa/Vocabulario/Finanzas.txt", "SAP\n")
+        self.write("Cliente Alfa/r.md", "---\nproyecto: Cliente Alfa\nworkstream: Finanzas\n---\n")
+        self.wav(self.REL, seconds=0.5)
+        self.addCleanup(server._TEMAS.clear)
+
+    def jobs(self, transcribe):
+        j = bare_jobs([])
+        nube = dict(server.DEFAULT_SETTINGS["cloud"], api_key="gsk_" + "0" * 20)  # falsa: el motor es de mentira
+        apr = {"reglas": [REGLA], "no": [], "no_reglas": []}
+        j.settings = settings_store(self.tmp, aprendido=apr, procesado="api", cloud=nube)
+        j.library = types.SimpleNamespace(find=lambda rel: {}, at=1)
+        j.submit_summary = lambda rel, auto=False: None
+        j.local = j.cloud = types.SimpleNamespace(transcribe=transcribe)
+        return j
+
+    def correr(self, j, final_pass=False):
+        jb = server.Job(self.REL, "r.wav", "nube", None)
+        jb.final_pass = final_pass
+        with j.lock:
+            j.list.append(jb)
+        with mock.patch.object(server, "log"):
+            j._run(jb)
+        return jb
+
+    def texto(self):
+        return [s["text"] for s in server.parse_srt(server.read_text(os.path.join(self.root, "Cliente Alfa", "r.srt")))]
+
+    def test_al_terminar_una_transcripcion(self):
+        j = self.jobs(lambda *a, **k: ([(0.0, 1.0, "hola orbalia"), (1.0, 1.9, "adiós")], "es", 2.0))
+        jb = self.correr(j)
+        self.assertEqual(jb.status, "done", jb.error)
+        self.assertEqual(self.texto(), ["hola Orvalia", "adiós"])
+
+    def test_si_el_repaso_final_falla_se_queda_el_directo_con_la_regla(self):
+        with open(os.path.join(self.root, "Cliente Alfa", "r.srt"), "w", encoding="utf-8") as f:
+            f.write(srt_text([(0.0, 1.0, "del directo con orbalia")]))
+
+        def falla(*a, **k):
+            raise engines.EngineError("HTTP 500")
+        jb = self.correr(self.jobs(falla), final_pass=True)
+        self.assertEqual(jb.status, "error")
+        self.assertEqual(self.texto(), ["del directo con Orvalia"])
 
 
 class CopiaOriginalTests(TempTree):

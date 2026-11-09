@@ -2658,7 +2658,7 @@ def aprendido_de(st):
     txt = lambda x: isinstance(x, str) and bool(x.strip())  # noqa: E731
     reglas = [dict(r, proyecto=r.get("proyecto") if isinstance(r.get("proyecto"), str) else "")
               for r in a.get("reglas") or [] if isinstance(r, dict) and txt(r.get("de")) and txt(r.get("a"))]
-    no = [x for x in a.get("no") or [] if txt(x)]
+    no = [x for x in a.get("no") or [] if txt(x)]  # como se escribió (se comparan con aprender.normal)
     no_reglas = [list(x) for x in a.get("no_reglas") or [] if isinstance(x, list) and len(x) == 2 and all(map(txt, x))]
     return {"reglas": reglas, "no": no, "no_reglas": no_reglas}
 
@@ -2703,7 +2703,8 @@ def original_de(rel):
 
 def registro_aprendido(rel):
     """Lo que Tenca ha cambiado en esta reunion: {"cambios": [{"start", "de", "a", "pos", "texto"}], "deshechas":
-    [normal(de)]} (las reglas que deshiciste aqui no se vuelven a aplicar en ella)."""
+    [normal(de)], "respondidas": [normal(termino)]} (las reglas que deshiciste aqui no se vuelven a aplicar en ella, y
+    lo que ya anadiste desde ella no se vuelve a proponer en ella, aunque fuera a otra lista)."""
     try:
         with open(os.path.join(backup_dir(rel), APRENDIDO_FILE), "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -2716,7 +2717,8 @@ def registro_aprendido(rel):
                and isinstance(c.get("de"), str) and isinstance(c.get("a"), str) and c["a"]
                and (c.get("pos") is None or (isinstance(c["pos"], int) and c["pos"] >= 0))
                and (c.get("texto") is None or isinstance(c["texto"], str))]
-    return {"cambios": cambios, "deshechas": [x for x in data.get("deshechas") or [] if isinstance(x, str)]}
+    return {"cambios": cambios, "deshechas": [x for x in data.get("deshechas") or [] if isinstance(x, str)],
+            "respondidas": [x for x in data.get("respondidas") or [] if isinstance(x, str)]}
 
 
 def guardar_registro(rel, reg):
@@ -2742,6 +2744,11 @@ def aplicar_aprendido(rel, st):
     todas = aprendido_de(st)["reglas"]
     if not todas:
         return 0
+    with App._tx_save_lock:  # no a la vez que una correccion a mano o un «Deshacer» de esta u otra reunion
+        return _aplicar_aprendido(rel, todas)
+
+
+def _aplicar_aprendido(rel, todas):
     abs_path = safe(rel, "file")
     proyecto = proyecto_de_reunion(abs_path)
     reglas = [r for r in todas if mismo_proyecto(r["proyecto"], proyecto)]
@@ -2753,9 +2760,10 @@ def aplicar_aprendido(rel, st):
     antes = {aprender.clave(s["start"]): s["text"] for s in orig or [] if s.get("start") is not None}
     reg = registro_aprendido(rel)
     deshechas, nuevos = set(reg["deshechas"]), []
+    repes = aprender.repetidos(bloques)  # dos frases con el mismo inicio: no se sabria marcar ni deshacer cada una
     for b in bloques:
         o = antes.get(b["start"])
-        if o is not None and o != b["text"]:
+        if (o is not None and o != b["text"]) or b["start"] in repes:
             continue  # una frase que has corregido tu (o que ya cambio Tenca): no se toca
         texto, hechos = aprender.aplicar(b["text"], reglas, deshechas)
         if hechos:
@@ -2764,9 +2772,9 @@ def aplicar_aprendido(rel, st):
     if not nuevos:
         return 0
     copia_original(rel, base, auto=True)
-    _escribir_bloques(base, bloques)
     reg["cambios"] += nuevos
-    guardar_registro(rel, reg)
+    guardar_registro(rel, reg)  # antes que el texto: si esto falla, no queda ningun cambio sin su marca
+    _escribir_bloques(base, bloques)
     n = len(nuevos)
     log(f"✦ {os.path.basename(abs_path)}: {n} cambio{'s' if n != 1 else ''} con lo aprendido de tus correcciones")
     return n
@@ -2794,7 +2802,9 @@ def aprendido_publico(rel, segments):
         for e, p in zip(es, pos):
             if p is None:
                 continue
-            marcas.append({"start": e["start"], "pos": p, "len": len(e["a"]), "de": e["de"], "a": e["a"]})
+            # en unidades UTF-16, como cuenta JavaScript (un emoji delante movia el subrayado)
+            marcas.append({"start": e["start"], "pos": _utf16(texto[:p]), "len": _utf16(e["a"]), "de": e["de"],
+                           "a": e["a"]})
             r = reglas.setdefault((aprender.normal(e["de"]), e["a"]), {"formas": Counter(), "a": e["a"], "veces": 0})
             r["formas"][e["de"]] += 1
             r["veces"] += 1
@@ -2802,6 +2812,10 @@ def aprendido_publico(rel, segments):
         return None
     return {"marcas": marcas, "reglas": [{"de": r["formas"].most_common(1)[0][0], "a": r["a"], "veces": r["veces"]}
                                          for r in reglas.values()]}
+
+
+def _utf16(s):
+    return len(s.encode("utf-16-le")) // 2
 
 
 def deshacer_aprendido(rel, de, a):
@@ -3670,13 +3684,17 @@ class Jobs:
         """Transcripcion terminada: primero las voces (si estan activas) y el resumen al acabar estas, para que
         lleve los nombres; si no, el resumen directamente. Antes, el documento en los destinos de salida y, antes de
         todo, lo que aprendiste a corregir (aplicar_aprendido): asi el resumen y los documentos ya lo llevan bien."""
-        try:
-            aplicar_aprendido(rel, self.settings.get())
-        except Exception:  # nunca a costa de lo demas: sin esto, la reunion se queda sin destinos ni resumen
-            log_exc()
+        self._aprendido(rel)
         self.write_outputs(rel)
         if not self.auto_voices(rel):
             self.auto_summary(rel)
+
+    def _aprendido(self, rel):
+        """aplicar_aprendido, nunca a costa de lo demas: si falla, la reunion sigue con sus destinos y su resumen."""
+        try:
+            aplicar_aprendido(rel, self.settings.get())
+        except Exception:
+            log_exc()
 
     # --- destinos de salida (salidas.py): la reunion como documento en otras carpetas
     def document_for(self, rel):
@@ -4262,6 +4280,7 @@ class Jobs:
             if job.final_pass:  # se queda el texto del directo, y con el se resume
                 self._final_pass_over(job.path)
                 log("   se mantiene el texto del directo")
+                self._aprendido(job.path)  # como en _after_transcribe: lo aprendido, antes de destinos y resumen
                 self.write_outputs(job.path)
                 self.auto_summary(job.path)
         finally:
@@ -6360,9 +6379,8 @@ class App:
         apr = aprendido_de(self.settings.get())
         reg = registro_aprendido(rel)
         hechos = {(aprender.normal(c["de"]), aprender.normal(c["a"])) for c in reg["cambios"]}
-        # una regla que ya tienes (o que dijiste que no) no se vuelve a ofrecer
-        ya = [(aprender.normal(r["de"]), aprender.normal(r["a"])) for r in apr["reglas"]]
-        ps = aprender.propuestas(orig, data["segments"], hechos, apr["no"], [tuple(x) for x in apr["no_reglas"]] + ya)
+        no = {aprender.normal(x) for x in apr["no"]} | set(reg["respondidas"])
+        ps = aprender.propuestas(orig, data["segments"], hechos, no, [tuple(x) for x in apr["no_reglas"]])
         if not ps:
             return vacio
         props = md_props(abs_path)
@@ -6373,9 +6391,17 @@ class App:
             k = aprender.normal(p["termino"])
             p["en"] = [l["id"] for l in listas if k in {aprender.normal(t) for t in l["terms"]}]
             p["en_general"] = k in general
-        return {"propuestas": ps, "lista": v["id"] if v else "", "proyecto": v["project"] if v else "",
-                "listas": [{"id": l["id"], "project": l["project"], "name": l["name"],
-                            "conectada": bool(l.get("conectada"))} for l in listas]}
+            for x in p["antes"]:  # la regla que ya tienes, en que proyectos (la interfaz no la ofrece otra vez alli)
+                kd = aprender.normal(x["texto"])
+                x["reglas_en"] = [r["proyecto"] for r in apr["reglas"]
+                                  if aprender.normal(r["de"]) == kd and aprender.normal(r["a"]) == k]
+        out = {"propuestas": ps, "lista": v["id"] if v else "", "proyecto": v["project"] if v else "",
+               "listas": [{"id": l["id"], "project": l["project"], "name": l["name"],
+                           "conectada": bool(l.get("conectada"))} for l in listas]}
+        if not v and props.get("workstream"):  # tiene tema, pero su lista no esta (sin conexion, borrada, renombrada)
+            out["lista"] = None
+            out["falta"] = {"proyecto": props.get("proyecto") or "", "workstream": props["workstream"]}
+        return out
 
     def aprender_get(self, q):
         """GET /api/aprender?path=: las propuestas de esa reunion (ver _propuestas)."""
@@ -6402,6 +6428,10 @@ class App:
         lista = str(b.get("lista") or "")
         v = find_vocab(None, None, lista) if lista else None
         if lista and not v:
+            vid = lista[len(VLINK):].split("/")[0] if lista.startswith(VLINK) else ""
+            if vid in VOCAB_LINKS and not os.path.isdir(VOCAB_LINKS[vid]["path"]):
+                raise ApiError(f"No encuentro tu carpeta de listas «{VOCAB_LINKS[vid]['name']}»: ¿sin conexión o con "
+                               "el disco desconectado? Vuelve a probar cuando esté, o elige otra lista.")
             raise ApiError("Esa lista ya no existe. Elige otra.")
         lang = self.settings.get().get("language") or ""
         if v:
@@ -6418,6 +6448,15 @@ class App:
                 self.settings.update(lambda d: d.update(prompt=general))
             cabe = termino not in vocab_fit(general, lang)["dropped"]
         proyecto, ahora = v["project"] if v else "", time.time()
+        try:  # desde esta reunion ya no se vuelve a proponer (aunque haya ido a otra lista que la de la reunion)
+            with self._tx_save_lock:
+                reg = registro_aprendido(rel_of(abs_path))
+                k = aprender.normal(termino)
+                if k not in reg["respondidas"] and os.path.isdir(backup_dir(rel_of(abs_path))):
+                    reg["respondidas"].append(k)
+                    guardar_registro(rel_of(abs_path), reg)
+        except OSError:
+            log_exc()
         if seguras:
             def upd(d):
                 a = aprendido_de(d)
@@ -6448,8 +6487,8 @@ class App:
 
         def upd(d):
             a = aprendido_de(d)
-            if k not in a["no"]:
-                a["no"].append(k)
+            if k not in {aprender.normal(x) for x in a["no"]}:
+                a["no"].append(termino)
             d["aprendido"] = a
         self.settings.update(upd)
         return {"ok": True}
@@ -6477,25 +6516,30 @@ class App:
         return [{k: r[k] for k in ("de", "a", "proyecto")} for r in aprendido_de(self.settings.get())["reglas"]]
 
     def aprender_reglas(self, q):
-        """GET /api/aprender/reglas: las reglas aprendidas (Ajustes › Proyectos)."""
-        return {"reglas": self._reglas_publicas()}
+        """GET /api/aprender/reglas: las reglas aprendidas y lo que dijiste que no se propusiera (Ajustes ›
+        Proyectos)."""
+        return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
 
     def aprender_olvidar(self, b):
         """POST /api/aprender/olvidar {de, proyecto}: la regla deja de aplicarse en las proximas reuniones (lo ya
-        cambiado se queda, con su Deshacer)."""
+        cambiado se queda, con su Deshacer). {no: termino}: ese termino se puede volver a proponer."""
         k, proyecto = aprender.normal(str(b.get("de") or "")), str(b.get("proyecto") or "")
+        kno = aprender.normal(str(b.get("no") or ""))  # {"no": termino}: que se pueda volver a proponer
         quitadas = []
 
         def upd(d):
             a = aprendido_de(d)
-            quitadas[:] = [r for r in a["reglas"] if aprender.normal(r["de"]) == k
-                           and mismo_proyecto(r["proyecto"], proyecto)]
-            a["reglas"] = [r for r in a["reglas"] if r not in quitadas]
+            if kno:
+                a["no"] = [x for x in a["no"] if aprender.normal(x) != kno]
+            else:
+                quitadas[:] = [r for r in a["reglas"] if aprender.normal(r["de"]) == k
+                               and mismo_proyecto(r["proyecto"], proyecto)]
+                a["reglas"] = [r for r in a["reglas"] if r not in quitadas]
             d["aprendido"] = a
         self.settings.update(upd)
         if quitadas:
             log(f"✦ regla olvidada: {quitadas[0]['de']} → {quitadas[0]['a']}")
-        return {"reglas": self._reglas_publicas()}
+        return {"reglas": self._reglas_publicas(), "no": aprendido_de(self.settings.get())["no"]}
 
     def doc(self, q):
         abs_path = safe(q.get("path"), "file")

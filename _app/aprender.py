@@ -133,15 +133,22 @@ def clave(start):
     return None if start is None else round(float(start), 2)
 
 
+def repetidos(segs):
+    """Los inicios (clave) que llevan dos o más frases."""
+    vistos = Counter(clave(s["start"]) for s in segs if s.get("start") is not None)
+    return {k for k, n in vistos.items() if n > 1}
+
+
 def pares(original, actual):
     """(lo que escribió Whisper, lo que hay ahora, inicio) de cada frase cambiada. Con tiempos, por el inicio de la
     frase (el de la copia del original y el del .srt corregido coinciden); sin ellos (.txt), por líneas."""
     if original and actual and all(s.get("start") is not None for s in list(original) + list(actual)):
+        repes = repetidos(original) | repetidos(actual)  # dos frases con el mismo inicio: no se sabe cuál es cuál
         antes = {clave(s["start"]): s["text"] for s in original}
         out = []
         for s in actual:
             o = antes.get(clave(s["start"]))
-            if o is not None and o != s["text"]:
+            if o is not None and o != s["text"] and clave(s["start"]) not in repes:
                 out.append((o, s["text"], s["start"]))
         return out
     a, b = [s["text"] for s in original or []], [s["text"] for s in actual or []]
@@ -162,7 +169,7 @@ def cambios(antes, ahora):
     ta, tb = tokens(antes), tokens(ahora)
     out = []
     sm = difflib.SequenceMatcher(None, [t for t, _, _ in ta], [t for t, _, _ in tb], autojunk=False)
-    for op, i1, i2, j1, j2 in sm.get_opcodes():
+    for op, i1, i2, j1, j2 in _juntar_nombres(sm.get_opcodes(), ta, tb):
         if op != "replace":
             continue
         # «la orbalia tesa» → «la Orvalia TSA» llega como un solo cambio de dos palabras: si cada una se parece a la
@@ -173,6 +180,25 @@ def cambios(antes, ahora):
             out += [(ta[i1 + k][0], tb[j1 + k][0], tb[j1 + k:j1 + k + 1]) for k in range(i2 - i1)]
             continue
         out.append((antes[ta[i1][1]:ta[i2 - 1][2]], ahora[tb[j1][1]:tb[j2 - 1][2]], tb[j1:j2]))
+    return out
+
+
+def _juntar_nombres(ops, ta, tb):
+    """«banco del norte» → «Banco del Norte» llega como dos cambios («banco», «norte») con «del» igual en medio: si los
+    dos solo ponen mayúsculas o tildes y lo de en medio son enlaces, es un nombre de varias palabras."""
+    def nombre(a, b):  # «banco» → «Banco»: la misma palabra con mayúscula inicial, y no una corriente («Vale»)
+        return fold(a) == fold(b) and b[:1].isupper() and not es_sigla(b) and fold(b) not in COMUNES
+    solo_forma = lambda o: (o[0] == "replace" and o[2] - o[1] == o[4] - o[3] and all(  # noqa: E731
+        nombre(ta[o[1] + k][0], tb[o[3] + k][0]) for k in range(o[2] - o[1])))
+    enlaces = lambda o: (o[0] == "equal" and 0 < o[2] - o[1] <= 2  # noqa: E731
+                         and all(fold(t) in ENLACES for t, _, _ in ta[o[1]:o[2]]))
+    out = []
+    for o in ops:
+        if len(out) >= 2 and solo_forma(o) and solo_forma(out[-2]) and enlaces(out[-1]):
+            a = out[-2]
+            out[-2:] = [("replace", a[1], o[2], a[3], o[4])]
+        else:
+            out.append(o)
     return out
 
 
@@ -201,8 +227,8 @@ def propuestas(original, actual, excluir=(), no=(), no_reglas=()):
     primero. `excluir`: pares (normal(de), normal(a)) que cambió Tenca, no tú; `no`: términos que dijiste que no
     (normal); `no_reglas`: pares de reglas que no quisiste. "regla" dice si es seguro cambiarlo solo la próxima vez:
     se parece a lo correcto, no son palabras corrientes y lo corregiste en todas partes."""
-    textos = [s["text"] for s in list(actual or []) + list(original or [])]
-    minusculas = {fold(t) for x in textos for t, _, _ in tokens(x) if t == t.lower()}
+    # las palabras que escribes en minúsculas (en lo corregido: el original tiene justo lo que estaba mal escrito)
+    minusculas = {fold(t) for x in actual or [] for t, _, _ in tokens(x["text"]) if t == t.lower()}
     excluir, no, no_reglas = set(excluir), set(no), {tuple(p) for p in no_reglas}
     todo = "\n".join(s["text"] for s in actual or [])
     grupos, orden = {}, []
@@ -250,7 +276,17 @@ def regla_segura(de, termino, texto):
         return False
     if all(fold(t) in COMUNES or fold(t) in ENLACES for t in toks):
         return False
+    if letras(de) == letras(termino) and not all(_forma_propia(t) for t, _, _ in tokens(termino)):
+        # solo cambian mayúsculas o tildes: «kpi» → «KPI» sí (una sigla no se escribe de otra forma), pero «plan» →
+        # «Plan» o «banco» → «Banco» no: cambiaría cada «plan» de las reuniones siguientes
+        return False
     return parecido(de, termino) >= PARECIDO_REGLA and not queda(de, termino, texto)
+
+
+def _forma_propia(t):
+    """Una palabra que solo se escribe así: sigla, mayúsculas por dentro («iPhone») o letras y cifras («M365»)."""
+    return es_sigla(t) or bool(re.search(r"[a-zß-ÿ][A-ZÀ-Þ]", t)) or (any(c.isdigit() for c in t)
+                                                                      and any(c.isalpha() for c in t))
 
 
 # ----------------------------------------------------------------------------- aplicar y deshacer reglas
@@ -286,14 +322,13 @@ def aplicar(texto, reglas, deshechas=()):
 
 
 def _dentro_de(texto, s, e, a):
-    """El trozo [s, e) ya es parte de `a` escrito en el texto (sin mayúsculas)."""
-    lo, hi, fa = max(0, s - len(a)), min(len(texto), e + len(a)), fold(a)
-    zona = fold(texto[lo:hi])
-    k = zona.find(fa)
-    while k != -1:
-        if lo + k <= s and lo + k + len(a) >= e:
+    """El trozo [s, e) ya es parte de `a` escrito en el texto (sin mirar mayúsculas), como «HANA» dentro de «S/4 HANA».
+    No cuenta el propio trozo: en una regla de solo mayúsculas («kpi» → «KPI») es `a` en minúsculas, no `a` escrito."""
+    lo = max(0, s - len(a))
+    for m in re.finditer(re.escape(a), texto[lo:min(len(texto), e + len(a))], re.IGNORECASE):
+        i, j = lo + m.start(), lo + m.end()
+        if i <= s and j >= e and (i, j) != (s, e):
             return True
-        k = zona.find(fa, k + 1)
     return False
 
 

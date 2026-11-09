@@ -182,8 +182,8 @@ USO DIARIO
   - Aprende de tus correcciones: si corriges un nombre o una sigla en una transcripción
     («orbalia» → «Orvalia»), al pulsar "Listo" te propone, encima del texto, añadirlo al vocabulario
     de esa reunión o a otra lista (también a tu carpeta de listas; si no puede escribir en ella,
-    te dice por qué). Las erratas y los cambios de redacción no cuentan. Si dejas marcada la
-    casilla, en las próximas reuniones de ese proyecto cambia sola lo que escribió Whisper: solo en
+    te dice por qué). Las erratas y los cambios de redacción no cuentan. Si marcas la casilla
+    "Y cambiar…", en las próximas reuniones de ese proyecto cambia sola lo que escribió Whisper: solo en
     frases que nadie ha tocado, subrayado en el texto y con "Deshacer". Nada se aprende sin tu
     clic y nada sale del PC. Lo que corrige sola está en Ajustes > Proyectos, con "quitar".
 

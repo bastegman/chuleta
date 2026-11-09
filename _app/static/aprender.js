@@ -32,7 +32,8 @@ async function aprCargar(a, avisar = false) {
   if (!S.apr || S.apr.path !== a.path) S.aprFilas = {};
   if (S.aprDeshecho && S.aprDeshecho.path !== a.path) S.aprDeshecho = null;
   S.apr = { path: a.path, data: r, lista: S.apr && S.apr.path === a.path ? S.apr.lista : r.lista };
-  if (S.apr.lista && !r.listas.some(l => l.id === S.apr.lista)) S.apr.lista = r.listas.some(l => l.id === r.lista) ? r.lista : '';
+  // la elegida ya no está: la de la reunión o, si tampoco está (r.lista null: sin conexión), ninguna hasta que elijas
+  if (S.apr.lista && !r.listas.some(l => l.id === S.apr.lista)) S.apr.lista = r.lista;
   aprPintar();
   const card = $('#aprBox .apr-card');
   if (avisar && card && card.getBoundingClientRect().bottom < main.getBoundingClientRect().top + 60) {
@@ -49,8 +50,11 @@ function aprNombreLista(id) {
 }
 /* qué se puede hacer con una propuesta para la lista elegida: añadir (y quizá la regla), solo la regla, o nada */
 function aprQue(p, lista) {
+  if (lista == null) return { anadir: true, reglas: [] };  // la lista de la reunión no está: primero, elegir otra
   const ya = lista ? p.en.includes(lista) : p.en_general;
-  const reglas = p.antes.filter(x => x.regla);
+  // las reglas seguras que aún no tienes en el proyecto de esa lista ('' = las reuniones sin proyecto)
+  const proy = fold(lista ? aprLista(lista)?.project || '' : '');
+  const reglas = p.antes.filter(x => x.regla && !(x.reglas_en || []).some(pr => fold(pr) === proy));
   if (!ya) return { anadir: true, reglas };
   return reglas.length ? { anadir: false, reglas } : null;
 }
@@ -64,16 +68,18 @@ function aprCardHtml() {
     .filter(f => f.q || (f.hecho && f.hecho.estado === 'ok'));
   if (!filas.length) return '';
   const pend = filas.filter(f => !f.hecho || f.hecho.estado !== 'ok');
-  const dest = lista ? `de <b>${esc(l.name)}</b>` : 'general';
+  const dest = lista == null ? '' : lista ? ` de <b>${esc(l.name)}</b>` : ' general';
   const proy = lista ? `de ${esc(l.project)}` : 'sin proyecto';
   const una = pend.length === 1;
-  const tit = una && pend[0].q.anadir ? `¿Añadir «${esc(pend[0].p.termino)}» al vocabulario ${dest}?`
+  const tit = una && pend[0].q.anadir ? `¿Añadir «${esc(pend[0].p.termino)}» al vocabulario${dest}?`
     : una ? `¿Cambiar ${aprY(pend[0].q.reglas.map(x => `«${esc(x.texto)}»`))} por «${esc(pend[0].p.termino)}» en las próximas reuniones?`
-      : pend.length ? `¿Añadir estas palabras al vocabulario ${dest}?` : 'Listo';
+      : pend.length ? `¿Añadir estas palabras al vocabulario${dest}?` : 'Listo';
   const sub = !pend.length ? 'Se nota desde la próxima reunión.'
     : pend.every(f => !f.q.anadir) ? `Ya ${una ? 'está' : 'están'} en la lista, pero Whisper no ${una ? 'lo' : 'las'} escribió bien.`
       : `${una ? 'Lo has' : 'Las has'} corregido tú. Así Whisper ${una ? 'lo' : 'las'} escribirá bien la próxima vez.`;
-  const opts = `<option value=""${lista ? '' : ' selected'}>Sin proyecto (vocabulario general)</option>` + Object.entries(
+  const falta = lista == null && ap.data.falta;  // la lista de la reunión no se encuentra: se elige otra a mano
+  const opts = (lista == null ? '<option value="-" selected disabled>Elige una lista…</option>' : '')
+    + `<option value=""${lista === '' ? ' selected' : ''}>Sin proyecto (vocabulario general)</option>` + Object.entries(
     ap.data.listas.reduce((g, x) => ((g[x.project] ||= []).push(x), g), {})).map(([pr, xs]) =>
     `<optgroup label="${esc(pr)}">${xs.map(x => `<option value="${esc(x.id)}"${x.id === lista ? ' selected' : ''}>${esc(x.name)} · ${esc(pr)}</option>`).join('')}</optgroup>`).join('');
   const fila = ({ p, k, q, hecho }) => {
@@ -83,24 +89,25 @@ function aprCardHtml() {
     }
     const reglas = q.reglas.map(x => `«${esc(x.texto)}»`);
     const regla = q.reglas.length ? (q.anadir
-      ? `<label class="apr-regla"><input type="checkbox" data-apr-regla="${k}" checked> Y cambiar ${aprY(reglas)} por «${esc(p.termino)}» en las próximas reuniones ${proy}</label>`
+      ? `<label class="apr-regla"><input type="checkbox" data-apr-regla="${k}"> Y cambiar ${aprY(reglas)} por «${esc(p.termino)}» en las próximas reuniones ${proy}</label>`
       : '') : '';
     const que = q.anadir ? `Whisper escribió ${aprY(antes)}`
       : `Ya está en la lista, pero Whisper escribió ${aprY(antes)}`;
     const si = q.anadir ? 'Añadir' : 'Cambiarlo';
     const err = hecho && hecho.estado === 'error' ? `<div class="apr-err" role="alert">${esc(hecho.msg)}</div>` : '';
     return `<li class="apr-fila" data-k="${k}"><div class="apr-txt"><b class="apr-term">${esc(p.termino)}</b> <span class="muted">${que}</span>${regla}${err}</div>
-      <div class="apr-acc"><button class="btn sm primary" type="button" data-act="apr-si" data-k="${k}"${q.anadir ? '' : ` title="${esc(`${APP_NAME} cambiará ${aprY(q.reglas.map(x => `«${x.texto}»`))} por «${p.termino}» en las próximas reuniones ${lista ? 'de ' + l.project : 'sin proyecto'} y te lo marcará`)}"`}>${si}</button>
+      <div class="apr-acc"><button class="btn sm primary" type="button" data-act="apr-si" data-k="${k}"${lista == null ? ' disabled title="Elige antes una lista (abajo)"' : ''}${q.anadir ? '' : ` title="${esc(`${APP_NAME} cambiará ${aprY(q.reglas.map(x => `«${x.texto}»`))} por «${p.termino}» en las próximas reuniones ${lista ? 'de ' + l.project : 'sin proyecto'} y te lo marcará`)}"`}>${si}</button>
       <button class="btn sm ghost" type="button" data-act="apr-no" data-k="${k}" title="No volver a proponerlo">No</button></div></li>`;
   };
   const conectada = l && l.conectada ? `<span class="muted"> · está en tu carpeta de listas: se añade allí</span>` : '';
+  const aviso = falta ? `<div class="apr-err" role="status">No encuentro la lista «${esc(falta.workstream)}»${falta.proyecto ? ` de ${esc(falta.proyecto)}` : ''} de esta reunión: ¿sin conexión, o la has movido? Elige otra o vuelve a probar cuando esté.</div>` : '';
   return `<div class="card apr-card" role="region" aria-label="Aprender de tus correcciones">
     <div class="apr-head"><span class="apr-ico" aria-hidden="true">✦</span><div class="apr-hd">
       <div class="apr-tit">${tit}</div>
       <div class="apr-sub">${sub}</div></div>
-      <button class="btn sm ghost apr-x" type="button" data-act="apr-cerrar" title="Ahora no (vuelve a salir al abrir la reunión otro día)">${pend.length ? 'Ahora no' : 'Cerrar'}</button></div>
+      <button class="btn sm ghost apr-x" type="button" data-act="apr-cerrar" title="${pend.length ? 'Ahora no: vuelve a salir la próxima vez que abras ' + esc(APP_NAME) : 'Cerrar'}">${pend.length ? 'Ahora no' : 'Cerrar'}</button></div>
     <ul class="apr-filas">${filas.map(fila).join('')}</ul>
-    ${pend.length ? `<div class="apr-dest"><label for="aprLista">Lista</label><select id="aprLista">${opts}</select>${conectada}</div>` : ''}
+    ${pend.length ? `<div class="apr-dest"><label for="aprLista">Lista</label><select id="aprLista">${opts}</select>${conectada}</div>${aviso}` : ''}
   </div>`;
 }
 
@@ -146,23 +153,35 @@ function aprMarcas(seg) {
 }
 /* el texto de una frase con lo buscado resaltado (hlTerms) y lo que cambió Tenca subrayado */
 function aprHl(seg, terms) {
-  const ms = aprMarcas(seg);
-  if (!ms) return hlTerms(seg.text, terms);
+  const ms = aprMarcas(seg), text = seg.text;
+  if (!ms) return hlTerms(text, terms);
+  // lo buscado, como hlTerms (rangos sobre el texto entero, juntos si se tocan): cada uno es un solo <mark> aunque
+  // cruce un subrayado, así el contador y «siguiente» de la búsqueda no cambian
+  const f = foldMap(text), rs = [];
+  for (const t of terms || []) { let k = 0; while ((k = f.indexOf(t, k)) !== -1) { rs.push([k, k + t.length]); k += t.length; } }
+  rs.sort((a, b) => a[0] - b[0]);
+  const marks = [];
+  for (const r of rs) { const l = marks[marks.length - 1]; if (l && r[0] <= l[1]) l[1] = Math.max(l[1], r[1]); else marks.push([...r]); }
+  const apr = (a, b) => {  // el trozo [a, b) con lo que cambió Tenca subrayado
+    let out = '', i = a;
+    for (const m of ms) {
+      const s = Math.max(m.pos, i), e = Math.min(m.pos + m.len, b);
+      if (e <= s) continue;
+      out += esc(text.slice(i, s)) + `<span class="apr-w" title="Lo cambió ${esc(APP_NAME)}: Whisper escribió «${esc(m.de)}»">${esc(text.slice(s, e))}</span>`;
+      i = e;
+    }
+    return out + esc(text.slice(i, b));
+  };
   let out = '', i = 0;
-  for (const m of ms) {
-    if (m.pos < i) continue;
-    out += hlTerms(seg.text.slice(i, m.pos), terms)
-      + `<span class="apr-w" title="Lo cambió ${esc(APP_NAME)}: Whisper escribió «${esc(m.de)}»">${hlTerms(seg.text.slice(m.pos, m.pos + m.len), terms)}</span>`;
-    i = m.pos + m.len;
-  }
-  return out + hlTerms(seg.text.slice(i), terms);
+  for (const [a, b] of marks) { out += apr(i, a) + '<mark>' + apr(a, b) + '</mark>'; i = b; }
+  return out + apr(i, text.length);
 }
 
 async function aprSi(k) {
   const ap = S.apr, p = ap?.data.propuestas[k];
   if (!p) return;
   const q = aprQue(p, ap.lista);
-  if (!q) return;
+  if (!q || ap.lista == null) return;
   const caja = $(`#aprBox [data-apr-regla="${k}"]`);
   const reglas = q.reglas.length && (!q.anadir || !caja || caja.checked) ? q.reglas.map(x => x.texto) : [];
   const btns = $$(`#aprBox .apr-fila[data-k="${k}"] button`);
@@ -263,21 +282,23 @@ main.addEventListener('change', e => {
 async function aprAjustes(d) {
   const box = $('#sAprendido', d);
   if (!box) return;
-  const pintar = reglas => {
-    box.innerHTML = !reglas.length ? '' : `<label>Palabras que ${esc(APP_NAME)} corrige al transcribir <span class="muted" style="font-weight:400">· las aprendió de tus correcciones</span></label>
+  const pintar = ({ reglas = [], no = [] }) => {
+    box.innerHTML = (reglas.length ? `<label>Palabras que ${esc(APP_NAME)} corrige al transcribir <span class="muted" style="font-weight:400">· las aprendió de tus correcciones</span></label>
       <table class="vtable">${reglas.map((r, i) => `<tr><td>«${esc(r.de)}» → ${esc(r.a)}</td><td class="muted">${r.proyecto ? esc(r.proyecto) : 'Sin proyecto'}</td>
         <td><button class="btn ghost sm" type="button" data-apr-olvidar="${i}">quitar</button></td></tr>`).join('')}</table>
-      <div class="help">Solo cambia frases que nadie ha tocado, en las reuniones de ese proyecto. Lo cambiado va subrayado y cada reunión tiene su «Deshacer». Quitarlo aquí no deshace lo ya cambiado.</div>`;
-    box.reglas = reglas;
+      <div class="help">Solo cambia frases que nadie ha tocado, en las reuniones de ese proyecto. Lo cambiado va subrayado y cada reunión tiene su «Deshacer». Quitarlo aquí no deshace lo ya cambiado.</div>` : '')
+      + (no.length ? `<div class="help apr-no-lista">No te propone añadir: ${no.map((x, i) => `<span class="apr-r">«${esc(x)}» <button class="lnk" type="button" data-apr-sino="${i}" title="Que vuelva a proponerlo si lo corriges">quitar</button></span>`).join('<span class="muted"> · </span>')}</div>` : '');
+    box.reglas = reglas; box.no = no;
   };
-  try { pintar((await api('/api/aprender/reglas')).reglas); } catch { box.innerHTML = ''; }
+  try { pintar(await api('/api/aprender/reglas')); } catch { box.innerHTML = ''; }
   box.addEventListener('click', async e => {
-    const b = e.target.closest('[data-apr-olvidar]');
+    const b = e.target.closest('[data-apr-olvidar], [data-apr-sino]');
     if (!b) return;
-    const r = box.reglas[+b.dataset.aprOlvidar];
+    const body = b.dataset.aprSino != null ? { no: box.no[+b.dataset.aprSino] }
+      : { de: box.reglas[+b.dataset.aprOlvidar].de, proyecto: box.reglas[+b.dataset.aprOlvidar].proyecto };
     try {
-      pintar((await api('/api/aprender/olvidar', { de: r.de, proyecto: r.proyecto })).reglas);
-      ($('[data-apr-olvidar]', box) || $('#sPrompt', d))?.focus();
+      pintar(await api('/api/aprender/olvidar', body));
+      ($('[data-apr-olvidar], [data-apr-sino]', box) || $('#sPrompt', d))?.focus();
     } catch (err) { toast(esc(err.message), 'err'); }
   });
 }
