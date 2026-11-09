@@ -135,6 +135,18 @@ def teams_meeting_title(exe_names=TEAMS_EXES):
         return None
 
 
+def teams_reunion_abierta(exe_names=TEAMS_EXES):
+    """¿Hay una ventana de reunión o llamada de Teams? True / False, o None si no se sabe (fuera de Windows o si no se
+    pueden leer las ventanas): el fin de la llamada (directo_avisos.FinDeLlamada) no para nada con un None."""
+    if not WINDOWS:
+        return None
+    try:
+        return pick_meeting_window(_ventanas(), exe_names) is not None
+    except Exception:
+        log_exc()
+        return None
+
+
 # ----------------------------------------------------------------------------- nivel 2: Outlook clásico (COM)
 #
 # Lo que hay que saber de Outlook por COM (fuentes y mediciones: CHANGELOG y tests/test_calendario.py):

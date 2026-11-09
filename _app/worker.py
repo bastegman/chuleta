@@ -37,6 +37,50 @@ class _OnlyLanguages:
         return out
 
 
+OIR_MARCOS = 500  # los primeros 10 s (marcos de 20 ms) del primer bloque: tan fiable como los 30 s y 1/3 del coste
+
+
+class _Escucha:
+    """Con un idioma fijo, en que idioma SUENA el trozo (idioma propuesto del directo). generate() recibe la salida del
+    encoder y detect_language la acepta tal cual (como hace faster-whisper con multilingual=True): no hay otro encoder,
+    solo un paso del decoder. Ese paso proyecta toda la memoria del encoder, asi que se le dan solo los OIR_MARCOS
+    primeros del primer bloque de la tanda (medido el 09/11/2026 en un i9 de 2019 con 4 hilos: medium 195 ms y small
+    60 ms por trozo, frente a 570 / 180 ms con el bloque entero; mismo idioma y mas seguro, sin el relleno). oido:
+    [(idioma, probabilidad)] (uno por trozo). Si falla, el trozo se transcribe igual, sin oido."""
+
+    def __init__(self, inner):
+        self._inner, self.oido = inner, []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def generate(self, features, *args, **kwargs):
+        if not self.oido:
+            try:
+                import ctranslate2
+                import numpy as np
+                parte = np.ascontiguousarray(np.asarray(features)[:1, :OIR_MARCOS])
+                tok, p = self._inner.detect_language(ctranslate2.StorageView.from_array(parte))[0][0]
+                self.oido.append((tok[2:-2], round(float(p), 3)))
+            except Exception:
+                pass
+        return self._inner.generate(features, *args, **kwargs)
+
+
+@contextlib.contextmanager
+def escuchar(model, on):
+    """Mientras dura, model.model oye el idioma de cada bloque (_Escucha); da la lista (vacia si on es falso)."""
+    if not on:
+        yield []
+        return
+    inner = model.model
+    model.model = _Escucha(inner)
+    try:
+        yield model.model.oido
+    finally:
+        model.model = inner
+
+
 @contextlib.contextmanager
 def only_languages(model, langs):
     if not langs:
@@ -127,7 +171,8 @@ def main():
         model = model_for(req)
         fixed, multi, allowed = lang_mode(req.get("language"))
         lang, prob = fixed, None
-        with only_languages(model, allowed):
+        # oir: con un idioma fijo, de que idioma suena cada bloque (live.Propuesta: «Lo ultimo suena a…»)
+        with only_languages(model, allowed), escuchar(model, bool(fixed and req.get("oir"))) as oido:
             if not lang:
                 # idioma del trozo (para la frase de estilo); con poca voz la deteccion no es fiable
                 # y se mantiene el anterior. Dentro del trozo, cada bloque detecta el suyo (multi).
@@ -143,7 +188,7 @@ def main():
                 audio, language=lang, multilingual=multi, beam_size=int(req.get("beam") or 1), batch_size=8,
                 without_timestamps=False, initial_prompt=prompt, chunk_length=int(req.get("chunk") or 20))
             segs = [(s.start, s.end, s.text) for s in it if engines.whisper_ok(s)]
-        return {"segments": segs, "language": lang, "prob": prob, "prompt": prompt}
+        return {"segments": segs, "language": lang, "prob": prob, "prompt": prompt, "oido": list(oido)}
 
     def transcribe_file(req):
         model = model_for(req)

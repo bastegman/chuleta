@@ -10,6 +10,26 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Avisos del directo (10/11/2026)
+
+Rediseño B6, puntos 1-3 (msg 1378). Rama `directo-avisos`. En la cabecera del directo, con lo que la app ya lee:
+
+- **Fuente callada**: «El micro no recibe sonido desde hace 1 min» si el micro da silencio digital (silenciado con la
+  tecla del portátil o en Windows, sin permiso, con el nivel a 0) más de un minuto. Escuchar callado no avisa: un
+  micro de verdad da el ruido de la sala. Un micro con puerta de ruido (ceros entre frases) se reconoce y no avisa.
+  «El ordenador no suena desde hace 1 min» solo en una llamada, después de haber oído algo y sin contar el rato en
+  que hablas tú (en una reunión presencial o en la sala de espera no avisa).
+- **«La llamada ha terminado: paro en 30 s · No terminar»**: cuando Teams suelta el micro (el registro de
+  privacidad apunta el fin) y su ventana de reunión se cierra, si esa llamada era la de la grabación (cubre el 60 % de
+  lo grabado y dura 2 min o más). Sin pulsar nada, para como «Parar». Nunca para si Teams vuelve a coger el micro, si
+  la ventana sigue o si no se puede leer; tras «No terminar», hasta otra llamada. Cerrar Teams también cuenta
+  como fin de la llamada (msg 1479).
+- **«Lo último suena a portugués · Cambiar»**: con un idioma fijo, cuando dos trozos seguidos (30 s de voz) suenan a
+  otro idioma de los que se pueden elegir. «Cambiar» es el cambio de idioma de siempre (rehace el último minuto); si ya
+  se habían oído 60 s del fijado y hay mezcla de los dos, propone la mezcla. «No» no lo vuelve a proponer en esa
+  grabación. En el PC, Whisper oye el idioma en lo que ya calculó para transcribir (10 s del primer bloque: 60 ms por
+  trozo con small y 195 ms con medium, medido); en la nube, el campo `language` de la respuesta, sin peticiones de más
+  (si la API devuelve el idioma que se le pidió, no se propone nada).
 ### Groq vuelve a transcribir con unos ajustes de antes (10/11/2026)
 
 - Con unos ajustes en los que el proveedor de la nube no es ninguno de los que hay (vacío o de una versión anterior),

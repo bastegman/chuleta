@@ -22,6 +22,7 @@ from time import perf_counter  # aparte de `time`: los tests sustituyen live.tim
 
 import numpy as np
 
+import directo_avisos
 import engines
 from common import log
 
@@ -672,6 +673,8 @@ def run(job, path, opts, write, log):
     reset(segs[-1][1] if segs else 0.0)  # retoma donde lo dejo una sesion anterior
     st["protegidas"] = len(segs)  # lo retomado no se rehace al cambiar el idioma (switch_language)
     used = [fixed_lang]  # idiomas de la reunion en esta sesion (job.idiomas_directo)
+    # «Lo ultimo suena a …» (B6): con un idioma fijo, en que idioma suenan los trozos; rechazos: los de esta grabacion
+    propuesta = job.propuesta = directo_avisos.Propuesta(opts.get("rechazos"))
     last_size, last_growth = -1, time.time()
 
     def stage(s):
@@ -698,6 +701,7 @@ def run(job, path, opts, write, log):
         nonlocal fixed_lang, lang
         want, before = opts.get("language") or None, lang
         fixed_lang, lang = want, (want or lang)
+        propuesta.oir(want, [])  # con el idioma nuevo, lo propuesto (si lo habia) ya no vale: fuera de la franja
         if want not in used:
             used.append(want)
             job.idiomas_directo = list(used)  # el repaso final no fuerza uno solo si la reunion cambio (server)
@@ -746,10 +750,17 @@ def run(job, path, opts, write, log):
                        "lang": lang, "caught_up": bool(st.get("caught_up")), "redo": st.get("redo") is not None,
                        "protegidas": st.get("protegidas", 0),
                        "behind_s": round(max(0.0, (job.recorded or 0.0) - (job.transcribed or 0.0)), 1),
-                       "speed": (engines.PRESETS_BY_ID.get(job.preset) or {}).get("live_speed")}
+                       "speed": (engines.PRESETS_BY_ID.get(job.preset) or {}).get("live_speed"),
+                       "propuesta": propuesta.publica()}
 
-    def transcribe(window, offset, timing=None):
+    def oir():
+        """Si este trozo tiene que decir en que idioma suena (Propuesta): idioma fijo, no una mezcla, y al dia
+        (poniendose al dia, con trozos de minutos, no: ahi no hay nada que proponer a tiempo y se ahorra el coste)."""
+        return bool(fixed_lang and not engines.lang_pair(fixed_lang) and st.get("caught_up"))
+
+    def transcribe(window, offset, timing=None, voice=0.0):
         nonlocal lang
+        st["oido"] = []  # (idioma, prob, segundos de voz) de este trozo, para la Propuesta
         preset = engines.PRESETS_BY_ID.get(job.preset) or engines.PRESETS_BY_ID["medium"]
         prev = segs[-1:]  # para no repetir la ultima frase del trozo anterior
         context = " ".join(t for _, _, t in segs[-CONTEXT_SEGS:])  # para enlazar con lo que se estaba diciendo
@@ -761,12 +772,17 @@ def run(job, path, opts, write, log):
                                                            context=context,
                                                            model=engines.CloudEngine.live_model(opts["cloud_cfg"]),
                                                            about=about, timing=tm)
-            lang = engines.LANG_CODES.get(str(detected or "").lower(), lang)
+            # con un idioma fijo, el texto sale en ese idioma (se le pide a la API) aunque ella diga que suena a otro:
+            # si lang tomara el que dice, «Cambiar» a ese idioma no rehario nada (switch_language: «ya estaba en él»)
+            lang = fixed_lang or engines.LANG_CODES.get(str(detected or "").lower(), lang)
+            if detected and oir():  # lo que dice la API (sin coste: viene en la respuesta); sin probabilidad
+                st["oido"] = [(engines.LANG_CODES.get(str(detected).lower()), None, voice)]
             out = [(a + offset, b + offset, t) for a, b, t in out]
             return stitch(prev, out, st["dedupe_until"], lang)
         secs = len(window) / SR
         req = {"op": "window", "model": preset["model"], "threads": opts["threads"], "language": fixed_lang,
-               "prev_language": lang, "prompt": opts.get("prompt"), "context": context, "beam": 1, "about": about}
+               "prev_language": lang, "prompt": opts.get("prompt"), "context": context, "beam": 1, "about": about,
+               "oir": oir()}
         for attempt in range(2):
             try:
                 worker.ensure(preset["model"], opts["threads"], lambda m: stage(m.get("stage") or job.stage),
@@ -787,6 +803,7 @@ def run(job, path, opts, write, log):
         if res["language"] != lang:
             log(f"   idioma: {res['language']}" + (f" ({res['prob']:.0%})" if res.get("prob") else ""))
         lang = res["language"]
+        st["oido"] = [(str(x[0]), x[1], voice) for x in (res.get("oido") or []) if x and x[0]]
         out = [(a + offset, b + offset, t) for a, b, t in res["segments"]]
         return engines.clean_segments(prev + out, res.get("prompt"), lang)[len(prev):]
 
@@ -894,7 +911,7 @@ def run(job, path, opts, write, log):
                 if voice >= DIRECT_MIN_VOICE_S:  # menos de 1 s de voz: musica/ruido, Whisper solo inventaria
                     tm = {"prep": perf_counter() - t_iter}
                     try:
-                        new = transcribe(audio, t0 + a / SR, tm)
+                        new = transcribe(audio, t0 + a / SR, tm, voice)
                     except engines.Cancelled:
                         if job.cancel or not lang_changed():
                             raise
@@ -921,6 +938,15 @@ def run(job, path, opts, write, log):
                     if lang_cuts():  # cambio el idioma con la peticion en vuelo (a la nube no se le corta): fuera
                         log("   directo: el idioma ha cambiado durante el trozo; se repite con el nuevo")
                         continue
+                    try:
+                        antes = propuesta.publica()
+                        propuesta.oir(fixed_lang, st.get("oido"))
+                        ahora = propuesta.publica()
+                        if ahora and ahora != antes:
+                            log(f"   directo: lo último suena a {ahora['idioma']} (fijado: {fixed_lang}); se propone "
+                                f"{ahora['cambiar_a']}")
+                    except Exception as e:  # un aviso nunca tumba el directo
+                        log(f"   directo: idioma propuesto: {e.__class__.__name__}: {e}")
                     if redo is not None and new:
                         tocadas = getattr(job, "edits", None) or {}
                         if any(seg_key(s[0]) in tocadas for s in redo["removed"]):

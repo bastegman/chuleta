@@ -200,6 +200,7 @@ function onDirectoJobs(prev) {
   const d = j.directo;
   if ($('#directoBar')) renderDirectoBar(a, j);
   renderDirectoTrad(j);
+  renderDirectoAvisos();  // «Lo último suena a …» llega con /api/jobs
   const paused = !!(d && d.paused);
   if (paused && S.directo.pausedFor !== j.id) {  // una vez por pausa
     S.directo.pausedFor = j.id;
@@ -526,3 +527,129 @@ document.addEventListener('click', e => {
   if (b.dataset.destOtra) return destinoOtra(path);
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDestino(); });
+
+/* ---------------------------------------------------------------- avisos de la franja del directo (B6, msg 1378) */
+/* Tres avisos, en la cabecera del directo y con lo que ya llega en los sondeos (sin peticiones nuevas):
+   - fuente callada (/api/rec/status → callada {mic, sys} en segundos; el criterio, en directo_avisos.Callada);
+   - «La llamada ha terminado: paro en 30 s · No terminar» (/api/rec/status → fin_llamada; FinDeLlamada);
+   - «Lo último suena a portugués · Cambiar» (/api/jobs → directo.propuesta; Propuesta). «Cambiar» es el cambio de
+     idioma de siempre (el selector de la cabecera); «No», POST /api/live/propuesta, y no se vuelve a proponer. */
+const DIRECTO_IDIOMAS = { es: 'español', en: 'inglés', pt: 'portugués', fr: 'francés', it: 'italiano', de: 'alemán', ca: 'catalán' };
+function directoIdiomaNombre(c) { return DIRECTO_IDIOMAS[c] || c; }
+function directoMinTxt(s) { return `${Math.max(1, Math.floor((+s || 0) / 60))} min`; }
+/* lo que se enseña (puro: se prueba con node). rec: /api/rec/status; d: j.directo; mine: esta app graba esta reunión */
+function directoAvisos(rec, d, mine) {
+  const out = [], fin = mine && rec && rec.fin_llamada, c = (mine && rec && rec.callada) || {};
+  if (fin && fin.quedan_s != null) {
+    out.push({ id: 'fin', texto: 'La llamada ha terminado: paro en ', quedan: Math.max(0, Math.round(fin.quedan_s)),
+      botones: [{ act: 'rec-seguir', label: 'No terminar', title: 'La grabación sigue hasta que la pares tú (la llamada siguiente no la para)' }] });
+  }
+  if (c.mic != null) {
+    out.push({ id: 'mic', texto: `El micro no recibe sonido desde hace ${directoMinTxt(c.mic)}`,
+      nota: '¿Silenciado en el portátil o en Windows? Tu voz no se está grabando.' });
+  }
+  if (c.sys != null) {
+    out.push({ id: 'sys', texto: `El ordenador no suena desde hace ${directoMinTxt(c.sys)}`,
+      nota: 'Si los demás están hablando, no se les está grabando: revisa la salida de sonido.' });
+  }
+  const p = d && d.propuesta;
+  if (p && p.idioma) {
+    const mezcla = p.cambiar_a && p.cambiar_a !== p.idioma && p.cambiar_a.includes('-');
+    const label = mezcla ? `Cambiar a ${p.cambiar_a.split('-').map(directoIdiomaNombre).join(' + ')}` : 'Cambiar';
+    out.push({ id: 'idioma', texto: `Lo último suena a ${directoIdiomaNombre(p.idioma)}`,
+      botones: [{ act: 'idioma-cambiar', label, valor: p.cambiar_a || p.idioma,
+        title: 'Cambia el idioma de esta reunión al momento y rehace en él lo del último minuto' },
+      { act: 'idioma-no', label: 'No', valor: p.idioma, title: 'No volver a proponerlo en esta grabación' }] });
+  }
+  return out;
+}
+/* «La llamada ha terminado…» al ver que la grabación se paró sola (onRecChange de app.js); '' si se paró a mano */
+function directoParadaTexto(rec) {
+  const p = rec && rec.parada;
+  return p && p.motivo === 'llamada' ? '■ La llamada ha terminado: grabación parada y guardada · la transcripción termina sola' : '';
+}
+
+(function avisosCss() {
+  const st = document.createElement('style');
+  st.id = 'avisosCss';
+  st.textContent = `
+.lh-avisos:empty { display: none; }
+.lh-avisos { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 2px; }
+.lh-aviso { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 7px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--ink); font-size: 13.5px; }
+.lh-aviso b { font-weight: 600; }
+.lh-aviso .la-nota { color: var(--muted); font-size: 12.5px; }
+.lh-aviso .sp { flex: 1; }
+.lh-aviso.la-fin { background: var(--accent-soft); }
+.lh-aviso.la-idioma { background: var(--accent-soft); }`;
+  document.head.appendChild(st);
+})();
+
+S.directo.finVisto = false;      // el «paro en 30 s» ya se avisó con un toast (una vez por aviso)
+S.directo.propOculta = null;     // propuesta ya contestada aquí (hasta que el servidor la quite o cambie)
+function renderDirectoAvisos() {
+  const rec = S.rec || {};
+  const fin = rec.recording && rec.fin_llamada && rec.fin_llamada.quedan_s != null;
+  if (fin && !S.directo.finVisto) {  // en cualquier página: lo que va a pasar no puede pillar por sorpresa
+    S.directo.finVisto = true;
+    toast(`La llamada ha terminado: paro en ${Math.round(rec.fin_llamada.quedan_s)} s · <u>No terminar</u>`, '', directoSeguir);
+  } else if (!fin) S.directo.finVisto = false;
+  const el = $('[data-lh-avisos]');
+  const a = curAudio();
+  if (!el || !a) return;
+  const j = liveJob(a), d = j && j.directo;
+  const mine = !!(rec.recording && rec.path === a.path);
+  let avisos = directoAvisos(rec, d, mine);
+  const pk = d && d.propuesta ? `${j.id}|${d.propuesta.idioma}|${d.propuesta.cambiar_a}` : null;
+  if (S.directo.propOculta && S.directo.propOculta !== pk) S.directo.propOculta = null;
+  if (pk && S.directo.propOculta === pk) avisos = avisos.filter(x => x.id !== 'idioma');
+  // la cuenta atrás se actualiza en su sitio: repintar cada segundo se comería el clic en «No terminar»
+  const sig = JSON.stringify(avisos.map(x => [x.id, x.texto, (x.botones || []).map(b => b.valor || b.act)]));
+  if (el.dataset.sig !== sig) {
+    el.dataset.sig = sig;
+    el.innerHTML = avisos.map(x => `<div class="lh-aviso la-${x.id}" data-aviso="${x.id}" role="status">`
+      + `<span>${esc(x.texto)}${x.quedan != null ? `<b data-quedan>${x.quedan}</b> s` : ''}</span>`
+      + (x.nota ? `<span class="la-nota">${esc(x.nota)}</span>` : '') + '<span class="sp"></span>'
+      + (x.botones || []).map(b => `<button class="btn sm${b.act === 'idioma-no' ? ' ghost' : ''}" type="button" data-aviso-act="${b.act}"`
+        + `${b.valor ? ` data-valor="${esc(b.valor)}"` : ''}${j ? ` data-id="${esc(j.id)}"` : ''} data-path="${esc(a.path)}" title="${esc(b.title || '')}">${esc(b.label)}</button>`).join('')
+      + '</div>').join('');
+  }
+  const q = $('[data-quedan]', el), f = avisos.find(x => x.id === 'fin');
+  if (q && f && q.textContent !== String(f.quedan)) q.textContent = String(f.quedan);
+}
+async function directoSeguir() {
+  try {
+    const r = await api('/api/rec/seguir', {});
+    toast(r.grabando === false ? 'La grabación ya se había parado: está guardada y la transcripción termina sola'
+      : 'Se sigue grabando: no se para hasta que lo hagas tú');
+    pollRec();
+  } catch (err) { toast(esc(err.message), 'err'); }
+}
+/* «Cambiar»: el mismo camino que elegir el idioma en la cabecera (notas.js / app.js: guarda lo corregido, cambia y
+   avisa de cuándo se verá); sin el selector a mano, el mismo guardado */
+function directoCambiarIdioma(path, code) {
+  const sel = $("#lHero select[data-prop='idioma']");
+  if (sel && [...sel.options].some(o => o.value === code)) {
+    sel.value = code;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return;
+  }
+  const a = S.audios.get(path);
+  if (a) saveProps(a, { idioma: code }).then(r => { if (r && typeof perfilSavedText === 'function') toast(perfilSavedText('idioma', true, false, r.directo?.idioma)); });
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-aviso-act]');
+  if (!b) return;
+  const act = b.dataset.avisoAct, pk = b.dataset.id ? `${b.dataset.id}|` : null;
+  if (act === 'rec-seguir') return directoSeguir();
+  const a = curAudio(), j = a && liveJob(a), p = j && j.directo && j.directo.propuesta;
+  if (p && pk) S.directo.propOculta = `${j.id}|${p.idioma}|${p.cambiar_a}`;
+  renderDirectoAvisos();
+  if (act === 'idioma-cambiar') return directoCambiarIdioma(b.dataset.path, b.dataset.valor);
+  if (act === 'idioma-no') {
+    try {
+      await api('/api/live/propuesta', { id: b.dataset.id, rechazar: b.dataset.valor });
+      toast(`De acuerdo: no se vuelve a proponer el ${directoIdiomaNombre(b.dataset.valor)} en esta grabación`);
+      pollJobs(true);
+    } catch (err) { S.directo.propOculta = null; toast(esc(err.message), 'err'); }
+  }
+});

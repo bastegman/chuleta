@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, urlparse
 
 import aprender
 import calendario
+import directo_avisos
 import engines
 import explicar
 import live
@@ -53,7 +54,7 @@ from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WIND
                     alert, clean_name, default_threads, fmt_srt, fold, is_protected, log, log_exc, natural_key,
                     parse_srt, protect, read_text, save_text, setup_logging, unprotect, wav_duration, write_bytes)
 from common import TOKEN_FILE, TOKEN_HEADER, local_opener, read_token  # sesion local (P1-02) y loopback sin proxy
-from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
+from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify, teams_mic_estado
 from bandeja import Bandeja
 import window as window_mod
 from window import Window, set_app_id
@@ -3595,7 +3596,10 @@ class Jobs:
                 # los ajustes de la nube vigentes en cada trozo (no una copia del arranque): una clave pegada, cambiada
                 # o quitada en Ajustes vale desde el siguiente
                 "cloud_cfg_fn": lambda: live_cloud_cfg(self.settings.get()),
-                "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume, "summarizer": self.summarizer}
+                "tmp_dir": os.path.join(DATA_DIR, "tmp"), "resume": resume, "summarizer": self.summarizer,
+                # idiomas propuestos que ya rechazaste en esta grabación (B6): no se vuelven a proponer, tampoco si el
+                # directo se para y se reanuda
+                "rechazos": self.__dict__.setdefault("rechazos_idioma", {}).setdefault(job.path, set())}
         job.opts = opts  # live.run los lee en cada trozo: si cambias tema, idioma o contexto, vale desde el siguiente
         job.out = LiveOutputs(abs_path)
         if resume:  # lo que ya estaba escrito no se reescribe: lo nuevo se anade detras
@@ -4840,6 +4844,22 @@ def open_dir(path):
 REC_ARRANQUE_S = 10.0
 
 
+def teams_estado():
+    """(micro de Teams, ¿ventana de reunión de Teams?) para directo_avisos.FinDeLlamada: ("uso" | "libre" | "duda",
+    función que devuelve True / False / None). La ventana solo se busca si hace falta (al terminar la llamada).
+    CHULETA_PRUEBAS_TEAMS (solo los E2E): un JSON {"mic": "libre", "ventana": false} en vez del registro y las
+    ventanas; si no se puede leer, "duda" (nunca se para nada)."""
+    fake = os.environ.get("CHULETA_PRUEBAS_TEAMS")
+    if fake:
+        try:
+            with open(fake, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return "duda", lambda: None
+        return str(d.get("mic") or "duda"), lambda: d.get("ventana")
+    return teams_mic_estado(), calendario.teams_reunion_abierta
+
+
 class App:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -4871,6 +4891,9 @@ class App:
         self.notes_lock, self.meeting, self.meeting_prev = threading.Lock(), None, None
         self.voices_dl = None  # descarga de los modelos de voces en curso (progreso para la interfaz)
         self.vigia = calendario.Vigia()  # reunión en curso (Teams/Outlook): sugerencias y aviso flotante
+        # «La llamada ha terminado: paro en 30 s · No terminar» (B6); parada: la última parada por eso (la interfaz
+        # la avisa al ver que ya no se graba)
+        self.fin_llamada, self.parada_auto = directo_avisos.FinDeLlamada(), None
         # lo que ya se sabe de los asistentes de Outlook (si pregunta, no se le vuelve a preguntar solo al arrancar)
         calendario.ASISTENTES["estado"] = self.settings.get().get("outlook_asistentes") or None
         calendario.al_cambiar = lambda v: self.settings.update(lambda d: d.update(outlook_asistentes=v))
@@ -5253,8 +5276,15 @@ class App:
                "build": BUILD}
         if r and r.alive():
             out.update(path=rel_of(r.path), started=r.started, resumen=getattr(self, "rec_resumen", ""), **r.status)
+            # avisos de la franja del directo (B6): fuente callada y «paro en 30 s»
+            out["callada"] = r.callada.estado(time.monotonic()) if getattr(r, "callada", None) else {}
+            quedan = self.fin_llamada.quedan(time.monotonic())
+            out["fin_llamada"] = {"app": "Teams", "quedan_s": quedan} if quedan is not None else None
         elif m and m.alive():
             out.update(m.status)
+        p = self.parada_auto
+        if not out["recording"] and p and time.time() - p["at"] < 120:
+            out["parada"] = p  # se paró sola al terminar la llamada: la interfaz lo dice al ver que ya no se graba
         return out
 
     def rec_monitor(self, b):
@@ -5330,6 +5360,7 @@ class App:
                 # tras arrancarla aviso «No se pudo grabar» y dejo la grabacion en marcha sin decirlo, hasta que el
                 # vigilante arranco el directo por su cuenta y la segunda pulsacion la paro)
                 started = True
+                self.parada_auto = None  # «se paró al terminar la llamada» era de la grabación anterior
                 avisos = []
                 preset = b.get("preset") or self.settings.get().get("live_preset") or "medium"
                 v = find_vocab(None, None, b["vocab"]) if b.get("vocab") else None
@@ -6488,11 +6519,17 @@ class App:
         return {"path": rel, "job": job, "carpeta": rel_of(dest), "duracion": dur, "aviso": "; ".join(avisos) or None}
 
     def _meeting_watch(self):
-        notified = None
+        """Cada 8 s, el vigilante de llamadas; mientras se confirma el fin de una llamada o cuentan los 30 s del
+        «paro en 30 s», el fin de la llamada se mira cada segundo (una lectura nueva justo antes de parar)."""
+        notified, siguiente = None, 0.0
         while True:
-            time.sleep(8)
+            time.sleep(1)
             try:
-                notified = self._meeting_step(notified)
+                if time.monotonic() >= siguiente:
+                    siguiente = time.monotonic() + 8
+                    notified = self._meeting_step(notified)
+                elif self.fin_llamada.pendiente():
+                    self._fin_llamada_tic()
             except Exception:
                 pass
 
@@ -6505,6 +6542,14 @@ class App:
         # no abre el aviso flotante, ni manda el toast, ni pinta el chip (02/11/2026: saltaban al arrancar sin reunion)
         app, self.meeting_prev = (leido if leido == self.meeting_prev else None), leido
         recording = bool(self.rec and self.rec.alive())
+        if recording:  # para el aviso del sonido del ordenador callado: solo cuenta en una llamada (directo_avisos)
+            self.rec.en_llamada = bool(leido)
+        fin = getattr(self, "fin_llamada", None)
+        if fin is not None and (recording or fin.pendiente()):  # sin grabar no se lee nada más
+            try:
+                self._fin_llamada_tic()
+            except Exception:
+                log_exc()
         st = self.settings.get()
         detect = st.get("meeting_detect", True)
         self.meeting = app if detect else None
@@ -6524,6 +6569,44 @@ class App:
         if not app:
             notified = None
         return notified
+
+    def _fin_llamada_tic(self):
+        """Una lectura del fin de la llamada de Teams que se graba (directo_avisos.FinDeLlamada) y lo que toque."""
+        r = self.rec
+        grabando = rel_of(r.path) if r and r.alive() and r.path else None
+        # con «Avisarme si estoy en una llamada» apagado no se vigilan las llamadas: tampoco para proponer parar
+        vigila = grabando and self.settings.get().get("meeting_detect", True) is not False
+        mic, ventana_fn = teams_estado() if vigila else ("duda", lambda: None)
+        accion = self.fin_llamada.tic(grabando, time.monotonic(), mic, ventana_fn)
+        if accion == "propone":
+            log(f"   la llamada de Teams ha terminado: se para la grabación en {directo_avisos.PARA_EN_S:.0f} s si no "
+                "se pide seguir")
+            notify("La llamada ha terminado", f"{APP_NAME} para la grabación en {directo_avisos.PARA_EN_S:.0f} s. "
+                   f"Abre {APP_NAME} y pulsa «No terminar» si no ha acabado.")
+        elif accion == "cancela":
+            log("   la llamada sigue (o no se puede saber): no se para la grabación")
+        elif accion == "para":
+            with self.toggle_lock:
+                r = self.rec
+                if not (r and r.alive() and rel_of(r.path) == grabando):
+                    return  # entretanto se paró a mano (o es otra grabación)
+                try:
+                    res = self.rec_stop({})
+                except ApiError:
+                    return
+            cue("stop")
+            self.parada_auto = {"motivo": "llamada", "path": res["path"], "at": time.time()}
+            log(f"■ {res['path']}: parada al terminar la llamada de Teams (sin «No terminar» en "
+                f"{directo_avisos.PARA_EN_S:.0f} s)")
+            notify("■ Grabación parada", "La llamada ha terminado · la transcripción termina sola")
+
+    def rec_seguir(self, b):
+        """«No terminar» del aviso «La llamada ha terminado: paro en 30 s»: no se para (hasta otra llamada)."""
+        habia = self.fin_llamada.seguir_grabando()
+        if habia:
+            log("   «No terminar»: la grabación sigue aunque la llamada haya terminado")
+        # grabando: si el clic llegó tarde (ya se había parado), la interfaz lo dice en vez de «se sigue grabando»
+        return {"ok": True, "seguia": habia, "grabando": bool(self.rec and self.rec.alive())}
 
     def _vocab_terms(self):
         """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión. La que no
@@ -7003,6 +7086,22 @@ class App:
         job.translate = bool(b.get("on"))
         if isinstance(job.directo, dict):  # que la respuesta ya lo refleje (live.py lo vuelve a publicar en <1 s)
             job.directo = dict(job.directo, translate=job.translate, translate_to=live.translate_to(job))
+        return job.public()
+
+    def live_propuesta(self, b):
+        """«Lo último suena a … · No» (B6): {id, rechazar: "pt"}. Ese idioma no se vuelve a proponer en esta grabación.
+        («Cambiar» no pasa por aquí: es el cambio de idioma de siempre, POST /api/notes.)"""
+        job = self.jobs._live_job(b.get("id"))
+        idioma = str(b.get("rechazar") or "")
+        if idioma not in directo_avisos.PROPONIBLES:
+            raise ApiError("Idioma desconocido.")
+        (job.opts or {}).setdefault("rechazos", set()).add(idioma)
+        p = getattr(job, "propuesta", None)
+        if p is not None:
+            p.rechazar(idioma)
+        if isinstance(job.directo, dict):  # que la respuesta ya lo refleje (live.py lo vuelve a publicar en <1 s)
+            job.directo = dict(job.directo, propuesta=None)
+        log(f"   directo {job.name}: no se propone más {idioma} en esta grabación")
         return job.public()
 
     def ocultar_captura(self, b):
@@ -8654,7 +8753,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/modelos/descargar": a.modelos_descargar, "/api/modelos/cancelar": a.modelos_cancelar,
                   "/api/probar": a.probar_empezar, "/api/probar/cancelar": a.probar_cancelar,
                   "/api/abrir-powershell": a.abrir_powershell,
-                  "/api/live/traducir": a.live_translate,
+                  "/api/live/traducir": a.live_translate, "/api/live/propuesta": a.live_propuesta,
+                  "/api/rec/seguir": a.rec_seguir,
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,
                   "/api/grabar/plan": a.grabar_plan_api, "/api/grabar/recordar": a.grabar_recordar,
