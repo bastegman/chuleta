@@ -5,13 +5,16 @@ tareas), que NO roba el foco (WS_EX_NOACTIVATE: puedes seguir escribiendo en la 
 20 s, al pulsar ✕, al empezar a grabar (también con Ctrl+Alt+R) o si la app se cierra.
 
     python aviso.py --puerto 8765 [--titulo "Reunión semanal"] [--nombre "Reunión semanal"] [--vocab ID]
-                    [--tema "Alfa · General"] [--segundos 20]
+                    [--tema "Alfa · General"] [--segundos 20] [--ocultar-captura]
                     [--estado fichero.json] [--auto-grabar-ms N]        (estos dos, para las pruebas)
 
 «Grabar» hace POST http://127.0.0.1:<puerto>/api/rec/toggle (cabeceras X-Audios: 1 y X-Chuleta-Token con el token de
 la sesión, que lee de sesion.token en la carpeta de datos; sin proxy) con el nombre y el tema sugeridos; si ya se
 estaba grabando no toca nada. Al salir escribe una línea JSON en stdout:
 {"resultado": "grabar" | "cerrar" | "tiempo" | "grabando" | "sin-servidor" | "error", ...}.
+
+--ocultar-captura: como la ventana de la app (window.py, ajuste «Al compartir pantalla»), el aviso no sale en lo que
+ven los demás al compartir pantalla: aparece justo al empezar una llamada, con el nombre de la reunión y «Grabar».
 """
 import argparse
 import json
@@ -71,9 +74,23 @@ def ventana_activa():
     return int(ctypes.windll.user32.GetForegroundWindow() or 0)
 
 
-def estilo_windows(root, x, y):
+def ocultar_de_capturas(hwnd):
+    """WDA_EXCLUDEFROMCAPTURE en el aviso, con lo mismo que la ventana de la app (window.py): solo desde Windows 10
+    2004. Devuelve la marca que queda (0x11) o None si no se puede."""
+    try:
+        import window
+        if not window.capture_support()[0]:
+            return None
+        window.set_display_affinity(hwnd, True)
+        return window.get_display_affinity(hwnd)
+    except Exception:
+        return None
+
+
+def estilo_windows(root, x, y, ocultar=False):
     """Solo Windows: la ventana no se activa (ni al mostrarse ni al pulsarla), no sale en la barra de tareas,
-    queda por encima, con sombra y esquinas redondeadas en Windows 11. Devuelve {hwnd, exstyle}."""
+    queda por encima, con sombra y esquinas redondeadas en Windows 11 y, con ocultar, fuera de las capturas (compartir
+    pantalla). Devuelve {hwnd, exstyle, afinidad}."""
     if not WINDOWS:
         return {}
     import ctypes
@@ -100,7 +117,8 @@ def estilo_windows(root, x, y):
         pass
     # SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED, encima de todo (HWND_TOPMOST = -1)
     u.SetWindowPos(hwnd, wintypes.HWND(-1), x, y, 0, 0, 0x1 | 0x10 | 0x40 | 0x20)
-    return {"hwnd": int(hwnd), "exstyle": u.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF}
+    return {"hwnd": int(hwnd), "exstyle": u.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF,
+            "afinidad": ocultar_de_capturas(hwnd) if ocultar else None}
 
 
 def devolver_foco(anterior, propio):
@@ -292,10 +310,12 @@ class Aviso:
         a, root = self.args, self.root
         self.datos = {}
         root.update_idletasks()
-        self.info = estilo_windows(root, self.x, self.y)  # antes de mostrarla: así no se activa al aparecer
+        ocultar = bool(getattr(a, "ocultar_captura", False))
+        # antes de mostrarla: así no se activa al aparecer (ni sale un instante al compartir pantalla)
+        self.info = estilo_windows(root, self.x, self.y, ocultar)
         root.deiconify()
         root.update_idletasks()
-        self.info = estilo_windows(root, self.x, self.y) or self.info  # por si Tk rehízo el marco al mostrarla
+        self.info = estilo_windows(root, self.x, self.y, ocultar) or self.info  # por si Tk rehízo el marco al mostrarla
         self.info["foco_devuelto"] = devolver_foco(self.activa_antes, self.info.get("hwnd"))
         root.after(max(1, int(a.segundos * 1000)), lambda: self.cerrar("tiempo"))
         root.after(2000, self.sondear)
@@ -317,6 +337,7 @@ def main(argv=None):
     p.add_argument("--segundos", type=float, default=20)
     p.add_argument("--estado", default="")
     p.add_argument("--auto-grabar-ms", dest="auto_grabar_ms", type=int, default=0)
+    p.add_argument("--ocultar-captura", dest="ocultar_captura", action="store_true")
     args = p.parse_args(argv)
     dpi_aware()
     activa = ventana_activa()  # antes de que exista nuestra ventana

@@ -55,6 +55,88 @@ TRANSLATE_FINAL_S = 10      # al terminar el directo, el ultimo paso: como mucho
 TRANSLATE_LOCK_S = 2        # ...de ellos, como mucho 2 s esperando a que el hilo de la traduccion acabe la suya
 TRANSLATE_FINAL_ATTEMPTS = 3  # ...e intentos dentro del plazo (otra clave tras un 401, max_tokens tras un 400)
 TRANSLATION_PUBLIC = 60     # ultimos bloques traducidos que viajan en el estado del trabajo
+TRANSLATE_TO = ("es", "en")  # destinos de la traduccion del directo (msg 1152): espanol o ingles
+
+# --- cambiar el idioma en pleno directo (msgs 1150-1151: «funcionó, pero tardó»)
+REDO_BACK_S = 60            # se rehace en el idioma nuevo lo escrito en el ultimo minuto (desde una frase entera)
+SWITCH_BEHIND_CLOUD_S = 30  # con mas retraso que esto (nube / local) el aviso dice «va poniéndose al día»
+SWITCH_BEHIND_LOCAL_S = 90
+SWITCH_RELOAD_S = 5         # en local, cancelar el trozo en vuelo es matar el proceso de Whisper: recargar medium ~5 s
+
+
+def seg_key(start):
+    """Una frase por su inicio, como la identifican las correcciones a mano del directo (server.seg_key)."""
+    return round(int(round(float(start) * 1000)) / 1000, 2)
+
+
+def redo_start(segs, edits=None, back_s=REDO_BACK_S):
+    """Desde que frase se rehace lo ya escrito al cambiar el idioma: la primera que empieza en los ultimos back_s
+    segundos del texto, pero nunca una corregida a mano ni las anteriores a ella (la correccion es sobre ese texto y se
+    perderia). Devuelve el indice (len(segs): nada que rehacer)."""
+    if not segs:
+        return 0
+    since = segs[-1][1] - back_s
+    k = next((i for i, s in enumerate(segs) if s[0] >= since - 1e-6), len(segs))
+    if edits:
+        for i in range(len(segs) - 1, k - 1, -1):
+            if seg_key(segs[i][0]) in edits:
+                return i + 1
+    return k
+
+
+def redo_from(segs, k):
+    """Segundo desde el que se relee el audio para rehacer segs[k:]: el inicio de esa frase o, si la anterior acaba
+    antes (un hueco), el final de la anterior, para no perder el arranque de una palabra que Whisper situo tarde."""
+    if k <= 0:
+        return float(segs[0][0]) if segs else 0.0
+    return float(min(segs[k][0], segs[k - 1][1]))
+
+
+def back_of(removed, end_s, eps=0.05):
+    """Si el trozo que rehacia lo ultimo no sale: las frases de antes que vuelven. Solo las que acaban antes del corte
+    (end_s): la que lo cruza la transcribe otra vez el trozo siguiente, que empieza ahi, y volveria repetida."""
+    return [s for s in removed if s[1] <= end_s + eps]
+
+
+def _round_eta(s):
+    s = max(1.0, float(s))
+    return int(-(-s // 1)) if s < 10 else int(5 * round(s / 5))
+
+
+def lang_switch_info(d, segs, edits, new, old):
+    """Lo que dice el aviso al cambiar el idioma de una reunion en pleno directo (Jobs.refresh_prompt). d: el estado
+    que publica run() (job.directo); segs: lo escrito (job.raw); edits: las correcciones a mano; new/old: el idioma
+    («»/None = detectar) despues y antes. Devuelve {sin_cambio} o {idioma, estado, eta_s, rehace_s, detras_s}:
+      - estado «al_dia»: el trozo en vuelo se cancela y se repite; eta_s, cuando sale el texto nuevo (nube: dos idas a
+        la API; local: lo que tarda Whisper en lo que se rehace, mas recargarse si estaba en marcha);
+      - «poniendose»: el directo va por detras de la grabacion (detras_s); el idioma vale ya, pero se vera al
+        alcanzarla;
+      - «pausa»: la nube esta en pausa por cupo; se aplicara al reanudarse o al terminar.
+    rehace_s: segundos de texto que se rehacen en el idioma nuevo (0 si ya estaba en ese idioma o no hay texto)."""
+    new, old, d = new or None, old or None, d or {}
+    if new == old:
+        return {"sin_cambio": True}
+    segs = list(segs or [])
+    k = len(segs) if new is not None and new == d.get("lang") else redo_start(segs, edits)
+    k = max(k, int(d.get("protegidas") or 0))  # lo retomado de una sesion anterior no se rehace (run)
+    rehace = segs[-1][1] - segs[k][0] if k < len(segs) else 0.0
+    cloud, behind = bool(d.get("cloud")), max(0.0, float(d.get("behind_s") or 0.0))
+    if d.get("paused"):
+        estado = "pausa"
+    elif d.get("caught_up") is False or behind > (SWITCH_BEHIND_CLOUD_S if cloud else SWITCH_BEHIND_LOCAL_S):
+        estado = "poniendose"
+    else:
+        estado = "al_dia"
+    eta = None
+    if estado == "al_dia":
+        if cloud:
+            net = (((d.get("latency") or {}).get("phases") or {}).get("net") or {}).get("p50")
+            eta = 1.0 + 2 * (net if net else 1.5)
+        else:
+            eta = (rehace + behind) / max(0.1, float(d.get("speed") or 1.0)) + SWITCH_RELOAD_S
+        eta = _round_eta(eta)
+    return {"idioma": new or "", "estado": estado, "eta_s": eta, "rehace_s": int(round(rehace)),
+            "detras_s": int(round(behind))}
 
 
 def wav_info(path):
@@ -393,18 +475,32 @@ def pause_message(q):
             "y el repaso final se hace igual.")
 
 
+def translate_to(job):
+    """Destino de la traduccion del directo de ese trabajo: «es» o «en» (job.translate_to; sin el, espanol)."""
+    to = getattr(job, "translate_to", None)
+    return to if to in TRANSLATE_TO else "es"
+
+
 class LiveTranslator:
-    """Hilo que traduce al espanol lo ultimo que se ha transcrito, cada TRANSLATE_EVERY_S, mientras job.translate.
-    get_segs() devuelve (generacion, lista de frases); si la generacion cambia (rehacer desde el principio), empieza
-    de cero. Lo traducido se acumula en job.translation (en memoria: es una ayuda para seguir la reunion). Solo se
-    traduce lo dicho en los ultimos TRANSLATE_BACK_S: activada a mitad de reunion empieza por ahi, no por el minuto 0,
-    y si se queda atras (un trozo grande al ponerse al dia) salta a lo ultimo."""
+    """Hilo que traduce lo ultimo que se ha transcrito, cada TRANSLATE_EVERY_S, mientras job.translate, al idioma de
+    job.translate_to (espanol o ingles, msg 1152). get_segs() devuelve (generacion, lista de frases); si la generacion
+    cambia (rehacer desde el principio) o cambia el destino, empieza de cero. Lo traducido se acumula en
+    job.translation (en memoria: es una ayuda para seguir la reunion). Solo se traduce lo dicho en los ultimos
+    TRANSLATE_BACK_S: activada a mitad de reunion empieza por ahi, no por el minuto 0, y si se queda atras (un trozo
+    grande al ponerse al dia) salta a lo ultimo. Al cambiar el idioma en pleno directo, rewind() quita lo traducido de
+    las frases que se rehacen.
+
+    epoch cuenta esos reinicios: una traduccion que estaba en vuelo cuando cambio (sobre frases que ya no estan, o a
+    otro idioma) no se publica. done, epoch, to y job.translation van con `state` (un candado corto: el bucle del
+    directo rebobina sin esperar a la peticion en vuelo); `lock` es el de una pasada entera (step)."""
 
     def __init__(self, job, opts, get_segs, log, every=TRANSLATE_EVERY_S):
         self.job, self.opts, self.get_segs, self.log, self.every = job, opts, get_segs, log, every
         self.done, self.gen, self.stop_flag, self.error, self.busy = 0, None, False, None, False
+        self.epoch, self.to = 0, None
         self.stop_at = 0.0  # cuando se llamo a stop()
         self.lock = threading.Lock()  # step() lo llama el hilo y, al final, el bucle del directo
+        self.state = threading.Lock()
         self.after_stop = None  # lo que el hilo traduzca despues de stop() (lo que se llevo): run() lo publica igual
         self.thread = threading.Thread(target=self._loop, daemon=True, name="live-translate")
 
@@ -420,11 +516,27 @@ class LiveTranslator:
         """Para las peticiones: cancelar a mano corta en el acto; tras stop(), pasado TRANSLATE_FINAL_S."""
         return bool(self.job.cancel) or (self.stop_flag and time.time() - self.stop_at > TRANSLATE_FINAL_S)
 
+    def rewind(self, kept, t):
+        """Cambio de idioma en pleno directo: las frases desde la len(kept) se rehacen (empiezan en t o despues).
+        Los bloques traducidos que llegan hasta ellas se quitan (se volveran a traducir con el texto nuevo) y lo
+        que este en vuelo no se publica. kept: las frases que se quedan."""
+        with self.state:
+            self.epoch += 1
+            self.job.translation[:] = [b for b in self.job.translation if b["end"] <= t + 1e-6]
+            last = self.job.translation[-1]["end"] if self.job.translation else None
+            covered = 0 if last is None else next((i for i, s in enumerate(kept) if s[1] > last + 1e-6), len(kept))
+            self.done = min(self.done, covered)
+
     def pending(self):
+        """Lo que toca traducir ahora (con `state`)."""
         gen, segs = self.get_segs()
-        if gen != self.gen:
-            self.gen, self.done = gen, 0
+        to = translate_to(self.job)
+        if gen != self.gen or to != self.to:  # rehacer desde el principio, o el otro destino: de cero
+            if self.to is not None or gen != self.gen:
+                self.epoch += 1
+            self.gen, self.to, self.done = gen, to, 0
             self.job.translation.clear()
+        self.done = min(self.done, len(segs))
         if segs:  # lo anterior a los ultimos TRANSLATE_BACK_S ya no ayuda a seguir la reunion: se salta
             since = segs[-1][1] - TRANSLATE_BACK_S
             while self.done < len(segs) and segs[self.done][1] < since:
@@ -448,7 +560,9 @@ class LiveTranslator:
         if not self.lock.acquire(timeout=TRANSLATE_LOCK_S if final else -1):
             return False
         try:
-            take = self.pending()
+            with self.state:
+                take = self.pending()
+                epoch, to = self.epoch, self.to
             if not take or not getattr(self.job, "translate", False):
                 return False
             text = " ".join(t for _, _, t in take)
@@ -457,7 +571,7 @@ class LiveTranslator:
                   if final else {})
             try:
                 out, _ = self.opts["summarizer"].translate(self.opts["cloud_cfg"], text, lambda **k: None,
-                                                           cancelled or self._cancelled, **kw)
+                                                           cancelled or self._cancelled, to=to, **kw)
             except engines.Cancelled:
                 return False
             except engines.EngineError as e:
@@ -467,9 +581,12 @@ class LiveTranslator:
             finally:
                 self.busy = False
             self.error = None
-            self.job.translation.append({"start": round(float(take[0][0]), 2), "end": round(float(take[-1][1]), 2),
-                                         "text": out})
-            self.done += len(take)
+            with self.state:
+                if epoch != self.epoch:  # mientras tanto cambio el idioma de la reunion o el destino: no vale
+                    return False
+                self.job.translation.append({"start": round(float(take[0][0]), 2),
+                                             "end": round(float(take[-1][1]), 2), "text": out})
+                self.done += len(take)
             if self.stop_flag and self.after_stop:  # la sesion ya termino: que se vea igual
                 self.after_stop()
             return True
@@ -479,7 +596,9 @@ class LiveTranslator:
     def _loop(self):
         last = 0.0
         while not (self.stop_flag or self.job.cancel):
-            if getattr(self.job, "translate", False) and time.time() - last >= self.every:
+            # al cambiar el destino no se espera a la siguiente vuelta: lo ultimo, ya en el idioma nuevo
+            otro = self.to is not None and translate_to(self.job) != self.to
+            if getattr(self.job, "translate", False) and (time.time() - last >= self.every or otro):
                 try:
                     did = self.step()
                 except Exception as e:  # nunca tumba el directo
@@ -490,7 +609,7 @@ class LiveTranslator:
             time.sleep(0.25)
 
     def _more(self):
-        with self.lock:  # pending() avanza lo que se salta: con el candado, como step()
+        with self.state:  # pending() avanza lo que se salta: con el candado, como step()
             return bool(self.pending())
 
 
@@ -504,6 +623,11 @@ def run(job, path, opts, write, log):
     si se cambian en la pagina de la reunion, valen desde el siguiente. cloud_cfg_fn (opcional): devuelve los
     ajustes de la nube vigentes y se llama en cada vuelta (una clave pegada, cambiada o quitada en Ajustes vale
     desde el siguiente trozo; sin el, cloud_cfg tal cual).
+
+    El idioma, ademas, vale al momento (msgs 1150-1151): el trozo en vuelo se cancela (en local se mata el proceso de
+    Whisper; una peticion a la nube que ya vuelve se descarta) y lo escrito en el ultimo minuto se rehace en el idioma
+    nuevo (redo_start: desde una frase entera y nunca una corregida a mano). Hasta que llega el texto nuevo se sigue
+    viendo el de antes; si el trozo que lo rehace falla, vuelve el de antes.
 
     En la nube un trozo que falla (tambien al ponerse al dia o el ultimo) no tumba la sesion: se anota en el log y
     en job.live_error, se salta y la grabacion sigue; el repaso final lo recupera al terminar."""
@@ -546,13 +670,61 @@ def run(job, path, opts, write, log):
         job.transcribed = st["t0"]
 
     reset(segs[-1][1] if segs else 0.0)  # retoma donde lo dejo una sesion anterior
+    st["protegidas"] = len(segs)  # lo retomado no se rehace al cambiar el idioma (switch_language)
+    used = [fixed_lang]  # idiomas de la reunion en esta sesion (job.idiomas_directo)
     last_size, last_growth = -1, time.time()
 
     def stage(s):
         job.stage = s
 
+    def lang_changed():
+        """El idioma de la reunion ha cambiado (Jobs.refresh_prompt actualiza opts) y aun no se ha aplicado."""
+        return (opts.get("language") or None) != fixed_lang
+
+    def lang_cuts():
+        """El cambio de idioma deja sin valor el trozo en vuelo: no si el nuevo es justo el que se estaba detectando
+        (con «Detectar» ya salia en ese idioma; cortarlo en local seria matar Whisper y repetir hasta 5 min de audio
+        para nada)."""
+        want = opts.get("language") or None
+        return want != fixed_lang and not (want is not None and want == lang)
+
+    def stop():
+        """Lo que corta las peticiones de un trozo: detener el directo o cambiar el idioma (se repite con el nuevo)."""
+        return bool(job.cancel) or lang_cuts()
+
+    def switch_language():
+        """Aplica el idioma nuevo ya: rebobina a lo escrito en el ultimo minuto (sin borrarlo de la pantalla hasta
+        que llegue lo nuevo) y relee el audio desde ahi; el siguiente trozo lo rehace en el idioma nuevo."""
+        nonlocal fixed_lang, lang
+        want, before = opts.get("language") or None, lang
+        fixed_lang, lang = want, (want or lang)
+        if want not in used:
+            used.append(want)
+            job.idiomas_directo = list(used)  # el repaso final no fuerza uno solo si la reunion cambio (server)
+        redo = st.get("redo")
+        if redo is not None:  # dos cambios seguidos: se rehace desde el mismo sitio, sin ir mas atras
+            reset(redo["from"])
+            log(f"   directo: idioma {want or 'detectar'} desde ya (se sigue rehaciendo desde {redo['from']:.1f} s)")
+            return
+        k = len(segs) if want is not None and want == before else redo_start(segs, getattr(job, "edits", None))
+        # lo de una sesion anterior (la app se reinicio a mitad) no: sus correcciones ya van en el texto, sin constar
+        k = max(k, st.get("protegidas", 0))
+        if k >= len(segs):  # nada que rehacer (sin texto, ya en ese idioma o todo corregido a mano)
+            log(f"   directo: idioma {want or 'detectar'} desde ya")
+            return
+        t_from, removed = redo_from(segs, k), segs[k:]
+        del segs[k:]
+        st["redo"] = {"from": t_from, "removed": removed, "until": removed[-1][1]}
+        if translator is not None:
+            translator.rewind(list(segs), t_from)
+        reset(t_from)
+        log(f"   directo: idioma {want or 'detectar'} desde ya; se rehacen en él los últimos "
+            f"{removed[-1][1] - removed[0][0]:.0f} s ({len(removed)} frases, desde {t_from:.1f} s)")
+        stage("Cambiando el idioma: se rehace lo último…")
+
     def publish(pace=None, paused=False):
-        """Estado del directo para la interfaz (cupo, ventana, latencia, traduccion)."""
+        """Estado del directo para la interfaz (cupo, ventana, latencia, traduccion) y para el aviso al cambiar el
+        idioma (lang_switch_info: idioma del texto, retraso, si esta al dia y la velocidad del modelo local)."""
         if not hasattr(job, "translation"):
             return
         tr = list(job.translation)
@@ -563,28 +735,29 @@ def run(job, path, opts, write, log):
         job.directo = {"cloud": on_cloud, "quota": keys.public(cfg, model=lm) if on_cloud else None,
                        "pace": list(pace) if pace else None, "paused": bool(paused), "latency": latency.stats(),
                        "translate": bool(getattr(job, "translate", False)), "translation": tr[-TRANSLATION_PUBLIC:],
+                       "translate_to": translate_to(job), "translation_epoch": translator.epoch if translator else 0,
                        "translation_n": len(tr), "translate_error": translator.error if translator else None,
                        "translating": bool(translator and translator.busy),
                        "translate_ok": on_cloud and not why, "translate_why": why,
                        "translate_model": engines.Summarizer.translate_model(cfg) if on_cloud else None,
                        "provider": (engines.PROVIDERS.get(cfg.get("provider", "groq")) or {}).get("label")
                        if on_cloud else None,
-                       "live_model": lm}
+                       "live_model": lm,
+                       "lang": lang, "caught_up": bool(st.get("caught_up")), "redo": st.get("redo") is not None,
+                       "protegidas": st.get("protegidas", 0),
+                       "behind_s": round(max(0.0, (job.recorded or 0.0) - (job.transcribed or 0.0)), 1),
+                       "speed": (engines.PRESETS_BY_ID.get(job.preset) or {}).get("live_speed")}
 
     def transcribe(window, offset, timing=None):
-        nonlocal lang, fixed_lang
+        nonlocal lang
         preset = engines.PRESETS_BY_ID.get(job.preset) or engines.PRESETS_BY_ID["medium"]
         prev = segs[-1:]  # para no repetir la ultima frase del trozo anterior
         context = " ".join(t for _, _, t in segs[-CONTEXT_SEGS:])  # para enlazar con lo que se estaba diciendo
-        want = opts.get("language") or None  # cambiado en la pagina de la reunion: vale desde este trozo
-        if want != fixed_lang:
-            fixed_lang, lang = want, (want or lang)
-            log(f"   directo: idioma {want or 'detectar'} desde el siguiente trozo")
         about = opts.get("about") or None
         tm = timing if timing is not None else {}
         if preset["engine"] == "cloud":
             out, detected = opts["cloud"].transcribe_array(opts["cloud_cfg"], window, fixed_lang, opts.get("prompt"),
-                                                           opts["tmp_dir"], job.id, stage, lambda: job.cancel,
+                                                           opts["tmp_dir"], job.id, stage, stop,
                                                            context=context,
                                                            model=engines.CloudEngine.live_model(opts["cloud_cfg"]),
                                                            about=about, timing=tm)
@@ -600,7 +773,9 @@ def run(job, path, opts, write, log):
                               lambda: job.cancel)
                 stage("Transcribiendo en directo…" if st["caught_up"] else "Poniéndose al día con lo ya grabado…")
                 t_req = perf_counter()
-                res = worker.request(req, audio=window, timeout=120 + 4 * secs, cancelled=lambda: job.cancel)
+                # cambiar el idioma corta tambien este trozo: WorkerClient mata el proceso y se recarga (~2-5 s), en
+                # vez de esperar a un trozo de 20-45 s (o de minutos, poniendose al dia) en el idioma de antes
+                res = worker.request(req, audio=window, timeout=120 + 4 * secs, cancelled=stop)
                 tm["infer"] = perf_counter() - t_req  # en local la "red" es el proceso de Whisper
                 break
             except engines.WorkerTimeout as e:  # el motor se colgo: proceso nuevo y otro intento
@@ -628,8 +803,11 @@ def run(job, path, opts, write, log):
                 segs = []
                 st["gen"] += 1
                 getattr(job, "edits", {}).clear()  # las correcciones eran sobre el texto de antes
+                st["redo"], st["protegidas"] = None, 0
                 reset(0.0)
                 log(f"   rehaciendo desde el principio con {job.preset}")
+            if lang_changed():  # cambiado en la pagina de la reunion: vale ya, tambien para lo ultimo escrito
+                switch_language()
             cloud = (engines.PRESETS_BY_ID.get(job.preset) or {}).get("engine") == "cloud"
             if cloud and keys and getattr(job, "translate", False) and translator is None \
                     and opts.get("summarizer") is not None:
@@ -711,12 +889,19 @@ def run(job, path, opts, write, log):
                 else:
                     voice = sum(min(s["end"], cut) - s["start"] for s in ts if s["start"] < cut) / SR
                     audio, a = window, 0
+                redo = st.get("redo")  # este trozo rehace lo ultimo en el idioma nuevo (switch_language)
+                new = None
                 if voice >= DIRECT_MIN_VOICE_S:  # menos de 1 s de voz: musica/ruido, Whisper solo inventaria
                     tm = {"prep": perf_counter() - t_iter}
                     try:
                         new = transcribe(audio, t0 + a / SR, tm)
                     except engines.Cancelled:
-                        raise
+                        if job.cancel or not lang_changed():
+                            raise
+                        # el idioma cambio con el trozo en vuelo: no se avanza; la vuelta siguiente lo aplica y
+                        # repite este audio (y lo ultimo escrito) con el nuevo
+                        log("   directo: el trozo en curso se repite con el idioma nuevo")
+                        continue
                     except Exception as e:
                         if not cloud:  # en local, como siempre
                             raise
@@ -733,6 +918,20 @@ def run(job, path, opts, write, log):
                               "repaso final recupera el texto.")
                     if job.restart:  # se pidio rehacer mientras tanto: este trozo ya no vale
                         continue
+                    if lang_cuts():  # cambio el idioma con la peticion en vuelo (a la nube no se le corta): fuera
+                        log("   directo: el idioma ha cambiado durante el trozo; se repite con el nuevo")
+                        continue
+                    if redo is not None and new:
+                        # corregiste a mano lo que se estaba rehaciendo (antes de que llegara lo nuevo): mandan tus
+                        # correcciones; vuelve lo de antes y lo nuevo vale desde donde acababa
+                        tocadas = getattr(job, "edits", None) or {}
+                        if any(seg_key(s[0]) in tocadas for s in redo["removed"]):
+                            despues = [s for s in new if s[0] >= redo["until"] - 1e-6]
+                            log(f"   directo: lo que se rehacía se corrigió a mano entretanto; se queda lo de antes "
+                                f"({len(redo['removed'])} frases) y el idioma nuevo vale desde {redo['until']:.1f} s")
+                            segs.extend(redo["removed"])
+                            new, redo = despues, None
+                            st["redo"] = None
                     t_paint = perf_counter()
                     if new:
                         segs.extend(new)
@@ -744,6 +943,20 @@ def run(job, path, opts, write, log):
                         if lat is not None:
                             log(f"   trozo de {len(audio) / SR:.1f} s ({voice:.1f} s de voz, {len(new)} frases): "
                                 f"texto a los {lat:.1f} s{fmt_phases(tm)}")
+                if redo is not None:
+                    st["redo"] = None
+                    end_s = t0 + cut / SR
+                    if new:
+                        log(f"   directo: rehecho en {lang or 'el idioma detectado'} lo último ({len(redo['removed'])} "
+                            f"frases → {len(new)})")
+                    else:  # no ha salido (un fallo de la nube, o nada): vuelve lo de antes, mejor que un hueco
+                        back = back_of(redo["removed"], end_s)
+                        if back:
+                            segs.extend(back)
+                            write(segs)
+                            job.rev += 1
+                            log(f"   directo: no se ha podido rehacer lo último en el idioma nuevo; se queda el texto "
+                                f"de antes ({len(back)} frases)")
                 st["dedupe_until"] = (t0 + cut / SR) if overlap else None
                 st["buf"] = buf[cut - overlap:]
                 st["t0"] = t0 + (cut - overlap) / SR

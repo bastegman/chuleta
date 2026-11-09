@@ -903,6 +903,7 @@ body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen Â«GuardarÂ
 .gr-falta .notice { margin: 0; border-radius: 0; border-width: 0 0 1px; }
 .gr-audio { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .gr-aviso { display: block; font-size: 12px; color: var(--warn); margin-top: 2px; }
+.gr-nota { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 .meter.gr-meter { display: inline-flex; width: 58px; margin: 0; gap: 0; vertical-align: middle; }
 .meter.gr-meter .ml, .meter.gr-meter .mdb, .meter.gr-meter .mdev { display: none; }
 .meter.gr-meter .mbar { width: 58px; height: 7px; }

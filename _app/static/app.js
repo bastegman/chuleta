@@ -972,8 +972,11 @@ async function appendLive(a) {
   let t;
   try { t = await api('/api/transcript?path=' + enc(a.path)); } catch { return; }
   if (!S.editing || !S.tx || S.tx.path !== a.path) return;
+  // el directo ha rehecho texto ya escrito (cambio de idioma, «rehacer desde el principio»): no se añade, se cambia
+  if (t.text_gen != null && S.tx.gen != null && t.text_gen !== S.tx.gen) return liveRehecho(a);
   const segs = S.tx.segs, last = segs.length ? (segs[segs.length - 1].start ?? -1) : -1;
   const add = t.segments.filter(s => (s.start ?? -1) > last + 0.005);
+  add.forEach(s => { s.orig = s.text; });
   const body = $('#txBody');
   if (!add.length || !body) return;
   syncEdits();
@@ -989,6 +992,28 @@ async function appendLive(a) {
   S.marks = $$('mark', body);
 }
 
+/* Corrigiendo en directo y el directo rehace lo ya escrito (cambio de idioma: el último minuto, en el idioma nuevo).
+   Lo que hay en el editor es el texto de antes: se guarda lo corregido (el servidor no toca lo rehecho y dice desde
+   dónde: rehecho_desde, ver saveEdits) y el editor pasa al texto nuevo sin salir de «Editar». Antes, lo rehecho no
+   llegaba al editor y al guardar se daba por borrado (revisión de idioma-directo, 09/11/2026). */
+async function liveRehecho(a) {
+  if (S.liveRehaciendo) return;
+  S.liveRehaciendo = true;
+  try {
+    await saveEdits(true);
+    if (!S.editing || !S.tx || S.tx.path !== a.path) return;
+    let t;
+    try { t = await api('/api/transcript?path=' + enc(a.path)); } catch { return; }
+    if (!S.editing || !S.tx || S.tx.path !== a.path) return;
+    const body = $('#txBody');
+    if (body) body.innerHTML = '';  // que renderTxSection (syncEdits) no copie el texto de antes en las frases nuevas
+    t.segments.forEach(s => { s.orig = s.text; });
+    Object.assign(S.tx, { kind: t.kind, segs: t.segments, starts: t.segments.map(s => s.start ?? 0), gen: t.text_gen ?? null });
+    S.dirty = false;
+    renderTxSection();
+  } finally { S.liveRehaciendo = false; }
+}
+
 async function loadTranscript(a) {
   if (S.editing && S.tx && S.tx.path === a.path) return liveJob(a) ? appendLive(a) : undefined;  // no pisar lo que se esta corrigiendo
   const want = a.path;
@@ -1000,7 +1025,8 @@ async function loadTranscript(a) {
   const st = main.scrollTop;
   const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 160;
   const typing = document.activeElement && document.activeElement.id === 'tq';
-  S.tx = { path: want, kind: t.kind, file: t.file, segs: t.segments, mtime: a.tx_mtime, starts: t.segments.map(s => s.start ?? 0), has_backup: !!t.has_backup };
+  t.segments.forEach(s => { s.orig = s.text; });  // para saber, si el directo rehace algo, qué habías corregido
+  S.tx = { path: want, kind: t.kind, file: t.file, segs: t.segments, mtime: a.tx_mtime, starts: t.segments.map(s => s.start ?? 0), has_backup: !!t.has_backup, gen: t.text_gen ?? null };
   if (keepScroll && typing) { renderTxBody(); main.scrollTop = st; return; }  // no robar el foco del buscador
   renderTxSection();
   const lj = jobFor(want);
@@ -1067,7 +1093,9 @@ function syncEdits() {
 function setSaveState(txt) { const el = $('#saveState'); if (el) el.textContent = txt; }
 function scheduleSave() { clearTimeout(S.saveTimer); setSaveState('Sin guardar…'); S.saveTimer = setTimeout(saveEdits, 1200); }
 function editPayload() {
-  return { path: S.tx.path, segments: S.tx.segs.filter(s => s.text.trim()).map(s => ({ start: s.start, end: s.end, text: s.text })) };
+  const p = { path: S.tx.path, segments: S.tx.segs.filter(s => s.text.trim()).map(s => ({ start: s.start, end: s.end, text: s.text })) };
+  if (S.tx.gen != null) p.gen = S.tx.gen;  // en directo: sobre qué versión del texto se ha corregido
+  return p;
 }
 /* Correcciones que aun no han llegado al servidor: la ultima version de cada reunion, hasta que el servidor la
    confirma. Cada version lleva su numero (sin salir en el JSON) y la reunion de la que sale: una version vieja no pisa
@@ -1130,6 +1158,10 @@ async function saveEdits(quiet = false) {
   const payload = txVersion();
   try {
     const r = await sendTx(payload);
+    if (r && r.rehecho_desde != null) {  // el directo rehízo texto mientras corregías: lo de ahí no se ha tocado
+      const n = payload.tx.segs.filter(s => (s.start ?? -1) >= r.rehecho_desde - 0.005 && s.orig != null && s.text !== s.orig).length;
+      if (n) toast(`${n === 1 ? 'Una corrección era' : `${n} correcciones eran`} sobre lo que el directo ha rehecho en el idioma nuevo (desde ${fmtClock(r.rehecho_desde)}): no se ${n === 1 ? 'ha' : 'han'} guardado. Hazla${n === 1 ? '' : 's'} sobre el texto nuevo.`, 'err');
+    }
     if (S.tx && S.tx === payload.tx) {
       S.tx.saveErr = null;
       if (!r.live) {  // en directo la copia del original se guarda al terminar

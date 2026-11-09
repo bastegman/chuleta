@@ -309,6 +309,9 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.select_option("[data-panel='idioma'] select", "pt")
         pg.wait_for_function("document.querySelector('[data-fila=idioma] .gr-origen').classList.contains('cambiado')",
                              timeout=5000)
+        # con un idioma fijo, la nota de que lo que se diga en otro se traduce a este (msg 1150, ítem 12)
+        pg.wait_for_selector("[data-fila='idioma'] .gr-nota", timeout=5000)
+        self.assertIn("lo que se diga en otro se traduce a este", pg.inner_text("[data-fila='idioma'] .gr-nota"))
         pg.check("input[name='grAlc_idioma'][value='proyecto']")
         pg.click("[data-gr-listo='idioma']")
         pg.wait_for_function("document.querySelector('[data-fila=idioma] .gr-origen').textContent === 'de Proyecto'",
@@ -327,6 +330,49 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, [r for r in red if "/api/rec/start" not in r])
         self.assertEqual([e for e in err if "grabadora de prueba" not in e and "400" not in e], [])
+        self.assertEqual(red, [])
+
+    def test_ajustes_ocultar_al_compartir(self):
+        """«Al compartir pantalla» en Ajustes › Al grabar (ítem 18, msg 1242). Aquí no hay ventana propia (el servidor
+        va con --no-browser): el interruptor sale apagado y dice por qué. Con un servidor que sí puede (respuesta
+        simulada), marcarlo lo aplica al momento, sin «Guardar», y lo dice."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agOcultar", timeout=10000)
+        self.assertTrue(pg.is_disabled("#agOcultar"))
+        nota = pg.inner_text("#agOcultarNota")
+        self.assertTrue("Solo en Windows" in nota or "ventana propia" in nota, nota)
+        st = pg.evaluate("api('/api/ocultar-captura')")
+        self.assertEqual((st["activado"], st["soportado"]), (True, False))
+        pg.keyboard.press("Escape")
+        # un Windows con la ventana propia: el servidor contesta como lo haría (aplicada / quitada)
+        enviados = []
+
+        def ocultar(route):
+            b = json.loads(route.request.post_data)
+            enviados.append(b)
+            route.fulfill(json={"activado": b["activado"], "soportado": True, "motivo": None,
+                                "aplicado": b["activado"], "error": None})
+        pg.route("**/api/ocultar-captura", ocultar)
+        pg.evaluate("S.config.ocultar_captura = {activado: true, soportado: true, motivo: null, aplicado: true}")
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agOcultar:not([disabled])", timeout=10000)
+        self.assertTrue(pg.is_checked("#agOcultar"))
+        self.assertIn("Tú la sigues viendo", pg.inner_text("#agOcultarNota"))
+        pg.click("#agOcultar")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('vuelve a salir al compartir')",
+                             timeout=5000)
+        self.assertEqual(enviados, [{"activado": False}])
+        self.assertFalse(pg.is_checked("#agOcultar"))
+        self.assertEqual(pg.inner_text(".aj-pend").strip(), "")  # se guarda solo: no cuenta como «sin guardar»
+        pg.click("#agOcultar")
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('no saldrá al compartir')",
+                             timeout=5000)
+        self.assertEqual(enviados[-1], {"activado": True})
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [])
         self.assertEqual(red, [])
 
     def test_ajustes_al_grabar_y_proyectos(self):

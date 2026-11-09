@@ -51,6 +51,7 @@ from common import (APP_ID, APP_NAME, ApiError, BAD_NAME, LOGGER, SRT_TIME, WIND
 from common import TOKEN_FILE, TOKEN_HEADER, local_opener, read_token  # sesion local (P1-02) y loopback sin proxy
 from recording import GlobalHotkey, RecorderProcess, cue, mic_meeting_app, notify
 from bandeja import Bandeja
+import window as window_mod
 from window import Window, set_app_id
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -525,6 +526,8 @@ DEFAULT_SETTINGS = {
     "favorites": [],          # [{"kind": "a"|"f", "path": ...}] (estilo Notion)
     "folder_icons": {},       # carpeta -> emoji
     "meeting_detect": True,   # avisar si Teams/Zoom/… usa el micro y no se esta grabando
+    # que la ventana no salga al compartir pantalla ni en capturas (window.py, msg 1242); se aplica al momento
+    "ocultar_al_compartir": True,
     "outlook_on": False,      # leer la cita en curso de Outlook clasico (COM, pywin32): nombre, tema y asistentes
     # si Outlook deja leer los asistentes sin preguntar ("si"), pregunta ("pregunta": solos no se leen, solo con
     # «Probar») o no deja ("deniega"); "" = sin comprobar. Lo apunta calendario.py (Object Model Guard)
@@ -1256,6 +1259,69 @@ def carpetas_reunion():
         return _CARPETAS[path]
 
 
+class TraduccionDestino:
+    """Ultimo destino de la traduccion del directo («es» o «en») elegido en cada reunion (ruta interna del audio), en
+    DATA_DIR/traduccion_destino.json: si la app se reinicia a mitad de reunion, o la apagas y la vuelves a encender,
+    sigue al mismo idioma. No va en la cabecera del .md: las versiones anteriores toman una clave que no conocen por
+    notas (Temas). Solo se usa durante el directo, asi que no sigue a la reunion si se mueve despues. Guarda las
+    MAX ultimas."""
+
+    MAX = 300
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        self.data = ({k: v for k, v in data.items() if isinstance(k, str) and v in live.TRANSLATE_TO}
+                     if isinstance(data, dict) else {})
+
+    def get(self, rel):
+        return self.data.get(rel)
+
+    def set(self, rel, to):
+        if to not in live.TRANSLATE_TO:
+            return
+        with self.lock:
+            if self.data.get(rel) == to and list(self.data)[-1:] == [rel]:
+                return
+            self.data.pop(rel, None)
+            self.data[rel] = to  # al final: los mas recientes son los que se quedan
+            while len(self.data) > self.MAX:
+                self.data.pop(next(iter(self.data)))
+            try:
+                tmp = f"{self.path}.{os.getpid()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, ensure_ascii=False)
+                os.replace(tmp, self.path)
+            except OSError:  # no poder recordarlo no impide traducir
+                log_exc()
+
+
+_TRAD, _TRAD_LOCK = {}, threading.Lock()
+
+
+def traduccion_destinos():
+    """El almacen TraduccionDestino de este PC (uno por DATA_DIR, que los tests cambian)."""
+    path = os.path.join(DATA_DIR, "traduccion_destino.json")
+    with _TRAD_LOCK:
+        if path not in _TRAD:
+            _TRAD[path] = TraduccionDestino(path)
+        return _TRAD[path]
+
+
+def traduccion_destino(rel, st):
+    """A que idioma se traduce el directo de una reunion: el ultimo elegido en ella; si no, el idioma del resumen de
+    Ajustes si es español o inglés; si no («el de la reunión»), español (msg 1152)."""
+    to = traduccion_destinos().get(rel)
+    if to in live.TRANSLATE_TO:
+        return to
+    lang = (st or {}).get("summary_lang") or "es"
+    return lang if lang in live.TRANSLATE_TO else "es"
+
+
 _TEMAS, _TEMAS_LOCK = {}, threading.Lock()
 
 
@@ -1850,6 +1916,27 @@ def perfil_vocab(st, sugerido=None):
     automatico, el que sugiera la reunion en curso y, si no, el ultimo elegido."""
     fijo = perfil_vocab_fijo(st)
     return fijo if fijo is not None else (sugerido or st.get("rec_vocab") or "")
+
+
+def idioma_repaso(usados):
+    """Idioma del repaso final de un directo en el que se cambió el idioma de la reunión (msg 1150: empezó en inglés y
+    pasó al portugués). Con el idioma del final para toda la grabación, lo dicho antes se pasaría a ese idioma; con
+    los dos que se usaron, la mezcla de esos dos si existe (en + pt → «en-pt») y si no, detectar (""). None: no
+    cambió (el de siempre, el de la reunión al terminar). usados: los idiomas fijados en la sesión, en orden (None =
+    detectar)."""
+    usados = list(usados or [])
+    if len(usados) < 2:
+        return None
+    sueltos = set()
+    for u in usados:
+        if not u:
+            return ""  # en algún momento se detectaba: detectar
+        sueltos.update(engines.PAIRS.get(u, (u,)))
+    if len(sueltos) == 1:
+        return next(iter(sueltos))
+    if len(sueltos) == 2:
+        return next((code for code, par in engines.PAIRS.items() if set(par) == sueltos), "")
+    return ""
 
 
 def idioma_de(props, st):
@@ -2647,6 +2734,27 @@ def apply_edits(segs, edits):
     return out
 
 
+def live_writer(job):
+    """El escritor del directo (live.run lo llama tras cada trozo con todas las frases): guarda lo que dio Whisper
+    (job.raw) y escribe el .txt y el .srt con las correcciones a mano. Si lo que llega cambia frases ya escritas (el
+    directo rehace: cambio de idioma, «rehacer desde el principio»), sube job.text_gen y apunta desde qué segundo
+    (job.rewrites), con el mismo candado con que /api/transcript lee el texto y su generación."""
+    def writer(segs):
+        with job.edit_lock:
+            segs, old = list(segs), job.raw
+            if old and segs[:len(old)] != old:  # se rehace lo ya escrito: desde la primera frase que cambia
+                i = next((n for n, (x, y) in enumerate(zip(segs, old)) if x != y), min(len(segs), len(old)))
+                desde = [float(v[i][0]) for v in (old, segs) if i < len(v) and v[i][0] is not None]
+                job.text_gen += 1
+                job.rewrites.append((job.text_gen, min(desde) if desde else 0.0))
+            job.raw = segs
+            try:
+                job.out.write(apply_edits(job.raw, job.edits))
+            except OSError as e:  # se reintenta con el siguiente trozo
+                log(f"   no se pudo escribir la transcripción todavía ({e.__class__.__name__})")
+    return writer
+
+
 class LiveOutputs:
     """El .txt y el .srt del directo: lo nuevo se ANADE al final; solo si cambia algo de antes
     (una correccion, "rehacer desde el principio") se reescribe el archivo, y siempre en el sitio."""
@@ -2703,8 +2811,12 @@ class Job:
         self.final_pass = False  # repaso del archivo entero al terminar un directo en la nube
         self.opts = None  # solo en directo: opciones que live.run va leyendo (vocabulario incluido)
         self.translate, self.translation, self.directo = False, [], None  # directo en la nube (live.py publish)
+        self.translate_to = "es"  # destino de la traduccion: «es» o «en» (start_live pone el de la reunion)
         # correcciones a mano durante el directo: {inicio de la frase: texto}, sobre lo que da Whisper (raw)
         self.edits, self.raw, self.out, self.edit_lock = {}, [], None, threading.Lock()
+        # cada vez que el directo rehace texto ya escrito (cambio de idioma, «rehacer desde el principio») sube text_gen
+        # y se apunta desde qué segundo (rewrites): lo que se corrige sobre un texto anterior no toca lo rehecho
+        self.text_gen, self.rewrites = 0, []
 
     def public(self):
         now = time.time()
@@ -2968,6 +3080,7 @@ class Jobs:
             raise ApiError("Ese audio ya se está transcribiendo.")
         job = Job(rel, os.path.basename(rel), preset, meeting_setup(abs_path, st)["language"] or None)
         job.engine, job.live, job.recording = "live", True, True
+        job.translate_to = traduccion_destino(rel, st)  # el ultimo de esta reunion o el idioma del resumen (msg 1152)
         # algun trozo en local (o, al retomar tras un reinicio, lo de antes sin constar que fuera en la nube): el
         # resumen automatico no lo sube a la nube sin permiso (CloudText, Jobs.auto_summary)
         retoma = os.path.isfile(os.path.splitext(abs_path)[0] + ".srt")
@@ -2998,7 +3111,11 @@ class Jobs:
         except ApiError:
             return False
         # local_part del directo: si tuvo algun trozo en local (sin el dato, si: lo seguro)
-        self._queue_final_pass(job.path, job.name, job.language, local_part=getattr(job, "local_part", True))
+        j = self._queue_final_pass(job.path, job.name, job.language, local_part=getattr(job, "local_part", True))
+        j.idioma_repaso = idioma_repaso(getattr(job, "idiomas_directo", None))
+        if j.idioma_repaso is not None:
+            log(f"   {job.name}: el idioma cambió en el directo; el repaso final, con "
+                f"{j.idioma_repaso or 'detección'} (no solo el del final)")
         return True
 
     def _queue_final_pass(self, rel, name, language, local_part=True):
@@ -3074,12 +3191,22 @@ class Jobs:
 
     def refresh_prompt(self, rel):
         """Cambio el tema, el idioma o el contexto de una reunion: si se esta transcribiendo en directo, live.run lo
-        lee en el siguiente trozo (vocabulario, idioma y contexto libre)."""
+        lee en el siguiente trozo (vocabulario y contexto libre); el idioma, al momento (cancela el trozo en vuelo y
+        rehace lo ultimo). Devuelve, para el aviso de la pagina, lo que va a pasar con el idioma en ese directo
+        (live.lang_switch_info) o None si no hay directo."""
         with self.lock:
             jobs = [j for j in self.list if j.path == rel and j.live and j.status == "running" and j.opts]
+        info = None
         for j in jobs:
+            antes = j.opts.get("language") or None
             j.opts.update(meeting_setup(safe(rel), self.settings.get()))
             log(f"   directo {j.name}: vocabulario, idioma y contexto actualizados")
+            if info is None:
+                with getattr(j, "edit_lock", contextlib.nullcontext()):
+                    escrito, edits = list(getattr(j, "raw", None) or []), dict(getattr(j, "edits", None) or {})
+                info = live.lang_switch_info(getattr(j, "directo", None), escrito, edits,
+                                             j.opts.get("language") or None, antes)
+        return info
 
     def _live_job(self, job_id):
         with self.lock:
@@ -3140,13 +3267,7 @@ class Jobs:
             job.out.sizes = {e: os.path.getsize(os.path.splitext(abs_path)[0] + e) for e in (".txt", ".srt")
                              if os.path.isfile(os.path.splitext(abs_path)[0] + e)}
 
-        def writer(segs):
-            with job.edit_lock:
-                job.raw = list(segs)
-                try:
-                    job.out.write(apply_edits(job.raw, job.edits))
-                except OSError as e:  # se reintenta con el siguiente trozo
-                    log(f"   no se pudo escribir la transcripción todavía ({e.__class__.__name__})")
+        writer = live_writer(job)
 
         try:
             segs, lang = live.run(job, abs_path, opts, writer, log)
@@ -3923,6 +4044,8 @@ class Jobs:
             # reunion»: el de su .md o el del perfil
             if job.final_pass or getattr(job, "per_meeting", False):
                 job.language = ms["language"] or None
+            if job.final_pass and getattr(job, "idioma_repaso", None) is not None:  # cambió en pleno directo
+                job.language = job.idioma_repaso or None
             if preset["engine"] == "cloud":
                 self._cloud_ready()  # ApiError si la nube se apago en Ajustes mientras esperaba en la cola
             if preset["engine"] == "local":
@@ -5164,6 +5287,7 @@ class App:
                 "rec_directo": st.get("rec_directo", True) is not False, "rec_mic": st.get("rec_mic") or "default",
                 "rec_sys": st.get("rec_sys") or "all",
                 "meeting_detect": bool(st.get("meeting_detect", True)),
+                "ocultar_captura": captura_estado(st),
                 "outlook_on": bool(st.get("outlook_on")), "rec_aviso": bool(st.get("rec_aviso", True)),
                 "summary": {"auto": bool(st.get("summary_auto", True)), "local": bool(st.get("summary_auto_local")),
                             "aviso_local": bool(st.get("aviso_resumen_local")),  # una vez, tras actualizar
@@ -5185,7 +5309,16 @@ class App:
 
     def transcript(self, q):
         abs_path = safe(q.get("path"), "file")
-        out = public_transcript(self.transcripts.load(os.path.splitext(abs_path)[0]))
+        activo = getattr(getattr(self, "jobs", None), "active_for", None)
+        job = activo(rel_of(abs_path)) if activo is not None else None
+        if job is not None and job.live and getattr(job, "edit_lock", None) is not None:
+            # en directo, el texto y su generación a la vez (el escritor del directo los cambia con este candado): el
+            # editor manda la generación al guardar y lo que se haya rehecho después no se toca (_save_live_edits)
+            with job.edit_lock:
+                out = public_transcript(self.transcripts.load(os.path.splitext(abs_path)[0]))
+                out["text_gen"] = getattr(job, "text_gen", 0)
+        else:
+            out = public_transcript(self.transcripts.load(os.path.splitext(abs_path)[0]))
         out["has_backup"] = os.path.isdir(backup_dir(rel_of(abs_path)))
         return out
 
@@ -5256,12 +5389,15 @@ class App:
                 save_text(md, text, "utf-8")
             elif os.path.isfile(md):
                 os.remove(md)  # sin notas ni propiedades: no se deja un archivo vacio
+        directo = None
         if {"proyecto", "workstream", "idioma", "contexto", "vocabulario"} & set(b.get("props") or {}):
-            self.jobs.refresh_prompt(rel_of(abs_path))  # el directo lo usa desde el siguiente trozo
+            directo = self.jobs.refresh_prompt(rel_of(abs_path))  # el idioma, ya; lo demas, en el siguiente trozo
         self.jobs.schedule_outputs(rel_of(abs_path))  # destinos de salida: el documento con las notas nuevas
         self.library.at = 0
         out = {"props": with_theme_id(props, rel_of(abs_path)),
                "mtime": os.path.getmtime(md) if os.path.isfile(md) else 0}
+        if directo is not None and "idioma" in (b.get("props") or {}):
+            out["directo"] = {"idioma": directo}  # el aviso dice cuándo se verá el idioma nuevo (perfilSavedText)
         if tema:
             try:
                 out["pendiente"] = self._tema_movido(abs_path, antes, props)
@@ -5990,7 +6126,9 @@ class App:
                 segs.append((s.get("start"), s.get("end"), text))
         job = self.jobs.active_for(rel)
         if job and job.live:
-            return self._save_live_edits(job, segs, base)
+            gen = b.get("gen")
+            return self._save_live_edits(job, segs, base, gen if isinstance(gen, int) and not isinstance(gen, bool)
+                                         else None)
         if job:
             raise ApiError("Se está haciendo el repaso final (1–2 min por hora de reunión); "
                            "podrás editar en cuanto termine."
@@ -6014,16 +6152,24 @@ class App:
         mt = max((os.path.getmtime(base + e) for e in (".txt", ".srt") if os.path.isfile(base + e)), default=0)
         return {"ok": True, "tx_mtime": mt, "count": len(segs)}
 
-    def _save_live_edits(self, job, segs, base):
+    def _save_live_edits(self, job, segs, base, gen=None):
         """Corregir mientras se transcribe en directo: se guardan las diferencias con lo que dio Whisper
-        y se aplican al escribir cada trozo nuevo, asi el directo no pisa lo corregido."""
+        y se aplican al escribir cada trozo nuevo, asi el directo no pisa lo corregido. gen: la generación del texto
+        que tenía el editor (/api/transcript → text_gen). Si desde entonces el directo ha rehecho texto ya escrito
+        (cambio de idioma), lo que va desde ahí (rehecho_desde) no se toca: ni se corrige con el texto de antes ni se
+        da por borrado (antes salía como «frase borrada» y se perdía lo rehecho)."""
         if not job.out:
             raise ApiError("El directo aún está empezando; prueba en unos segundos.")
         sent = {seg_key(a): t for a, _, t in segs if a is not None}
         last = max(sent) if sent else -1.0  # lo que llego despues aun no lo veias: no se toca
         with job.edit_lock:
+            corte = None
+            if gen is not None and gen != getattr(job, "text_gen", 0):
+                corte = min((t for g, t in getattr(job, "rewrites", []) if g > gen), default=0.0)
             for a, _, t in job.raw:
                 k = seg_key(a)
+                if corte is not None and a >= corte - 1e-6:
+                    continue  # rehecho despues de que el editor cargara su texto
                 if k in sent:
                     if sent[k] != " ".join(t.split()):
                         job.edits[k] = sent[k]
@@ -6032,9 +6178,11 @@ class App:
                 elif k <= last:
                     job.edits[k] = ""  # la dejaste vacia: frase borrada
             job.out.write(apply_edits(job.raw, job.edits))
+            gen_ahora = getattr(job, "text_gen", 0)
         self.library.at = 0
         mt = max((os.path.getmtime(base + e) for e in (".txt", ".srt") if os.path.isfile(base + e)), default=0)
-        return {"ok": True, "tx_mtime": mt, "count": len(segs), "live": True}
+        return {"ok": True, "tx_mtime": mt, "count": len(segs), "live": True, "text_gen": gen_ahora,
+                "rehecho_desde": corte}
 
     def restore_transcript(self, b):
         """«Restaurar el original». Como save_transcript, con el candado que coge _move_now: si la reunion se esta
@@ -6148,16 +6296,35 @@ class App:
         return self.jobs.set_live_preset(b.get("id"), b.get("preset"), bool(b.get("restart")))
 
     def live_translate(self, b):
-        """Traducción al español del directo en la nube, por reunión (apagada por defecto); live.py hace el resto."""
+        """Traducción del directo en la nube, por reunión (apagada por defecto): {id, on, to}. to: «es» o «en» (msg
+        1152); se recuerda para esa reunión (traduccion_destino), también con la traducción apagada. live.py hace el
+        resto: con otro destino, vuelve a traducir lo último al idioma nuevo."""
         job = self.jobs._live_job(b.get("id"))
+        to = b.get("to")
+        if to is not None and to not in live.TRANSLATE_TO:
+            raise ApiError("La traducción del directo solo puede ser al español o al inglés.")
         if b.get("on"):  # sin servicio de chat (Azure OpenAI) no hay traduccion: se dice, no falla a medias
             why = engines.chat_missing(self.settings.get()["cloud"], "La traducción del directo")
             if why:
                 raise ApiError(why)
+        if to is not None:
+            job.translate_to = to
+            traduccion_destinos().set(job.path, to)
         job.translate = bool(b.get("on"))
         if isinstance(job.directo, dict):  # que la respuesta ya lo refleje (live.py lo vuelve a publicar en <1 s)
-            job.directo = dict(job.directo, translate=job.translate)
+            job.directo = dict(job.directo, translate=job.translate, translate_to=live.translate_to(job))
         return job.public()
+
+    def ocultar_captura(self, b):
+        """POST {activado}: guarda «Ocultar Tenca al compartir pantalla» y lo aplica ya a la ventana (Ajustes › Al
+        grabar; sin «Guardar», como «Arrancar con Windows»). Sin «activado», solo dice cómo está (como el GET)."""
+        if isinstance(b, dict) and "activado" in b:
+            on = b.get("activado") is True
+            self.settings.update(lambda d: d.update(ocultar_al_compartir=on))
+            if WINDOW is not None:
+                WINDOW.set_capture(on)
+            log(f"ajustes: ocultar {APP_NAME} al compartir pantalla {'activado' if on else 'desactivado'}")
+        return captura_estado(self.settings.get())
 
     def clear_jobs(self, b):
         self.jobs.clear()
@@ -7746,7 +7913,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/perfil": a.perfil_get,
                   "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
                   "/api/agente/estado": a.agente_estado,
-                  "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()}}
+                  "/api/inicio-windows": lambda q: {"activado": inicio_windows_leer()},
+                  "/api/ocultar-captura": lambda q: captura_estado(a.settings.get())}
         try:
             if u.path in routes:
                 t0 = time.time()
@@ -7802,7 +7970,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/voces/exportar": a.voices_export,
                   "/api/apagar": a.apagar, "/api/mostrar": a.mostrar, "/api/ocultar": a.ocultar,
                   "/api/acerca/abrir": a.acerca_abrir, "/api/calendario/activar": a.calendario_activar,
-                  "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)}}
+                  "/api/inicio-windows": lambda b: {"activado": inicio_windows_poner(b.get("activado") is True)},
+                  "/api/ocultar-captura": a.ocultar_captura}
         try:
             u = urlparse(self.path)
             if self.headers.get("Transfer-Encoding"):  # sin Content-Length no se sabe donde acaba el cuerpo (P0-1)
@@ -8508,6 +8677,25 @@ def _startup_quitar(rutas):
             log(f"   arrancar con Windows: {e}")
 
 
+def ocultar_al_compartir(st):
+    """El ajuste «Ocultar Tenca al compartir pantalla» (por defecto, sí)."""
+    return (st or {}).get("ocultar_al_compartir", True) is not False
+
+
+def captura_estado(st):
+    """Para Ajustes: {activado (el ajuste), soportado, motivo (por qué no se puede), aplicado (lo que tiene la ventana
+    ahora), error}. Sin la ventana propia (se abrió en Edge, o con --no-browser) no se puede: esa ventana no es de este
+    proceso."""
+    ok, motivo = window_mod.capture_support()
+    out = {"activado": ocultar_al_compartir(st), "soportado": ok, "motivo": motivo, "aplicado": None, "error": None}
+    if ok and WINDOW is None:
+        out.update(soportado=False, motivo=f"Solo con la ventana propia de {APP_NAME}: ahora se ha abierto en el "
+                   "navegador y esa ventana no es suya.")
+    elif WINDOW is not None:
+        out.update(aplicado=WINDOW.capture_applied, error=WINDOW.capture_error)
+    return out
+
+
 def inicio_windows_leer():
     """«Arrancar con Windows»: True o False; None si no se puede (fuera de Windows, o sin el acceso directo del menu
     Inicio, que es el que se copia: una copia descomprimida sin instalar). Tambien True con una copia que aun lleve un
@@ -8713,7 +8901,10 @@ def main():
     if no_browser:  # para abrirla a mano (desarrollo): el token no va al log, que sale entero en el diagnostico
         log(f"  Interfaz: {URL}?t=<el contenido de {os.path.join(DATA_DIR, TOKEN_FILE)}>")
     ico = os.path.join(STATIC_DIR, "tenca.ico")
-    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, ico, tray=make_tray(ico))
+    # ocultarse al compartir pantalla: lo lee del ajuste al abrir la ventana (y Ajustes lo cambia al momento)
+    WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, ico,
+                                            hide_from_capture=lambda: ocultar_al_compartir(Handler.app.settings.get()),
+                                            tray=make_tray(ico))
     inicio_windows_al_dia()
     if WINDOW is not None and WINDOW.available:
         # la ventana propia exige el hilo principal: el servidor pasa a un hilo y aqui se bloquea hasta apagar

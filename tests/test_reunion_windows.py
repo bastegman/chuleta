@@ -238,6 +238,18 @@ class AvisoTests(unittest.TestCase):
             time.sleep(0.1)
         return []
 
+    def test_con_ocultar_captura_no_sale_al_compartir_pantalla(self):
+        """«Al compartir pantalla» (msg 1242): el aviso, que sale justo al empezar una llamada con el nombre de la
+        reunión y «Grabar», lleva WDA_EXCLUDEFROMCAPTURE como la ventana de la app; sin la opción, no."""
+        p, est = self.abrir("ocultar", "--ocultar-captura", segundos=4)
+        e = self.estado(est)
+        self.assertEqual(e.get("afinidad"), 0x11, e)  # Windows Server 2025 del runner: build 26100
+        self.assertEqual(self.resultado(p)["resultado"], "tiempo")
+        p, est = self.abrir("sin-ocultar", segundos=4)
+        e = self.estado(est)
+        self.assertIsNone(e.get("afinidad"), e)
+        self.resultado(p)
+
     def test_geometria_estilo_captura_y_auto_grabar(self):
         trabajo = VentanaDeTrabajo()
         p, est = self.abrir("auto", "--auto-grabar-ms", "6000")

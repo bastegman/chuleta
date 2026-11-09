@@ -1,6 +1,7 @@
 /* Directo en la nube (Groq): cupo y latencia en la cabecera del directo, «modo seguir» (letra grande y el texto
-   siempre abajo), traduccion al espanol por reunion en una columna lateral y, en Ajustes, el modelo del directo y
-   las claves adicionales. Todo sobre j.directo (lo publica live.py en /api/jobs), /api/config y /api/live/traducir.
+   siempre abajo), traduccion al espanol o al ingles (msg 1152) por reunion en una columna lateral y, en Ajustes, el
+   modelo del directo y las claves adicionales. Todo sobre j.directo (lo publica live.py en /api/jobs), /api/config y
+   /api/live/traducir.
    Sin dependencias: su CSS se inyecta aqui mismo para no tocar app.css. Nunca ensena ni guarda claves (las mascaras
    vienen del servidor). */
 I.eye = '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -20,6 +21,8 @@ S.directo = {
 .directo-bar .db-item { white-space: nowrap; }
 .directo-bar .db-trad { font-weight: 500; cursor: pointer; }
 .directo-bar .db-trad input { margin: 0 2px 0 0; accent-color: var(--accent); }
+.directo-bar .db-trad-grupo { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.directo-bar .db-trad-to { height: 28px; font: inherit; font-weight: 500; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
 .directo-bar .btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .directo-bar .db-err { flex-basis: 100%; color: var(--err); }
 .directo-bar .pill.err { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 11px; font-size: 12px; font-weight: 600; background: var(--err-soft); color: var(--err); }
@@ -84,6 +87,11 @@ function directoQuotaText(q) {
   return t;
 }
 
+/* destinos de la traduccion del directo (live.TRANSLATE_TO) y como se nombran */
+const DIRECTO_TRAD_TO = [['es', 'español'], ['en', 'inglés']];
+function directoTradTo(d) { return d && d.translate_to === 'en' ? 'en' : 'es'; }
+function directoTradNombre(to) { return (DIRECTO_TRAD_TO.find(([v]) => v === to) || DIRECTO_TRAD_TO[0])[1]; }
+
 /* traduccion del directo: con que modelo y en que proveedor de verdad («gpt-oss-20b en Groq», «gpt-4o-mini en OpenAI») */
 function directoTradLabel(d) {
   const m = String((d && d.translate_model) || '').replace(/^openai\/(?=gpt-oss)/, '');
@@ -114,8 +122,13 @@ function renderDirectoBar(a, j) {
   const quota = directoQuotaText(d.quota);
   const lat = directoLatencyText(d.latency);
   const tradOk = d.translate_ok !== false, tradLabel = directoTradLabel(d);  // sin chat (Azure): la casilla, apagada
-  const sig = JSON.stringify([j.id, quota, lat, d.pace, d.paused, d.translate, d.translate_error, d.translating, d.translate_ok, d.translate_model, S.directo.seguir]);
+  const to = directoTradTo(d);
+  const sig = JSON.stringify([j.id, quota, lat, d.pace, d.paused, d.translate, to, d.translate_error, d.translating, d.translate_ok, d.translate_model, S.directo.seguir]);
+  // «Traducir al ▾ español / inglés»: la casilla enciende y apaga; el destino se recuerda para esta reunión
+  const toSel = `<select class="db-trad-to" id="directoTradTo" data-id="${esc(j.id)}" aria-label="Idioma al que se traduce"${tradOk ? '' : ' disabled'}>${DIRECTO_TRAD_TO.map(([v, l]) => `<option value="${v}"${v === to ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
   if (el.dataset.sig === sig) return;  // sin cambios: no se repinta (no se pisa el clic en la casilla)
+  // con el desplegable del destino abierto o con el foco, repintar lo cerraría a mitad de elegir: se espera
+  if (document.activeElement && document.activeElement.id === 'directoTradTo' && el.contains(document.activeElement)) return;
   el.dataset.sig = sig;
   el.innerHTML = `<div class="directo-bar">
     ${d.paused ? '<span class="pill err">Directo en pausa por cupo</span>' : ''}
@@ -123,8 +136,8 @@ function renderDirectoBar(a, j) {
     ${d.pace ? `<span class="db-item" title="Tamaño de los trozos de audio que se mandan: más largos cuando queda menos cupo">trozos de ${d.pace[0]}–${d.pace[1]} s</span>` : ''}
     <span class="db-item" title="Del final de cada trozo de audio al texto en pantalla (mediana y percentil 95 de esta sesión)">${esc(lat)}</span>
     <span class="sp"></span>
-    ${tradOk ? `<label class="btn sm db-trad" title="${esc(`Traduce al español lo último que se ha dicho, cada 10–15 s${tradLabel ? `, con ${tradLabel}` : ''}. Solo para esta reunión; no se guarda.`)}"><input type="checkbox" id="directoTradChk" data-id="${esc(j.id)}"${d.translate ? ' checked' : ''}> Traducir al español${d.translating ? '<i class="db-dot" title="traduciendo…"></i>' : ''}</label>`
-      : `<label class="btn sm db-trad" title="${esc(d.translate_why || 'La traducción necesita un servicio de chat en la nube.')}" aria-disabled="true"><input type="checkbox" id="directoTradChk" data-id="${esc(j.id)}" disabled> Traducir al español</label>`}
+    <span class="db-trad-grupo">${tradOk ? `<label class="btn sm db-trad" title="${esc(`Traduce al idioma elegido (español o inglés) lo último que se ha dicho, cada 10–15 s${tradLabel ? `, con ${tradLabel}` : ''}. Solo para esta reunión; no se guarda.`)}"><input type="checkbox" id="directoTradChk" data-id="${esc(j.id)}"${d.translate ? ' checked' : ''}> Traducir al${d.translating ? '<i class="db-dot" title="traduciendo…"></i>' : ''}</label>`
+      : `<label class="btn sm db-trad" title="${esc(d.translate_why || 'La traducción necesita un servicio de chat en la nube.')}" aria-disabled="true"><input type="checkbox" id="directoTradChk" data-id="${esc(j.id)}" disabled> Traducir al</label>`}${toSel}</span>
     <button class="btn sm${S.directo.seguir ? ' on' : ''}" id="directoSeguir" type="button" title="Letra grande y el texto siempre abajo del todo: para leer de reojo durante la reunión">${I.eye}Modo seguir</button>
     ${d.translate_error ? `<div class="db-err">Traducción: ${esc(d.translate_error)}</div>` : ''}
   </div>`;
@@ -149,21 +162,31 @@ document.addEventListener('click', e => {
   if (b) directoSetSeguir(!S.directo.seguir);
 });
 
+/* la casilla (encender o apagar) y el destino: los dos mandan {id, on, to}. El destino se recuerda para esta reunión
+   aunque la traducción esté apagada; con ella encendida, lo último se vuelve a traducir al idioma nuevo. */
 document.addEventListener('change', async e => {
-  if (e.target.id !== 'directoTradChk') return;
-  const on = e.target.checked, id = e.target.dataset.id;
+  const chk = e.target.id === 'directoTradChk', sel = e.target.id === 'directoTradTo';
+  if (!chk && !sel) return;
+  const c = $('#directoTradChk'), s = $('#directoTradTo');
+  const on = chk ? e.target.checked : !!(c && c.checked), id = e.target.dataset.id;
+  const prevTo = s && s.dataset.prev ? s.dataset.prev : null;
+  const to = s ? s.value : 'es';
+  if (sel) e.target.blur();  // elegido: la barra vuelve a ponerse al día (renderDirectoBar no repinta con el foco ahí)
   try {
-    const j = await api('/api/live/traducir', { id, on });
-    if (j.directo) j.directo.translate = on;  // el estado publicado por live.py se actualiza en el siguiente sondeo
-    if (on) toast('Traducción al español activada: aparece a la derecha en unos 10–15 s');
+    const j = await api('/api/live/traducir', { id, on, to });
+    if (j.directo) Object.assign(j.directo, { translate: on, translate_to: to });  // live.py lo publica en el siguiente sondeo
+    if (on) toast(chk ? `Traducción al ${directoTradNombre(to)} activada: aparece a la derecha en unos 10–15 s`
+      : `Ahora se traduce al ${directoTradNombre(to)}: lo último sale en unos segundos`);
     const a = curAudio();
     if (a) { renderDirectoBar(a, j); renderDirectoTrad(j); }
     pollJobs(true);
   } catch (err) {
-    e.target.checked = !on;
+    if (chk) e.target.checked = !on;
+    else if (prevTo) e.target.value = prevTo;
     toast(esc(err.message), 'err');
   }
 });
+document.addEventListener('focusin', e => { if (e.target.id === 'directoTradTo') e.target.dataset.prev = e.target.value; });
 
 /* cada sondeo de /api/jobs (lo llama onJobs de app.js, antes de recargar el texto del directo) */
 function onDirectoJobs(prev) {
@@ -202,7 +225,7 @@ function directoAfterRender(tx, lj) {
   if (lj && !recent && (st.seguir || st.atBottom)) requestAnimationFrame(directoScrollEnd);
 }
 
-/* ---------------------------------------------------------------- traduccion al espanol (columna lateral) */
+/* ---------------------------------------------------------------- traduccion al espanol o al ingles (columna lateral) */
 function renderDirectoTrad(j) {
   const page = $('.live-page'), tx = $('#aTx');
   let aside = $('#directoTrad');
@@ -223,13 +246,15 @@ function renderDirectoTrad(j) {
     S.directo.tradN = -1;
   }
   page.classList.add('directo-dos');
-  const n = d.translation_n || blocks.length;
-  const sig = [j.id, n, d.translating ? 1 : 0, d.translate ? 1 : 0, d.translate_error || ''].join('|');
+  const n = d.translation_n || blocks.length, to = directoTradTo(d);
+  // translation_epoch: al cambiar el destino o el idioma de la reunión se quitan bloques y llegan otros (pueden ser
+  // los mismos en número)
+  const sig = [j.id, n, d.translating ? 1 : 0, d.translate ? 1 : 0, d.translate_error || '', to, d.translation_epoch || 0].join('|');
   if (aside.dataset.sig === sig) return;
   const atEnd = S.directo.tradN < 0 || aside.scrollHeight - aside.scrollTop - aside.clientHeight < 120;
   aside.dataset.sig = sig;
   const tl = directoTradLabel(d);
-  aside.innerHTML = `<div class="dt-head"><b>${I.translate}Traducción al español</b><span class="muted">${tl ? `${esc(tl)} · ` : ''}una ayuda para seguir la reunión, no se guarda</span></div>
+  aside.innerHTML = `<div class="dt-head"><b>${I.translate}Traducción al ${directoTradNombre(to)}</b><span class="muted">${tl ? `${esc(tl)} · ` : ''}una ayuda para seguir la reunión, no se guarda</span></div>
     ${n > blocks.length ? '<div class="muted dt-note">(bloques anteriores no mostrados)</div>' : ''}
     ${blocks.length ? blocks.map((b, i) => `<p${i === blocks.length - 1 ? ' class="dt-last"' : ''}><span class="ts">${fmtClock(b.start)}</span>${esc(b.text)}</p>`).join('')
       : `<div class="muted dt-note">${d.translate ? 'Traduciendo lo que se vaya diciendo…' : ''}</div>`}

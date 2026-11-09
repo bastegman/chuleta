@@ -459,7 +459,8 @@ class LiveTranslateApiTests(unittest.TestCase):
         out = app.live_translate({"id": job.id, "on": True})
         self.assertTrue(job.translate)
         self.assertTrue(out["live"])
-        self.assertEqual(out["directo"], {"translate": True, "paused": False})  # la respuesta ya lo refleja
+        # la respuesta ya lo refleja, con el destino (msg 1152: el de siempre, español)
+        self.assertEqual(out["directo"], {"translate": True, "paused": False, "translate_to": "es"})
         app.live_translate({"id": job.id, "on": False})
         self.assertFalse(job.translate)
         with self.assertRaises(server.ApiError):

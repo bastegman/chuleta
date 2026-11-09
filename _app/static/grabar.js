@@ -189,7 +189,9 @@ function grValorHtml(l) {
       + (G.devsErr ? grDevsAviso(G.devsErr) : '') + aviso;
   }
   if (l.clave === 'contexto') return esc(l.valor) + aviso;
-  return `<b>${esc(l.valor)}</b>${aviso}`;
+  // la nota del idioma fijo (plan.NOTA_IDIOMA_FIJO): lo que se diga en otro idioma sale traducido a ese
+  const nota = l.nota ? `<span class="gr-nota">${esc(l.nota)}</span>` : '';
+  return `<b>${esc(l.valor)}</b>${aviso}${nota}`;
 }
 /* medidor pequeño con la estructura que espera updateMeters() de app.js */
 function grMedidor(kind) {
@@ -259,7 +261,7 @@ function grPanelHtml(k) {
   }
   if (k === 'idioma') {
     return `<label class="gr-l" for="grSelIdioma">Idioma de la reunión</label><select data-gr="idioma" id="grSelIdioma">${LANGS.map(([v, t]) => `<option value="${v}"${v === l.code ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>
-      <div class="help">Las mezclas detectan el idioma cada pocos segundos, pero solo entre esos dos. Con uno solo, lo que se diga en otro idioma se pasa a ese.</div>${pie()}`;
+      <div class="help">Las mezclas detectan el idioma cada pocos segundos, pero solo entre esos dos. Con uno solo, lo que se diga en otro idioma se pasa a ese. En pleno directo se puede cambiar en la página de la reunión: vale al momento y rehace el último minuto.</div>${pie()}`;
   }
   if (k === 'contexto') {
     return `<label class="gr-l" for="grCtx">De qué va y quién participa</label><input class="input" data-gr="contexto" id="grCtx" maxlength="500" value="${esc(l.valor || '')}" placeholder="Una o dos frases: las recibe Whisper detrás del vocabulario, y el resumen" autocomplete="off">${pie()}`;

@@ -389,6 +389,38 @@ class TresModosE2E(unittest.TestCase):
         t = self.esperar_texto(rel, "test", 300)
         print(f"   directo local: {t!r}", flush=True)
         self.assertFalse([p for p in self.groq.peticiones], "en local no puede salir nada hacia Groq")
+        self.idioma_en_pleno_directo_local()
+
+    def idioma_en_pleno_directo_local(self):
+        """Ítem 12 con el Whisper medium de verdad (msgs 1150-1151): con el directo en marcha y lo dicho ya escrito
+        en inglés, la reunión pasa a «Solo español»: el aviso trae el estado y lo ya escrito se rehace en español (se
+        relee ese audio y Whisper lo transcribe con el idioma nuevo), sin esperar al final de la grabación."""
+        rel = "Pruebas/" + time.strftime("%Y-%m-%d %H-%M-%S") + " - Directo idioma.wav"
+        grab = GrabacionEnCurso(os.path.join(self.root, rel), self.pcm)
+        log = os.path.join(self.datos, "server.log")
+        try:
+            self.abrir(rel)
+            antes = self.esperar_texto(rel, "test", 300)
+            t0 = time.time()
+            r = self.api("/api/notes", {"path": rel, "props": {"idioma": "es"}})
+            info = (r.get("directo") or {}).get("idioma") or {}
+            print(f"   directo local, idioma → es: aviso {info}", flush=True)
+            self.assertIn(info.get("estado"), ("al_dia", "poniendose"), r)
+            self.assertGreater(info.get("rehace_s", 0), 0, r)
+            fin, hecho = time.time() + 300, ""
+            while time.time() < fin and not hecho:
+                with open(log, encoding="utf-8", errors="replace") as f:
+                    hecho = next((x for x in f.read().splitlines()
+                                  if "rehecho en es lo último" in x
+                                  or "no se ha podido rehacer lo último" in x), "")
+                time.sleep(1)
+            despues = self.texto(rel)
+            print(f"   rehecho a los {time.time() - t0:.0f} s: {despues!r} (antes {antes!r}) · {hecho.strip()}",
+                  flush=True)
+            self.assertIn("rehecho en es lo último", hecho)
+            self.assertNotEqual(despues, antes)
+        finally:
+            grab.cerrar()
 
     def test_2_con_tu_cuenta_de_claude(self):
         pg = self.pg

@@ -122,19 +122,34 @@ function vocabCarpetasHtml(carpetas) {
 /* ---------------------------------------------------------------- página de la reunión y directo */
 function perfilPropsHtml(a) {
   const p = a.props || {};
-  return `<div class="prow"><span class="pk">${I.globe}Idioma</span><span class="pv"><select class="pstate" data-prop="idioma" title="Idioma con el que se transcribe esta reunión (en directo, desde el siguiente trozo)">${perfilLangOptions(p.idioma, S.config.language)}</select></span></div>
+  return `<div class="prow"><span class="pk">${I.globe}Idioma</span><span class="pv"><select class="pstate" data-prop="idioma" title="Idioma con el que se transcribe esta reunión (en directo, al momento: también rehace lo del último minuto)">${perfilLangOptions(p.idioma, S.config.language)}</select></span></div>
     <div class="prow"><span class="pk">${I.text}Contexto</span><span class="pv"><input class="pinput" data-prop="contexto" maxlength="500" value="${esc(p.contexto || '')}" placeholder="De qué va y quién participa (opcional)" autocomplete="off" title="Lo recibe Whisper detrás del vocabulario y lo tiene en cuenta el resumen"></span></div>`;
 }
 function perfilLiveHtml(a) {
   const p = a.props || {};
-  return `<div class="lh-ws pf-live">${I.globe}Idioma <select class="pstate" data-prop="idioma" title="Idioma de esta reunión: el directo lo usa desde el siguiente trozo">${perfilLangOptions(p.idioma, S.config.language)}</select>
+  return `<div class="lh-ws pf-live">${I.globe}Idioma <select class="pstate" data-prop="idioma" title="Idioma de esta reunión: el directo lo usa al momento y rehace en él lo del último minuto">${perfilLangOptions(p.idioma, S.config.language)}</select>
     ${I.text}<input class="pinput pf-ctx" data-prop="contexto" maxlength="500" value="${esc(p.contexto || '')}" placeholder="Contexto: de qué va y quién participa (opcional)" autocomplete="off" title="Lo recibe Whisper detrás del vocabulario, desde el siguiente trozo, y lo tiene en cuenta el resumen"></div>`;
 }
-/* Mensaje al guardar idioma o contexto desde la página (notas.js). live: hay un directo en marcha. */
-function perfilSavedText(prop, live, transcribed) {
+/* Mensaje al guardar idioma o contexto desde la página (notas.js). live: hay un directo en marcha. info: lo que dice
+   el servidor del idioma en ese directo (POST /api/notes → directo.idioma, live.lang_switch_info): el tiempo real en
+   que se verá (msgs 1150-1151: «funcionó, pero tardó»). Sin info (servidor anterior), la frase de siempre. */
+function perfilSavedText(prop, live, transcribed, info) {
   const que = prop === 'idioma' ? 'Idioma' : 'Contexto';
+  if (live && prop === 'idioma' && info) return perfilIdiomaDirectoText(info);
   if (live) return `${que}: el directo lo usa desde el siguiente trozo`;
   return transcribed ? `${que} guardado · se aplicará si la vuelves a transcribir (y al resumen)` : `${que} guardado · se usará al transcribirla`;
+}
+/* «~45 s» / «~2 min» para los avisos del directo. */
+function perfilSegTxt(s) {
+  s = Math.max(0, Math.round(+s || 0));
+  return s >= 90 ? `${Math.round(s / 60)} min` : `${s} s`;
+}
+function perfilIdiomaDirectoText(i) {
+  if (i.sin_cambio) return 'Idioma guardado: el directo ya usaba ese idioma';
+  const rehace = i.rehace_s >= 3 ? `; rehace en él los últimos ${perfilSegTxt(i.rehace_s)} ya escritos` : '';
+  if (i.estado === 'pausa') return `Idioma cambiado. El directo está en pausa por cupo: lo aplicará al reanudarse o al terminar${rehace}`;
+  if (i.estado === 'poniendose') return `Idioma cambiado ya, pero el directo va poniéndose al día (~${perfilSegTxt(i.detras_s)} por detrás): verás el idioma nuevo cuando alcance lo grabado${rehace}`;
+  return `Idioma cambiado: el directo lo usa ya y el texto nuevo sale en ~${perfilSegTxt(i.eta_s)}${rehace}`;
 }
 
 /* ---------------------------------------------------------------- Ajustes (rediseño B2, 07/11/2026)

@@ -29,6 +29,16 @@ DIAS = ("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
 CLAVES_CAMBIOS = ("carpeta", "idioma", "contexto", "mic", "sys", "live", "preset")
 ALCANCES = ("reunion", "proyecto", "workstream", "ajustes")
 IDIOMA_RE = re.compile(r"^(auto|[a-z]{2}(-[a-z]{2})?)$")  # el mismo que server.IDIOMA_RE
+# con un idioma fijo Whisper pasa a ese idioma lo que se diga en otro (msg 1150: una reunion que paso del ingles al
+# portugues siguio saliendo en ingles): se dice en la tarjeta de grabar, con lo que hacer
+NOTA_IDIOMA_FIJO = ("Con un idioma fijo, lo que se diga en otro se traduce a este: si la reunión puede cambiar de "
+                    "idioma, mejor una mezcla o «Detectar».")
+
+
+def idioma_fijo(code):
+    """Un solo idioma (no detectar ni una mezcla como «es-en»)."""
+    code = (code or "").strip().lower()
+    return bool(code) and code != "auto" and "-" not in code
 
 
 def idioma_txt(code):
@@ -246,7 +256,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     else:
         lang, l_origen, l_txt = st.get("language") or "", "ajustes", "Ajustes › Al grabar"
     lang = "" if lang == "auto" else lang
-    lineas.append(_linea("idioma", "Idioma", idioma_txt(lang), l_origen, l_txt, code=lang))
+    lineas.append(_linea("idioma", "Idioma", idioma_txt(lang), l_origen, l_txt, code=lang,
+                         **({"nota": NOTA_IDIOMA_FIJO} if idioma_fijo(lang) else {})))
 
     # --- vocabulario: el del workstream o, sin proyecto, el general de Ajustes
     if v:

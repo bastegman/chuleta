@@ -4,7 +4,8 @@ name: windows-real
 # regional español del usuario (Set-Culture es-ES) para el filtro de Outlook (P1-07), con la zona horaria de Madrid
 # (las horas de Outlook por pywin32, fix-calendario), y la ventana propia (pywebview
 # sobre WebView2) ante los mensajes con los que Windows apaga o cierra la sesion (P1-09) y sin WebView2 (P2-35). El
-# aviso con PowerShell 5.1 (P1-01) corre aqui y en tests.yml. Se lanza a mano (Actions -> windows-real -> Run
+# aviso con PowerShell 5.1 (P1-01) corre aqui y en tests.yml. test_ocultar_captura_windows: la ventana real con WebView2
+# lleva WDA_EXCLUDEFROMCAPTURE y no sale en una captura de pantalla (ocultar al compartir, msg 1242). Se lanza a mano (Actions -> windows-real -> Run
 # workflow) y con cada push a main, o a la rama fix-windows, que toque la app, los tests o este workflow (P2-38); deja
 # server.log y los resultados como artefacto. Solo lee el repo.
 on:

@@ -34,8 +34,9 @@ class DirectoCargaTests(unittest.TestCase):
     def test_textos_y_sin_nada_externo(self):
         js = read("directo.js")
         for s in ("Cada clave es de una cuenta distinta: el audio y el texto se procesan bajo esa cuenta",
-                  "Traducir al español", "Modo seguir", "/api/live/traducir", "Claves adicionales (opcional)",
-                  "Modelo del directo", "Traducción al español", "Directo en pausa por cupo", "directoCss"):
+                  "Traducir al", "Modo seguir", "/api/live/traducir", "Claves adicionales (opcional)",
+                  "Modelo del directo", "Traducción al ${directoTradNombre(to)}", "Directo en pausa por cupo",
+                  "directoCss", "['es', 'español'], ['en', 'inglés']", 'id="directoTradTo"'):
             self.assertIn(s, js, s)
         self.assertNotIn("fetch(", js)        # todo pasa por api() de app.js (mismo origen)
         self.assertNotIn("<link", js)

@@ -10,6 +10,47 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Idioma y traducción en pleno directo; oculta al compartir pantalla (09/11/2026)
+
+Ítems 12, 13a y 18 del backlog (msgs 1150-1152 y 1242). Rama `idioma-directo`.
+
+- **Cambiar el idioma en pleno directo vale al momento** (msg 1151: «funcionó, pero tardó»). Antes valía desde el
+  siguiente trozo y lo ya escrito seguía en el idioma de antes hasta el repaso final. Ahora el trozo que se estaba
+  transcribiendo se corta (en local se para Whisper y se recarga; una petición a la nube que ya vuelve se descarta) y
+  se repite con el idioma nuevo, y lo escrito en el último minuto se rehace en él: se relee ese audio y sale en una
+  sola petición. Nunca se rehace una frase corregida a mano ni las anteriores a ella. Lo de antes sigue en pantalla
+  hasta que llega lo nuevo y, si el trozo que lo rehace falla, vuelve lo de antes. El aviso dice el tiempo real: «el
+  texto nuevo sale en ~4 s; rehace en él los últimos 58 s», o que el directo va poniéndose al día, o que está en
+  pausa por cupo (`live.lang_switch_info`, devuelto por `POST /api/notes` en `directo.idioma`).
+  - Corrigiendo el texto («Editar») mientras se cambia el idioma: lo corregido se guarda antes del cambio (y no se
+    rehace), el editor pasa solo al texto rehecho sin salir de «Editar», y lo guardado sobre el texto de antes no da
+    por borrado lo rehecho (`text_gen` en `/api/transcript` y en el guardado; `rehecho_desde` en la respuesta, con
+    aviso si una corrección caía en lo rehecho). Si se corrige algo que se estaba rehaciendo, manda la corrección.
+  - Elegir el idioma que ya se estaba detectando no corta nada. Lo retomado tras reiniciar la app no se rehace.
+  - **Repaso final**: si el idioma cambió en pleno directo, repasa la grabación con la mezcla de los dos idiomas
+    usados (inglés y portugués → «Inglés + portugués») o detectando, y no con el del final para todo (lo dicho antes
+    del cambio saldría traducido).
+- **Nota en la tarjeta de grabar** con un idioma fijo: lo que se diga en otro idioma se traduce a ese; si la reunión
+  puede cambiar de idioma, mejor una mezcla o «Detectar».
+- **Traducción del directo al español o al inglés** (msg 1152): «Traducir al ▾ español / inglés». El destino se
+  recuerda por reunión (`traduccion_destino.json` en los datos de la app, no en la cabecera del `.md`, que las
+  versiones anteriores tomarían por notas); sin él, el idioma del resumen si es español o inglés. Al cambiarlo se
+  vuelve a traducir lo último en el idioma nuevo, sin esperar a la siguiente vuelta. Al inglés va con su propio prompt,
+  escrito en inglés. Sigue sin guardarse. `POST /api/live/traducir {id, on, to}`.
+- **Tenca no sale al compartir pantalla** (de la research de competencia; Minutes lo hace por defecto): la ventana
+  lleva `WDA_EXCLUDEFROMCAPTURE` desde antes de enseñarse. Lo que pinta WebView2 dentro también queda fuera
+  (comprobado con capturas en Windows). Activado por defecto, con el interruptor «Al compartir pantalla» en Ajustes →
+  Al grabar (se aplica al momento, `POST /api/ocultar-captura`). Vale también para el aviso flotante «● Grabar», que
+  sale justo al empezar una llamada con el nombre de la reunión (`aviso.py --ocultar-captura`). En un Windows anterior
+  a 10 2004 no se aplica (lo pintaría en negro): queda en el registro y el interruptor lo dice. Sin la ventana propia
+  (abierta en Edge) no se puede, y también lo dice.
+- Tests: `test_idioma_directo.py` (sesiones con reloj falso: cambio entre trozos, con un trozo en vuelo en la nube y
+  en local, dos seguidos, el trozo que rehace falla, corregidas a mano, traducción), `test_ocultar_captura.py`, y de
+  punta a punta: `test_e2e_idioma.py` (grabando de verdad contra un Groq falso, en ui-smoke), el cambio de idioma con
+  el Whisper medium de verdad en `test_e2e_procesado.py`, `test_ocultar_captura_windows.py` (la ventana real con
+  WebView2: la marca y capturas con y sin ella, en windows-real) y el aviso real con la marca en
+  `test_reunion_windows.py`; en `test_ui_smoke.py`, la nota de la tarjeta y el interruptor de Ajustes.
+
 ### Subir audio (09/11/2026)
 
 Ítem 7 del backlog (Bernardo, msg 1296: «poder subir un audio, independiente de donde venga»). Hecho por Steve en la

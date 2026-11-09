@@ -1164,13 +1164,15 @@ class Vigia:
                 pass
         self.proc = None
 
-    def abrir_aviso(self, puerto, app_dir, python=None, creationflags=0, segundos=20):
-        """Lanza aviso.py (proceso aparte, como el selector de carpetas) con lo que se sabe de la reunión."""
+    def abrir_aviso(self, puerto, app_dir, python=None, creationflags=0, segundos=20, ocultar=False):
+        """Lanza aviso.py (proceso aparte, como el selector de carpetas) con lo que se sabe de la reunión. ocultar: el
+        ajuste «Al compartir pantalla» (que el aviso no salga en lo que ven los demás)."""
         sug = dict((self.ultimo or {}).get("sugerencia") or {})
         titulo = ((self.ultimo or {}).get("teams") or {}).get("title") or sug.get("name") or ""
         cmd = [python or sys.executable, os.path.join(app_dir, "aviso.py"), "--puerto", str(puerto),
                "--titulo", titulo, "--nombre", sug.get("name") or "", "--vocab", sug.get("vocab") or "",
-               "--tema", sug.get("vocab_label") or "", "--segundos", str(segundos)]
+               "--tema", sug.get("vocab_label") or "", "--segundos", str(segundos)] + (["--ocultar-captura"]
+                                                                                       if ocultar else [])
         try:
             self.proc = subprocess.Popen(cmd, cwd=app_dir, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL, creationflags=creationflags)
@@ -1190,7 +1192,8 @@ class Vigia:
         abrir, self.avisado = decidir_aviso(app, recording, settings.get("rec_aviso", True), self.abierto(),
                                             self.avisado)
         if abrir:
-            return self.abrir_aviso(puerto, app_dir, creationflags=creationflags)
+            return self.abrir_aviso(puerto, app_dir, creationflags=creationflags,
+                                    ocultar=settings.get("ocultar_al_compartir", True) is not False)
         if (not app or recording) and self.abierto():
             self.cerrar_aviso()
         if not app:

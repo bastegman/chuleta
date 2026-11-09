@@ -2570,8 +2570,8 @@ class Summarizer:
                 continue
             raise EngineError(api_error(r))
         how = " a tiempo" if end is not None else ": el servicio no respondió tras varios intentos"
-        raise EngineError(f"{'La traducción' if system == self.TRANSLATE_SYSTEM else 'El resumen'} no ha podido "
-                          f"hacerse{how}" + (f" ({last})." if last else "."))
+        raise EngineError(f"{'La traducción' if system in self.TRANSLATE_SYSTEMS.values() else 'El resumen'} no ha "
+                          f"podido hacerse{how}" + (f" ({last})." if last else "."))
 
     @staticmethod
     def _sleep(secs, cancelled):
@@ -2587,6 +2587,15 @@ class Summarizer:
         "si una frase ya está en español, cópiala tal cual). Conserva nombres propios, siglas, cifras, fechas y "
         "términos técnicos. El fragmento puede empezar o acabar a mitad de frase: tradúcelo igual, sin inventar "
         "el resto. Devuelve solo la traducción, sin comillas ni notas.")
+    # al ingles (msg 1152), escrito en ingles: con las instrucciones en espanol, un modelo pequeno tiende a contestar en
+    # espanol
+    TRANSLATE_SYSTEM_EN = (
+        "You are a simultaneous interpreter for work meetings. Translate into English, faithfully and without "
+        "summarizing, commenting or completing, the meeting transcript fragment you are given (it usually comes in "
+        "Portuguese or Spanish; if a sentence is already in English, copy it as is). Keep proper names, acronyms, "
+        "figures, dates and technical terms. The fragment may start or end mid-sentence: translate it anyway, without "
+        "inventing the rest. Return only the translation, without quotes or notes.")
+    TRANSLATE_SYSTEMS = {"es": TRANSLATE_SYSTEM, "en": TRANSLATE_SYSTEM_EN}
 
     @classmethod
     def translate_model(cls, cfg):
@@ -2600,10 +2609,14 @@ class Summarizer:
             return (cfg.get("summary_model") or "").strip() or cls.TRANSLATE_MODEL
         return cls.TRANSLATE_MODEL if provider == "groq" else "gpt-4o-mini"
 
-    def translate(self, cfg, text, report, cancelled, model=None, timeout=60, attempts=8, budget=None):
-        """Traduce al espanol un trozo del directo con un modelo de chat rapido (translate_model). Devuelve (texto,
-        modelo). Comparte claves y rotacion con la transcripcion. timeout, attempts y budget (ver _chat): el ultimo
-        paso, al terminar el directo, tiene un plazo para no retener el final de la sesion."""
+    def translate(self, cfg, text, report, cancelled, model=None, timeout=60, attempts=8, budget=None, to="es"):
+        """Traduce un trozo del directo al espanol (to="es") o al ingles ("en") con un modelo de chat rapido
+        (translate_model). Devuelve (texto, modelo). Comparte claves y rotacion con la transcripcion. timeout, attempts
+        y budget (ver _chat): el ultimo paso, al terminar el directo, tiene un plazo para no retener el final de la
+        sesion."""
+        system = self.TRANSLATE_SYSTEMS.get(to)
+        if system is None:
+            raise EngineError(f"No se puede traducir a «{to}»: solo al español o al inglés.")
         text = " ".join((text or "").split())
         model = model or self.translate_model(cfg)
         if not text:
@@ -2612,7 +2625,7 @@ class Summarizer:
         if missing:
             raise EngineError(missing)
         max_tokens = min(1200, 120 + len(text) // 2)  # el espanol ocupa ~1 token por 3-4 caracteres; con margen
-        return self._chat(cfg, self.TRANSLATE_SYSTEM, text, max_tokens, report, cancelled, model=model,
+        return self._chat(cfg, system, text, max_tokens, report, cancelled, model=model,
                           temperature=0.1, timeout=timeout, attempts=attempts, budget=budget)
 
     def summarize(self, segments, meta, cfg, report, cancelled):

@@ -241,6 +241,8 @@ main.addEventListener('change', e => {
 });
 
 /* ---------------------------------------------------------------- propiedades de la reunion */
+/* Devuelve la respuesta del servidor (o nada si ha fallado: entonces ya se ha dicho el error y no se avisa de que se
+   ha guardado). */
 async function saveProps(a, patch) {
   try {
     const r = await api('/api/notes', { path: a.path, props: patch });
@@ -250,6 +252,7 @@ async function saveProps(a, patch) {
     const t = $('#pTitleTxt');
     if (S.playing === a.path) $('#pTitle').textContent = fullTitle(a);
     if (t && document.activeElement !== t) t.textContent = titleOf(a);
+    return r;
   } catch (err) { toast(esc(err.message), 'err'); }
 }
 function titleRowHtml(a) {
@@ -284,8 +287,11 @@ const curAudio = () => S.route.kind === 'a' ? S.audios.get(S.route.path) : null;
 main.addEventListener('change', e => {
   const a = curAudio();
   if (a && e.target.dataset.prop === 'estado') { e.target.className = 'pstate ' + (ESTADO_CLS[e.target.value] || ''); saveProps(a, { estado: e.target.value }); }
-  if (a && e.target.dataset.prop === 'idioma') {  // perfil.js: el directo lo relee en el siguiente trozo
-    saveProps(a, { idioma: e.target.value }).then(() => { if (typeof perfilSavedText === 'function') toast(perfilSavedText('idioma', !!liveJob(a), !!(a.txt || a.srt))); });
+  if (a && e.target.dataset.prop === 'idioma') {  // perfil.js: en directo vale al momento y el aviso dice cuándo se verá
+    const v = e.target.value;
+    // corrigiendo: antes, lo corregido (el directo no rehace una frase corregida, y así no se pierde nada)
+    const antes = S.editing && S.tx && S.tx.path === a.path ? saveEdits(true) : Promise.resolve();
+    antes.then(() => saveProps(a, { idioma: v })).then(r => { if (r && typeof perfilSavedText === 'function') toast(perfilSavedText('idioma', !!liveJob(a), !!(a.txt || a.srt), r.directo?.idioma)); });
   }
 });
 main.addEventListener('keydown', e => {
@@ -320,7 +326,7 @@ main.addEventListener('focusout', e => {
     if (v !== ((a.props || {}).participantes || '')) saveProps(a, { participantes: v }).then(() => window.reunionParticipantesGuardados?.(a));
   } else if (e.target.dataset && e.target.dataset.prop === 'contexto') {  // perfil.js: Whisper y el resumen lo usan
     const v = e.target.value.trim();
-    if (v !== ((a.props || {}).contexto || '')) saveProps(a, { contexto: v }).then(() => { if (typeof perfilSavedText === 'function') toast(perfilSavedText('contexto', !!liveJob(a), !!(a.txt || a.srt))); });
+    if (v !== ((a.props || {}).contexto || '')) saveProps(a, { contexto: v }).then(r => { if (r && typeof perfilSavedText === 'function') toast(perfilSavedText('contexto', !!liveJob(a), !!(a.txt || a.srt))); });
   }
 });
 

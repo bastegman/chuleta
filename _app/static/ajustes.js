@@ -20,7 +20,38 @@ function ajAlGrabarHtml() {
       <div class="ag-regla"><label for="agMic">Micrófono · audio del PC</label><div class="ag-dos"><select id="agMic" aria-label="Micrófono">${ajDispositivos(null)[0]}</select><select id="agSys" aria-label="Audio del PC">${ajDispositivos(null)[1]}</select><span id="agDevsAviso" class="hidden"></span></div></div>
       <div class="ag-regla"><label for="agDirecto">Texto en directo</label><div><label class="ag-sw"><input type="checkbox" id="agDirecto"${c.rec_directo !== false ? ' checked' : ''}>si el portátil va lento, quítalo: transcribe al terminar</label></div></div>
       <div class="ag-regla"><label for="lMeet">Llamada detectada</label><div><label class="ag-sw"><input type="checkbox" id="lMeet"${c.meeting_detect !== false ? ' checked' : ''}>avisarme si estoy en una llamada y no estoy grabando</label></div></div>
+      ${ajOcultarHtml(c.ocultar_captura)}
     </div>`;
+}
+/* «Ocultar Tenca al compartir pantalla» (msg 1242; window.py): se aplica al marcarlo, sin «Guardar» (data-se-guarda-solo),
+   como «Arrancar con Windows». o: /api/config → ocultar_captura ({activado, soportado, motivo, error}). */
+function ajOcultarHtml(o) {
+  if (!o) return '';
+  const no = o.soportado === false;
+  const nota = no ? `<span class="gr-aviso" id="agOcultarNota">${esc(o.motivo || 'No se puede en este equipo.')}</span>`
+    : `<span class="ag-sub" id="agOcultarNota">${esc(ajOcultarAyuda(o))}</span>`;
+  return `<div class="ag-regla"><label for="agOcultar">Al compartir pantalla</label><div><label class="ag-sw"><input type="checkbox" id="agOcultar" data-se-guarda-solo${o.activado && !no ? ' checked' : ''}${no ? ' disabled' : ''}>ocultar ${esc(APP_NAME)}: quien vea tu pantalla no la ve</label>${nota}</div></div>`;
+}
+function ajOcultarAyuda(o) {
+  if (o && o.error) return `Windows no lo ha aplicado: ${o.error}`;
+  return `Tú la sigues viendo. Tampoco sale en tus capturas de pantalla: para enseñar ${APP_NAME} en una demo o hacerle una captura, quítalo (vale al momento).`;
+}
+function bindAjOcultar(d) {
+  const x = $('#agOcultar', d);
+  if (!x) return;
+  x.onchange = async () => {
+    const on = x.checked;
+    x.disabled = true;
+    try {
+      const r = await api('/api/ocultar-captura', { activado: on });
+      if (S.config) S.config.ocultar_captura = r;
+      x.checked = !!r.activado;
+      const n = $('#agOcultarNota', d);
+      if (n) n.textContent = ajOcultarAyuda(r);
+      toast(r.error ? esc(`No se ha podido aplicar: ${r.error}`) : r.activado ? `${esc(APP_NAME)} no saldrá al compartir pantalla` : `${esc(APP_NAME)} vuelve a salir al compartir pantalla`, r.error ? 'err' : '');
+    } catch (err) { x.checked = !on; toast(esc(err.message), 'err'); }
+    finally { x.disabled = false; }
+  };
 }
 /* opciones de micrófono y audio del PC con lo guardado elegido (sin la lista de dispositivos: las genéricas) */
 function ajDispositivos(devs) {
@@ -81,6 +112,7 @@ function ajAlGrabarCollect(d) {
   return out;
 }
 function bindAjAlGrabar(d) {
+  bindAjOcultar(d);
   const proy = $('#agProy', d), box = $('#agFilas', d);
   if (!proy || !box) return;
   let seq = 0, t = null, elegido = false;

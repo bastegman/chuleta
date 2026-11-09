@@ -17,9 +17,15 @@ ventana mas de Edge. Si pywebview no esta instalado o no puede crear la ventana,
   - Desde que se crea Window hasta que la ventana se ensena (evento shown) esta «en camino» (pending): en un PC lento
     son decenas de segundos y el usuario vuelve a pulsar el acceso directo. Si en ese rato otra copia pide
     /api/mostrar, no se abre Edge (eran las «2 veces la app» del 02/11/2026): la ventana sale sola y se trae al frente.
+  - Ocultarse al compartir pantalla (msg 1242, como Minutes): SetWindowDisplayAffinity con WDA_EXCLUDEFROMCAPTURE en la
+    ventana de nivel superior, que tapa tambien lo que pinta WebView2 dentro (comprobado con capturas en windows-real).
+    Teams, Zoom y las capturas de pantalla ven lo que hay detras; el usuario la sigue viendo. Ajuste
+    «ocultar_al_compartir» (por defecto, si), que se aplica al momento. Necesita Windows 10 2004 (build 19041) o
+    posterior: en uno anterior Windows la pintaria en negro (WDA_MONITOR), asi que no se aplica y se dice.
 """
 import json
 import os
+import sys
 import threading
 import time
 
@@ -84,6 +90,55 @@ def set_window_icons(hwnd, ico_path):
         return False
 
 
+WDA_NONE, WDA_EXCLUDEFROMCAPTURE = 0x0, 0x11
+CAPTURE_MIN_BUILD = 19041  # Windows 10 version 2004: antes, WDA_EXCLUDEFROMCAPTURE se comporta como WDA_MONITOR
+
+
+def windows_build():
+    try:
+        return int(sys.getwindowsversion().build)
+    except Exception:
+        return 0
+
+
+def capture_support(build=None, windows=None):
+    """(soportado, motivo): si esta ventana se puede ocultar al compartir pantalla en este Windows."""
+    if not (WINDOWS if windows is None else windows):
+        return False, "Solo en Windows."
+    build = windows_build() if build is None else build
+    if build < CAPTURE_MIN_BUILD:
+        return False, (f"Este Windows no lo admite (hace falta Windows 10 versión 2004 o posterior; este es el build "
+                       f"{build}).")
+    return True, None
+
+
+def _user32():
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    u.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+    u.SetWindowDisplayAffinity.restype = wintypes.BOOL
+    u.GetWindowDisplayAffinity.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    u.GetWindowDisplayAffinity.restype = wintypes.BOOL
+    return u
+
+
+def set_display_affinity(hwnd, on):
+    """Pone (on) o quita la marca de «no capturar» en una ventana de nivel superior de este proceso. Devuelve (ok,
+    codigo de error de Windows)."""
+    import ctypes
+    ok = bool(_user32().SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE if on else WDA_NONE))
+    return ok, (0 if ok else ctypes.get_last_error())
+
+
+def get_display_affinity(hwnd):
+    """La marca que tiene la ventana (0 ninguna, 0x11 no capturar) o None si Windows no contesta."""
+    import ctypes
+    from ctypes import wintypes
+    v = wintypes.DWORD()
+    return int(v.value) if _user32().GetWindowDisplayAffinity(hwnd, ctypes.byref(v)) else None
+
+
 def renderer(wv):
     """El motor con que pywebview pintara la ventana: «edgechromium» (WebView2) o, si falta el runtime de WebView2,
     «mshtml» (el de Internet Explorer: la interfaz sale en blanco). None si no se sabe (entonces decide start(), que
@@ -120,8 +175,11 @@ def close_reason(v):
 class Window:
     """La ventana de la app. run() en el hilo principal; show() y destroy() valen desde cualquier hilo."""
 
-    def __init__(self, url, data_dir, ico_path, webview=None, tray=None):
+    def __init__(self, url, data_dir, ico_path, webview=None, tray=None, hide_from_capture=None):
         self.url, self.data_dir, self.ico_path = url, data_dir, ico_path
+        # ocultarse al compartir pantalla: un bool o una funcion que lo lee del ajuste (server.py); None, no se toca
+        self.hide_from_capture = hide_from_capture
+        self.capture_applied, self.capture_error = None, None  # lo que hay puesto ahora (None: aun nada)
         self.tray = tray  # bandeja.Bandeja (aun sin crear) o None; se crea en el hilo de la ventana (_hook_native)
         self.tray_ok = False
         self._notice_lock = threading.Lock()  # dos X seguidas: un solo globo
@@ -195,6 +253,8 @@ class Window:
                 set_window_icons(self.hwnd, self.ico_path)
             if not self.native:  # pywebview sin before_show
                 self._hook_native()
+            if self.capture_applied is None:  # sin before_show (o sin la Form de WinForms): ahora, con el hwnd
+                self.set_capture(self._capture_pref(), quiet_off=True)
             log(f"ventana abierta ({'WebView2' if WINDOWS else 'pywebview'}; hwnd {self.hwnd})")
         except Exception:
             log_exc()
@@ -225,6 +285,8 @@ class Window:
             log_exc()
             return False
         self._create_tray(form)
+        # antes de ensenarla: que ni el primer fotograma salga en una reunion en la que ya se esta compartiendo
+        self.set_capture(self._capture_pref(), quiet_off=True)
         if WINDOWS:
             try:
                 import ctypes
@@ -232,6 +294,71 @@ class Window:
             except Exception:
                 log_exc()
         return True
+
+    # --- ocultarse al compartir pantalla
+    def _capture_pref(self):
+        f = self.hide_from_capture
+        try:
+            return bool(f() if callable(f) else f)
+        except Exception:
+            log_exc()
+            return False
+
+    def capture_state(self):
+        """{soportado, motivo, aplicado, error} para Ajustes."""
+        ok, motivo = capture_support()
+        return {"soportado": ok, "motivo": motivo, "aplicado": self.capture_applied, "error": self.capture_error}
+
+    def set_capture(self, on, quiet_off=False):
+        """Pone o quita la marca de «no capturar» en la ventana, desde cualquier hilo: en WinForms se hace en el hilo de
+        la ventana (Invoke). quiet_off: al abrir, con el ajuste apagado, no hay nada que quitar. Devuelve True si queda
+        como se pide."""
+        form = getattr(self.w, "native", None) if self.w is not None else None
+        try:
+            if form is not None and getattr(form, "InvokeRequired", False):
+                import System
+                out = []
+                form.Invoke(System.Action(lambda: out.append(self._set_capture_here(form, on, quiet_off))))
+                return bool(out and out[0])
+        except Exception:  # la ventana se esta cerrando: nada que marcar
+            log_exc()
+            return False
+        return self._set_capture_here(form, on, quiet_off)
+
+    def _set_capture_here(self, form, on, quiet_off):
+        try:
+            if self.quitting:
+                return False
+            if not on and quiet_off and not self.capture_applied:
+                self.capture_applied = False
+                return True
+            ok_sup, motivo = capture_support()
+            if not ok_sup:
+                if on and self.capture_error != motivo:
+                    log(f"ocultar {APP_NAME} al compartir pantalla: no se puede ({motivo})")
+                self.capture_applied, self.capture_error = False, (motivo if on else None)
+                return not on
+            hwnd = None
+            if form is not None:
+                try:
+                    hwnd = int(form.Handle.ToInt64())
+                except Exception:
+                    hwnd = None
+            hwnd = hwnd or self.hwnd
+            if not hwnd:
+                return False
+            ok, err = set_display_affinity(hwnd, on)
+            if ok:
+                self.capture_applied, self.capture_error = bool(on), None
+                log(f"ventana {'oculta' if on else 'visible'} al compartir pantalla (hwnd {hwnd})")
+            else:
+                self.capture_applied = False
+                self.capture_error = f"Windows no lo ha aceptado (error {err})."
+                log(f"ocultar {APP_NAME} al compartir pantalla: SetWindowDisplayAffinity falló (error {err})")
+            return ok
+        except Exception:
+            log_exc()
+            return False
 
     def _create_tray(self, form):
         """El icono de la bandeja, en el hilo de la ventana (su bucle de mensajes es el que lo atiende). Desde

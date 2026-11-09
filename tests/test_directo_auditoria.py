@@ -798,7 +798,8 @@ class TraduccionTests(unittest.TestCase):
         self.assertLessEqual(live.TRANSLATE_LOCK_S, 3)
         tr.lock.release()
         self.assertTrue(tr.step(final=True))  # sin nadie: con plazo (todo incluido) y pocos intentos
-        self.assertEqual(sorted(summ.kw), ["attempts", "budget"])
+        self.assertEqual(sorted(summ.kw), ["attempts", "budget", "to"])  # to: el destino (msg 1152), aquí el de siempre
+        self.assertEqual(summ.kw["to"], "es")
         self.assertEqual(summ.kw["attempts"], live.TRANSLATE_FINAL_ATTEMPTS)
         self.assertLessEqual(summ.kw["budget"], live.TRANSLATE_FINAL_S)
         self.assertGreater(summ.kw["budget"], live.TRANSLATE_FINAL_S - 1)  # sin esperar al hilo, el plazo entero
@@ -825,7 +826,8 @@ class TraduccionTests(unittest.TestCase):
         with mock.patch.object(live.LiveTranslator, "_loop", lambda tr: None):
             r = run_session([(0.0, 3.4), (4.0, 7.0)], 9.0, translate=True, summ=Summ())
         self.assertEqual(len(calls), 1, calls)
-        self.assertEqual(sorted(calls[0]), ["attempts", "budget"])
+        self.assertEqual(sorted(calls[0]), ["attempts", "budget", "to"])
+        self.assertEqual(calls[0]["to"], "es")
         self.assertEqual(calls[0]["attempts"], live.TRANSLATE_FINAL_ATTEMPTS)
         self.assertTrue(0 < calls[0]["budget"] <= live.TRANSLATE_FINAL_S)
         self.assertEqual(len(r.job.translation), 1)

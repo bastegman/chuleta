@@ -19,7 +19,9 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
 - **Transcribir** mientras se habla o al terminar: en tu PC (faster-whisper) o en la nube (Groq, OpenAI, Azure OpenAI
   o cualquier API compatible con OpenAI). En la nube el directo va casi en streaming: trozos de 3–6 s cortados en las
   pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de respaldo de otras cuentas
-  del mismo proveedor, si las añades); con «Modo seguir» y, si quieres, traducción al español en una columna.
+  del mismo proveedor, si las añades); con «Modo seguir» y, si quieres, traducción al español o al inglés en una
+  columna («Traducir al ▾», recordado por reunión; no se guarda). El idioma de la reunión se cambia en pleno directo y
+  vale al momento: el trozo en curso se repite y lo escrito en el último minuto se rehace en el idioma nuevo.
 - **Corregir** la transcripción en la propia página y **tomar notas** por reunión (bloques, propiedades, etiquetas,
   estado, participantes, proyecto).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio. Al terminar se hace
@@ -55,6 +57,11 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
 - **Quién habla** (opcional): separa las voces de cada reunión en tu PC (sherpa-onnx), etiqueta «Persona 1»,
   «Persona 2», «Tú»… en la transcripción, deja ponerles nombre y, con consentimiento, recordarlas en las próximas
   reuniones. El resumen usa esos nombres.
+- **Oculta al compartir pantalla**: en Teams, Zoom o Meet los demás no ven Tenca ni su aviso «Grabar» (ven lo que
+  haya detrás); tú sí.
+  Tampoco sale en capturas de pantalla. Se quita en Ajustes → Al grabar → «Al compartir pantalla» (para
+  una demo o una captura; vale al momento). Windows 10 2004 o posterior (`SetWindowDisplayAffinity` con
+  `WDA_EXCLUDEFROMCAPTURE`).
 - **Compartir**: desde Ajustes se genera un zip instalable para otra persona.
 
 ## Instalar (Windows, sin permisos de administrador)
