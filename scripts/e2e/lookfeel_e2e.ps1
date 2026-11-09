@@ -345,7 +345,7 @@ Check "c.instala_en_carpeta_propia" (Test-Path -LiteralPath (Join-Path $inst "_a
 Check "c.log_instalando_en" ($ilog -match ("Instalando en " + [regex]::Escape($inst))) (($ilog -split "`n" | Select-String "Instalando en" | Select-Object -First 1) -join "")
 Check "c.log_donde_quedo" ($ilog -match ("Instalada en " + [regex]::Escape($inst))) (($ilog -split "`n" | Select-String "Instalada en" | Select-Object -First 1) -join "")
 Check "c.log_descomprimida_borrable" ($ilog -match "descomprimiste .* ya no hace falta") (($ilog -split "`n" | Select-String "descomprimiste" | Select-Object -First 1) -join "")
-$faltan = @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR TENCA.bat", "_app\desinstalar.ps1", "_app\instalar.ps1", "_app\version.txt", "_app\static\tenca.ico", "_app\Tenca.bat", "_app\export\LEEME.txt") | Where-Object { -not (Test-Path -LiteralPath (Join-Path $inst $_)) }
+$faltan = @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR TENCA.bat", "_app\desinstalar.ps1", "_app\instalar.ps1", "_app\version.txt", "_app\static\tenca.ico", "_app\Tenca.bat", "_app\export\LEEME.txt", "_app\static\manrope.woff2", "_app\static\fraunces.woff2", "_app\static\fuentes-OFL.txt", "_app\static\logo.svg") | Where-Object { -not (Test-Path -LiteralPath (Join-Path $inst $_)) }
 Check "c.copiados" ($faltan.Count -eq 0) ("faltan: " + ($faltan -join ", "))
 Check "c.version_copiada" (((Get-Content -LiteralPath (Join-Path $inst "_app\version.txt") -Encoding UTF8 -Raw).Trim()) -eq $verZip) ""
 Check "c.descomprimida_intacta" ((Test-Path -LiteralPath (Join-Path $dir1 "_app\server.py")) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "_app\python.txt"))) $dir1
@@ -912,6 +912,13 @@ if (-not $Chuleta) {
     Note "v.api_tarda_s" $script:ultimaEspera
     if ($script:ultimaEspera -gt 5) { Diag-Lenta "v" }
     Check "v.app_es_tenca" ($cfgv2 -and $cfgv2.app_name -eq $App -and $cfgv2.root -ieq $vInst -and $cfgv2.version -eq $verZip) "app_name=$($cfgv2.app_name) root=$($cfgv2.root) version=$($cfgv2.version)"
+    # la carpeta sigue llamandose Chuleta: las rutas que ensena la app («Se guarda en …») empiezan por ese nombre
+    Check "v.raiz_con_su_nombre" ($cfgv2 -and $cfgv2.root_name -eq (Split-Path -Leaf $vInst)) "root_name=$($cfgv2.root_name)"
+    try { $planv = Invoke-RestMethod "$Base/api/grabar/plan" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch { $planv = $null }
+    $carv = $(if ($planv) { @($planv.lineas | Where-Object { $_.clave -eq "carpeta" })[0].valor } else { "" })
+    Check "v.se_guarda_en_la_carpeta_real" ("$carv" -like "$(Split-Path -Leaf $vInst)\*") "$carv"
+    $fuentesV = @("manrope.woff2", "fraunces.woff2", "fuentes-OFL.txt", "logo.svg") | Where-Object { -not (Test-Path -LiteralPath (Join-Path $vInst "_app\static\$_")) }
+    Check "v.fuentes_copiadas" (@($fuentesV).Count -eq 0) ("faltan: " + ($fuentesV -join ", "))
     $treev = Wait-Tree "Reunion de Chuleta" 40
     Check "v.app_ve_la_reunion" ($treev -match "Proyecto Beta" -and $treev -match "Reunion de Chuleta") $(if ($treev) { "$($treev.Length) caracteres" } else { "sin respuesta" })
     try { $iwv = Invoke-RestMethod "$Base/api/inicio-windows" -Headers (Api-Headers $false) -TimeoutSec 10 } catch { $iwv = $null }

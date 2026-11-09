@@ -57,10 +57,11 @@ ACTUALIZAR A UNA VERSIÓN NUEVA
   Si venías de Chuleta (el nombre anterior): sus accesos directos del escritorio y del menú Inicio,
   "Arrancar con Windows" y su entrada en Aplicaciones instaladas pasan a llamarse Tenca, sin
   duplicados. No cambia nada más: tus reuniones y listas de vocabulario siguen en su carpeta, que
-  conserva su nombre (p. ej. C:\Users\<tu usuario>\Chuleta), y tus ajustes, claves y voces siguen en
-  %LOCALAPPDATA%\AudiosApp. Si la tenías anclada a la barra de tareas, Windows no deja que un
-  instalador le cambie el nombre: clic derecho en el icono > Desanclar de la barra de tareas y,
-  con Tenca abierta, clic derecho en su icono > Anclar a la barra de tareas.
+  conserva su nombre (p. ej. C:\Users\<tu usuario>\Chuleta) y Tenca la llama así ("Se guarda en
+  Chuleta\..."), y tus ajustes, claves y voces siguen en %LOCALAPPDATA%\AudiosApp. Si la tenías
+  anclada a la barra de tareas, Windows no deja que un instalador le cambie el nombre: clic derecho
+  en el icono > Desanclar de la barra de tareas y, con Tenca abierta, clic derecho en su icono >
+  Anclar a la barra de tareas.
 
   Si la misma carpeta de reuniones la usan varias copias de Tenca (en otro PC, o en una carpeta
   de OneDrive compartida), actualízalas todas a la vez: una copia de una versión anterior envía al

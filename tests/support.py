@@ -67,10 +67,13 @@ def patched_paths(**values):
 
 class TempTree(unittest.TestCase):
     """Un ROOT temporal con su _app/ y un DATA_DIR aparte; COMPLETE apunta a ese DATA_DIR."""
+    # el nombre de la carpeta: el de una instalacion nueva (server.root_name() == APP_NAME); la de una instalada encima
+    # de Chuleta, que conserva su nombre, la prueban test_raiz_real (ROOT_NAME = "Chuleta") y test_ui_smoke
+    ROOT_NAME = "Tenca"
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="notas-test-")
-        self.root = os.path.join(self.tmp, "Notas")
+        self.root = os.path.join(self.tmp, self.ROOT_NAME)
         self.app_dir = os.path.join(self.root, "_app")
         self.data_dir = os.path.join(self.tmp, "datos")
         os.makedirs(os.path.join(self.app_dir, "static"))

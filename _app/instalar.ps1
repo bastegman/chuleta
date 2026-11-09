@@ -424,11 +424,16 @@ function Get-LnkInfo($lnkPath) {
     # a que apunta un acceso directo: @{ app = <carpeta _app> o ""; deLaApp = $true si es de la app (abre server.py, o un
     # lanzador .bat de la app) }. La carpeta: WorkingDirectory (pythonw.exe desde el 31/10/2026) o la del destino (los
     # antiguos apuntaban a _app\Notas.bat); vale si tiene server.py
-    $r = @{ app = ""; deLaApp = $false }
+    # vivo = $true si solo se reconoce por el nombre del .bat y ese .bat existe: sin server.py al lado no es de la app
+    # (o no se sabe), pero tampoco esta roto, asi que no se quita
+    $r = @{ app = ""; deLaApp = $false; vivo = $false }
     try { $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath) } catch { return $r }
     $wd, $tp, $ar = "$($sc.WorkingDirectory)", "$($sc.TargetPath)", "$($sc.Arguments)"
     $bats = @("Tenca.bat") + @($LegacyNames | ForEach-Object { "$_.bat" })
-    $r.deLaApp = ($ar -match 'server\.py') -or ($tp -and ($bats -contains (Split-Path -Leaf $tp)))
+    $porArgs = $ar -match 'server\.py'
+    $porBat = [bool]($tp -and ($bats -contains (Split-Path -Leaf $tp)))
+    $r.deLaApp = $porArgs -or $porBat
+    $r.vivo = $porBat -and -not $porArgs -and (Test-Path -LiteralPath $tp -PathType Leaf)
     # tambien la carpeta del server.py de los argumentos: uno sin WorkingDirectory no se tomara por roto
     $deArgs = $(if ($ar -match '"?([^"]*server\.py)"?') { Split-Path -Parent $Matches[1] } else { "" })
     foreach ($d in @($wd, $(if ($tp) { Split-Path -Parent $tp } else { "" }), $deArgs)) {
@@ -441,7 +446,8 @@ function Get-LnkAntiguos($dir, $appDir, $nombres = $LegacyNames) {
     # los accesos directos con un nombre anterior de la app en $dir que sobran: los que apuntan a $appDir, que
     # se migran, y los de la app que ya no apuntan a nada (una carpeta borrada). Cada uno: @{ path; name; tipo = "esta" o
     # "rota" }. Uno que apunta a otra copia de la app (otra carpeta con server.py) se queda y se dice; uno que no es de
-    # la app (un documento que se llame igual) no se toca
+    # la app (un documento que se llame igual) no se toca, ni uno que abre un Notas.bat o Chuleta.bat que existe sin
+    # server.py al lado (puede ser de otro programa: no esta roto)
     $out = @()
     foreach ($n in $nombres) {
         $p = Join-Path $dir "$n.lnk"
@@ -449,8 +455,8 @@ function Get-LnkAntiguos($dir, $appDir, $nombres = $LegacyNames) {
         $i = Get-LnkInfo $p
         if ($i.app -and (Same-Path $i.app $appDir)) { $out += @{ path = $p; name = $n; tipo = "esta" } }
         elseif ($i.app) { Say "    Se conserva el acceso directo '$n' en $dir : es de otra copia ($($i.app))." Yellow }
-        elseif ($i.deLaApp) { $out += @{ path = $p; name = $n; tipo = "rota" } }
-        else { Log-File "    se conserva $p (no es de la app)" }
+        elseif ($i.deLaApp -and -not $i.vivo) { $out += @{ path = $p; name = $n; tipo = "rota" } }
+        else { Log-File "    se conserva $p (no es de la app, o abre un .bat que existe)" }
     }
     return $out
 }
@@ -542,11 +548,14 @@ function Test-TieneReuniones($rootDir, $appDir) {
 function Get-CarpetaNueva {
     # la carpeta propia que ya fue de la app (desinstalada: quedan alli sus reuniones con el LEEME), con el nombre de
     # ahora o con el anterior (%USERPROFILE%\Chuleta); si no hay, %USERPROFILE%\Tenca o, si esa ya tiene otras cosas,
-    # "Tenca (2)", "Tenca (3)"... ($null si ninguna vale)
-    foreach ($f in @(@($FolderName) + $LegacyFolders)) {
+    # "Tenca (2)", "Tenca (3)"... ($null si ninguna vale). Si las dos fueron de la app, la que tiene reuniones: un zip
+    # descomprimido en %USERPROFILE%\Tenca no debe dejar fuera las reuniones de %USERPROFILE%\Chuleta
+    $deLaApp = @(foreach ($f in @(@($FolderName) + $LegacyFolders)) {
         $dir = Join-Path $script:UserHome $f
-        if ((Test-Path -LiteralPath $dir -PathType Container) -and (Test-CarpetaDeLaApp $dir)) { return $dir }
-    }
+        if ((Test-Path -LiteralPath $dir -PathType Container) -and (Test-CarpetaDeLaApp $dir)) { $dir }
+    })
+    foreach ($dir in $deLaApp) { if (Test-TieneReuniones $dir (Join-Path $dir "_app")) { return $dir } }
+    if ($deLaApp.Count -gt 0) { return $deLaApp[0] }
     for ($i = 1; $i -le 20; $i++) {
         $dir = Join-Path $script:UserHome $(if ($i -eq 1) { $FolderName } else { "$FolderName ($i)" })
         if (Test-CarpetaLibre $dir) { return $dir }

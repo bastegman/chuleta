@@ -62,7 +62,8 @@ class PendienteTests(TempTree):
         r = self.destino("Beta")
         self.assertEqual(r["path"], self.rel)
         self.assertEqual(r["pendiente"]["destino"], self.nuevo_dir)
-        self.assertEqual(r["pendiente"]["display"], f"\\Beta\\{TODAY} Comité\\")
+        # como la tarjeta: con la raíz por su nombre en el disco (la de los tests se llama como la app)
+        self.assertEqual(r["pendiente"]["display"], f"Tenca\\Beta\\{TODAY} Comité\\")
         self.assertEqual(self.aplicar(), 0)  # sigue grabando
         self.assertTrue(os.path.isfile(server.safe(self.rel)))
         with open(os.path.join(self.data_dir, "movimientos_pendientes.json"), encoding="utf-8") as f:

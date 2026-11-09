@@ -10,6 +10,30 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Tenca encima de Chuleta: la carpeta con su nombre de verdad (09/11/2026)
+
+- **Rutas**: la tarjeta de grabar, el aviso de Ctrl+Alt+R, la cabecera del directo («Se guarda en … · Cambiar»), los
+  avisos de mover una reunión y Ajustes › Proyectos enseñan la raíz con el nombre que tiene la carpeta en el disco
+  (`server.root_name()`): «Chuleta\Proyecto\…» en una instalación encima de Chuleta, que no renombra la carpeta, y no
+  «Tenca\…», que no existe en el Explorador. En una instalación nueva no cambia nada (la carpeta se llama Tenca). La
+  cabecera del directo decía «\Proyecto\…», sin la raíz: ahora, igual que la tarjeta. Las opciones «(raíz)» de los
+  selectores de carpeta, también. El nombre de la app (título, bandeja, avisos) sigue siendo Tenca.
+- **El proyecto de las listas de la raíz** se llama como su carpeta, igual que cualquier otro proyecto: «Chuleta» encima
+  de Chuleta. Así sus documentos «por proyecto» siguen en la subcarpeta «Chuleta» de siempre (con `4553b9c` empezaban
+  a ir a una «Tenca» nueva) y la carpeta y el idioma que tenía asignados vuelven a ese nombre una vez al arrancar
+  (`migrate_app_name`, marca `nombre_v`; los que `4553b9c` pasó a «Tenca» también). Las reuniones y ajustes guardados
+  con «Tenca», «Chuleta» o «Notas» se siguen reconociendo como de la raíz.
+- **Arranque con Windows**: si la migración de «Chuleta.lnk» la hace la app (porque el instalador no pudo), copia
+  también el «desactivado» de Aplicaciones de inicio (StartupApproved), como ya hacía el instalador; y reconoce su
+  acceso directo por la ruta de su `_app` seguida de la barra (`…\_app` ya no casa con `…\_app2`).
+- **Instalador**: un `Notas.lnk`/`Chuleta.lnk` que abre un `.bat` con ese nombre que existe sin `server.py` al lado
+  no se da por roto (puede ser de otro programa) y se queda. Sin instalación anterior, si `%USERPROFILE%\Tenca` (un zip
+  descomprimido ahí) y `%USERPROFILE%\Chuleta` (desinstalada, con reuniones) fueron de la app, va a la que tiene
+  reuniones.
+- **Desarrollo y CI**: los avisos de `test_reunion_windows` esperan 25 s (el primero arranca Python y Tk en frío y en
+  los runners de Windows pasaba de 12 s alguna vez); el E2E de Windows comprueba que las fuentes y el logotipo llegan a
+  la copia instalada y, en la fase v, que la raíz y «Se guarda en» llevan el nombre de la carpeta de Chuleta.
+
 ### Renombrado a Tenca (09/11/2026)
 
 La app pasa a llamarse **Tenca** (Bernardo, msg 1249). Lo de abajo, con «Chuleta», es el historial de antes.

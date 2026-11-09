@@ -370,10 +370,12 @@ S.movsDesde = Date.now() / 1000;
   document.head.appendChild(st);
 })();
 
-/* \Proyecto Alfa\2026-11-07 Comité\ (las vinculadas, con su nombre) */
+/* Chuleta\Proyecto Alfa\2026-11-07 Comité\: la raíz con el nombre que tiene en el disco y las vinculadas con el
+   suyo, igual que la tarjeta de Grabar y los avisos (server.ruta_txt) */
 function destinoRel(rel) {
   const parts = rel ? rel.split('/') : [];
-  return '\\' + parts.map((_, i) => nodeName(parts.slice(0, i + 1).join('/')) + '\\').join('');
+  const raiz = parts.length && parts[0].startsWith(':') ? '' : rootName() + '\\';
+  return raiz + parts.map((_, i) => nodeName(parts.slice(0, i + 1).join('/')) + '\\').join('');
 }
 /* la carpeta principal donde está ahora: la que contiene su carpeta (una carpeta por reunión) o la suya */
 function destinoActual(a) {
@@ -406,7 +408,7 @@ function destinoOpciones(a) {
     seen.add(folder);
     out.push({ folder, label });
   };
-  add(cur, cur ? pathLabel(cur) : `${APP_NAME} (raíz)`);
+  add(cur, cur ? pathLabel(cur) : `${rootName()} (raíz)`);
   const pf = S.config.project_folders || {};
   Object.keys(pf).sort((x, y) => x.localeCompare(y)).forEach(p => add(pf[p], p));
   Object.entries(S.config.workstream_folders || {}).forEach(([vid, f]) => {

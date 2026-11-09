@@ -57,6 +57,17 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 ROOT = os.path.dirname(APP_DIR)
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AudiosApp")
+
+
+def root_name():
+    """Como se llama de verdad la carpeta de la app (ROOT) en el disco: «Tenca» en una instalacion nueva y «Chuleta» en
+    una instalada encima de Chuleta, que no renombra la carpeta de las reuniones (decision 1 del renombrado,
+    09/11/2026). Es lo que se ensena como raiz de una ruta («Chuleta\\Proyecto Alfa\\…», lo que se ve en el
+    Explorador) y el nombre del proyecto de las listas de la raiz, como el de cualquier otro proyecto es el de su
+    carpeta. Se calcula cada vez: los tests cambian ROOT."""
+    return unicodedata.normalize("NFC", os.path.basename(os.path.normpath(ROOT)) or ROOT.rstrip("\\/") or APP_NAME)
+
+
 HOST, PORT = "127.0.0.1", 8765
 URL = f"http://{HOST}:{PORT}/"
 SERVER, WINDOW = None, None  # los pone main(): el servidor HTTP y la ventana propia (None si se abre en Edge)
@@ -1515,7 +1526,9 @@ def _list_vocab(avisos=None, conectadas=True):
         return os.path.normcase(os.path.normpath(p))
 
     vlinks = list(VOCAB_LINKS.items())
-    top_names = {norm(ROOT): APP_NAME, **{norm(l["path"]): l["name"] for l in LINKS.values()}}
+    # el proyecto de las listas de la raiz se llama como su carpeta, igual que todos (root_name: «Chuleta» si se instalo
+    # encima de Chuleta); asi sus reuniones y sus documentos «por proyecto» siguen con el nombre de antes (09/11/2026)
+    top_names = {norm(ROOT): root_name(), **{norm(l["path"]): l["name"] for l in LINKS.values()}}
     top_names.update({norm(l["path"]): l["name"] for _, l in vlinks if norm(l["path"]) not in top_names})
 
     def add(f, project, d, extra):
@@ -1610,9 +1623,10 @@ def _project_dir(v):
 
 
 def _is_app_name(project):
-    """El proyecto de las listas de la raiz: el nombre de la app o uno de los que tuvo («Notas»)."""
+    """El proyecto de las listas de la raiz: el nombre de su carpeta (root_name, con el que se llama), el de la app o
+    uno de los que tuvo («Chuleta», «Notas»: reuniones y ajustes guardados con ellos)."""
     from common import APP_FORMER_NAMES
-    return fold(project or "") in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME,)}
+    return fold(project or "") in {fold(a) for a in APP_FORMER_NAMES + (APP_NAME, root_name())}
 
 
 def _of_project(v, project):
@@ -2115,12 +2129,14 @@ def rec_destino(v, st, name="", when=None):
     return {"carpeta": rel, "origen": origin, "reunion": reunion, "por_reunion": por_reunion(st)}
 
 
-def display_rel(rel):
-    """Una ruta interna como la ve el usuario: «\\Proyecto Alfa\\2026-11-07 Comité\\» (una vinculada, con su nombre)."""
-    parts = [p for p in (rel or "").split("/") if p]
-    if parts and parts[0].startswith(LINK):
-        parts[0] = (LINKS.get(parts[0][len(LINK):]) or {}).get("name") or parts[0]
-    return "\\" + "".join(p + "\\" for p in parts)
+def ruta_txt(rel):
+    """Una ruta interna como la ve el usuario, igual en la tarjeta de Grabar, en el aviso de Ctrl+Alt+R, en el directo y
+    en los avisos de mover: «Chuleta\\Proyecto Alfa\\2026-11-07 Comité\\», con la raiz por el nombre que tiene de
+    verdad en el disco (root_name) y una vinculada por el suyo (plan.ruta_txt)."""
+    return grabar_plan.ruta_txt(rel, {k: l["name"] for k, l in LINKS.items()}, root_name())
+
+
+display_rel = ruta_txt  # el nombre de antes (rama de carpetas): era «\\Proyecto Alfa\\…», sin la raiz
 
 
 def move_one(f, t):
@@ -2288,28 +2304,35 @@ def migrate_main_folders(d):
     return out
 
 
-def migrate_app_name(d):
-    """Una vez por nombre (nombre_v): lo que los ajustes guardan por el nombre del proyecto (la carpeta asignada,
-    project_folders, y el idioma, project_langs) lleva, para las listas de la raiz, el nombre que tenia la app
-    inmediatamente antes (APP_FORMER_NAMES[0], «Chuleta»: el unico con el que la version anterior los buscaba). Pasa al
-    de ahora, si aun no tiene uno, para que la carpeta y el idioma asignados sigan valiendo tras el renombrado
-    (09/11/2026). Uno mas antiguo («Notas») no: la version anterior ya no lo usaba y puede ser un proyecto de verdad.
-    Solo una vez: si despues se quita la asignacion de la raiz, no vuelve. Devuelve [(clave, nombre anterior)]."""
+def migrate_app_name(d, raiz=None):
+    """Lo que los ajustes guardan por el nombre del proyecto (la carpeta asignada, project_folders, y el idioma,
+    project_langs) lleva, para las listas de la raiz, el nombre con el que lo buscaba la version anterior: el que dejo
+    aqui la ultima vez (nombre_v; «Tenca» con la de 4553b9c, que lo llamaba como la app) o, sin marca, «Chuleta»
+    (APP_FORMER_NAMES[0], el nombre de la app en todas las de antes). Ahora se llama como su carpeta en el disco
+    (root_name, `raiz`): «Chuleta» en una instalacion encima de Chuleta, «Tenca» en una nueva. Pasa a ese nombre si aun
+    no tiene uno, para que la carpeta y el idioma asignados sigan valiendo. Uno mas antiguo («Notas») no: ya no se usaba
+    y puede ser un proyecto de verdad. Una vez por nombre: si despues se quita la asignacion de la raiz, no vuelve.
+    Devuelve [(clave, nombre anterior)]."""
     from common import APP_FORMER_NAMES
-    out = []
-    if d.get("nombre_v") == APP_NAME:
+    raiz = raiz or root_name()
+    out, antes = [], d.get("nombre_v")
+    if antes == raiz:
         return out
+    antes = antes if isinstance(antes, str) and antes else APP_FORMER_NAMES[0]
     for key in ("project_folders", "project_langs"):
         m = d.get(key)
-        if not isinstance(m, dict) or any(fold(k) == fold(APP_NAME) for k in m):
+        if not isinstance(m, dict) or raiz in m:
             continue
-        k = next((k for k in m if fold(k) == fold(APP_FORMER_NAMES[0])), None)
+        # el de ahora con otras mayusculas (una carpeta «tenca»: las busquedas son exactas) o, si no, el de antes
+        k = next((k for k in m if fold(k) == fold(raiz)), None)
+        if k is None and fold(antes) != fold(raiz):
+            k = next((k for k in m if fold(k) == fold(antes)), None)
         if k is not None:
             m = dict(m)
-            m[APP_NAME] = m.pop(k)
+            m[raiz] = m.pop(k)
             d[key] = m
             out.append((key, k))
-    d["nombre_v"] = APP_NAME
+    d["nombre_v"] = raiz
     return out
 
 
@@ -3996,7 +4019,7 @@ DIAG_LINES = (
     "   movimiento pendiente de {t}: la carpeta {t} ya no existe, se queda donde está",
     "   movimiento pendiente de {t}: {e} Se reintenta en {n} s",
     "   carpeta principal de {t}: era la de una reunión ({t}); pasa a {t}",
-    "   {k}: la carpeta de la app se llamaba «{t}»; pasa a «{t}»",  # renombrado a Tenca (migrate_app_name)
+    "   {k}: el proyecto de la raíz se llamaba «{t}»; pasa a «{t}», el nombre de su carpeta",  # migrate_app_name
     "   carpeta principal de {t}⟦ (workstream)⟧: {t}",
     "↺ {t}: transcripción original restaurada",
     "🔗 carpeta vinculada: {t}",
@@ -4061,6 +4084,8 @@ DIAG_LINES = (
     "arrancar con Windows: acceso directo actualizado",
     "arrancar con Windows: sigue activado, ahora como «{t}»",  # la copia con el nombre anterior de la app
     "arrancar con Windows: quitado el acceso directo antiguo «{t}»",
+    "arrancar con Windows: desactivado en Aplicaciones de inicio, como lo tenía «{t}»",  # _startup_aprobado_copiar
+    "arrancar con Windows: activado en Aplicaciones de inicio, como lo tenía «{t}»",
     "   arrancar con Windows: {e}",
     "ventana oculta: la app sigue en segundo plano (el acceso directo la vuelve a abrir)",
     "apagando ({t})",
@@ -4283,11 +4308,7 @@ class App:
             self.settings.update(lambda d: cambios.extend(migrate_main_folders(d)))
             for k, old, new in cambios:
                 log(f"   carpeta principal de {k}: era la de una reunión ({old}); pasa a {new or 'la raíz'}")
-        renombrados = []  # los ajustes del proyecto de la raiz con el nombre anterior de la app (09/11/2026): una vez
-        if self.settings.get().get("nombre_v") != APP_NAME:
-            self.settings.update(lambda d: renombrados.extend(migrate_app_name(d)))
-        for k, viejo in renombrados:
-            log(f"   {k}: la carpeta de la app se llamaba «{viejo}»; pasa a «{APP_NAME}»")
+        self._migrar_nombre_raiz()
         self._load_vocab_links()
         self.library = Library(Durations(os.path.join(DATA_DIR, "durations.json")))
         self.transcripts = Transcripts()
@@ -4344,8 +4365,7 @@ class App:
                 # con proyecto, el resumen dice el proyecto y no la carpeta: la de la reunión, también (sin tarjeta,
                 # es lo único que dice dónde se guarda; revisión de la fusión de ux-grabar), escrita como en la
                 # tarjeta y al final: repite el nombre de la reunión y, si el aviso no cabe, es lo que se corta
-                links = {k: l["name"] for k, l in LINKS.items()}
-                donde = (f" · se guarda en {grabar_plan.ruta_txt(r['carpeta'], links)}"
+                donde = (f" · se guarda en {ruta_txt(r['carpeta'])}"
                          if p["proyecto"].get("vocab") and r.get("carpeta") is not None else "")
                 notify(f"● Grabando en {APP_NAME}", del_plan + p["resumen"] + " · Ctrl+Alt+R para parar"
                        + (f" · {r['aviso']}" if r.get("aviso") else "") + donde)
@@ -4355,6 +4375,16 @@ class App:
                 log(f"   no se pudo grabar (Ctrl+Alt+R): {e.msg}")  # el toast se va; el log se queda
                 notify("No se pudo grabar", e.msg)
                 raise
+
+    def _migrar_nombre_raiz(self):
+        """Al arrancar, despues de cargar las vinculadas: los ajustes del proyecto de la raiz pasan al nombre de su
+        carpeta (migrate_app_name), una vez por nombre. Devuelve [(clave, nombre anterior)]."""
+        renombrados, raiz = [], root_name()
+        if self.settings.get().get("nombre_v") != raiz:
+            self.settings.update(lambda d: renombrados.extend(migrate_app_name(d, raiz)))
+        for k, viejo in renombrados:
+            log(f"   {k}: el proyecto de la raíz se llamaba «{viejo}»; pasa a «{raiz}», el nombre de su carpeta")
+        return renombrados
 
     # --- plan de grabacion (plan.py): un solo calculo para la tarjeta, Ctrl+Alt+R, el aviso flotante e Inicio
     def _motores(self, st):
@@ -4466,15 +4496,14 @@ class App:
             carpeta_origen=self._carpeta_origen(st, full),
             sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
             motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
-            carpeta_reunion=self._carpeta_reunion(st, plantilla))
+            carpeta_reunion=self._carpeta_reunion(st, plantilla), raiz=root_name())
         # la carpeta de Ajustes (la de las reuniones sin proyecto) guardada que ahora no se encuentra (una vinculada
         # desconectada): se graba en otra y se dice por qué en su línea (revisión 3 de B2)
         fija = perfil_de(st)["folder"]
         car = next((x for x in p["lineas"] if x["clave"] == "carpeta"), None)
         if fija is not None and perfil_folder(st) is None and car and car["origen"] in ("ajustes", "ultima") \
                 and not car.get("aviso"):
-            links = {k: l["name"] for k, l in LINKS.items()}
-            ruta = grabar_plan.ruta_txt(fija, links)
+            ruta = ruta_txt(fija)
             car["aviso"] = f"No se encuentra la carpeta de las reuniones sin proyecto ({ruta}): se guarda aquí."
         # un proyecto sin carpeta propia (sus listas vienen de una carpeta conectada y no se le ha asignado ninguna)
         # graba en la de Ajustes o en la última usada, que puede ser la de otro cliente: se dice cómo fijarle una
@@ -4529,12 +4558,11 @@ class App:
         cálculo que el plan (lo que dice la tabla es lo que se usará al grabar). `sin_asignar`: la que tendría el
         proyecto si se le quita la suya (para la opción «Sin asignar» al editarla)."""
         full = {v["id"]: v for v in list_vocab()}
-        links = {k: l["name"] for k, l in LINKS.items()}
 
         def una(v, s):
             rel = self._carpeta_plan(v, s, full)
             o, t = self._carpeta_origen(s, full)(v, rel)
-            return {"rel": rel or "", "ruta": grabar_plan.ruta_txt(rel, links), "origen": o, "texto": t}
+            return {"rel": rel or "", "ruta": ruta_txt(rel), "origen": o, "texto": t}
         sin_ws = dict(st, workstream_folders={})
         proyectos, workstreams = {}, {}
         for v in full.values():
@@ -5034,7 +5062,8 @@ class App:
         cloud["extra_keys_by"], cloud["extra_keys"] = by, by.get(cloud.get("provider") or "groq", [])
         cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
                           if cloud["has_key"] and getattr(self.jobs, "cloud", None) is not None else None)
-        return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
+        return {"root": ROOT, "root_name": root_name(), "version": VERSION,
+                "app_name": APP_NAME, "window": WINDOW is not None,
                 "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL,
                            "tenca": TENCA_URL},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
@@ -8171,15 +8200,16 @@ def _startup_lnks():
 
 
 def _lnk_apunta_a(path, carpeta):
-    """¿El acceso directo `path` es de esta copia de la app? Lo es si lleva la ruta de su carpeta _app (`carpeta`):
-    WScript.Shell la guarda en la carpeta de trabajo y en los argumentos («…\\_app\\server.py»), en UTF-16LE. Se busca
-    en las dos alineaciones del fichero y sin distinguir mayusculas; sin poder leerlo, no lo es."""
+    """¿El acceso directo `path` es de esta copia de la app? Lo es si lleva una ruta de dentro de su carpeta _app
+    (`carpeta`): WScript.Shell guarda los argumentos («…\\_app\\server.py») y el icono («…\\_app\\static\\…») en
+    UTF-16LE. Se busca la carpeta seguida de la barra, en las dos alineaciones del fichero y sin distinguir mayusculas:
+    sin la barra, «…\\_app» casaba tambien con «…\\_app2», otra carpeta. Sin poder leerlo, no lo es."""
     try:
         with open(path, "rb") as f:
             data = f.read(1 << 16)
     except OSError:
         return False
-    aguja = os.path.normcase(os.path.normpath(carpeta)).casefold()
+    aguja = os.path.normcase(os.path.join(os.path.normpath(carpeta), "")).casefold()
     return any(aguja in os.path.normcase(data[i:].decode("utf-16-le", "ignore")).casefold() for i in (0, 1))
 
 
@@ -8192,6 +8222,29 @@ def _startup_antiguos(destino):
     carpeta = os.path.dirname(destino)
     return [p for p in (os.path.join(carpeta, f"{n}.lnk") for n in ARRANQUE_ANTIGUOS)
             if os.path.isfile(p) and _lnk_apunta_a(p, APP_DIR)]
+
+
+STARTUP_APPROVED = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder"
+
+
+def _startup_aprobado_copiar(desde, hacia, clave=STARTUP_APPROVED):
+    """Aplicaciones de inicio (Administrador de tareas) guarda si se desactivo un acceso directo de la carpeta Inicio
+    por su nombre de fichero (HKCU\\<clave>, REG_BINARY; sin valor = activado). Al pasar «Chuleta.lnk» a «Tenca.lnk» se
+    copia su valor, como Copy-ArranqueAprobado del instalador: lo desactivado sigue desactivado aunque la migracion la
+    haga la app (un instalador que no pudo). El del nombre viejo se deja. Sin valor o sin registro, nada."""
+    if not WINDOWS:
+        return
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
+            v, tipo = winreg.QueryValueEx(k, desde)
+            if tipo != winreg.REG_BINARY or not v:
+                return
+            winreg.SetValueEx(k, hacia, 0, winreg.REG_BINARY, v)
+        log(f"arrancar con Windows: {'desactivado' if v[0] == 3 else 'activado'} en Aplicaciones de inicio, como lo "
+            f"tenía «{desde[:-4]}»")
+    except (ImportError, OSError):
+        pass
 
 
 def _startup_quitar(rutas):
@@ -8250,6 +8303,7 @@ def inicio_windows_al_dia():
             os.makedirs(os.path.dirname(destino), exist_ok=True)
             shutil.copy2(origen, destino)
             log(f"arrancar con Windows: sigue activado, ahora como «{APP_NAME}»")
+            _startup_aprobado_copiar(os.path.basename(antiguos[0]), os.path.basename(destino))
         if origen and os.path.isfile(destino) and os.path.isfile(origen):
             with open(origen, "rb") as a, open(destino, "rb") as b:
                 if a.read() != b.read():

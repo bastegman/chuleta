@@ -49,16 +49,18 @@ def norm_titulo(s):
     return " ".join(fold(s or "").split())
 
 
-def ruta_txt(rel, links=None):
+def ruta_txt(rel, links=None, raiz=None):
     """Cómo se enseña una carpeta interna: «Tenca\\Proyecto Alfa\\Reuniones\\» o, en una vinculada,
-    «<su nombre>\\sub\\». `links`: id -> nombre de las vinculadas."""
+    «<su nombre>\\sub\\». `links`: id -> nombre de las vinculadas. `raiz`: cómo se llama de verdad la carpeta de la app
+    en el disco (server.root_name(): «Chuleta» en una instalación encima de Chuleta, que no la renombra); sin ella, el
+    nombre de la app."""
     rel = (rel or "").replace("\\", "/").strip("/")
     if rel.startswith(":"):
         lid, _, rest = rel[1:].partition("/")
         head = (links or {}).get(lid) or "Carpeta vinculada"
         parts = [head] + [p for p in rest.split("/") if p]
     else:
-        parts = [APP_NAME] + [p for p in rel.split("/") if p]
+        parts = [raiz or APP_NAME] + [p for p in rel.split("/") if p]
     return "\\".join(parts) + "\\"
 
 
@@ -133,7 +135,7 @@ def _linea(clave, etiqueta, valor, origen, origen_txt, **extra):
 
 
 def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None, carpeta_origen=None,
-             sugerir_titulo=None, motores=None, links=None, carpeta_reunion=None):
+             sugerir_titulo=None, motores=None, links=None, carpeta_reunion=None, raiz=None):
     """El plan efectivo de una grabación nueva.
 
     st: ajustes. listas: [{id, project, name, n}] (n = términos). sug: la reunión en curso (calendario.suggest:
@@ -143,7 +145,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     carpeta_origen(v, rel): (origen, texto) de esa carpeta. sugerir_titulo(nombre): calendario.suggest sobre un
     nombre escrito. motores: {presets: {id: {...}}, procesado, agente, proveedor, resumen_auto, resumen_local}.
     links: id -> nombre de las carpetas vinculadas. carpeta_reunion(base, nombre): la carpeta de la reunión dentro
-    de la base, o None (rama de carpetas; sin ella, la grabación va en la base).
+    de la base, o None (rama de carpetas; sin ella, la grabación va en la base). raiz: el nombre de la carpeta de la
+    app en el disco (ruta_txt).
     """
     st, sug, pedido = st or {}, dict(sug or {}), dict(pedido or {})
     cambios = {k: v for k, v in (pedido.get("cambios") or {}).items() if k in CLAVES_CAMBIOS}
@@ -214,8 +217,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         base = carpeta_de(v) if carpeta_de else ""
         c_origen, c_txt = carpeta_origen(v, base) if carpeta_origen else ("ajustes", "Ajustes › Al grabar")
     sub = carpeta_reunion(base, nombre) if carpeta_reunion else None
-    lineas.append(_linea("carpeta", "Se guarda en", ruta_txt(sub if sub is not None else base, links), c_origen, c_txt,
-                         rel=base, sub=sub))
+    lineas.append(_linea("carpeta", "Se guarda en", ruta_txt(sub if sub is not None else base, links, raiz), c_origen,
+                         c_txt, rel=base, sub=sub))
 
     # --- idioma: esta reunión › workstream › proyecto › Ajustes
     if "idioma" in cambios and not IDIOMA_RE.match(str(cambios["idioma"] or "auto").strip().lower()):

@@ -5,7 +5,7 @@ arranca el acceso directo, la grabadora real (`recorder.py`) con la tarjeta de s
 interfaz en Chromium (Playwright):
 
 1. graba 33 s en el proyecto Alfa: la grabación va a su carpeta «AAAA-MM-DD Comité de seguimiento» (B1b);
-2. en la cabecera del directo, «Se guarda en … · Cambiar» → Beta: «Se moverá a \\Beta\\… al terminar · Deshacer»;
+2. en la cabecera del directo, «Se guarda en … · Cambiar» → Beta: «Se moverá a <raíz>\\Beta\\… al terminar · Deshacer»;
 3. para la grabación: la reunión no se mueve hasta que acaban el directo, el repaso final y el resumen (D4b);
 4. entonces se mueve la carpeta entera (audio, texto, subtítulos, notas, resumen y voces), la vieja desaparece, la
    página pasa sola a la ruta nueva y avisa «Movida a …».
@@ -148,7 +148,8 @@ class CarpetaEnDirectoE2E(unittest.TestCase):
         stem = os.path.splitext(os.path.basename(rel))[0]
         pg.evaluate("async p => { await refreshTree(true); go('a', p); }", rel)
         pg.wait_for_selector(".live-hero .dest-line", timeout=20000)
-        self.assertIn(f"\\Alfa\\{hoy} {NOMBRE}\\", pg.inner_text(".live-hero .dest-line"))
+        # la raíz por su nombre en el disco: esta carpeta se llama «Chuleta» (instalada encima), aunque la app sea Tenca
+        self.assertIn(f"Chuleta\\Alfa\\{hoy} {NOMBRE}\\", pg.inner_text(".live-hero .dest-line"))
         self.foto("1-se-guarda-en")
         # 2. «Cambiar» → Beta, en pleno directo
         pg.click(".live-hero [data-dest-act='cambiar']")
@@ -158,7 +159,7 @@ class CarpetaEnDirectoE2E(unittest.TestCase):
         pg.wait_for_selector(".live-hero .dest-line.pend", timeout=15000)
         linea = pg.inner_text(".live-hero .dest-line.pend")
         self.assertIn("Se moverá a", linea)
-        self.assertIn(f"\\Beta\\{hoy} {NOMBRE}\\", linea)
+        self.assertIn(f"Chuleta\\Beta\\{hoy} {NOMBRE}\\", linea)
         self.foto("3-se-movera")
         m = self.api("/api/jobs")["movimientos"]
         self.assertEqual(m["pendientes"][rel]["folder"], "Beta")

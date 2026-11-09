@@ -212,7 +212,7 @@ class AvisoTests(unittest.TestCase):
         self.procs.append(p)
         return p, est
 
-    def estado(self, est, secs=12):
+    def estado(self, est, secs=25):
         for _ in range(int(secs * 10)):
             if os.path.exists(est):
                 time.sleep(0.2)
@@ -222,6 +222,8 @@ class AvisoTests(unittest.TestCase):
         self.fail("el aviso no escribió su estado")
 
     def resultado(self, p, secs=25):
+        # 25 s para todos: el primer aviso de la clase arranca Python y Tk en frío y en los runners de Windows pasaba de
+        # 12 s alguna vez (test_auto_grabar_con_grabacion_ya_en_marcha_no_para_nada, run 42630015111, 09/11/2026)
         out, err = p.communicate(timeout=secs)
         self.assertEqual(p.returncode, 0, err)
         lines = [l for l in out.splitlines() if l.strip()]
@@ -324,21 +326,21 @@ class AvisoTests(unittest.TestCase):
         self.srv.recording = True
         p, est = self.abrir("grabando")
         self.estado(est)
-        res = self.resultado(p, secs=12)
+        res = self.resultado(p)
         self.assertEqual(res["resultado"], "grabando", res)
         self.assertEqual(self.srv.posts, [])
 
     def test_auto_grabar_con_grabacion_ya_en_marcha_no_para_nada(self):
         self.srv.recording = True
         p, est = self.abrir("grabando2", "--auto-grabar-ms", "300")
-        res = self.resultado(p, secs=12)
+        res = self.resultado(p)
         self.assertEqual(res["resultado"], "grabando", res)
         self.assertEqual(self.srv.posts, [])  # consulta el estado antes de pulsar: ningún toggle
 
     def test_error_del_servidor_se_ensena_y_cierra(self):
         self.srv.fail = True
         p, est = self.abrir("error", "--auto-grabar-ms", "500")
-        res = self.resultado(p, secs=15)
+        res = self.resultado(p)
         self.assertEqual(res["resultado"], "error", res)
         self.assertIn("prueba", res["error"])
 
@@ -349,12 +351,12 @@ class AvisoTests(unittest.TestCase):
         libre = s.getsockname()[1]
         s.close()
         p, est = self.abrir("sin-servidor", puerto=libre)
-        res = self.resultado(p, secs=15)
+        res = self.resultado(p)
         self.assertEqual(res["resultado"], "sin-servidor", res)
 
     def test_tiempo_agotado(self):
         p, est = self.abrir("tiempo", segundos=3)
-        res = self.resultado(p, secs=12)
+        res = self.resultado(p)
         self.assertEqual(res["resultado"], "tiempo", res)
 
 

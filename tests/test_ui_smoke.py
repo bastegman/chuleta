@@ -1153,8 +1153,42 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=10000)
         pg.select_option("#grProy", "")  # sin proyecto: se graba en la de Ajustes, que no está
         pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-aviso", timeout=10000)
-        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Tenca\\Fuera\\)",
+        # la ruta, con la raíz por su nombre en el disco: esta carpeta se llama «Chuleta» (test_rutas_con_el_nombre_…)
+        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Chuleta\\Fuera\\)",
                       pg.inner_text(".dialog.gr [data-fila='carpeta'] .gr-aviso"))
+        pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+
+    def test_rutas_con_el_nombre_de_la_carpeta_en_el_disco(self):
+        """P2 del renombrado (09/11/2026): la carpeta de esta suite se llama «Chuleta», como la de una instalación de
+        Tenca encima de Chuleta, que no la renombra. La tarjeta de grabar, su selector de carpeta y Ajustes › Proyectos
+        enseñan la ruta de verdad («Chuleta\\…», «Chuleta (raíz)») y nunca «Tenca\\…», que no está en el Explorador; el
+        nombre de la app sigue siendo Tenca."""
+        pg, errores, red = self.pagina()
+        nada = {"teams": None, "outlook": None, "reason": None, "sugerencia": {}}
+        pg.route("**/api/reunion/actual", lambda r: r.fulfill(json=nada))
+        pg.route("**/api/rec/monitor", lambda r: r.fulfill(json={"ok": True}))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        self.assertEqual(pg.evaluate("[APP_NAME, rootName(), folderName('')]"), ["Tenca", "Chuleta", "Chuleta (raíz)"])
+        self.assertEqual(pg.title(), "Tenca")
+        pg.click("#btnRec")
+        pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=10000)
+        pg.select_option("#grProy", "")  # sin proyecto: la de Ajustes, que es la raíz
+        pg.wait_for_function("document.querySelector(\".dialog.gr [data-fila='carpeta'] .gr-v code\")"
+                             ".textContent.startsWith('Chuleta')", timeout=10000)
+        ruta = pg.inner_text(".dialog.gr [data-fila='carpeta'] .gr-v code")
+        self.assertRegex(ruta, r"^Chuleta\\[^\\]+\\$")  # la carpeta de la reunión, en la raíz
+        pg.select_option("#grProy", "Proyecto/Vocabulario/General.txt")
+        pg.wait_for_function("document.querySelector(\".dialog.gr [data-fila='carpeta'] .gr-v code\")"
+                             ".textContent.startsWith('Chuleta\\\\Proyecto')", timeout=10000)
+        pg.click(".dialog.gr [data-gr-cambiar='carpeta']")
+        pg.wait_for_selector("#grSelCarpeta", timeout=5000)
+        opciones = pg.evaluate("[...document.querySelectorAll('#grSelCarpeta option')].map(o => o.textContent)")
+        self.assertIn("Chuleta (raíz)", opciones)
+        self.assertFalse(any("Tenca" in o and "fuera de" not in o for o in opciones), opciones)
+        self.assertNotIn("Tenca\\", pg.inner_text(".dialog.gr"))
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))

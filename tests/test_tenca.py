@@ -36,10 +36,11 @@ PS_LEGADO = re.compile(r"^\s*\$(LegacyNames|LegacyArranque|LegacyFolders|LegacyL
 LEGADO_PY = ("APP_FORMER_NAMES", "ARRANQUE_ANTIGUOS")
 # el aviso de la migración en el LEEME y el README (lo único que puede nombrar a Chuleta en un texto para el usuario)
 AVISO_LEEME = ("cuando se llamaba Chuleta o Notas", "Si venías de Chuleta (el nombre anterior)",
-               "C:\\Users\\<tu usuario>\\Chuleta)", "...\\Chuleta si venías de ahí")
+               "C:\\Users\\<tu usuario>\\Chuleta)", "...\\Chuleta si venías de ahí",
+               '("Se guarda en Chuleta\\...")')
 AVISO_README = ("app, «Chuleta» y «Notas»", "Instalada encima de Chuleta, no queda nada con ese nombre",
                 "su `ABRIR CHULETA.bat` se quitan", "(`%USERPROFILE%\\Chuleta`: renombrarla",
-                "o `%USERPROFILE%\\Chuleta` si venía de ahí")
+                "o `%USERPROFILE%\\Chuleta` si venía de ahí", "(«Se guarda en Chuleta\\…»)")
 
 
 def py_cadenas(src):
@@ -340,6 +341,21 @@ class ArranqueConNombreAnteriorTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.viejo))
         self.assertIs(server.inicio_windows_leer(), True)
 
+    def test_al_arrancar_copia_lo_de_aplicaciones_de_inicio(self):
+        """P2 de la revisión de 977f8b0: si migra la app (el instalador no pudo), «desactivado» en Aplicaciones de
+        inicio (StartupApproved, por nombre de fichero) pasa también a Tenca.lnk; con Tenca.lnk ya puesto, nada."""
+        self.write(self.origen, b"lnk-tenca")
+        self.write(self.viejo, self.nuestro)
+        with mock.patch.object(server, "_startup_aprobado_copiar") as cp:
+            server.inicio_windows_al_dia()
+        cp.assert_called_once_with("Chuleta.lnk", "Tenca.lnk")
+        self.write(self.viejo, self.nuestro)  # las dos: la de ahora ya tiene lo suyo
+        with mock.patch.object(server, "_startup_aprobado_copiar") as cp:
+            server.inicio_windows_al_dia()
+        cp.assert_not_called()
+        with mock.patch.dict(sys.modules, {"winreg": None}):  # sin registro (o fuera de Windows): nada, sin error
+            server._startup_aprobado_copiar("Chuleta.lnk", "Tenca.lnk")
+
     def test_la_ruta_en_otra_alineacion_y_mayusculas(self):
         self.write(self.origen, b"lnk-tenca")
         self.write(self.viejo, lnk_de(server.APP_DIR.upper(), extra=b"x"))  # ruta en byte impar y en mayúsculas
@@ -369,6 +385,18 @@ class ArranqueConNombreAnteriorTests(unittest.TestCase):
         self.assertIs(server.inicio_windows_poner(True), True)
         self.assertEqual(sorted(os.listdir(self.startup)), ["Chuleta.lnk", "Notas.lnk", "Tenca.lnk"])
 
+    def test_otra_carpeta_que_empieza_igual_no_es_esta(self):
+        """P2 de la revisión de 977f8b0: la ruta de la _app se buscaba como subcadena y «…\\_app» casaba con
+        «…\\_app2»."""
+        self.write(self.origen, b"lnk-tenca")
+        self.write(self.viejo, lnk_de(server.APP_DIR + "2"))
+        self.assertFalse(server._lnk_apunta_a(self.viejo, server.APP_DIR))
+        self.assertIs(server.inicio_windows_leer(), False)
+        server.inicio_windows_al_dia()
+        self.assertEqual(os.listdir(self.startup), ["Chuleta.lnk"])
+        self.assertTrue(server._lnk_apunta_a(self.viejo, server.APP_DIR + "2"))  # la suya sí
+        self.assertTrue(server._lnk_apunta_a(self.viejo, server.APP_DIR + "2" + os.sep))
+
     def test_sin_el_de_inicio_no_se_toca_la_antigua(self):
         """Sin Tenca.lnk en el menú Inicio no hay de qué copiar: la antigua es lo único que la abre al entrar."""
         self.write(self.viejo, self.nuestro)
@@ -397,43 +425,88 @@ class ArranqueConNombreAnteriorTests(unittest.TestCase):
     def test_los_mensajes_tienen_plantilla(self):
         for msg in ("arrancar con Windows: sigue activado, ahora como «Tenca»",
                     "arrancar con Windows: quitado el acceso directo antiguo «Chuleta»",
-                    "   project_folders: la carpeta de la app se llamaba «Chuleta»; pasa a «Tenca»"):
+                    "   project_folders: el proyecto de la raíz se llamaba «Tenca»; pasa a «Chuleta», el nombre de su "
+                    "carpeta"):
             self.assertNotIn("<texto>", server.diag_line(msg).replace("«<texto>»", ""), msg)
 
 
 class AjustesDelProyectoDeLaRaizTests(unittest.TestCase):
-    """Revisión de 53d0103 (P1): la carpeta y el idioma asignados al proyecto de las listas de la raíz se guardaban con
-    el nombre de la app («Chuleta»); tras el renombrado pasan a «Tenca» y siguen valiendo."""
+    """Revisión de 53d0103 (P1) y P2 del 09/11/2026: la carpeta y el idioma asignados al proyecto de las listas de la
+    raíz se guardan por su nombre. Hasta Chuleta era el de la app («Chuleta»); con 4553b9c, «Tenca»; ahora, el de su
+    carpeta en el disco (server.root_name(): «Chuleta» en una instalación encima de Chuleta, «Tenca» en una nueva)."""
 
-    def test_pasan_al_nombre_de_ahora(self):
+    def test_encima_de_chuleta_con_los_de_chuleta_no_cambia_nada(self):
+        """Lo que dejó Chuleta (sin marca) en una carpeta que se sigue llamando Chuleta: ya se llaman como ella."""
+        d = {"project_folders": {"Chuleta": "Reuniones raiz", "Alfa": "Alfa/R"}, "project_langs": {"Chuleta": "en"}}
+        self.assertEqual(server.migrate_app_name(d, "Chuleta"), [])
+        self.assertEqual(d["project_folders"], {"Chuleta": "Reuniones raiz", "Alfa": "Alfa/R"})
+        self.assertEqual(d["project_langs"], {"Chuleta": "en"})
+        self.assertEqual(d["nombre_v"], "Chuleta")
+
+    def test_encima_de_chuleta_con_lo_que_dejo_4553b9c_vuelve(self):
+        """El estado que dejó 4553b9c (la versión que llamaba al proyecto de la raíz «Tenca» y los pasó a ese nombre) en
+        una instalación encima de Chuleta: vuelven al nombre de la carpeta."""
+        d = {"project_folders": {"Tenca": "Reuniones raiz", "Alfa": "Alfa/R"}, "project_langs": {"Tenca": "en"},
+             "nombre_v": "Tenca"}
+        self.assertEqual(server.migrate_app_name(d, "Chuleta"),
+                         [("project_folders", "Tenca"), ("project_langs", "Tenca")])
+        self.assertEqual(d["project_folders"], {"Chuleta": "Reuniones raiz", "Alfa": "Alfa/R"})
+        self.assertEqual(d["project_langs"], {"Chuleta": "en"})
+        self.assertEqual(d["nombre_v"], "Chuleta")
+        self.assertEqual(server.migrate_app_name(d, "Chuleta"), [])  # otra vez: nada
+
+    def test_carpeta_nueva_con_los_de_chuleta(self):
+        """Los ajustes de Chuleta (en %LOCALAPPDATA%, no en la carpeta) con una carpeta nueva que se llama Tenca."""
         d = {"project_folders": {"Chuleta": "Reuniones raiz", "Alfa": "Alfa/R"}, "project_langs": {"chuleta": "en"}}
-        self.assertEqual(server.migrate_app_name(d), [("project_folders", "Chuleta"), ("project_langs", "chuleta")])
+        self.assertEqual(server.migrate_app_name(d, "Tenca"),
+                         [("project_folders", "Chuleta"), ("project_langs", "chuleta")])
         self.assertEqual(d["project_folders"], {"Tenca": "Reuniones raiz", "Alfa": "Alfa/R"})
         self.assertEqual(d["project_langs"], {"Tenca": "en"})
         self.assertEqual(d["nombre_v"], "Tenca")
-        self.assertEqual(server.migrate_app_name(d), [])  # otra vez: nada
+        self.assertEqual(server.migrate_app_name(d, "Tenca"), [])  # otra vez: nada
+
+    def test_carpeta_nueva_con_lo_que_dejo_4553b9c_no_cambia_nada(self):
+        d = {"project_folders": {"Tenca": "Reuniones raiz"}, "nombre_v": "Tenca"}
+        self.assertEqual(server.migrate_app_name(d, "Tenca"), [])
+        self.assertEqual(d["project_folders"], {"Tenca": "Reuniones raiz"})
+
+    def test_mismo_nombre_con_otras_mayusculas(self):
+        """Una carpeta «tenca»: las búsquedas son por el nombre exacto (v["project"]), así que la clave pasa a ese."""
+        d = {"project_folders": {"Tenca": "R"}, "nombre_v": "Tenca"}
+        self.assertEqual(server.migrate_app_name(d, "tenca"), [("project_folders", "Tenca")])
+        self.assertEqual(d["project_folders"], {"tenca": "R"})
 
     def test_una_sola_vez(self):
         """Revisión de 977f8b0 (P1): si después se quita la asignación de la raíz, no vuelve en el siguiente
         arranque."""
         d = {"project_folders": {"Chuleta": "raiz"}}
-        server.migrate_app_name(d)
+        server.migrate_app_name(d, "Tenca")
         d["project_folders"] = {"Chuleta": "otra vez"}  # p. ej. un proyecto de verdad que se llame así
-        self.assertEqual(server.migrate_app_name(d), [])
+        self.assertEqual(server.migrate_app_name(d, "Tenca"), [])
         self.assertEqual(d["project_folders"], {"Chuleta": "otra vez"})
 
     def test_no_pisa_lo_que_ya_tiene_el_nombre_nuevo(self):
         d = {"project_folders": {"Chuleta": "vieja", "Tenca": "nueva"}}
-        self.assertEqual(server.migrate_app_name(d), [])
+        self.assertEqual(server.migrate_app_name(d, "Tenca"), [])
         self.assertEqual(d["project_folders"], {"Chuleta": "vieja", "Tenca": "nueva"})
+        d = {"project_folders": {"Chuleta": "la suya", "Tenca": "de 4553b9c"}, "nombre_v": "Tenca"}
+        self.assertEqual(server.migrate_app_name(d, "Chuleta"), [])
+        self.assertEqual(d["project_folders"], {"Chuleta": "la suya", "Tenca": "de 4553b9c"})
 
     def test_notas_no(self):
         """Revisión de 977f8b0 (P1): solo el nombre de la versión anterior (Chuleta, con el que se buscaban); «Notas» ya
         no se usaba y puede ser un proyecto de verdad."""
         d = {"project_folders": {"Notas": "Notas/Reuniones", "Chuleta": "de Chuleta"}, "project_langs": {"Notas": "de"}}
-        self.assertEqual(server.migrate_app_name(d), [("project_folders", "Chuleta")])
+        self.assertEqual(server.migrate_app_name(d, "Tenca"), [("project_folders", "Chuleta")])
         self.assertEqual(d["project_folders"], {"Notas": "Notas/Reuniones", "Tenca": "de Chuleta"})
         self.assertEqual(d["project_langs"], {"Notas": "de"})
+
+    def test_sin_raiz_usa_la_carpeta_de_verdad(self):
+        with tempfile.TemporaryDirectory() as tmp, patched_paths(ROOT=os.path.join(tmp, "Chuleta")):
+            self.assertEqual(server.root_name(), "Chuleta")
+            d = {"project_folders": {"Tenca": "R"}, "nombre_v": "Tenca"}
+            self.assertEqual(server.migrate_app_name(d), [("project_folders", "Tenca")])
+            self.assertEqual(d, {"project_folders": {"Chuleta": "R"}, "nombre_v": "Chuleta"})
 
     def test_se_rescata_la_marca(self):
         self.assertIn(("nombre_v",), server.Store.RESCUE)
@@ -441,10 +514,10 @@ class AjustesDelProyectoDeLaRaizTests(unittest.TestCase):
     def test_se_aplica_al_grabar(self):
         """La carpeta asignada al proyecto de la raíz vale otra vez para rec_folder_origin y el idioma para el plan."""
         import plan
-        v = {"id": "Vocabulario/General.txt", "project": server.APP_NAME, "name": "General",
+        v = {"id": "Vocabulario/General.txt", "project": "Chuleta", "name": "General",
              "_abs": os.path.join(REPO, "Vocabulario", "General.txt")}
-        st = {"project_folders": {"Chuleta": "Reuniones raiz"}, "project_langs": {"Chuleta": "en"}}
-        server.migrate_app_name(st)
+        st = {"project_folders": {"Tenca": "Reuniones raiz"}, "project_langs": {"Tenca": "en"}, "nombre_v": "Tenca"}
+        server.migrate_app_name(st, "Chuleta")
         with mock.patch.object(server, "_usable_dir", return_value=True):
             self.assertEqual(server.rec_folder_origin(v, st, [v]), ("Reuniones raiz", "proyecto"))
         self.assertEqual(st["project_langs"].get(v["project"]), "en")
@@ -454,9 +527,8 @@ class AjustesDelProyectoDeLaRaizTests(unittest.TestCase):
     def test_el_arranque_lo_migra(self):
         src = open(os.path.join(APP, "server.py"), encoding="utf-8").read()
         init = src[src.index("class App:"):src.index("self.library = Library(")]
-        self.assertIn("renombrados.extend(migrate_app_name(d))", init)
-        self.assertIn('if self.settings.get().get("nombre_v") != APP_NAME:', init)
-        self.assertLess(init.index("self._load_links()"), init.index("migrate_app_name"))
+        self.assertIn("self._migrar_nombre_raiz()", init)
+        self.assertLess(init.index("self._load_links()"), init.index("self._migrar_nombre_raiz()"))
 
 
 class CompartirSinLoViejoTests(unittest.TestCase):
@@ -640,6 +712,18 @@ class MigracionWindowsTests(unittest.TestCase):
         self.assertIn("pasa a llamarse 'Tenca'", out)
         self.assertNotIn("ya no abría nada", out)
 
+    def test_un_bat_ajeno_que_existe_no_es_roto(self):
+        """P2 de la revisión de 3029a55: un Notas.lnk o Chuleta.lnk que abre un Notas.bat/Chuleta.bat que existe pero
+        sin server.py al lado (de otro programa) no es «roto»: se queda. Uno a un .bat que ya no existe, sí lo es."""
+        desk = os.path.join(self.base, "Escritorio")
+        ajeno = os.path.join(self.base, "Apuntes", "Notas.bat")
+        write(ajeno, "@echo off")
+        self.lnk(os.path.join(desk, "Notas.lnk"), ajeno, "", os.path.dirname(ajeno))
+        self.lnk(os.path.join(desk, "Chuleta.lnk"), os.path.join(self.base, "Borrada", "_app", "Chuleta.bat"))
+        out = self.ps("Set-AccesoDirecto " + q(desk) + " " + q(self.app) + " " + q(self.pyw) + " $true")
+        self.assertEqual(sorted(os.listdir(desk)), ["Notas.lnk", "Tenca.lnk"], out)  # el roto (Chuleta.bat) se quita
+        self.assertIn("ya no abría nada", out)
+
     def test_la_app_reconoce_su_lnk_de_verdad(self):
         """server._lnk_apunta_a con un .lnk de verdad (WScript.Shell): la ruta de la _app va en UTF-16LE."""
         lnk = os.path.join(self.base, "Inicio", "Chuleta.lnk")
@@ -754,6 +838,16 @@ class MigracionWindowsTests(unittest.TestCase):
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave) as k:
             with self.assertRaises(FileNotFoundError):
                 winreg.QueryValueEx(k, "Otra.lnk")
+        # y la app, cuando la migración la hace ella (server._startup_aprobado_copiar), igual
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, clave) as k:
+            winreg.DeleteValue(k, "Tenca.lnk")
+        with mock.patch.object(server, "log"):
+            server._startup_aprobado_copiar("Chuleta.lnk", "Tenca.lnk", clave)
+            server._startup_aprobado_copiar("Nada.lnk", "Otra2.lnk", clave)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, clave) as k:
+            self.assertEqual(winreg.QueryValueEx(k, "Tenca.lnk")[0], desactivado)
+            with self.assertRaises(FileNotFoundError):
+                winreg.QueryValueEx(k, "Otra2.lnk")
 
 
 if __name__ == "__main__":

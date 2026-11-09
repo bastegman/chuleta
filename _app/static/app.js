@@ -136,7 +136,10 @@ const provName = () => S.config?.procesado === 'agente' ? `${S.config.agente?.la
 const estDuration = a => a.duration || (a.ext === '.wav' ? a.size / 192000 : a.size / 16000);
 /* nombres de carpeta: las vinculadas (fuera de Audios) van por dentro como ":<id>/…" y se ven con su nombre */
 const nodeName = p => nfc(S.folders.get(p)?.name ?? p.split('/').pop());
-const folderName = p => p ? nodeName(p) : `${APP_NAME} (raíz)`;
+/* la carpeta de la app como se llama en el disco (server.root_name): «Chuleta» en una instalación encima de Chuleta,
+   que no renombra la carpeta; las rutas y la raíz se enseñan con ese nombre, el de la app queda para la app */
+const rootName = () => nfc(S.config?.root_name || APP_NAME);
+const folderName = p => p ? nodeName(p) : `${rootName()} (raíz)`;
 const pathLabel = p => p.split('/').map((_, i, parts) => nodeName(parts.slice(0, i + 1).join('/'))).join(' › ');
 
 function hlTerms(text, terms) {
@@ -1405,7 +1408,7 @@ async function viewSearch(q) {
     const hits = x.hits.map(h => `<div class="hit" data-go="${k}" data-path="${esc(x.path)}" data-t="${h.start ?? ''}" data-q="${esc(q)}">`
       + `<span class="ts">${h.start != null ? fmtClock(h.start) : '·'}</span><span>${hlTerms(h.text, terms)}</span></div>`).join('');
     return `<div class="card sres"><div class="h" data-go="${k}" data-path="${esc(x.path)}" data-q="${esc(q)}"><b>${x.kind === 'doc' ? I.doc : ''}${esc(title)}</b>`
-      + `<span class="f">${esc(nfc(x.folder || APP_NAME).replaceAll('/', ' › '))} · ${x.count} ${x.count === 1 ? 'vez' : 'veces'}</span></div>${hits}`
+      + `<span class="f">${esc(x.folder ? nfc(x.folder).replaceAll('/', ' › ') : rootName())} · ${x.count} ${x.count === 1 ? 'vez' : 'veces'}</span></div>${hits}`
       + `${x.count > x.hits.length ? `<div class="muted" style="font-size:12.5px;padding-top:6px">y ${x.count - x.hits.length} más…</div>` : ''}</div>`;
   }).join('');
 }
@@ -1870,7 +1873,7 @@ function ask(title, html, ok = 'Aceptar') {
 function flatFolders() {
   const out = [];
   if (!S.tree) return out;  // aún sin árbol (p. ej. «Reuniones» pulsado al arrancar): nada, no un TypeError
-  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${APP_NAME} (raíz)`, depth: d }); subFolders(n).forEach(f => w(f, d + 1)); })(S.tree, 0);
+  (function w(n, d) { out.push({ path: n.path, name: n.path ? (n.linked ? '🔗 ' : '') + nfc(n.name) : `${rootName()} (raíz)`, depth: d }); subFolders(n).forEach(f => w(f, d + 1)); })(S.tree, 0);
   return out;
 }
 /* vincular una carpeta de fuera de Audios (p. ej. la del proyecto): selector de carpetas de Windows */

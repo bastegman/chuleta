@@ -300,7 +300,7 @@ class CarpetaNuevaTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         prepare(home)
         out = run_ps_functions(INSTALAR, ["Test-Instalacion", "Test-CarpetaDeLaApp", "Test-CarpetaLibre",
-                                          "Get-CarpetaNueva"],
+                                          "Test-TieneReuniones", "Get-CarpetaNueva"],
                                "$FolderName = 'Tenca'; $LegacyFolders = @('Chuleta'); "
                                "$script:UserHome = '" + home.replace("'", "''") + "'; "
                                "Write-Output ('R=' + (Get-CarpetaNueva))")
@@ -351,6 +351,24 @@ class CarpetaNuevaTests(unittest.TestCase):
         def prep(h):
             self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "\ufeffCHULETA · grabar, transcribir y resumir")
             self.write(os.path.join(h, "Tenca", "_app", "server.py"))
+        self.assertEqual(self.nueva(prep), "Tenca")
+
+    def test_la_que_tiene_reuniones_antes_que_un_zip_descomprimido(self):
+        """P2 del renombrado: el zip de Tenca descomprimido en %USERPROFILE%\\Tenca (con su _app, sin reuniones) no
+        deja fuera las reuniones de una Chuleta desinstalada en %USERPROFILE%\\Chuleta."""
+        def prep(h):
+            self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "\ufeffCHULETA · grabar, transcribir y resumir")
+            self.write(os.path.join(h, "Chuleta", "Proyecto Alfa", "reunion.wav"))
+            self.write(os.path.join(h, "Tenca", "_app", "server.py"))
+            self.write(os.path.join(h, "Tenca", "_app", "static", "prueba.wav"))  # lo de _app no son reuniones
+        self.assertEqual(self.nueva(prep), "Chuleta")
+
+    def test_las_dos_con_reuniones_la_de_ahora(self):
+        def prep(h):
+            self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "\ufeffCHULETA · grabar, transcribir y resumir")
+            self.write(os.path.join(h, "Chuleta", "Proyecto Alfa", "reunion.wav"))
+            self.write(os.path.join(h, "Tenca", "LEEME.txt"), "\ufeffTENCA · grabar, transcribir y resumir")
+            self.write(os.path.join(h, "Tenca", "Beta", "otra.m4a"))
         self.assertEqual(self.nueva(prep), "Tenca")
 
     def test_chuleta_ajena_no_se_usa(self):

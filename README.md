@@ -94,7 +94,8 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
    Chuleta, no queda nada con ese nombre: sus accesos directos (escritorio, menú Inicio y «Arrancar con Windows»)
    pasan a llamarse «Tenca», sin duplicados; su entrada de Aplicaciones instaladas y su `ABRIR CHULETA.bat` se
    quitan. La carpeta de las reuniones conserva su nombre (`%USERPROFILE%\Chuleta`: renombrarla rompería lo que
-   apunta a ella) y los datos siguen en `%LOCALAPPDATA%\AudiosApp`. Un anclaje de la barra de tareas no lo puede
+   apunta a ella), la app la enseña con ese nombre («Se guarda en Chuleta\…») y los datos siguen en
+   `%LOCALAPPDATA%\AudiosApp`. Un anclaje de la barra de tareas no lo puede
    cambiar un instalador: el instalador lo detecta y dice cómo volver a anclarla. Si varias copias de Tenca usan la
    misma carpeta de reuniones (otro PC, OneDrive), actualízalas todas a la vez (ver «Privacidad»).
 
