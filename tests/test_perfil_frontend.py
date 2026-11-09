@@ -14,7 +14,7 @@ from test_frontend import js_defs, read
 # grabar, en ajustes.js)
 HOOKS_APP = ("perfilLiveHtml(a)", "perfilMotoresHtml()", "perfilResumenHtml()", "perfilSalidasHtml()",
              "bindPerfilSettings(d)",
-             "collectPerfilSettings(d)", "perfilLangOf(list[0])", "perfilImportar('', pintarListas)",
+             "collectPerfilSettings(d)", "perfilLangOf(list[0])", "perfilImportar('', drawVocab)",
              "perfilVocabEmptyHtml()")
 GUARDED = ("perfilLiveHtml", "perfilMotoresHtml", "perfilResumenHtml", "perfilSalidasHtml", "bindPerfilSettings",
            "collectPerfilSettings", "perfilLangOf",

@@ -2346,7 +2346,7 @@ function openSettings(opts) {
       }
     });
     // las listas, aquí mismo: al abrir y tras «Importar listas…» o «Probar otra vez» (ajustes.js), sin cerrar Ajustes
-    const pintarListas = () => {
+    const drawVocab = () => {
       const box = $('#sVocab', d);
       if (!box || !document.body.contains(box)) return;
       // agrupado por proyecto: cada uno con sus temas y un boton para anadir otro
@@ -2361,11 +2361,11 @@ function openSettings(opts) {
         <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-vnew="">${I.plus}Nuevo proyecto</button>${typeof perfilImportar === 'function' ? `<button class="btn sm" type="button" id="sVocabImport">${I.folder}Importar listas de otra carpeta…</button>` : ''}</div>
         <div class="help">Cada tema es una lista de nombres y siglas, separados por comas y <b>los más importantes primero</b>: Whisper lee como mucho ${S.vocab[0]?.limit || 223} tokens (unos 45 términos) y lo que no cabe se queda fuera por el final.</div>`;
     };
-    d.ajPintarListas = pintarListas;
-    loadVocab(S.config.language ?? 'es-en').then(pintarListas);
+    d.ajPintarListas = drawVocab;
+    loadVocab(S.config.language ?? 'es-en').then(drawVocab);
     d.addEventListener('click', e => {
       const ed = e.target.closest('[data-vedit]'), nw = e.target.closest('[data-vnew]'), r = e.target.closest('[data-vdir]');
-      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', pintarListas);
+      if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', drawVocab);
       // editar o crear una lista sale de Ajustes: antes, si hay algo sin guardar, se pregunta
       if (ed) d.ajAntesDeSalir().then(ok => ok && openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit)));
       if (nw) d.ajAntesDeSalir().then(ok => ok && openVocabEditor(null, openSettings, nw.dataset.vnew));
