@@ -308,6 +308,39 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual(err, [], err)
         self.assertEqual(red, [], red)
 
+    def test_quitar_la_carpeta_del_tema_del_perfil_deja_guardar(self):
+        """Quitar la carpeta de listas de la que sale el tema de «Perfil de reunión»: el servidor pone el tema en
+        automático y el selector de Ajustes también, así que «Guardar» funciona (revisión de la fusión con ux-grabar,
+        09/11/2026: el selector se quedaba con la lista quitada y «Guardar» daba 400 «Ese tema de vocabulario ya no
+        existe»)."""
+        listas = os.path.join(self.tmp, "Listas del perfil")
+        os.makedirs(listas)
+        for n in ("Uno", "Dos"):
+            with open(os.path.join(listas, n + ".txt"), "w", encoding="utf-8") as f:
+                f.write("alfa, beta\n")
+        self.api_post("/api/vocab/link/add", {"path": listas})
+        vocab = json.load(urllib.request.urlopen(urllib.request.Request(
+            self.base + "/api/vocab", headers={"X-Chuleta-Token": self.token}), timeout=10))
+        vid = next(v["id"] for v in vocab["items"] if v.get("conectada") and v["name"] == "Dos")
+        self.api_post("/api/settings", {"perfil": {"vocab": vid}})
+        self.addCleanup(self.api_post, "/api/settings", {"perfil": {"vocab": None}})
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
+        self.assertEqual(pg.input_value("#pfVocab"), vid)
+        pg.click(".aj-nav [data-sec='vocabulario']")
+        pg.wait_for_selector("#sVocabCarpetas:has-text('Listas del perfil')", timeout=10000)
+        pg.click("#sVocabCarpetas [data-vunlink]")
+        pg.wait_for_selector("#sVocabCarpetas:has-text('Ninguna')", timeout=10000)
+        pg.wait_for_function("document.querySelector('#pfVocab').value === '__auto'", timeout=5000)
+        pg.click("#modal [data-m='ok']")
+        pg.wait_for_selector("#modal.hidden", state="attached", timeout=5000)  # guardado: Ajustes se cierra
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], err)
+        self.assertEqual(red, [], red)
+
     def test_copiar_para_correo_con_formato(self):
         """«Copiar para correo» (mock 08): al portapapeles van text/html y text/plain, sin Markdown ni minutos y sin
         firma de IA. En WebView2 lo prueba test_portapapeles_webview2 (runner de Windows)."""

@@ -201,6 +201,9 @@ async function vocabDesconectar(rel, after) {
   try {
     const r = await api('/api/vocab/link/remove', { rel });
     S.config.vocab_links = r.vocab_links || [];
+    // el servidor pone en automático el tema del perfil (y el último elegido) si era de esa carpeta: la configuración
+    // de aquí también, para que Ajustes no guarde el tema quitado (perfilVocabRedraw)
+    try { setConfig(await api('/api/config')); } catch { /* la siguiente lectura la trae */ }
     await loadVocab(S.config.language ?? 'es-en');
     toast('Carpeta quitada · no se ha borrado nada de ella');
     if (after) after();
@@ -244,6 +247,22 @@ function perfilSavedText(prop, live, transcribed) {
 }
 
 /* ---------------------------------------------------------------- Ajustes: Perfil de reunión */
+function perfilVocabOptions(vocab, sel) {
+  const opt = (v, l) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+  return opt(PERFIL_AUTO, 'Automático · el que sugiera la reunión en curso (Teams/Outlook) o el último elegido')
+    + opt('', 'Sin vocabulario · el general de Ajustes')
+    + perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => opt(v.id, v.name + (v.desc ? ' · ' + v.desc : ''))).join('')}</optgroup>`).join('');
+}
+/* Ajustes abierto y las listas han cambiado (quitar una carpeta de listas): #pfVocab, otra vez con las que hay. Se queda
+   lo elegido si sigue existiendo; si no, lo guardado (el servidor ya lo ha puesto en automático). Si no, «Guardar»
+   mandaba el tema quitado y daba «Ese tema de vocabulario ya no existe» (revisión de la integración, 09/11/2026). */
+function perfilVocabRedraw(d) {
+  const v = $('#pfVocab', d);
+  if (!v) return;
+  const vocab = S.vocab || [], p = (S.config || {}).perfil || {};
+  const vale = v.value === PERFIL_AUTO || v.value === '' || vocab.some(x => x.id === v.value);
+  v.innerHTML = perfilVocabOptions(vocab, vale ? v.value : (p.vocab == null ? PERFIL_AUTO : p.vocab));
+}
 function perfilFieldsetHtml() {
   const c = S.config || {}, p = c.perfil || {}, vocab = S.vocab || [], presets = c.presets || [];
   const folderSel = p.folder == null ? PERFIL_AUTO : p.folder, vocabSel = p.vocab == null ? PERFIL_AUTO : p.vocab;
@@ -256,7 +275,7 @@ function perfilFieldsetHtml() {
         <div><label>${I.globe}Idioma de la reunión</label>${langSelect('sLang', c.language ?? 'es-en')}</div>
       </div>
       <label>${I.topic}Tema de vocabulario</label>
-      <select id="pfVocab">${opt(PERFIL_AUTO, 'Automático · el que sugiera la reunión en curso (Teams/Outlook) o el último elegido', vocabSel)}${opt('', 'Sin vocabulario · el general de Ajustes', vocabSel)}${perfilGroups(vocab).map(([pr, vs]) => `<optgroup label="${esc(pr)}">${vs.map(v => opt(v.id, v.name + (v.desc ? ' · ' + v.desc : ''), vocabSel)).join('')}</optgroup>`).join('')}</select>
+      <select id="pfVocab">${perfilVocabOptions(vocab, vocabSel)}</select>
       <label>${I.text}Contexto de las reuniones <span class="muted" style="font-weight:400">· opcional, una o dos frases</span></label>
       <textarea id="pfContext" rows="2" maxlength="500" placeholder="p. ej. Reuniones semanales del proyecto Alfa con el equipo del cliente: seguimiento de la migración y del plan de pruebas">${esc(p.context || '')}</textarea>
       <div class="help"><b>Español + inglés</b>, <b>Español + portugués</b> e <b>Inglés + portugués</b> detectan el idioma cada pocos segundos pero solo entre esos dos y dejan cada frase en su idioma; si una reunión es solo en uno, fijarlo es algo más preciso. El contexto lo recibe Whisper detrás del vocabulario (si no cabe todo, se recorta antes que el vocabulario) y lo tiene en cuenta el resumen.</div>

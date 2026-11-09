@@ -95,7 +95,9 @@ Lo que pidió: «me gustaría poder conectar a una carpeta, no tener que pegarlo
 - **«Usar las listas de una carpeta…»** (Ajustes → Vocabulario; en ● Grabar, al final del selector de proyecto y, sin
   listas, como botón): eliges la carpeta donde ya tienes tus listas y la app las lee de allí **en vivo**, sin copiarlas.
   Lo que cambies en esos `.txt` vale desde la siguiente grabación (en directo, desde el siguiente trozo). Ajustes
-  enseña cada carpeta con cuántas listas da, «Abrir» y «quitar» (no borra nada).
+  enseña cada carpeta con cuántas listas da, «Abrir» y «quitar» (no borra nada). Si el tema del perfil salía de la
+  carpeta que quitas, vuelve a «Automático» también en Ajustes, y «Guardar» funciona (antes daba «Ese tema de
+  vocabulario ya no existe»; revisión de la integración del 09/11/2026).
 - Valen tres formas: `.txt` sueltos en la carpeta (el proyecto es el nombre de la carpeta; si se llama `Vocabulario`,
   el de la de encima), `<carpeta>\Vocabulario\*.txt` y `<carpeta>\<Proyecto>\Vocabulario\*.txt`. Cada `.txt` es un
   tema, con los términos separados por comas, punto y coma o **uno por línea**.

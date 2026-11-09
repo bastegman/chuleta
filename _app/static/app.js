@@ -2424,7 +2424,9 @@ function openSettings(opts) {
       const vo = e.target.closest('[data-vopen]'), vu = e.target.closest('[data-vunlink]');
       if (e.target.closest('#sVocabImport') && typeof perfilImportar === 'function') perfilImportar('', openSettings);
       if (e.target.closest('#sVocabConectar') && typeof vocabConectar === 'function') vocabConectar(redrawVocab);
-      if (vu && typeof vocabDesconectar === 'function') vocabDesconectar(vu.dataset.vunlink, redrawVocab);
+      if (vu && typeof vocabDesconectar === 'function') {
+        vocabDesconectar(vu.dataset.vunlink, () => { redrawVocab(); if (typeof perfilVocabRedraw === 'function') perfilVocabRedraw(d); });
+      }
       if (ed) openVocabEditor(S.vocab.find(v => v.id === ed.dataset.vedit));
       if (nw) openVocabEditor(null, openSettings, nw.dataset.vnew);
       const rev = r ? r.dataset.vdir : vo ? vo.dataset.vopen : null;
