@@ -208,19 +208,23 @@ function ownAudios(f) {
 const isActive = j => j.status === 'queued' || j.status === 'running';
 const jobFor = path => S.jobs.find(j => j.path === path && isActive(j) && j.kind !== 'summary');  // los resúmenes van aparte
 const lastJobFor = path => { for (let i = S.jobs.length - 1; i >= 0; i--) if (S.jobs[i].path === path) return S.jobs[i]; };
+/* el último trabajo de TRANSCRIPCIÓN de esa reunión: el de voces y el resumen tienen su propio aviso. Con lastJobFor, un
+   fallo de las voces salía también como «No se pudo transcribir» con la transcripción hecha (09/11/2026, msg 1378) */
+const lastTxJobFor = path => { for (let i = S.jobs.length - 1; i >= 0; i--) { const j = S.jobs[i]; if (j.path === path && j.kind !== 'voces' && j.kind !== 'summary') return j; } };
 function statusOf(a) {
   const j = jobFor(a.path);
   if (j && j.live) return 'rec';
   if (j) return j.status;
   if (a.recording) return 'rec';
   if (a.txt || a.srt) return a.partial ? 'partial' : 'done';
-  const l = lastJobFor(a.path);
+  const l = lastTxJobFor(a.path);
   return l && l.status === 'error' ? 'error' : 'pending';
 }
 function statusPill(a) {
   const j = jobFor(a.path);
   if (j && j.live) return `<span class="pill rec"><i class="recdot"></i>En directo</span>`;
   if (a.recording) return '<span class="pill rec"><i class="recdot"></i>Grabando</span>';
+  if (j && j.kind === 'voces') return `<span class="pill run">${j.status === 'running' ? `Voces ${Math.round(j.progress * 100)} %` : 'Voces en cola'}</span>`;  // no «Transcribiendo»: ya está transcrita
   if (j && j.status === 'running') return `<span class="pill run">Transcribiendo ${Math.round(j.progress * 100)} %</span>`;
   if (j) return '<span class="pill run">En cola</span>';
   const st = statusOf(a);
@@ -945,7 +949,7 @@ function renderAudioJob(a) {
   const el = $('#aJob');
   if (!el) return;
   let j = jobFor(a.path);
-  if (!j) { const l = lastJobFor(a.path); if (l && l.status === 'error') j = l; }
+  if (!j) { const l = lastTxJobFor(a.path); if (l && l.status === 'error') j = l; }
   if (!j) { el.innerHTML = ''; el.dataset.id = ''; return; }
   if (el.dataset.id === j.id + j.status) return updateJobLine(el, j);
   el.dataset.id = j.id + j.status;

@@ -1731,6 +1731,74 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             self.assertNotIn(marca, r["text"], marca)
         self.assertEqual(errores, [])
 
+    def test_fallo_de_las_voces_no_sale_como_de_la_transcripcion(self):
+        """fix-subir-memoria (09/11/2026, msg 1378): con la reunión ya transcrita, un fallo de «Quién habla» salía
+        también como «No se pudo transcribir» con «Reintentar» (lastJobFor no miraba el tipo) y con la traza de ONNX
+        en crudo. Ahora: la transcripción sigue «Transcrito», el error va solo en la barra de voces y en su aviso, y
+        en una frase."""
+        import wave
+        rel = "Reuniones/2026-11-09 19-38-00 - Audio viejo.wav"
+        stem = os.path.join(self.root, *os.path.splitext(rel)[0].split("/"))
+        os.makedirs(os.path.dirname(stem), exist_ok=True)
+        with wave.open(stem + ".wav", "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"\0\0" * 16000)
+        with open(stem + ".srt", "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,000 --> 00:00:01,000\nHola a todos\n")
+        onnx = ("Non-zero status code returned while running Concat node. Name:'/decoder/_pooling/Concat_4' Status "
+                "Message: bad allocation")
+        sys.path.insert(0, os.path.join(REPO, "_app"))
+        import explicar
+        tx = {"id": "t1", "path": rel, "name": "a.wav", "preset": "cloud", "engine": "cloud", "status": "done",
+              "progress": 1, "stage": "Listo", "error": None, "kind": "transcribe", "created": 1, "elapsed": 40}
+        voz = {"id": "v1", "path": rel, "name": "a.wav", "preset": "voces", "engine": None, "status": "running",
+               "progress": 0.4, "stage": "Identificando voces… (bloque 1/2)", "error": None, "kind": "voces",
+               "created": 2, "elapsed": 10}
+        estado = {"voz": voz}
+
+        def jobs(route):
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"jobs": [tx, estado["voz"]], "movimientos": []}))
+
+        def config(route):
+            r = route.fetch()
+            d = r.json()
+            d["voices"] = {"enabled": True, "models_ready": True}
+            route.fulfill(response=r, body=json.dumps(d))
+
+        pg, errores, red = self.pagina()
+        pg.route("**/api/jobs", jobs)
+        pg.route("**/api/config", config)
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.evaluate("p => location.hash = '#/a/' + encodeURIComponent(p)", rel)
+        pg.wait_for_function("document.querySelector('#aJob') && document.querySelector('#aJob').innerText"
+                             ".includes('Identificando voces')", timeout=15000)
+        # mientras, en la lista no dice «Transcribiendo 40 %»: ya está transcrita
+        self.assertIn("Voces 40 %", pg.evaluate("p => statusPill(S.audios.get(p))", rel))
+        # termina en error: lo que manda el servidor (Job.public) es el error técnico y su aviso en una frase
+        estado["voz"] = dict(voz, status="error", stage="Error", error=onnx, progress=0.4,
+                             aviso=explicar.explicar(onnx))
+        pg.wait_for_function("document.querySelector('#aVoz').innerText.includes('No se pudieron identificar')",
+                             timeout=15000)
+        pg.wait_for_function("document.querySelector('#toasts').innerText.includes('No se pudieron identificar')",
+                             timeout=15000)
+        self.assertNotIn("No se pudo transcribir", pg.inner_text("#aJob"))
+        self.assertEqual(pg.locator("#aJob [data-act='tx-toggle']").count(), 0)  # ni su «Reintentar»
+        for donde in ("#aVoz", "#toasts"):
+            texto = pg.inner_text(donde)
+            self.assertIn("le ha faltado memoria", texto, donde)
+            self.assertNotIn("Concat", texto, donde)
+            self.assertNotIn("No se pudo transcribir", texto, donde)
+        # en la lista sigue «Transcrito», no «Error»
+        self.assertEqual(pg.evaluate("p => statusOf(S.audios.get(p))", rel), "done")
+        self.assertIn("Transcrito", pg.evaluate("p => statusPill(S.audios.get(p))", rel))
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [])
+        self.assertEqual(red, [])
+
 
 if __name__ == "__main__":
     unittest.main()

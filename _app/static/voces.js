@@ -40,7 +40,7 @@ function renderVoicesBar(a) {
       ${S.tx && S.tx.kind === 'srt' ? `<button class="btn ghost sm" data-act="voz-export" title="Guarda <reunión>.hablantes.txt junto al audio">${I.text}Exportar con hablantes</button>` : ''}
       ${on ? `<button class="btn ghost sm" data-act="voz-identify" title="Repetir la identificación">${I.refresh}Volver a identificar</button>` : ''}`;
   } else if (on && (a.txt || a.srt) && !a.recording && !jobFor(a.path)) {
-    html = `${last && last.status === 'error' ? `<span class="vz-st err">No se pudieron identificar las voces: ${esc(last.error || '')}</span>` : '<span class="muted">' + I.voice + 'Quién habla: aún sin identificar</span>'}
+    html = `${last && last.status === 'error' ? `<span class="vz-st err">No se pudieron identificar las voces: ${esc(last.aviso?.frase || last.error || '')}</span>` : '<span class="muted">' + I.voice + 'Quién habla: aún sin identificar</span>'}
       <span class="sp"></span><button class="btn sm" data-act="voz-identify">${I.voice}Identificar voces</button>`;
   }
   el.innerHTML = html ? `<div class="card voz-bar">${html}</div>` : '';

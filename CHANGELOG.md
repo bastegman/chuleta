@@ -10,6 +10,27 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Memoria con audios largos (09/11/2026)
+
+Bernardo subió un audio viejo de 55 min (msg 1378): la transcripción en la nube salió bien, pero «Quién habla» se quedó
+sin memoria y la app enseñó la traza de ONNX dos veces, una como «No se pudo transcribir». Rama `fix-subir-memoria`.
+
+- **Arreglado**: «Quién habla» llegaba a 2,3 GB con una reunión de 55 min o de 1 h (medido): cada huella de voz le
+  pasaba 90 s de golpe al modelo de huellas (TitaNet), que gasta ~9 MB por segundo de audio. Ahora le pasa ventanas de
+  30 s y promedia (la huella sale igual: coseno 0,999-1,0), suelta la memoria del modelo de cada bloque al acabarlo y
+  lee el audio desde un archivo temporal en vez de tenerlo en memoria. Con la misma reunión, 0,69-0,75 GB.
+- **Arreglado**: un fallo de las voces salía también como «No se pudo transcribir» (con «Reintentar») aunque la
+  transcripción estuviera hecha, y la lista decía «Transcribiendo» mientras se identificaban las voces. Ahora cada
+  aviso va en su sitio y la lista dice «Voces n %».
+- **Arreglado**: un error de memoria se explica en una frase («Al PC le ha faltado memoria…»), sin la traza; otro fallo
+  dentro de un modelo, también.
+- En el PC, sin batched (Whisper «Normal»), el espectrograma de todo el audio se calculaba de una vez (+1,5 GB con
+  30 min): ahora va por bloques de 60 s, con el mismo resultado. El audio pasa a float32 con una copia en vez de dos.
+- Topes: el silencio que sustituye a los trozos ilegibles tiene tope total (30 min; después, nunca más que el audio
+  leído) y un audio de más de 8 horas se rechaza al subirlo, antes de guardarlo, y no se decodifica en la cola.
+- «Quién habla» usa la mitad de los hilos del PC, entre 2 y 4 (antes, siempre 2): con 4, un 21 % menos de tiempo
+  (medido en un Mac de 8 núcleos).
+
 ### Idioma y traducción en pleno directo; oculta al compartir pantalla (09/11/2026)
 
 Ítems 12, 13a y 18 del backlog (msgs 1150-1152 y 1242). Rama `idioma-directo`.
@@ -51,6 +72,7 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
   el Whisper medium de verdad en `test_e2e_procesado.py`, `test_ocultar_captura_windows.py` (la ventana real con
   WebView2: la marca y capturas con y sin ella, en windows-real) y el aviso real con la marca en
   `test_reunion_windows.py`; en `test_ui_smoke.py`, la nota de la tarjeta y el interruptor de Ajustes.
+
 
 ### Subir audio (09/11/2026)
 

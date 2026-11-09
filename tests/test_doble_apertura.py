@@ -200,7 +200,12 @@ class Arranques:
         """POST /api/ocultar con el token, como la página al cerrar la ventana con la X."""
         import json
         import urllib.request
-        with open(os.path.join(self.datos, "sesion.token"), encoding="utf-8") as f:
+        # en el runner de Windows, con los seis escenarios a la vez, la primera copia puede tardar en dejar su token:
+        # FileNotFoundError en «ya abierta, oculta y ocupada» (run 42668014867, intento 1, Windows 3.12). Se espera a
+        # que esté, como hace la página con el suyo
+        token_file = os.path.join(self.datos, "sesion.token")
+        self.esperar(lambda: os.path.isfile(token_file), 30)
+        with open(token_file, encoding="utf-8") as f:
             token = f.read().strip()
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/ocultar", data=b"{}", method="POST",
                                      headers={"X-Chuleta-Token": token, "X-Audios": "1",
@@ -267,7 +272,7 @@ class DobleAperturaTests(unittest.TestCase):
         try:
             p1 = a.lanzar(**dict(extra or {}, **(extra1 or {})))
             if segunda_vez:  # la ventana ya está abierta: el acceso directo la vuelve a enseñar
-                a.esperar(lambda: a.eventos_de("ventana"), 60)
+                r["ventana1"] = a.esperar(lambda: a.eventos_de("ventana"), 90)
                 time.sleep(1.0)
                 if ocultar:  # cerrada con la X: oculta, la app sigue en segundo plano
                     r["ocultar"] = a.ocultar()
@@ -287,6 +292,8 @@ class DobleAperturaTests(unittest.TestCase):
             r["show"] = a.eventos_de("show")
             r["hide"] = a.eventos_de("hide")
             r["log"] = a.log()
+        except Exception as e:  # con lo que haya en el log: un fallo de la CI se puede leer sin repetirlo
+            r.update(error=repr(e), log=a.log())
         finally:
             a.cerrar()
         return r
@@ -310,6 +317,7 @@ class DobleAperturaTests(unittest.TestCase):
         datos = {k: v for k, v in r.items() if k not in ("log", "a")}
         msg = f"{r['nombre']}: {datos}\n{r.get('log', '')[-3000:]}"
         self.assertNotIn("error", r, msg)
+        self.assertTrue(r.get("ventana1", True), msg)  # la primera abrió su ventana antes de seguir
         self.assertTrue(r["vivo1"], msg)
         self.assertEqual(len(r["ventanas"]), 1, msg)
         self.assertEqual(r["edge"], [], msg)  # ningún Edge, ni de la primera copia ni de la segunda

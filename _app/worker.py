@@ -89,8 +89,11 @@ def main():
         if state["key"] != key:
             state["model"] = state["key"] = None  # libera la RAM del anterior
             from faster_whisper import WhisperModel
-            state["model"] = WhisperModel(req.get("model_path") or key[0], device="cpu", compute_type="int8",
-                                          cpu_threads=key[1])
+            m = WhisperModel(req.get("model_path") or key[0], device="cpu", compute_type="int8", cpu_threads=key[1])
+            # el espectrograma, por bloques: sin batched, transcribe() lo calcula de todo el audio de una vez (~50 MB
+            # por minuto de audio solo de intermedios; engines.FeaturesPorBloques, fix-subir-memoria)
+            m.feature_extractor = engines.FeaturesPorBloques(m.feature_extractor)
+            state["model"] = m
             state["key"] = key
         return state["model"]
 
@@ -149,7 +152,7 @@ def main():
         # av.open(..., metadata_errors="ignore") y PyAV 19 (29/09/2026, lo que instala hoy pip) ya no lo admite:
         # TypeError y ninguna transcripcion en local desde la cola (07/11/2026). Mismo remuestreo (s16, mono, 16 kHz)
         offset = float(req.get("start") or 0)  # continuar una transcripcion que se quedo a medias
-        audio = engines.decode_16k(req["path"], offset).astype(np.float32) / 32768.0
+        audio = engines.a_float32(engines.decode_16k(req["path"], offset))  # una sola copia en float32
         fixed, multi, allowed = lang_mode(req.get("language"))
         lang = fixed
         with only_languages(model, allowed):  # el generador detecta al iterar: todo dentro del with

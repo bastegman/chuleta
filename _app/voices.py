@@ -44,6 +44,13 @@ MIN_MATCH_S = 5.0        # voz acumulada para intentar emparejar (entre 5 y 20 s
 BREVE_S = 10.0           # clusteres con menos voz: «(breve)», no generan persona
 BLOQUE_S = 1800.0        # audio mas largo se diariza por bloques de <= 30 min enlazados por huella
 HUELLA_MAX_S = 90.0      # voz que se concatena para una huella (los tramos mas largos primero)
+# Lo mas que se le pasa de una vez al modelo de huellas (TitaNet): su memoria crece con la duracion del trozo y una
+# huella mas larga es la media de las de sus ventanas, ponderada por su duracion. Medido el 09/11/2026 (sherpa-onnx
+# 2.0.1, un proceso por medida): 10 s, +84 MB; 30 s, +265 MB; 90 s, +808 MB. Con tres hablantes de 90 s la
+# diarizacion de 11 min llegaba a 1,96 GB y en el portatil de Bernardo, con Teams y Outlook abiertos, se quedo sin
+# memoria («bad allocation» en /decoder/_pooling/Concat_4, el nodo que crece con el tiempo); por encima de ~123 s el
+# modelo ni funciona. Por ventanas de 30 s: coseno 0,999-1,0 con la huella de 90 s de golpe (tests/test_fix_memoria.py)
+HUELLA_VENTANA_S = 30.0
 # Calibrado el 08/11/2026 con scripts/eval_voces.py: reuniones reales de 4 personas del AMI Meeting Corpus (CC BY 4.0;
 # 3 para elegir y 4 de prueba) y 4 reuniones montadas con voces chilenas de OpenSLR 71 (CC BY-SA 4.0). Hasta entonces,
 # 0,5 sin unir nada al final: 36 hablantes visibles para 12 personas (DER 0,517) y 48 para 16 en las de prueba (0,494).
@@ -113,6 +120,14 @@ def available():
         except (OSError, subprocess.SubprocessError) as e:
             _AVAILABLE.update(ok=False, why=f"{e.__class__.__name__}: {e}")
     return _AVAILABLE["ok"], _AVAILABLE["why"]
+
+
+def hilos(n=None):
+    """Hilos de onnxruntime para «Quién habla»: la mitad de los del PC, entre 2 y 4 (hasta el 09/11/2026, siempre 2).
+    Medido ese día (10 min de reunión, Mac de 8 núcleos y 16 hilos): 1 hilo, 34,5 s; 2, 23,3 s; 4, 18,3 s; 8, 23,0 s.
+    Con 4 o menos hilos en el PC se queda en 2, como antes. El proceso sigue en prioridad baja."""
+    n = os.cpu_count() if n is None else n
+    return min(4, max(2, (n or 2) // 2))
 
 
 def models_dir(data_dir):
@@ -188,11 +203,18 @@ def ensure_models(data_dir, progress=None, cancelled=None):
 
 # ----------------------------------------------------------------------------- audio
 
-def load_audio_16k(path, cancelled=None):
-    """int16 16 kHz mono. Con PyAV (engines.decode_16k) cualquier formato; sin el, solo WAV PCM 16 bit (desarrollo)."""
+def load_audio_16k(path, cancelled=None, en_disco=None):
+    """int16 16 kHz mono. Con PyAV (engines.decode_16k) cualquier formato; sin el, solo WAV PCM 16 bit (desarrollo).
+    en_disco: un archivo nuevo donde dejar el audio decodificado; se devuelve leído de ahí con np.memmap (solo lectura),
+    así que no ocupa memoria del proceso por mucho que dure: el sistema trae del disco lo que se va leyendo y lo puede
+    soltar cuando quiera (en Windows no cuenta como memoria comprometida, la que se acaba en un «bad allocation»)."""
     try:
         import engines
-        return engines.decode_16k(path, cancelled=cancelled or (lambda: False))
+        if en_disco is None:
+            return engines.decode_16k(path, cancelled=cancelled or (lambda: False))
+        with open(en_disco, "wb") as f:
+            n = engines.decode_16k(path, cancelled=cancelled or (lambda: False), destino=f)
+        return np.memmap(en_disco, dtype="<i2", mode="r", shape=(n,)) if n else np.zeros(0, np.int16)
     except ImportError:
         pass
     import wave
@@ -214,7 +236,8 @@ def load_audio_16k(path, cancelled=None):
 
 
 def _f32(samples16):
-    return np.ascontiguousarray(np.asarray(samples16, dtype=np.float32) / 32768.0)
+    """float32 en [-1, 1) con una sola copia (antes, dos: asarray y la division)."""
+    return np.multiply(samples16, np.float32(1 / 32768.0), dtype=np.float32)
 
 
 # ----------------------------------------------------------------------------- diarizacion y huellas (sherpa-onnx)
@@ -247,18 +270,32 @@ def _extractor(so, paths, threads=2):
     return so.SpeakerEmbeddingExtractor(cfg)
 
 
-def embed(ex, samples_f32):
-    """Vector L2-normalizado (192) de un trozo de voz float32 a 16 kHz, o None si es demasiado corto."""
-    if len(samples_f32) < SR:  # menos de 1 s: no es fiable
-        return None
+def _embed1(ex, samples_f32):
     s = ex.create_stream()
     s.accept_waveform(SR, samples_f32)
     s.input_finished()
     if not ex.is_ready(s):
         return None
-    v = np.asarray(ex.compute(s), dtype=np.float32)
-    n = float(np.linalg.norm(v))
-    return v / n if n > 0 else None
+    return _unit(np.asarray(ex.compute(s), dtype=np.float32))
+
+
+def embed(ex, samples_f32, ventana_s=HUELLA_VENTANA_S):
+    """Vector L2-normalizado (192) de un trozo de voz float32 a 16 kHz, o None si es demasiado corto. Al modelo nunca
+    le llegan mas de ventana_s de una vez: un trozo mas largo se parte en ventanas iguales (ninguna de menos de la
+    mitad) y su huella es la media de las de cada una, ponderada por su duracion (HUELLA_VENTANA_S)."""
+    n = len(samples_f32)
+    if n < SR:  # menos de 1 s: no es fiable
+        return None
+    cada = max(SR, int(ventana_s * SR))
+    k = -(-n // cada)
+    if k == 1:
+        return _embed1(ex, samples_f32)
+    acc, cortes = None, [i * n // k for i in range(k + 1)]
+    for a, b in zip(cortes, cortes[1:]):
+        v = _embed1(ex, np.ascontiguousarray(samples_f32[a:b]))
+        if v is not None:
+            acc = v * (b - a) if acc is None else acc + v * (b - a)
+    return _unit(acc)
 
 
 def fingerprint(ex, samples16, tramos, max_s=HUELLA_MAX_S):
@@ -454,9 +491,6 @@ def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift
     paths = model_paths(data_dir)
     if not models_ready(data_dir):
         raise VoicesError("Faltan los modelos de voces (activa la opcion en Ajustes para descargarlos)")
-    sd, ex = _diarizer(so, paths, threads, shift, umbral_grupos), _extractor(so, paths, threads)
-    if sd.sample_rate != SR:
-        raise VoicesError(f"El modelo espera {sd.sample_rate} Hz")
     total_s = len(samples16) / SR
     n_blocks = max(1, int(math.ceil(total_s / BLOQUE_S)))
     block = int(math.ceil(len(samples16) / n_blocks))
@@ -473,12 +507,18 @@ def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift
             progress(stage=f"Identificando voces… ({where})", frac=0.05 + 0.85 * (_bi + done / max(1, n)) / n_blocks)
             return 1 if cancelled() else 0
 
-        res = sd.process(_f32(part), cb)
+        # una sesion de onnxruntime por bloque y por fase, que se suelta al terminarla: cada una guarda para si la
+        # memoria que ha llegado a usar (su arena) y, juntas, se sumaban (fix-subir-memoria, 09/11/2026)
+        sd = _diarizer(so, paths, threads, shift, umbral_grupos)
+        if sd.sample_rate != SR:
+            raise VoicesError(f"El modelo espera {sd.sample_rate} Hz")
+        local = {}
+        for s in sd.process(_f32(part), cb).sort_by_start_time():
+            local.setdefault(int(s.speaker), []).append((round(s.start + t_off, 3), round(s.end + t_off, 3)))
+        del sd
         if cancelled():
             raise VoicesError("cancelado")
-        local = {}
-        for s in res.sort_by_start_time():
-            local.setdefault(int(s.speaker), []).append((round(s.start + t_off, 3), round(s.end + t_off, 3)))
+        ex = _extractor(so, paths, threads)
         for spk in sorted(local):
             if cancelled():
                 raise VoicesError("cancelado")
@@ -499,6 +539,7 @@ def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift
                 mean = sum(v * max(s, 1.0) for v, s in target["vecs"])
                 n = float(np.linalg.norm(mean))
                 target["vec"] = mean / n if n > 0 else None
+        del ex
     order = sorted(range(len(speakers)), key=lambda i: -speakers[i]["segundos"])
     tramos, hablantes, huellas = [], {}, {}
     for k, i in enumerate(order, 1):
@@ -512,7 +553,7 @@ def diarize(samples16, data_dir, threads=2, progress=None, cancelled=None, shift
     out = {"tramos": tramos, "hablantes": hablantes, "huellas": huellas, "duracion_s": round(total_s, 1)}
     if consolidar:
         progress(stage="Uniendo voces parecidas…", frac=0.92)
-        out = consolidate(out, samples16, ex, participantes=participantes)
+        out = consolidate(out, samples16, _extractor(so, paths, threads), participantes=participantes)
     progress(stage="Voces identificadas", frac=0.95)
     return out
 
@@ -1131,9 +1172,13 @@ def main(argv=None):
             msg["frac"] = round(float(frac), 4)
         send(msg)
 
+    # el audio decodificado, en un archivo de DATA_DIR/tmp (el servidor vacía esa carpeta al arrancar y al cerrarse)
+    tmp = os.path.join(a.data, "tmp", f"voces-{os.getpid()}-{uuid.uuid4().hex[:8]}.pcm")
+    samples = None
     try:
         progress(stage="Leyendo audio…", frac=0.01)
-        samples = load_audio_16k(a.diarize)
+        os.makedirs(os.path.dirname(tmp), exist_ok=True)
+        samples = load_audio_16k(a.diarize, en_disco=tmp)
         if a.fingerprint:
             data = read_sidecar(a.out) or {}
             tramos = [(float(t["inicio"]), float(t["fin"])) for t in data.get("tramos", [])
@@ -1166,6 +1211,12 @@ def main(argv=None):
     except Exception as e:
         send({"type": "error", "error": str(e) or e.__class__.__name__})
         return 1
+    finally:
+        del samples  # suelta el memmap: en Windows un archivo mapeado no se puede borrar
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

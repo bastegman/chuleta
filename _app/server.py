@@ -3774,7 +3774,7 @@ class Jobs:
             pass
         err = open(log_path, "ab")
         p = subprocess.Popen([sys.executable, "-u", os.path.join(APP_DIR, "voices.py"), *args, "--data", DATA_DIR,
-                              "--threads", "2"], stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
+                              "--threads", str(voices.hilos())], stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
                              creationflags=engines.NO_WINDOW | (voices.IDLE_PRIORITY or engines.BELOW_NORMAL))
         err.close()
         q = queue.Queue()
@@ -5964,6 +5964,8 @@ class App:
                 dur = engines.probar_audio(tmp)
             except engines.EngineError as e:
                 raise ApiError(f"«{original}» {e}.{consejo}")
+            if dur and dur > engines.AUDIO_MAX_S:  # la cola no lo podría decodificar entero (fix-subir-memoria)
+                raise ApiError(f"«{original}» {engines.DEMASIADO_LARGO}.")
             # su carpeta «AAAA-MM-DD Nombre», como al grabar (con la fecha del audio, no la de hoy)
             mname = fit_meeting_dir(folder, label, lt, stem) if por_reunion(st) else None
             mdir = free_dir(folder, mname) if mname else None

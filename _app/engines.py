@@ -372,7 +372,14 @@ def media_duration(path):
 
 
 SILENCIO_MAX_S = 2.0  # lo más que se rellena por un paquete que no se puede leer (uno de verdad dura milisegundos)
+# y en total: hasta SILENCIO_LIBRE_S sin más; después, nunca más silencio que audio leído. Un archivo dañado con miles
+# de paquetes ilegibles que dicen durar mucho no puede pedir horas de silencio (09/11/2026, fix-subir-memoria)
+SILENCIO_LIBRE_S = 1800.0
 PROBAR_TOPE_S = 120.0  # al subir, cuánto audio ilegible se recorre buscando el primer trozo que se lee
+# Lo más largo que se decodifica: 8 h son 0,9 GB a 16 kHz en int16. Más, se pide cortarlo (al subir, antes de guardar)
+AUDIO_MAX_S = 8 * 3600.0
+DEMASIADO_LARGO = (f"dura más de {AUDIO_MAX_S / 3600:.0f} horas y no cabe de una vez en memoria: córtalo en partes "
+                   "más cortas")
 
 
 def _paquetes(c, s, av):
@@ -395,19 +402,29 @@ def _paquetes(c, s, av):
         yield from frames
 
 
-def decode_16k(path, start=0.0, cancelled=lambda: False):
-    """Cualquier audio/video a int16 16 kHz mono, paquete a paquete (la mitad de memoria que float32)."""
+def decode_16k(path, start=0.0, cancelled=lambda: False, destino=None):
+    """Cualquier audio/video a int16 16 kHz mono, paquete a paquete (la mitad de memoria que float32). Con destino (un
+    archivo abierto en binario), el audio se escribe ahí según se lee, sin guardarlo en memoria, y devuelve cuántas
+    muestras ha escrito (voices.load_audio_16k lo lee después con np.memmap)."""
     import av
     import numpy as np
-    skip, parts, leidos = int(start * 16000), [], 0
+    skip, parts, leidos, relleno, pos, escritas = int(start * 16000), [], 0, 0, 0, 0
+    tope, libre = int(AUDIO_MAX_S * 16000), int(SILENCIO_LIBRE_S * 16000)
 
     def anadir(a):
-        nonlocal skip
+        nonlocal skip, pos, escritas
+        pos += len(a)
+        if pos > tope:
+            raise EngineError(f"El audio {DEMASIADO_LARGO}.")
         if skip:  # continuar desde ese segundo
             cut = min(skip, len(a))
             a, skip = a[cut:], skip - cut
         if len(a):
-            parts.append(a)
+            escritas += len(a)
+            if destino is not None:
+                destino.write(np.ascontiguousarray(a, "<i2").tobytes())
+            else:
+                parts.append(a)
 
     try:
         with av.open(path) as c:
@@ -418,8 +435,12 @@ def decode_16k(path, start=0.0, cancelled=lambda: False):
             for fr in itertools.chain(_paquetes(c, s, av), [None]):  # perezoso: no carga el archivo entero antes
                 if cancelled():
                     raise Cancelled()
-                if isinstance(fr, float):  # un paquete que no se pudo leer: su silencio
-                    anadir(np.zeros(int(round(fr * 16000)), np.int16))
+                if isinstance(fr, float):  # un paquete que no se pudo leer: su silencio (con tope total)
+                    n = int(round(fr * 16000))
+                    if relleno + n > libre and relleno + n > leidos:
+                        continue
+                    relleno += n
+                    anadir(np.zeros(n, np.int16))
                     continue
                 for o in rs.resample(fr):
                     a = o.to_ndarray().reshape(-1)
@@ -431,8 +452,10 @@ def decode_16k(path, start=0.0, cancelled=lambda: False):
         if not leidos:
             raise EngineError(f"No se pudo leer el audio ({e.__class__.__name__}: {e})")
         # WAV cortado (p. ej. grabacion interrumpida): se usa lo que se pudo leer
-    if not leidos and parts:  # ningun paquete se pudo leer: solo habria silencio
+    if not leidos and escritas:  # ningun paquete se pudo leer: solo habria silencio
         raise EngineError("No se pudo leer el audio: ningún trozo se puede decodificar.")
+    if destino is not None:
+        return escritas
     return np.concatenate(parts) if parts else np.zeros(0, np.int16)
 
 
@@ -480,6 +503,69 @@ def probar_audio(path, segundos=3.0):
         elif s.duration and s.time_base:
             dur = float(s.duration * s.time_base)
     return dur
+
+
+def a_float32(y):
+    """int16 → float32 en [-1, 1) con una sola copia: `y.astype(np.float32) / 32768.0` hacía dos (en 1 h de audio,
+    el worker pasaba de 0,29 a 0,72 GB antes de empezar). Mismo resultado bit a bit (dividir por 2^15 es exacto)."""
+    import numpy as np
+    return np.multiply(y, np.float32(1 / 32768.0), dtype=np.float32)
+
+
+FEATURES_BLOQUE_S = 60.0  # FeaturesPorBloques: segundos de audio por bloque
+
+
+class FeaturesPorBloques:
+    """El extractor de features de faster-whisper, por bloques. WhisperModel.transcribe (sin batched: el preset
+    «Normal») calcula el espectrograma de TODO el audio de una vez y su STFT intermedio pesa ~50 MB por minuto (medido
+    el 09/11/2026 con faster-whisper 1.2.1: 30 min de audio, +1,5 GB). Este hace la STFT y el banco mel por bloques de
+    FEATURES_BLOQUE_S y solo el logaritmo, sobre el resultado entero (que pesa 32-51 KB por segundo): el mismo
+    resultado que FeatureExtractor.__call__ de faster-whisper 1.2.1 (tramas de 25 ms cada 10 ms, ventana de Hann,
+    relleno «reflect» en los extremos, sin la última trama). Lo demás (n_samples, hop_length…) es del original."""
+
+    def __init__(self, fe):
+        self.__dict__["_fe"] = fe
+
+    def __getattr__(self, k):
+        return getattr(self.__dict__["_fe"], k)
+
+    def __setattr__(self, k, v):
+        setattr(self.__dict__["_fe"], k, v)
+
+    def __call__(self, waveform, padding=160, chunk_length=None):
+        import numpy as np
+        fe = self.__dict__["_fe"]
+        sr, nfft, hop = fe.sampling_rate, fe.n_fft, fe.hop_length
+        paso = max(1, int(FEATURES_BLOQUE_S * sr) // hop)  # tramas por bloque
+        if len(waveform) <= 2 * paso * hop:
+            return fe(waveform, padding=padding, chunk_length=chunk_length)
+        if chunk_length is not None:  # lo que hace el original con chunk_length
+            fe.n_samples = chunk_length * sr
+            fe.nb_max_frames = fe.n_samples // hop
+        w = np.asarray(waveform, dtype=np.float32)
+        if padding:
+            w = np.pad(w, (0, padding))
+        w = np.pad(w, (nfft // 2, nfft // 2), mode="reflect")
+        n = (len(w) - nfft) // hop  # tramas que se usan: 1 + (len - nfft) // hop, sin la última
+        window = np.hanning(nfft + 1)[:-1].astype("float32")
+        filtros = fe.mel_filters
+        mel = None
+        for f0 in range(0, n, paso):
+            f1 = min(f0 + paso, n)
+            seg = w[f0 * hop:(f1 - 1) * hop + nfft]
+            tramas = np.lib.stride_tricks.as_strided(seg, (f1 - f0, nfft), (hop * seg.strides[0], seg.strides[0]))
+            st = np.fft.rfft(tramas * window, n=nfft, axis=-1).astype("complex64").T
+            m = filtros @ (np.abs(st) ** 2)
+            if mel is None:
+                mel = np.empty((m.shape[0], n), m.dtype)
+            mel[:, f0:f1] = m
+        del w
+        np.clip(mel, 1e-10, None, out=mel)
+        np.log10(mel, out=mel)
+        np.maximum(mel, mel.max() - 8.0, out=mel)
+        mel += 4.0
+        mel /= 4.0
+        return mel
 
 
 def find_silences(y, sr=16000, thresh_db=-35.0, min_s=0.4):

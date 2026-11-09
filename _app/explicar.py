@@ -29,6 +29,8 @@ ACCIONES = {
 LIMITE_CLAUDE = ("you've hit your", "you've reached your", "you're out of usage credits", "you're out of extra usage",
                  "requires usage credits", "your org is out of usage", "usage limit reached")
 INSTALACION = ("no module named", "importerror", "dll load failed", "modulenotfounderror")
+SIN_MEMORIA = ("bad allocation", "bad_alloc", "unable to allocate", "out of memory", "failed to allocate",
+               "cannot allocate memory", "not enough memory", "insufficient memory", "memoria insuficiente")
 CLAUDE_FALLO = ("claude code ha fallado", "no responde a --version", "ha contestado algo inesperado",
                 "no se ha podido lanzar claude code", "no ha devuelto texto")
 
@@ -112,6 +114,19 @@ def explicar(err, proveedor=None):
         det = _detalle(tecnico)
         out["frase"] = ("Claude Code ha dado un error" + (f" ({det})" if det else "")
                         + ": si se repite, copia el diagnóstico en Ajustes → Ayuda.")
+        out["accion"] = _accion("diagnostico")
+        return out
+
+    # --- sin memoria (09/11/2026): «bad allocation» de onnxruntime (std::bad_alloc en Windows), MemoryError de numpy…
+    # Bernardo recibió la traza de ONNX en crudo en dos avisos al identificar las voces de un audio subido (msg 1378)
+    if "MemoryError" in names or any(k in low for k in SIN_MEMORIA):
+        out["frase"] = ("Al PC le ha faltado memoria para terminar. Cierra lo que no estés usando (otras "
+                        "aplicaciones, pestañas del navegador) y vuelve a probar.")
+        out["accion"] = _accion("reintentar")
+        return out
+    if "non-zero status code returned while running" in low or "onnxruntime" in low:  # otro fallo dentro del modelo
+        out["frase"] = ("Ha fallado el análisis del audio en este PC. Vuelve a probar y, si se repite, copia el "
+                        "diagnóstico en Ajustes → Ayuda.")
         out["accion"] = _accion("diagnostico")
         return out
 
