@@ -45,6 +45,8 @@ def patched_paths(**values):
     with server.ALIASES_LOCK:
         aliases_saved = dict(server.ALIASES)
         server.ALIASES.clear()
+    sugeridos_saved = set(server.TEXTOS_SUGERIDOS)  # los textos de participantes que «escribio la app» (la pista)
+    server.TEXTOS_SUGERIDOS.clear()
     server.LINKS.clear()
     server.VOCAB_LINKS.clear()
     try:
@@ -59,6 +61,8 @@ def patched_paths(**values):
         with server.ALIASES_LOCK:
             server.ALIASES.clear()
             server.ALIASES.update(aliases_saved)
+        server.TEXTOS_SUGERIDOS.clear()
+        server.TEXTOS_SUGERIDOS.update(sugeridos_saved)
 
 
 class TempTree(unittest.TestCase):
