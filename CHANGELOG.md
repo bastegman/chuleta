@@ -49,6 +49,12 @@ La app pasa a llamarse **Tenca** (Bernardo, msg 1249). Lo de abajo, con «Chulet
   ventana dejaría de agruparse en los anclajes hechos), la cabecera `X-Chuleta-Token` (el instalador nuevo apaga con
   ella la Chuleta abierta) y las variables de entorno `CHULETA_*` y `NOTAS_*`.
 
+### Marca Tenca (09/11/2026)
+
+- Icono y logotipo nuevos (la tenca sobre tres renglones), paleta Boldo y ocre con contraste AA medido en claro y oscuro,
+  Manrope y Fraunces dentro de la app (OFL, `fuentes-OFL.txt`), Acerca de con un tributo a la tenca (*Mimus thenca*) y
+  «Invitar a un café» al pie de Ajustes. El desinstalador quita también las fuentes y su licencia.
+
 ### Ajustes por lo que haces: «Al grabar» primero, «Proyectos» y «Calendario y Teams» (07/11/2026)
 Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configurado es lo que se usa (msg 1196).
 - Ajustes abre en **«Al grabar»**: arriba, «Así se graba ahora una reunión de [proyecto]», el mismo cálculo que la

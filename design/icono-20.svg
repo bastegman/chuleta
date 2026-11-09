@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+  <!-- Icono a 20 px (125 % de 16): como logo-small.svg, con los bordes en pixeles enteros a 20 px -->
+  <rect width="20" height="20" rx="4.4" fill="#1E5A46"/>
+  <circle cx="12" cy="7" r="3" fill="#F4F1E8"/>
+  <path d="M14.3 5.5 18 7 14.3 8.5Z" fill="#E8A94A"/>
+  <rect x="3" y="11" width="11" height="2" rx="1" fill="#F4F1E8"/>
+  <rect x="3" y="14" width="6" height="2" rx="1" fill="#F4F1E8"/>
+</svg>

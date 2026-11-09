@@ -25,9 +25,10 @@ from common import TOKEN_HEADER, local_opener, read_token
 
 WINDOWS = sys.platform == "win32"
 ANCHO, ALTO = 340, 64  # px a 96 ppp; se escala con el monitor
-# la paleta de app.css (tema oscuro): neutros cálidos, texto claro y el acento burdeos de la app en «Grabar»
-C = {"fondo": "#1c1b1f", "texto": "#ebe8e5", "suave": "#a09a95", "boton": "#be123c", "boton_hover": "#9f1239",
-     "boton_texto": "#ffffff", "rojo": "#fb7185", "ok": "#4ade80", "err": "#f87171"}
+# la paleta oscura de la marca (hoja 01b): panel grafito y el botón principal en Boldo claro con texto oscuro (9:1); el
+# punto rojo dice «grabar», como en la app
+C = {"fondo": "#18201c", "texto": "#e8ede9", "suave": "#a2aca5", "boton": "#7cc7a6", "boton_hover": "#a3dcc2",
+     "boton_texto": "#0d1a14", "rojo": "#f87171", "ok": "#9fdc5c", "err": "#f87171"}
 
 
 def limpiar_texto(s, limite=200):

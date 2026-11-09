@@ -1,5 +1,10 @@
 # Tenca
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/tenca-logo-oscuro.png">
+  <img alt="Tenca" src="design/tenca-logo.png" width="240">
+</picture>
+
 App local de Windows para grabar reuniones, transcribirlas y resumirlas. Funciona en tu propio PC, en su propia
 ventana (WebView2, el motor de Edge que trae Windows), sin instalar nada más que Python y unas librerías. Las
 grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPROFILE%\Tenca` (donde la instala
@@ -323,7 +328,8 @@ llevan nombres de personas y empresas, así que ese zip es solo para gente del m
 .venv/bin/pip install pillow && .venv/bin/python make_icons.py
 ```
 
-Rasteriza `_app/static/logo.svg` (y `design/logo-small.svg` para 16 y 20 px) con Chrome o Edge headless y escribe
+Rasteriza `design/icono.svg` (y, para 16, 20, 24 y 32 px, `design/logo-small.svg` e `icono-20/24/32.svg`, dibujados en
+la rejilla de su tamaño) con Chrome o Edge headless y escribe
 `_app/static/tenca.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
 `_app/static/tenca.png`. Solo hace falta si cambia el logo.
 
@@ -335,3 +341,6 @@ Ajustes › Ayuda › Acerca de; no hay ventanas emergentes ni recordatorios.
 ## Licencia
 
 MIT. Ver `LICENSE`.
+
+Las tipografías de `_app/static` (Fraunces y Manrope) van con la SIL Open Font License 1.1, no con la MIT: avisos y
+licencia en `_app/static/fuentes-OFL.txt`.
