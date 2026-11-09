@@ -1327,6 +1327,11 @@ def clean_icon(v):
 
 
 PARTICIPANTES_ORIGENES = ("outlook", "teams")
+# Los textos de «Participantes» que la app ha escrito desde Outlook/Teams en esta sesion (calendario.join_participants:
+# «Apellido, Nombre; …»). «Confirmar» quita participantes_origen sin cambiar el texto: con esto la pista de quien habla
+# sigue contandolos bien (voices.count_participants sugeridos=True). Si el usuario los edita, el texto ya no esta aqui y
+# se cuenta como texto libre, de mas. Solo en memoria: tras reiniciar la app, tambien como texto libre.
+TEXTOS_SUGERIDOS = set()
 # «Ana, Luis (sugeridos por Outlook, sin confirmar)»: asi las versiones publicadas (012bb24, 5c55e54), que solo
 # aceptan las claves que conocen, leen la cabecera y ensenan los nombres con la nota. La clave participantes_origen
 # (como la escribia fix-privacidad antes de fusionarse con fix-perfil) se sigue leyendo; al guardar pasa a la nota.
@@ -3530,8 +3535,9 @@ class Jobs:
         if old.get("tramos") and props.get("participantes_origen") not in PARTICIPANTES_ORIGENES:  # la grabadora
             # deja un sidecar con solo «micro»: eso aun no es una identificacion
             return 0
-        return voices.count_participants(props.get("participantes"),
-                                         sugeridos=props.get("participantes_origen") in PARTICIPANTES_ORIGENES)
+        texto = props.get("participantes")
+        return voices.count_participants(texto, sugeridos=props.get("participantes_origen") in PARTICIPANTES_ORIGENES
+                                         or " ".join(str(texto or "").split()) in TEXTOS_SUGERIDOS)
 
     def _suggest_participants(self, abs_path, data):
         """Propiedad «Participantes» con los nombres reconocidos, solo si esta vacia (no se pisa lo escrito a mano)."""
@@ -4335,6 +4341,9 @@ class App:
                     origen = str(b.get("sugerido") or "").strip().lower()
                     if origen in PARTICIPANTES_ORIGENES:
                         props["participantes_origen"] = origen
+                        if len(TEXTOS_SUGERIDOS) > 500:
+                            TEXTOS_SUGERIDOS.clear()
+                        TEXTOS_SUGERIDOS.add(props["participantes"])
                 # perfil de la reunion, a la cabecera del .md: idioma y contexto (el directo, la cola y el resumen
                 # los leen de ahi; se pueden cambiar en la pagina de la reunion) y la carpeta a la que copiar textos
                 perfil = perfil_de(self.settings.get())

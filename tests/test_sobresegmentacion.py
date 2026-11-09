@@ -293,8 +293,24 @@ class PistaDeParticipantesTests(Reunion):
         self.assertEqual(self.correr({"participantes": texto, "participantes_origen": "outlook"}), 2)
 
     def test_editados_a_mano_del_lado_prudente(self):
-        """El mismo texto ya editado (sin origen) es texto libre: se cuenta de mas, nunca de menos."""
-        self.assertEqual(self.correr({"participantes": "Stegmaier, Bernardo; García López, Ana"}), 4)
+        """Un texto que la app no escribio (editado a mano, o tras reiniciar) es texto libre: de mas, nunca de menos."""
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()):
+            self.assertEqual(self.correr({"participantes": "Stegmaier, Bernardo; García López, Ana"}), 4)
+
+    def test_confirmados_sin_tocar(self):
+        """«Confirmar» quita el origen pero no cambia el texto que escribio la app: se siguen contando bien."""
+        texto = "Stegmaier, Bernardo; García López, Ana"
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", {texto}):
+            self.assertEqual(self.correr({"participantes": texto}), 2)
+
+    def test_rec_start_apunta_el_texto_sugerido(self):
+        from test_carpetas import make_app, rec
+        os.makedirs(os.path.join(self.root, "Alfa"))
+        a, texto = make_app(self), "Stegmaier, Bernardo; García López, Ana"
+        with mock.patch.object(server, "TEXTOS_SUGERIDOS", set()) as vistos:
+            rec(a, self, participantes=texto, sugerido="outlook")
+            rec(a, self, participantes="Ana, Luis", name="Otra")  # sin origen: escrito a mano
+        self.assertEqual(vistos, {texto})
 
     def test_al_reidentificar_si_los_sugirio_la_reunion(self):
         self.identificar(micro_en=None)
