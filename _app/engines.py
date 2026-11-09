@@ -373,10 +373,13 @@ def media_duration(path):
 
 SILENCIO_MAX_S = 2.0  # lo más que se rellena por un paquete que no se puede leer (uno de verdad dura milisegundos)
 # y en total (09/11/2026, fix-subir-memoria): un archivo dañado con miles de paquetes ilegibles que dicen durar mucho
-# no puede pedir horas de silencio. Si el contenedor dice cuánto dura, el relleno no pasa de ahí (+2 % y 10 s): la línea
-# de tiempo sigue en su sitio aunque la mayor parte sean tramas que no se leen (AMR con DTX). Si no lo dice, hasta
-# SILENCIO_LIBRE_S sin más y, después, nunca más silencio que audio leído.
+# no puede pedir horas de silencio. Los paquetes que dicen durar más de TRAMA_MAX_S (ninguna trama de un códec de voz
+# dura tanto: AMR 20 ms, AAC ~23-64 ms, MP3 26 ms, Opus hasta 120 ms) se rellenan hasta SILENCIO_LIBRE_S sin más y,
+# después, nunca más que el audio leído. Los de una trama, siempre: son la línea de tiempo de verdad (un AMR con DTX
+# puede ser casi todo tramas que no se leen). No vale la duración de la cabecera: en un .amr crudo FFmpeg la estima por
+# el bitrate y se queda corta (revisión 2: un AMR real x30 perdía 21 s al final, uno de 63 min, 20 min)
 SILENCIO_LIBRE_S = 1800.0
+TRAMA_MAX_S = 0.125
 PROBAR_TOPE_S = 120.0  # al subir, cuánto audio ilegible se recorre buscando el primer trozo que se lee
 # Lo más largo que se decodifica: 8 h son 0,9 GB a 16 kHz en int16. Más, se pide cortarlo (al subir, antes de guardar)
 AUDIO_MAX_S = 8 * 3600.0
@@ -402,18 +405,6 @@ def _paquetes(c, s, av):
             yield min(max(seg, 0.0), SILENCIO_MAX_S)
             continue
         yield from frames
-
-
-def _duracion_declarada(c, s):
-    """Lo que dice durar el archivo según su cabecera (segundos), o None."""
-    try:
-        if getattr(c, "duration", None):
-            return c.duration / 1_000_000
-        if getattr(s, "duration", None) and getattr(s, "time_base", None):
-            return float(s.duration * s.time_base)
-    except (TypeError, ValueError, ZeroDivisionError):
-        pass
-    return None
 
 
 def decode_16k(path, start=0.0, cancelled=lambda: False, destino=None):
@@ -450,14 +441,13 @@ def decode_16k(path, start=0.0, cancelled=lambda: False, destino=None):
             if s is None:
                 raise EngineError("El archivo no tiene pista de audio.")
             rs = av.AudioResampler(format="s16", layout="mono", rate=16000)
-            dur = _duracion_declarada(c, s)
-            hasta = int((dur * 1.02 + 10) * 16000) if dur else None  # lo más lejos que llega el relleno
+            trama = int(TRAMA_MAX_S * 16000)
             for fr in itertools.chain(_paquetes(c, s, av), [None]):  # perezoso: no carga el archivo entero antes
                 if cancelled():
                     raise Cancelled()
                 if isinstance(fr, float):  # un paquete que no se pudo leer: su silencio (con tope total)
                     n = int(round(fr * 16000))
-                    if (pos + n > hasta) if hasta else (relleno + n > libre and relleno + n > leidos):
+                    if n > trama and relleno + n > libre and relleno + n > leidos:
                         continue
                     relleno += n
                     anadir(np.zeros(n, np.int16))

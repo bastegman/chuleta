@@ -193,6 +193,31 @@ class FormatosTests(unittest.TestCase):
         self.assertIn(".amr", server.AUDIO_EXT)
         self.assertAlmostEqual(len(engines.decode_16k(amr)) / 16000, 2.1, delta=0.05)
 
+    def test_amr_con_un_minuto_de_tramas_no_data_sigue_en_su_sitio(self):
+        """fix-subir-memoria, revisión 2 (P1): con el relleno acotado por la duración de la cabecera, un .amr crudo
+        perdía su línea de tiempo, porque FFmpeg la estima por el bitrate y con DTX se queda muy corta. Aquí: 2,1 s de
+        voz, 3.000 tramas NO_DATA (1 byte, 20 ms, que FFmpeg no decodifica) y la voz otra vez = 64,2 s; FFmpeg estima
+        6,5 s y así salían 18,6 s. Las tramas de un códec se rellenan siempre: el texto y las voces casan con el
+        audio."""
+        uno = os.path.join(self.tmp, "uno.amr")
+        with av.open(os.path.join(FIX, "android_antiguo.3gp")) as c, av.open(uno, "w", format="amr") as out:
+            s = c.streams.audio[0]
+            o = out.add_stream_from_template(s)
+            for pk in c.demux(s):
+                if pk.dts is None:
+                    continue
+                pk.stream = o
+                out.mux(pk)
+        with open(uno, "rb") as f:
+            voz = f.read()[len(b"#!AMR\n"):]
+        amr = os.path.join(self.tmp, "dtx.amr")
+        with open(amr, "wb") as f:
+            f.write(b"#!AMR\n" + voz + b"\x7c" * 3000 + voz)
+        y = engines.decode_16k(amr)
+        self.assertAlmostEqual(len(y) / 16000, 2.1 + 60 + 2.1, delta=0.05)
+        with mock.patch.object(engines, "SILENCIO_LIBRE_S", 1.0):  # ni con el tope total mínimo: son tramas
+            self.assertAlmostEqual(len(engines.decode_16k(amr)) / 16000, 64.2, delta=0.05)
+
     def test_un_trozo_danado_a_mitad_no_corta_el_audio(self):
         """Antes, el primer paquete dañado terminaba el audio sin decirlo (medido con estos: mp3 0,71 s de 1,6,
         m4a 0,79, aac 0,77). Ahora llega hasta el final, como ffmpeg. En un .aac (ADTS) el trozo dañado se lo come el

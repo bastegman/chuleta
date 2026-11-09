@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import wave
 
@@ -140,9 +141,16 @@ def main():
     a = ap.parse_args()
     a.salida = os.path.abspath(a.salida)  # el hijo cambia de carpeta: todas las rutas, absolutas (run 42692402938)
     os.makedirs(a.salida, exist_ok=True)
-    trabajo = os.path.join(a.salida, "trabajo")
-    shutil.rmtree(trabajo, ignore_errors=True)
-    os.makedirs(trabajo)
+    # el audio (~105 MB con 55 min) y los modelos, fuera de --salida: si algo falla a medias, el artefacto de la CI
+    # (if: always()) no se los lleva (revisión 2)
+    trabajo = tempfile.mkdtemp(prefix="voces-memoria-")
+    try:
+        return medir_todo(a, trabajo)
+    finally:
+        shutil.rmtree(trabajo, ignore_errors=True)
+
+
+def medir_todo(a, trabajo):
     audio = sintetizar(trabajo, a.minutos)
     datos = os.path.join(trabajo, "datos")
     sys.path.insert(0, os.path.join(REPO, "_app"))
@@ -162,7 +170,6 @@ def main():
         mal.append(f"la de ahora pasa de {a.tope:.0f} MB")
     for m in mal:
         print("ERROR:", m, flush=True)
-    shutil.rmtree(trabajo, ignore_errors=True)
     return 1 if mal else 0
 
 

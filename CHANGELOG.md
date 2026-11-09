@@ -25,10 +25,12 @@ sin memoria y la app enseñó la traza de ONNX dos veces, una como «No se pudo 
 - **Arreglado**: un error de memoria se explica en una frase («Al PC le ha faltado memoria…»), sin la traza; otro fallo
   dentro de un modelo, también.
 - En el PC, sin batched (Whisper «Normal»), el espectrograma de todo el audio se calculaba de una vez (+1,5 GB con
-  30 min): ahora va por bloques de 60 s, con el mismo resultado. El audio pasa a float32 con una copia en vez de dos.
-- Topes: el silencio que sustituye a los trozos ilegibles no pasa de lo que el archivo dice durar (si no lo dice,
-  30 min y, después, nunca más que el audio leído); un audio de más de 8 horas se rechaza al subirlo, antes de
-  guardarlo, y no se decodifica en la cola (pide dividirlo, por ejemplo con Audacity).
+  30 min): ahora va por bloques de 60 s, con el mismo resultado salvo redondeos (1e-7). El audio pasa a float32 con
+  una copia en vez de dos.
+- Topes: el silencio que sustituye a los paquetes ilegibles que dicen durar más que una trama tiene tope total (30 min
+  y, después, nunca más que el audio leído; las tramas de un códec, como las de silencio de un AMR, se rellenan
+  siempre, porque son la línea de tiempo); un audio de más de 8 horas se rechaza al subirlo, antes de guardarlo, y no
+  se decodifica en la cola (pide dividirlo, por ejemplo con Audacity).
 - El audio temporal de las voces se borra al acabar, también si se cancela.
 - «Quién habla» usa la mitad de los hilos del PC, entre 2 y 4 (antes, siempre 2): con 4, un 21 % menos de tiempo
   (medido en un Mac de 8 núcleos).
@@ -77,7 +79,6 @@ sin memoria y la app enseñó la traza de ONNX dos veces, una como «No se pudo 
   el Whisper medium de verdad en `test_e2e_procesado.py`, `test_ocultar_captura_windows.py` (la ventana real con
   WebView2: la marca y capturas con y sin ella, en windows-real) y el aviso real con la marca en
   `test_reunion_windows.py`; en `test_ui_smoke.py`, la nota de la tarjeta y el interruptor de Ajustes.
-
 
 ### Subir audio (09/11/2026)
 

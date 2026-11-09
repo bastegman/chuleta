@@ -161,7 +161,7 @@ class FFmpegError(Exception):
     pass
 
 
-def fake_av(paquetes, frame=1600, duracion=None):
+def fake_av(paquetes, frame=1600):
     """PyAV falso: cada paquete es True (se lee: `frame` muestras de valor 1) o un float (no se lee y dice durar
     eso)."""
     class Stream:
@@ -175,7 +175,6 @@ def fake_av(paquetes, frame=1600, duracion=None):
 
     class Container:
         streams = [Stream()]
-        duration = int(duracion * 1_000_000) if duracion else None
 
         def __enter__(self):
             return self
@@ -212,21 +211,21 @@ class DecodeTopesTests(unittest.TestCase):
             y = engines.decode_16k("x.amr")
         self.assertEqual(len(y), 301 * 1600 + 200 * 1600)
 
-    def test_con_duracion_declarada_el_relleno_llega_hasta_ella(self):
-        """Revisión de fix-subir-memoria: un AMR largo cuya mayor parte son tramas DTX que no se leen no puede perder
-        su silencio a mitad (todo lo de después se adelantaría y el .srt y las voces dejarían de casar). Si la
-        cabecera dice cuánto dura, el relleno llega hasta ahí, más que SILENCIO_LIBRE_S y que lo leído."""
-        paquetes = [True] * 10 + [0.1] * 400 + [True] * 10  # 1 s leído, 40 s sin leer, 1 s leído: 42 s
-        with mock.patch.dict(sys.modules, {"av": fake_av(paquetes, duracion=42.0)}), \
+    def test_las_tramas_cortas_siempre_y_el_tope_solo_para_paquetes_largos(self):
+        """Revisión 2 (P1): un AMR con DTX puede ser casi todo tramas que no se leen (20 ms): son la línea de tiempo y
+        se rellenan siempre, aunque pasen de SILENCIO_LIBRE_S y de lo leído. El tope total es para los paquetes que
+        dicen durar más que cualquier trama (TRAMA_MAX_S). Con audio real: test_subir_audio (dtx.amr)."""
+        paquetes = [True] * 10 + [0.02] * 2000 + [True] * 10  # 1 s leído, 40 s de tramas sin leer, 1 s leído
+        with mock.patch.dict(sys.modules, {"av": fake_av(paquetes)}), \
                 mock.patch.object(engines, "SILENCIO_LIBRE_S", 1.0):
             y = engines.decode_16k("x.amr")
-        self.assertEqual(len(y), 42 * SR)  # sin cabecera, se quedaba en 1 s + 1 s + 1 s de silencio
+        self.assertEqual(len(y), 42 * SR)
         self.assertEqual((y[0], y[SR + 5], y[-1]), (1, 0, 1))
-        # y no pasa de lo que dice durar (+2 % y 10 s): paquetes que dicen durar 2 s de un archivo de 5 s
-        with mock.patch.dict(sys.modules, {"av": fake_av([True] + [2.0] * 100 + [True], duracion=5.0)}):
+        largos = [True] * 10 + [0.5] * 100 + [True] * 10  # paquetes de 0,5 s: con tope (aquí, 1 s leído)
+        with mock.patch.dict(sys.modules, {"av": fake_av(largos)}), \
+                mock.patch.object(engines, "SILENCIO_LIBRE_S", 1.0):
             y = engines.decode_16k("x.m4a")
-        self.assertLessEqual(len(y), int((5.0 * 1.02 + 10) * SR) + 1600)
-        self.assertEqual(y[-1], 1)  # lo legible del final sigue
+        self.assertEqual(len(y), 2 * SR + int(1.0 * SR))  # 2 paquetes de 0,5 s caben (≤ lo leído), el resto no
 
     def test_mas_largo_que_el_tope_es_un_error_claro(self):
         with mock.patch.dict(sys.modules, {"av": fake_av([True] * 20)}), \
