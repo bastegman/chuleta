@@ -389,7 +389,8 @@ class DesinstaladorTextoTests(unittest.TestCase):
         self.assertTrue(exts)
         self.assertFalse(exts & MEETING_EXT, exts & MEETING_EXT)
         txt = re.search(r"\$CodeTxt = @\(([^)]*)\)", self.ps1).group(1)
-        self.assertEqual(set(re.findall(r'"([^"]+)"', txt)), {"version.txt", "python.txt", "export\\LEEME.txt"})
+        self.assertEqual(set(re.findall(r'"([^"]+)"', txt)), {"version.txt", "python.txt", "export\\LEEME.txt",
+                                                              "static\\fuentes-OFL.txt"})  # la licencia de las fuentes
         launchers = re.search(r"\$RootLaunchers = @\(([^)]*)\)", self.ps1).group(1)
         self.assertTrue(all(n.endswith(".bat") for n in re.findall(r'"([^"]+)"', launchers)))
         # $file solo sale de _app y pasa por Test-AppFile; $dir solo son carpetas vacias de _app
@@ -554,6 +555,7 @@ class DesinstaladorWindowsTests(unittest.TestCase):
         shutil.copy(DESINSTALAR, os.path.join(app, "desinstalar.ps1"))
         for rel in ("server.py", "common.py", "Chuleta.bat", "instalar.ps1", "version.txt", "python.txt",
                     "static\\app.js", "static\\app.css", "static\\index.html", "static\\logo.svg",
+                    "static\\manrope.woff2", "static\\fraunces.woff2", "static\\fuentes-OFL.txt",
                     "export\\LEEME.txt", "export\\INSTALAR.bat", "__pycache__\\server.cpython-313.pyc"):
             with open(os.path.join(app, rel), "w", encoding="utf-8") as f:
                 f.write("x\n")

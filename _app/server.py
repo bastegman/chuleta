@@ -69,7 +69,8 @@ MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": 
         ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aac": "audio/aac",
         ".webm": "audio/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".wma": "audio/x-ms-wma",
         ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-        ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
+        ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
+        ".woff2": "font/woff2"}  # las tipografías de la marca (static/*.woff2)
 # Atributos de OneDrive "solo en linea": leer el archivo dispararia la descarga
 CLOUD_ONLY = 0x400000 | 0x1000
 LIVE_PRESETS = tuple(p["id"] for p in engines.PRESETS)  # en directo: por lotes y beam 1, cambia el modelo
@@ -80,6 +81,10 @@ VERSION_FILE = os.path.join(APP_DIR, "version.txt")  # lo escribe scripts/build_
 REPO_URL = "https://github.com/bastegman/chuleta"
 # Acerca de > «invitar al autor a un café»: la pagina de donaciones de PayPal del autor (abre el navegador del sistema)
 DONAR_URL = "https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR"
+# Acerca de > el tributo a la tenca (Mimus thenca): «Historia natural y biologia reproductiva de la Tenca (Mimus thenca)
+# en Chile central», Boletin del Museo Nacional de Historia Natural de Chile 61: 43-53 (2012). El DOI es del Museo
+# (prefijo 10.54830 en Crossref) y sobrevive a un cambio de su web
+TENCA_URL = "https://doi.org/10.54830/bmnhn.v61.2012.161"
 PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Chuleta/INSTALAR.bat, Chuleta/_app/...)
 
 
@@ -4865,7 +4870,8 @@ class App:
 
     def acerca_abrir(self, b):
         """Ajustes > Acerca de: abre la carpeta de datos (DATA_DIR: ajustes, API key cifrada, registros) en el
-        Explorador, o el repositorio o la pagina de PayPal («Invitar al autor a un cafe») en el navegador."""
+        Explorador, o el repositorio, la pagina de PayPal («Invitar al autor a un cafe») o la de la tenca en el
+        navegador."""
         que = b.get("que")
         if que == "datos":
             os.makedirs(DATA_DIR, exist_ok=True)
@@ -4874,6 +4880,8 @@ class App:
             webbrowser.open(REPO_URL)
         elif que == "donar":
             webbrowser.open(DONAR_URL)
+        elif que == "tenca":
+            webbrowser.open(TENCA_URL)
         elif que == "claves":  # el asistente: la página de claves del proveedor (solo las de engines.PROVIDERS)
             url = (engines.PROVIDERS.get(b.get("proveedor") or "groq") or {}).get("keys")
             if not url:
@@ -4978,7 +4986,8 @@ class App:
         cloud["quota"] = (self.jobs.cloud.keys.public(st["cloud"], model=engines.CloudEngine.live_model(st["cloud"]))
                           if cloud["has_key"] and getattr(self.jobs, "cloud", None) is not None else None)
         return {"root": ROOT, "version": VERSION, "app_name": APP_NAME, "window": WINDOW is not None,
-                "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL},
+                "acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL,
+                           "tenca": TENCA_URL},
                 "presets": presets, "providers": engines.PROVIDERS, "cloud": cloud,
                 "procesado": mode, "agente": self._agente_info(st),
                 "ultima_prueba": (st.get("ultima_prueba") if (st.get("ultima_prueba") or {}).get("modo") == mode

@@ -110,7 +110,10 @@ class NombreCentralizadoTests(unittest.TestCase):
                   "api('/api/acerca/abrir', { que: 'datos' })",
                   "api('/api/acerca/abrir', { que: 'repo' })", "api('/api/diagnostico')", "copy(r.texto,",
                   'id="aDonar"', "api('/api/acerca/abrir', { que: 'donar' })", "${esc(ac.donar || '#')}",
-                  "const ac = S.config.acerca || {};", "${esc(ac.datos || '')}"):
+                  "const ac = S.config.acerca || {};", "${esc(ac.datos || '')}",
+                  # marca Tenca (09/11/2026): el logotipo arriba y el tributo a la tenca al final, con su enlace
+                  '<fieldset class="acerca"', '<div class="ac-marca"><img src="/logo.svg" alt="">', 'id="aTenca"',
+                  "api('/api/acerca/abrir', { que: 'tenca' })", "<i>Mimus thenca</i>"):
             self.assertIn(s, app, s)
         self.assertIn("info: '<svg", app)
         self.assertNotIn("versión del ${", app)
@@ -282,8 +285,8 @@ class ServidorHttpTests(unittest.TestCase):
         «Acerca de»."""
         src = read("server.py")
         self.assertIn('"app_name": APP_NAME, "window": WINDOW is not None', src)
-        self.assertIn('"acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, "donar": DONAR_URL}',
-                      src)
+        self.assertIn('"acerca": {"licencia": license_name(), "repo": REPO_URL, "datos": DATA_DIR, '
+                      '"donar": DONAR_URL,\n                           "tenca": TENCA_URL}', src)
 
     def test_acerca_abrir(self):
         with mock.patch.object(server, "open_dir") as open_dir, mock.patch.object(server.webbrowser, "open") as wb:
@@ -293,21 +296,33 @@ class ServidorHttpTests(unittest.TestCase):
             wb.assert_called_once_with(server.REPO_URL)
             self.assertEqual(self.call("/api/acerca/abrir", {"que": "donar"}), (200, {"ok": True}))
             self.assertEqual(wb.call_args_list[-1].args, (server.DONAR_URL,))
+            self.assertEqual(self.call("/api/acerca/abrir", {"que": "tenca"}), (200, {"ok": True}))
+            self.assertEqual(wb.call_args_list[-1].args, (server.TENCA_URL,))
             code, body = self.call("/api/acerca/abrir", {"que": "otra"})
         self.assertEqual(code, 400)
         self.assertEqual(self.call("/api/acerca/abrir", {"que": "datos"}, header=False)[0], 403)
 
     def test_invitar_a_un_cafe(self):
-        """Donaciones discretas: un enlace de PayPal al correo del autor en Acerca de, el README y el LEEME (y su
-        plantilla), sin ventanas emergentes ni recordatorios."""
+        """Donaciones discretas: un enlace de PayPal al correo del autor en Ajustes, el README y el LEEME (y su
+        plantilla), sin ventanas emergentes ni recordatorios. En Ajustes, dos sitios y ninguno más (msg 1248,
+        08/11/2026: «algo más visible pero discreto»): al pie de la columna de secciones y en Acerca de."""
         self.assertTrue(server.DONAR_URL.startswith("https://www.paypal.com/donate?business="), server.DONAR_URL)
         raiz = os.path.dirname(APP)
         for n in ("README.md", "LEEME.txt", os.path.join("_app", "export", "LEEME.txt")):
             with open(os.path.join(raiz, n), encoding="utf-8") as f:
                 self.assertIn(server.DONAR_URL, f.read(), n)
         app = read("static", "app.js")
-        self.assertNotIn("donar", app.split("Acerca de</legend>")[0].lower())  # solo en Acerca de, nada antes
+        ini = app.index("function openSettings(")
+        fin = app.index("\nfunction ", ini + 1)
+        self.assertNotIn("donar", (app[:ini] + app[fin:]).lower())  # solo dentro de Ajustes
+        ajustes = app[ini:fin]
+        self.assertEqual(ajustes.count("api('/api/acerca/abrir', { que: 'donar' })"), 2)  # el pie y Acerca de
+        self.assertIn('<a class="aj-cafe" id="ajCafe" href="${esc(ac.donar)}"', ajustes)
+        self.assertLess(ajustes.index('id="ajCafe"'), ajustes.index("</nav>"))  # al pie de la columna, no en otra parte
         self.assertNotIn("toast(", app.split('id="aDonar"')[1].split("</fieldset>")[0])
+        for n in os.listdir(STATIC):  # ni en los demás scripts: nada de avisos ni recordatorios
+            if n.endswith(".js") and n != "app.js":
+                self.assertNotIn("donar", read("static", n).lower(), n)
 
     def test_diagnostico_enmascara_claves(self):
         """Versión, Python, sistema, motor y las últimas 30 líneas de server.log sin la API key ni las adicionales."""

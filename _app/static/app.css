@@ -1,25 +1,33 @@
+/* Marca Tenca (hoja de marca 01b): Boldo #1E5A46 y ocre, Fraunces para títulos y Manrope para la interfaz. Las
+   fuentes van dentro de la app (funciona sin conexión): licencia SIL OFL 1.1 en fuentes-OFL.txt, y design/fuentes.py
+   las genera. Lo que no tengan (símbolos, emojis, otros alfabetos) sale de las fuentes del sistema */
+@font-face { font-family: "Manrope"; src: url("manrope.woff2") format("woff2"); font-weight: 200 800; font-style: normal; font-display: fallback; }
+@font-face { font-family: "Fraunces"; src: url("fraunces.woff2") format("woff2"); font-weight: 400 800; font-style: normal; font-display: fallback; }
+
+/* Paleta: contraste WCAG medido (texto ≥ 4,5:1 sobre fondo, panel, hover y selección; iconos ≥ 3:1), en claro y oscuro */
 :root {
-  --bg: #f5f4f2; --panel: #ffffff; --panel-2: #faf9f7; --ink: #1f1c1a; --ink-2: #44403c; --muted: #6b6662;
-  --line: #e7e4e0; --line-2: #d6d2cd; --hover: #f1eeeb;
-  --accent: #be123c; --accent-strong: #9f1239; --accent-2: #fb7185; --accent-ink: #ffffff; --accent-soft: #fbe9ed; --accent-line: #f2bcc8;
-  --ok: #166534; --ok-soft: #e6f5eb; --warn: #a3490a; --warn-soft: #fdf3e6; --err: #c9281c; --err-soft: #fdecea; --err-ink: #ffffff;
-  --cloud: #0369a1; --cloud-soft: #e5f2fa; --mark: #fde68a; --star: #d97706;
-  --shadow: 0 1px 2px rgba(31, 28, 26, .06), 0 10px 28px rgba(31, 28, 26, .12);
-  --shadow-sm: 0 1px 2px rgba(31, 28, 26, .06);
+  --bg: #f4f1e8; --panel: #ffffff; --panel-2: #faf8f2; --ink: #18211d; --ink-2: #38443e; --muted: #56615a;
+  --line: #e2ddd0; --line-2: #ccc5b5; --hover: #f0ece2;
+  --accent: #1e5a46; --accent-strong: #164534; --accent-2: #4f9a7b; --accent-ink: #ffffff; --accent-soft: #e3eee8; --accent-line: #b5d2c4;
+  --ok: #2e6b26; --ok-soft: #e6f2e3; --warn: #a3490a; --warn-soft: #fdf3e6; --err: #c9281c; --err-soft: #fdecea; --err-ink: #ffffff;
+  --cloud: #0369a1; --cloud-soft: #e5f2fa; --mark: #f6e0a6; --star: #9c5a08;
+  --shadow: 0 1px 2px rgba(24, 33, 29, .06), 0 10px 28px rgba(24, 33, 29, .12);
+  --shadow-sm: 0 1px 2px rgba(24, 33, 29, .06);
   --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
   --radius: 10px; --radius-sm: 8px; --radius-lg: 14px;
-  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-read: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font: "Manrope", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-read: "Manrope", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
   --mono: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, monospace;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #141316; --panel: #1c1b1f; --panel-2: #19181c; --ink: #ebe8e5; --ink-2: #cdc8c3; --muted: #a09a95;
-    --line: #2b292e; --line-2: #39363c; --hover: #26242a;
-    --accent: #fb7185; --accent-strong: #fda4af; --accent-2: #e11d48; --accent-ink: #2b0a14; --accent-soft: #3a1c25; --accent-line: #6e2d3d;
-    --ok: #4ade80; --ok-soft: #15291d; --warn: #fbbf24; --warn-soft: #2e2310; --err: #f87171; --err-soft: #321718; --err-ink: #2a0b0b;
-    --cloud: #38bdf8; --cloud-soft: #0f2633; --mark: #6b5310; --star: #fbbf24;
+    --bg: #101613; --panel: #18201c; --panel-2: #141b17; --ink: #e8ede9; --ink-2: #c9d1cb; --muted: #a2aca5;
+    --line: #2a332e; --line-2: #3a453f; --hover: #222b26;
+    --accent: #7cc7a6; --accent-strong: #a3dcc2; --accent-2: #2f8a66; --accent-ink: #0d1a14; --accent-soft: #1c3329; --accent-line: #2f5a47;
+    --ok: #6fd08c; --ok-soft: #15291d; --warn: #fbbf24; --warn-soft: #2e2310; --err: #f87171; --err-soft: #321718; --err-ink: #2a0b0b;
+    --cloud: #38bdf8; --cloud-soft: #0f2633; --mark: #5c4512; --star: #e8a94a;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .5);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
     color-scheme: dark;
@@ -46,8 +54,8 @@ legend > svg { color: var(--ink-2); }
 
 /* ---------- top bar ---------- */
 .topbar { height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16.5px; width: 270px; letter-spacing: -.015em; color: var(--ink); }
-.logo { width: 30px; height: 30px; display: block; flex: none; border-radius: 8px; }
+.brand { display: flex; align-items: center; gap: 9px; font: 620 21px/1 var(--font-display); width: 270px; letter-spacing: -.01em; color: var(--ink); }
+.logo { width: 28px; height: 28px; display: block; flex: none; }
 .gsearch { flex: 1; max-width: 640px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); transition: border-color .12s, box-shadow .12s; }
 .gsearch:focus-within { border-color: var(--accent); box-shadow: var(--ring); background: var(--panel); }
 .gsearch svg { color: var(--muted); width: 16px; height: 16px; }
@@ -112,14 +120,14 @@ h3 .recdot, legend .recdot { width: 9px; height: 9px; margin-right: 8px; vertica
 .live-chip { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: 16px; background: var(--err); color: var(--err-ink); font-weight: 700; font-size: 12px; letter-spacing: .06em; }
 
 /* ---------- grabadora ---------- */
-.rec-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--err) 55%, var(--line)); background: var(--panel); color: var(--err); font-weight: 600; cursor: pointer; font-variant-numeric: tabular-nums; }
-.rec-btn:hover { background: var(--err-soft); border-color: var(--err); }
+.rec-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--panel); color: var(--accent); font-weight: 650; cursor: pointer; font-variant-numeric: tabular-nums; }
+.rec-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
 .rec-btn .recdot { animation: none; background: var(--err); }
 .rec-btn.on { background: var(--err); border-color: var(--err); color: var(--err-ink); }
 .rec-btn.on .recdot { background: var(--err-ink); border-radius: 2px; }
 .rec-btn + .live-chip + .tb-btn, .rec-btn + .tb-btn { margin-left: 0; }
-.rec-go { background: var(--err) !important; border-color: var(--err) !important; color: var(--err-ink) !important; }
-.rec-go .recdot { background: var(--err-ink); animation: none; }
+.rec-go { background: var(--accent) !important; border-color: var(--accent) !important; color: var(--accent-ink) !important; }
+.rec-go .recdot { background: var(--accent-ink); animation: none; }
 .rec-stop { color: var(--err-ink); background: var(--err); border-color: var(--err); }
 .rec-stop:hover { color: var(--err-ink); background: var(--err); filter: brightness(1.1); }
 .meter { display: grid; grid-template-columns: 90px 1fr 110px; align-items: center; gap: 10px; margin-top: 8px; font-size: 12px; color: var(--muted); }
@@ -200,8 +208,8 @@ body.playing .to-live { bottom: 96px; }
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 .crumbs a:hover { color: var(--accent); }
 .crumbs .sep { opacity: .5; }
-h1 { font-size: 24px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -.02em; font-weight: 650; }
-h1 .sub { color: var(--muted); font-weight: 450; }
+h1 { font: 620 26px/1.2 var(--font-display); margin: 0 0 6px; letter-spacing: -.01em; }
+h1 .sub { color: var(--muted); font-weight: 450; font-family: var(--font); font-size: .8em; letter-spacing: 0; }
 h1 > svg { width: 22px; height: 22px; color: var(--muted); margin-right: 4px; vertical-align: -3px; }
 h2 { font-size: 15px; margin: 30px 0 12px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
 h2 .count { color: var(--muted); font-weight: 450; }
@@ -340,7 +348,7 @@ textarea { width: 100%; min-height: 70px; padding: 8px 10px; border-radius: var(
 
 /* ---------- doc ---------- */
 .docview { font: 15.5px/1.7 var(--font-read); max-width: 820px; margin-top: 18px; padding: 26px 32px; }
-.docview h1, .docview h2, .docview h3, .docview h4 { margin: 22px 0 8px; display: block; }
+.docview h1, .docview h2, .docview h3, .docview h4 { margin: 22px 0 8px; display: block; font-family: var(--font-display); font-weight: 620; }
 .docview h1 { font-size: 22px } .docview h2 { font-size: 18px } .docview h3 { font-size: 16px }
 .docview table { border-collapse: collapse; margin: 12px 0; font-size: 14px; }
 .docview td, .docview th { border: 1px solid var(--line-2); padding: 5px 9px; text-align: left; vertical-align: top; }
@@ -397,11 +405,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .jitem .s svg { width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
 .jitem .s.err { color: var(--err); }
 .jitem .pbar { height: 4px; }
-.modal { position: fixed; inset: 0; background: rgba(20, 14, 12, .42); display: flex; align-items: flex-start; justify-content: center; padding-top: 8vh; z-index: 50; }
+.modal { position: fixed; inset: 0; background: rgba(16, 22, 19, .42); display: flex; align-items: flex-start; justify-content: center; padding-top: 8vh; z-index: 50; }
 .modal.sobre { z-index: 55; padding-top: 18vh; }  /* una confirmación encima de Ajustes, sin cerrarlo */
 .modal.sobre .dialog { width: 460px; }
 .dialog { width: 560px; max-width: calc(100vw - 40px); max-height: 84vh; overflow-y: auto; background: var(--panel); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px 24px 22px; border: 1px solid var(--line); }
-.dialog h3 { margin: -20px -24px 18px; padding: 15px 24px; font-size: 16px; font-weight: 650; border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: var(--radius-lg) var(--radius-lg) 0 0; position: sticky; top: -20px; z-index: 2; letter-spacing: -.01em; }
+.dialog h3 { margin: -20px -24px 18px; padding: 15px 24px; font: 620 18px/1.3 var(--font-display); border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: var(--radius-lg) var(--radius-lg) 0 0; position: sticky; top: -20px; z-index: 2; letter-spacing: -.01em; }
 .dialog h3 > svg { width: 18px; height: 18px; margin-right: 8px; vertical-align: -4px; color: var(--muted); }
 .dialog label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin: 14px 0 5px; }
 .dialog .input, .dialog select { width: 100%; }
@@ -646,7 +654,7 @@ ol.pasos code { user-select: all; }
 .sum-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; }
 .sum-tools .sp { flex: 1; }
 .sumview { margin-top: 0; }
-.sumview h2 { font-size: 17px; margin: 18px 0 6px; }
+.sumview h2 { font: 620 18px/1.3 var(--font-display); margin: 18px 0 6px; }
 .sumview h2:first-child { margin-top: 0; }
 .sumview li.todo { list-style: none; margin-left: -18px; }
 .sumview li.todo.done { color: var(--muted); }
@@ -666,11 +674,11 @@ ol.pasos code { user-select: all; }
 .spk:hover { border-color: var(--spk); box-shadow: 0 0 0 2px color-mix(in srgb, var(--spk) 18%, transparent); }
 .spk.c1 { --spk: var(--accent); }
 .spk.c2 { --spk: #1d4ed8; }
-.spk.c3 { --spk: #0f766e; }
-.spk.c4 { --spk: #a16207; }
+.spk.c3 { --spk: #9d2b6b; }
+.spk.c4 { --spk: #9c5a08; }
 .spk.c5 { --spk: #6d28d9; }
 @media (prefers-color-scheme: dark) {
-  .spk.c2 { --spk: #93c5fd; } .spk.c3 { --spk: #5eead4; } .spk.c4 { --spk: #fcd34d; } .spk.c5 { --spk: #c4b5fd; }
+  .spk.c2 { --spk: #93c5fd; } .spk.c3 { --spk: #f5a3cf; } .spk.c4 { --spk: #e8a94a; } .spk.c5 { --spk: #c4b5fd; }
 }
 .spk.known { font-weight: 700; }
 .spk.me { --spk: var(--ok); }
@@ -716,13 +724,13 @@ ol.pasos code { user-select: all; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .dialog.wz { width: 660px; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .dialog.wz .wz-raiz { display: contents; }
-.wz-head { display: flex; align-items: center; gap: 10px; padding: 13px 22px; border-bottom: 1px solid var(--line); background: var(--panel-2); font-weight: 650; font-size: 15px; flex: none; }
+.wz-head { display: flex; align-items: center; gap: 10px; padding: 13px 22px; border-bottom: 1px solid var(--line); background: var(--panel-2); font: 620 17px/1.3 var(--font-display); flex: none; }
 .wz-head img { width: 22px; height: 22px; }
-.wz-steps { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.wz-steps { margin-left: auto; display: flex; align-items: center; gap: 6px; font: 500 12px var(--font); color: var(--muted); }
 .wz-steps i { width: 26px; height: 4px; border-radius: 2px; background: var(--line-2); }
 .wz-steps i.on { background: var(--accent); }
 .wz-body { padding: 20px 22px 18px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
-.wz-body h2 { font-size: 20px; margin: 0 0 6px; font-weight: 650; letter-spacing: -.01em; outline: none; }
+.wz-body h2 { font: 620 21px/1.25 var(--font-display); margin: 0 0 6px; letter-spacing: -.005em; outline: none; }
 .wz-lead { color: var(--ink-2); margin: 0 0 14px; }
 .wz-opts { border: 0; padding: 0; margin: 0; }
 .wz-opt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); margin-top: 8px; cursor: pointer; font-weight: 400; }
@@ -790,6 +798,21 @@ ol.pasos code { user-select: all; }
 .aj-nav button:hover { background: var(--hover); color: var(--ink); }
 .aj-nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .aj-main { overflow-y: auto; padding: 6px 22px 18px; min-height: 0; }
+/* «Invitar a un café», al pie de la columna de secciones: se ve al abrir Ajustes, sin ventanas ni recordatorios */
+.aj-cafe { margin-top: auto; display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 6px; font-size: 12.5px; color: var(--muted); }
+.aj-cafe svg { width: 15px; height: 15px; flex: none; }
+.aj-cafe:hover { background: var(--hover); color: var(--accent); }
+/* Acerca de: la marca arriba, enlaces que se ven como enlaces y el tributo a la tenca al final, pequeño */
+.acerca .ac-marca { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; flex-wrap: wrap; }
+.acerca .ac-marca img { width: 22px; height: 22px; }
+.acerca .ac-marca b { font: 620 18px/1.2 var(--font-display); letter-spacing: -.005em; }
+.acerca .ac-marca .muted { font-size: 12.5px; }
+.acerca a { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 2px; }
+.acerca a:hover { text-decoration-color: currentColor; }
+.acerca .ac-tenca { display: flex; align-items: flex-start; gap: 7px; margin: 14px 0 0; font-size: 12px; color: var(--muted); }
+.acerca .ac-tenca a { color: inherit; }
+.i-tenca { width: 14px; height: 14px; fill: currentColor; stroke: none; flex: none; margin-top: 2px; }
+.i-tenca path:nth-child(2) { fill: var(--star); }
 .aj-main > section > fieldset:first-child, .aj-main > section > .cfg-estado:first-child { margin-top: 12px; }
 .dialog.aj .btns.aj-pie { margin: 0; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel); align-items: center; flex: none; }
 .aj-pend { margin-right: auto; font-size: 12.5px; color: var(--warn); }
@@ -818,7 +841,8 @@ body.aj-abierto .toasts { top: 18px; bottom: auto; }  /* que no tapen «Guardar�
 .gr-top { display: grid; grid-template-columns: 82px 1fr auto; align-items: center; gap: 8px 12px; }
 .gr-top > label { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .gr-nombre { position: relative; }
-.gr-nombre .input { width: 100%; height: 38px; font-size: 15px; font-weight: 500; }
+.gr-nombre .input { width: 100%; height: 40px; font: 560 17px var(--font-display); }  /* el título de la reunión, como en la tarjeta de la hoja de marca */
+.gr-nombre .input::placeholder { font-weight: 400; }
 .gr-tag { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; min-width: 70px; }
 .gr-tag.de-reunion { color: var(--ok); }
 .gr-tag.archivo { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--warn); white-space: normal; }

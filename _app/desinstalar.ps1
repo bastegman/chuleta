@@ -64,11 +64,11 @@ Log "desinstalando $AppName de $Root (silencioso=$Silencioso borrar_datos=$Borra
 # .json) esta en las listas; los .txt se borran solo por su nombre exacto
 $AppFolders = [ordered]@{
     "."           = @(".py", ".ps1", ".bat")
-    "static"      = @(".css", ".js", ".html", ".svg", ".ico", ".png")
+    "static"      = @(".css", ".js", ".html", ".svg", ".ico", ".png", ".woff2")
     "export"      = @(".bat")
     "__pycache__" = @(".pyc")
 }
-$CodeTxt = @("version.txt", "python.txt", "export\LEEME.txt")
+$CodeTxt = @("version.txt", "python.txt", "export\LEEME.txt", "static\fuentes-OFL.txt")
 # los .bat de la raiz (sin _app no funcionan); el LEEME.txt y la licencia se quedan junto a las reuniones
 $RootLaunchers = @("INSTALAR.bat", "ABRIR CHULETA.bat", "ABRIR NOTAS.bat")
 

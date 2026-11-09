@@ -2,8 +2,11 @@
 """
 Genera los iconos de la app a partir de los SVG:
 
-    _app/static/logo.svg     maestro (cabecera de la app y tamaños >= 24 px)
-    design/logo-small.svg    variante simplificada para 16 y 20 px (sin anillas, renglones de 1 px)
+    design/icono.svg         maestro (el azulejo de la app, tamaños >= 24 px)
+    design/logo-small.svg    variante simplificada para 16 px (sin ojo, dos renglones en pixeles enteros)
+    design/icono-20.svg, icono-24.svg, icono-32.svg   el mismo dibujo en la rejilla de 20, 24 y 32 px
+
+(_app/static/logo.svg es otra cosa: la tenca sola, sin azulejo, para la cabecera de la app y el asistente.)
 
 y escribe _app/static/chuleta.ico (9 tamaños, todos en BMP) y _app/static/chuleta.png (256 px).
 Todos los tamaños van en BMP porque Windows no siempre pinta bien un .ico cuyas entradas pequeñas son PNG
@@ -29,11 +32,19 @@ BROWSERS = [p for p in ("/Applications/Google Chrome.app/Contents/MacOS/Google C
                         r"C:\Program Files\Google\Chrome\Application\chrome.exe") if os.path.exists(p)]
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 SMALL = {16, 20}  # tamaños que usan la variante simplificada
+# versiones dibujadas en la rejilla de su tamaño (bordes en pixeles enteros: a 20, 24 y 32 px el maestro escalado
+# deja los renglones en medio pixel y se ven borrosos en la barra de tareas); si existen junto al SVG que toca,
+# mandan sobre él
+PIXEL = {20: "icono-20.svg", 24: "icono-24.svg", 32: "icono-32.svg"}
 
 
 def render(svg, size, work):
     """Captura el SVG a `size` px con el navegador headless (ventana grande + recorte: la ventana mínima
-    de Chrome es mayor que los iconos pequeños)."""
+    de Chrome es mayor que los iconos pequeños). Si junto a `svg` está la versión dibujada para ese tamaño (PIXEL), se
+    usa esa."""
+    pixel = os.path.join(os.path.dirname(os.path.abspath(svg)), PIXEL.get(size, ""))
+    if size in PIXEL and os.path.isfile(pixel):
+        svg = pixel
     html = os.path.join(work, f"r{size}.html")
     out = os.path.join(work, f"r{size}.png")
     with open(html, "w", encoding="utf-8") as f:
@@ -77,7 +88,7 @@ def main(master, small, out_dir):
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:4] or (os.path.join(ROOT, "_app", "static", "logo.svg"),
+    args = sys.argv[1:4] or (os.path.join(ROOT, "design", "icono.svg"),
                              os.path.join(ROOT, "design", "logo-small.svg"),
                              os.path.join(ROOT, "_app", "static"))
     main(*args)

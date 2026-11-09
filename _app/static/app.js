@@ -79,6 +79,8 @@ const I = {
   power: '<svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>',
   face: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 10h.01M15 10h.01"/></svg>',
   info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
+  cafe: '<svg viewBox="0 0 24 24"><path d="M4 10h12v4a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M16 11.5h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 4.5c0 1.2 1 1.6 1 3M12 4.5c0 1.2 1 1.6 1 3"/></svg>',
+  tenca: '<svg viewBox="0 0 64 64" class="i-tenca"><path fill-rule="evenodd" d="M33 21a10 10 0 1 0 20 0a10 10 0 1 0-20 0ZM43.6 18.8a2 2 0 1 0 4 0a2 2 0 1 0-4 0Z"/><path d="M51.6 16.6 62.5 21 51.6 25.4Z"/><rect x="6" y="32" width="40" height="7" rx="3.5"/><rect x="6" y="43" width="29" height="7" rx="3.5"/><rect x="6" y="54" width="18" height="7" rx="3.5"/></svg>',
 };
 /* iconos de los presets de transcripcion por id; el emoji que manda engines.py queda solo de reserva */
 const PRESET_ICONS = { rapido: 'bolt', turbo: 'scale', medium: 'gauge', calidad: 'target', nube: 'nube' };
@@ -2028,7 +2030,8 @@ function openSettings(opts) {
   const provOpts = Object.entries(P).map(([k, v]) => `<option value="${k}"${k === c.provider ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
   openModal(`<h3>${I.gear}Ajustes</h3>
     <div class="aj-grid">
-    <nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}"${id === sec ? ' autofocus' : ''}>${l}</button>`).join('')}</nav>
+    <nav class="aj-nav" aria-label="Secciones de Ajustes">${AJ_SECS.map(([id, l]) => `<button type="button" data-sec="${id}" class="${id === sec ? 'on' : ''}" aria-current="${id === sec ? 'true' : 'false'}"${id === sec ? ' autofocus' : ''}>${l}</button>`).join('')}
+      ${ac.donar ? `<a class="aj-cafe" id="ajCafe" href="${esc(ac.donar)}" title="${esc(APP_NAME)} es gratis. Si te sirve, puedes invitar al autor a un café (PayPal)">${I.cafe}Invitar a un café</a>` : ''}</nav>
     <div class="aj-main">
     ${S.config.settings_broken ? `<div class="notice">${settingsBrokenHtml(S.config.settings_broken)}</div>` : ''}
     <section data-secc="algrabar"${sec === 'algrabar' ? '' : ' hidden'}>
@@ -2109,13 +2112,15 @@ function openSettings(opts) {
         <b>Para actualizar a alguien que ya lo tiene</b>: mándale el zip nuevo y que ejecute su INSTALAR.bat. El instalador cierra la versión abierta y actualiza la que ya tenía, en su carpeta de siempre (con sus grabaciones).</div>
     </fieldset>
     <div class="help" style="margin-top:16px"><b>Atajos:</b> Ctrl+Alt+R empezar/parar grabación (desde cualquier programa) · Espacio reproducir/pausa · ← → 5 s · Shift + ← → 15 s · [ ] velocidad · Ctrl K buscar en todas las transcripciones · Ctrl P ir a una reunión · Ctrl F buscar en la transcripción</div>
-    <fieldset style="margin-top:14px"><legend>${I.info}Acerca de</legend>
-      <div class="help" style="margin-top:0"><b>${esc(APP_NAME)}</b> · versión ${esc(S.config.version || '')}${ac.licencia ? ` · licencia ${esc(ac.licencia)}` : ''}<br>
+    <fieldset class="acerca" style="margin-top:14px"><legend>${I.info}Acerca de</legend>
+      <div class="ac-marca"><img src="/logo.svg" alt=""><b>${esc(APP_NAME)}</b><span class="muted">versión ${esc(S.config.version || '')}${ac.licencia ? ` · licencia ${esc(ac.licencia)}` : ''}</span></div>
+      <div class="help" style="margin-top:0">
         Código, novedades y ayuda: <a href="${esc(ac.repo || '#')}" id="aRepo">${esc((ac.repo || '').replace(/^https?:\/\//, ''))}</a><br>
         Datos y registros (ajustes, API key cifrada, <code>server.log</code>): <code>${esc(ac.datos || '')}</code><br>
         ${esc(APP_NAME)} es gratis. Si te sirve, puedes <a href="${esc(ac.donar || '#')}" id="aDonar">invitar al autor a un café</a> (PayPal).</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="aDatos">${I.folder}Abrir</button><button class="btn sm" type="button" id="aDiag">${I.clipboard}Copiar diagnóstico</button><span class="muted" style="font-size:12.5px">versión, sistema, motor y las últimas líneas del registro: para pedir ayuda</span></div>
       <div class="help">Solo lleva datos técnicos: la versión, el sistema, el motor y el modelo, cuántas carpetas vinculadas y copias en otras carpetas hay y, de las últimas líneas del registro, el texto fijo de cada mensaje con sus cifras y códigos de error. Los nombres de reuniones, carpetas, proyectos, temas y personas, las rutas y cualquier otro texto van como &lt;texto&gt;, y las claves no van. El registro completo (<code>server.log</code>) sí lleva nombres y rutas: no lo compartas tal cual. Aun así, revisa el diagnóstico antes de pegarlo y no lo publiques en un sitio público.</div>
+      ${ac.tenca ? `<p class="ac-tenca">${I.tenca}<span>El nombre viene de la tenca (<a href="${esc(ac.tenca)}" id="aTenca" title="Museo Nacional de Historia Natural de Chile"><i>Mimus thenca</i></a>), un pájaro de Chile.</span></p>` : ''}
     </fieldset>
     <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:10px"><input type="checkbox" id="sInicioWin" data-se-guarda-solo disabled> Arrancar ${esc(APP_NAME)} al iniciar Windows <span class="muted" id="sInicioWinNota" style="font-weight:400">· lo mismo que «Arrancar con Windows» en el menú del icono de la bandeja</span></label>
     <div class="row" style="margin-top:10px"><button class="btn ghost sm danger" id="sOff" type="button" title="Cierra la app del todo, también el motor que sigue en segundo plano al cerrar la ventana">${I.power}Apagar ${esc(APP_NAME)}</button>
@@ -2292,6 +2297,10 @@ function openSettings(opts) {
     $('#aDatos', d).onclick = () => api('/api/acerca/abrir', { que: 'datos' }).catch(e => toast(e.message, 'err'));
     $('#aRepo', d).onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'repo' }).catch(() => window.open(ac.repo, '_blank')); };
     $('#aDonar', d).onclick = e => { e.preventDefault(); if (ac.donar) api('/api/acerca/abrir', { que: 'donar' }).catch(() => window.open(ac.donar, '_blank')); };
+    const cafe = $('#ajCafe', d);
+    if (cafe) cafe.onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'donar' }).catch(() => window.open(ac.donar, '_blank')); };
+    const tenca = $('#aTenca', d);
+    if (tenca) tenca.onclick = e => { e.preventDefault(); api('/api/acerca/abrir', { que: 'tenca' }).catch(() => window.open(ac.tenca, '_blank')); };
     $('#aDiag', d).onclick = async () => {
       try { const r = await api('/api/diagnostico'); await copy(r.texto, 'Diagnóstico copiado: revísalo antes de pegarlo donde pidas ayuda'); } catch (e) { toast(e.message, 'err'); }
     };
