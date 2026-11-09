@@ -131,8 +131,8 @@ USO DIARIO
     Teams). En la página de la reunión, idioma y contexto se cambian sobre la marcha y el directo
     los usa desde el siguiente trozo. El resumen también tiene en cuenta el contexto.
   - Ajustes > Proyectos: una tabla con la carpeta y el idioma de cada proyecto y workstream, los
-    que se usarán al grabar. En gris, lo que no has elegido tú: sin carpeta asignada, la del
-    proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. Con "Editar", lo
+    que se usarán al grabar. En negro, lo asignado; en gris, lo heredado: sin carpeta asignada,
+    la del proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. Con "Editar", lo
     que cambies en la fila se guarda al momento (también la carpeta de cada workstream). Debajo,
     las listas de vocabulario, las carpetas fuera de Chuleta y las copias en otras carpetas.
   - Copias en otras carpetas (en Ajustes > Proyectos): carpetas donde cada reunión se guarda además como

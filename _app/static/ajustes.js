@@ -430,9 +430,11 @@ function bindAjCalendario(d) {
     const pintar = () => {
       const on = casilla.checked, activar = $('[data-rn-accion="activar"]', est);
       activar?.classList.add('hidden');  // el suyo, en la columna de la derecha, como «Desactivar»
-      chip(oe, on ? 'ok' : '', on ? 'Activado' : 'Apagado');
-      // «Probar» ya está en la frase cuando es lo que toca (Outlook cerrado): no dos veces (su resultado, sí)
-      $('#rnProbar', d)?.classList.toggle('hidden', !!$('[data-rn-accion="probar"]', est));
+      const soloWin = fueraWin && !on && !activar;  // fuera de Windows el servidor no ofrece nada
+      chip(oe, on ? 'ok' : soloWin ? 'aviso' : '', on ? 'Activado' : soloWin ? 'Solo en Windows' : 'Apagado');
+      // «Probar» ya está en la frase cuando es lo que toca (Outlook cerrado): no dos veces (su resultado, sí). Fuera
+      // de Windows no hay nada que probar
+      $('#rnProbar', d)?.classList.toggle('hidden', soloWin || !!$('[data-rn-accion="probar"]', est));
       // mientras reunion.js activa, su botón está desactivado: el de aquí, igual
       const nuevo = on ? boton(false, 'Desactivar') : activar ? boton(true, 'Activar').replace('<button ', activar.disabled ? '<button disabled ' : '<button ') : '';
       if (oa.innerHTML === nuevo) return;

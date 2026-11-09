@@ -946,6 +946,7 @@ details.ag-como > summary:hover { color: var(--ink-2); }
 .ct-estado.aviso { background: var(--warn-soft); color: var(--warn); }
 .ct-estado.err { background: var(--err-soft); color: var(--err); }
 .ct-frase { font-size: 13px; color: var(--ink-2); }
+.ct-frase #rnEstado { margin-top: 0; font-size: inherit; color: inherit; }  /* el estado de Outlook, como la frase de Teams */
 .ct-acc:empty { display: none; }
 fieldset.ct-opciones { margin-top: 16px; }
 @media (max-width: 900px) {
