@@ -1,0 +1,107 @@
+/* Hoy (rediseño B7, hoy.js; mock 05 de notas_chuleta_rediseno_2026-11-07): la reunión de ahora arriba, «Para
+   revisar» y «Esta semana», y la agenda de Outlook a la derecha en ventanas anchas (en las estrechas, entre «Para
+   revisar» y «Esta semana»: lo que pide algo de ti va antes que un mes de citas). En un fichero aparte para no tocar
+   app.css, que cambian otras ramas a la vez */
+.page.hoy { max-width: 1260px; }
+.hoy-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "ahora" "rev" "agenda" "sem"; gap: 0 28px; }
+.hoy-ahora-box { grid-area: ahora; min-width: 0; }
+.hoy-agenda { grid-area: agenda; min-width: 0; }
+.hoy-rev { grid-area: rev; min-width: 0; }
+.hoy-sem { grid-area: sem; min-width: 0; }
+@media (min-width: 1380px) {
+  .hoy-grid { grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto auto 1fr; grid-template-areas: "ahora agenda" "rev agenda" "sem agenda"; align-items: start; }
+  .hoy-agenda > h2:first-child { margin-top: 18px; }
+}
+
+/* la reunión de ahora */
+.hoy-ahora { display: flex; align-items: center; gap: 16px; padding: 18px 20px; margin-top: 18px; border-color: var(--accent-line); box-shadow: var(--shadow-sm); }
+.hoy-ahora.vacio { border-color: var(--line); box-shadow: none; }
+.ha-ico { width: 44px; height: 44px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
+.hoy-ahora.vacio .ha-ico { background: var(--hover); color: var(--muted); }
+.ha-txt { flex: 1; min-width: 0; }
+.ha-kicker { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.hoy-ahora.vacio .ha-kicker { color: var(--muted); }
+.hoy-ahora h2.ha-titulo, .ha-titulo { display: block; font: 620 21px/1.25 var(--font-display); margin: 2px 0 9px; overflow-wrap: anywhere; }
+.ha-titulo.sin { font: 600 16px/1.3 var(--font); color: var(--ink-2); margin-bottom: 2px; }
+.ha-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ha-chip { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 2px 0 10px; border: 1px solid var(--accent-line); border-radius: 15px; background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 13px; max-width: 100%; }
+.ha-chip:focus-within { box-shadow: var(--ring); }
+.ha-chip svg { width: 15px; height: 15px; }
+.ha-chip select { border: 0; background: transparent; color: inherit; font-weight: 600; max-width: 280px; min-width: 0; cursor: pointer; padding: 0 4px; outline: none; }
+.ha-motivo { color: var(--muted); font-size: 12.5px; }
+.ha-ultima { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--ink-2); font-size: 13px; }
+.ha-ultima svg { width: 15px; height: 15px; color: var(--muted); }
+.ha-ultima a { color: var(--accent); font-weight: 600; }
+.ha-ultima a:hover { text-decoration: underline; }
+.ha-prox { color: var(--muted); font-size: 13px; }
+.ha-grabar { flex: none; height: 44px; padding: 0 20px; font-size: 15px; }
+.ha-grabar .recdot { animation: none; width: 8px; height: 8px; }
+@media (max-width: 720px) {
+  .hoy-ahora { flex-wrap: wrap; }
+  .ha-grabar { width: 100%; justify-content: center; }
+}
+
+/* Para revisar y Esta semana */
+.hr-lista { padding: 2px 0; overflow: hidden; }
+.hr-fila, .hs-fila { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 11px 16px; border-top: 1px solid var(--line); cursor: pointer; }
+.hr-lista > :first-child { border-top: 0; }
+.hr-fila:hover, .hs-fila:hover { background: var(--hover); }
+.hr-dia { color: var(--muted); font-weight: 650; font-size: 13px; }
+.hr-n { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
+.hr-proy { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--hover); color: var(--ink-2); }
+.hr-proy.sin { background: var(--warn-soft); color: var(--warn); }
+.hr-sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.hr-sub .aviso { color: var(--warn); font-weight: 600; }
+.hr-mas { display: inline-block; margin-top: 8px; color: var(--accent); font-weight: 600; font-size: 13px; }
+.hs-fila .pill.ok { cursor: pointer; }
+@media (max-width: 720px) {
+  .hr-fila, .hs-fila { grid-template-columns: minmax(0, 1fr) auto; }
+  .hr-dia:empty { display: none; }
+  .hr-dia { grid-column: 1 / -1; }
+}
+
+/* la agenda de Outlook */
+.ag-estado { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-2); border: 1px dashed var(--line-2); color: var(--ink-2); font-size: 13px; margin-bottom: 10px; }
+.ag-estado > span { flex: 1; min-width: 180px; }
+.ag-estado.leyendo { color: var(--muted); }
+.ag-estado svg { width: 15px; height: 15px; color: var(--muted); }
+.ag-lista { padding: 2px 0; overflow: hidden; }
+.ag-dia + .ag-dia { border-top: 1px solid var(--line); }
+.ag-dia-h { padding: 10px 14px 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.ag-cita { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto; gap: 10px; padding: 6px 10px 8px 14px; align-items: start; }
+.ag-prep { height: 26px; padding: 0 8px; font-size: 12px; color: var(--accent); }
+.ag-prep.on { color: var(--muted); }
+.ag-prep-txt { margin-top: 2px; font-size: 12px; line-height: 1.35; color: var(--accent); font-weight: 600; }
+.ag-prep-txt svg { width: 13px; height: 13px; margin-right: 3px; vertical-align: -2px; }
+.hp-l { display: grid; gap: 4px; margin: 0 0 12px; font-weight: 600; font-size: 13px; }
+.hp-l .muted { font-weight: 450; }
+.hp-l textarea { resize: vertical; min-height: 60px; font-weight: 450; }
+.hp-hueco { flex: 1; }
+.ag-cita.ahora { background: var(--accent-soft); }
+.ag-h { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 13px; color: var(--ink-2); line-height: 1.3; }
+.ag-h small { display: block; color: var(--muted); font-weight: 450; font-size: 11.5px; }
+.ag-n { font-size: 13.5px; font-weight: 550; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; overflow-wrap: anywhere; line-height: 1.35; }
+.ag-tag { display: inline-flex; align-items: center; height: 18px; font-size: 11px; font-weight: 650; padding: 0 6px; border-radius: 9px; background: var(--hover); color: var(--muted); }
+.ag-tag svg { width: 12px; height: 12px; }
+.ag-tag.ahora { background: var(--accent); color: var(--accent-ink); }
+.ag-lugar { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ag-nada { padding: 12px 14px; color: var(--muted); font-size: 13px; }
+.ag-mas { margin-top: 8px; }
+.ag-pie { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.ag-pie .btn { margin-left: auto; }
+
+/* sin reuniones todavía */
+.hoy-vacio { padding: 22px 24px; margin-top: 22px; }
+.hoy-vacio h2 { margin: 0 0 16px; font: 620 20px/1.2 var(--font-display); }
+.hv-formas { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.hv-formas li { display: flex; align-items: center; gap: 14px; color: var(--ink-2); }
+.hv-formas li > :first-child { width: 132px; flex: none; display: flex; align-items: center; }
+.hv-kbd { gap: 4px; color: var(--muted); }
+.hoy-vacio .recdot { animation: none; }
+.hv-ico { color: var(--accent); padding-left: 10px; }
+.hv-subir { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.hv-subir a { color: var(--accent); font-weight: 600; }
+
+/* Calendario: las citas de Outlook que vienen, distintas de las reuniones grabadas */
+.cev.outlook { background: transparent; border: 1px dashed var(--accent-line); color: var(--ink-2); cursor: default; }
+.cmore.outlook { color: var(--muted); cursor: default; }

@@ -1,0 +1,13 @@
+[
+  {"asunto": "Comité de seguimiento", "en": -20, "duracion": 60, "periodica": true},
+  {"asunto": "Revisión de presupuesto", "en": 75, "duracion": 45, "lugar": "Sala 3 · Torre Picasso"},
+  {"asunto": "Daily de Infraestructura", "dia": 1, "hora": "09:30", "duracion": 15, "periodica": true},
+  {"asunto": "Kick-off Proyecto Beta", "dia": 1, "hora": "12:00", "duracion": 60},
+  {"asunto": "Entrevista equipo", "dia": 2, "hora": "16:00", "duracion": 45},
+  {"asunto": "Comité de seguimiento", "dia": 7, "hora": "10:00", "duracion": 60, "periodica": true},
+  {"asunto": "Migración de servidores", "dia": 9, "hora": "11:00", "duracion": 90},
+  {"asunto": "Cierre trimestral", "dia": 20, "hora": "17:00", "duracion": 60},
+  {"asunto": "Cancelada: no sale", "dia": 3, "hora": "10:00", "duracion": 30, "cancelada": true},
+  {"asunto": "Vacaciones: no sale (todo el día)", "dia": 4, "hora": "00:00", "duracion": 1440, "todo_el_dia": true},
+  {"asunto": "Dentro de 40 días: no sale", "dia": 40, "hora": "10:00", "duracion": 60}
+]

@@ -36,6 +36,7 @@ import urllib.request
 import uuid
 import webbrowser
 from collections import Counter
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -831,7 +832,10 @@ class Library:
                 real = [i for i in hs.values() if not i.get("breve")]
                 info = {"n": len(real), "known": sum(1 for i in real if i.get("persona") and not i.get("provisional")),
                         "doubt": sum(1 for i in real if i.get("persona") and i.get("provisional")),
-                        "tu": bool(d.get("tu"))}
+                        "tu": bool(d.get("tu")),
+                        # sin nombre: ni persona ni «Tú» (Hoy › Para revisar, «2 voces sin nombre»)
+                        "sin_nombre": sum(1 for h, i in hs.items() if not i.get("breve") and not i.get("persona")
+                                          and h != d.get("tu"))}
         except (OSError, ValueError, AttributeError):
             info = None
         self.speakers[p] = (a["spk_mtime"], info)
@@ -4585,6 +4589,10 @@ DIAG_LINES = (
     "   calendario: apagado desde Ajustes",
     "   calendario: el formato de fecha {s} no le vale a Outlook ({e})",
     "   calendario: con el formato de fecha {s}, Outlook da {n} citas fuera de la hora pedida",
+    "   calendario: agenda · {n} citas⟦ (cortada)⟧ ({n} ms)",
+    "   hoy: reunión preparada ({n} cosas)",
+    "   hoy: reunión sin preparar ({n} cosas)",
+    "   calendario: agenda · {s} ({n} ms)",
     "   calendario: {s} ({n} ms)",
     "apagar pedido desde la interfaz ({n} trabajos en cola o en marcha)",
     "apagar pedido desde la bandeja ({n} trabajos en cola o en marcha)",
@@ -4845,6 +4853,12 @@ class App:
         # lo que ya se sabe de los asistentes de Outlook (si pregunta, no se le vuelve a preguntar solo al arrancar)
         calendario.ASISTENTES["estado"] = self.settings.get().get("outlook_asistentes") or None
         calendario.al_cambiar = lambda v: self.settings.update(lambda d: d.update(outlook_asistentes=v))
+        # la agenda de Outlook de un mes para Hoy (B7), en segundo plano y en memoria; con CHULETA_PRUEBAS_OUTLOOK
+        # (pruebas de la interfaz) sale de un fichero de citas en vez de Outlook
+        self.agenda = calendario.Agenda()
+        prueba = os.environ.get("CHULETA_PRUEBAS_OUTLOOK")
+        self.agenda_sesion = calendario.sesion_de_prueba(prueba) if prueba else None
+        threading.Thread(target=self._agenda_watch, daemon=True, name="agenda-outlook").start()
         threading.Thread(target=self._meeting_watch, daemon=True, name="meeting-watch").start()
         threading.Thread(target=self._monitor_watchdog, daemon=True).start()
         self.hotkey = GlobalHotkey(lambda: self.rec_toggle({"source": "hotkey"}))
@@ -4868,7 +4882,7 @@ class App:
                 # el mismo plan que enseña la tarjeta de Grabar (plan.py): la reunión en curso (Teams/Outlook, sin
                 # esperar a COM: calendario.py) o la que vio el aviso flotante al abrirse, y de ahí proyecto,
                 # carpeta, idioma, vocabulario, motor y dispositivos, cada uno de su capa
-                sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
+                sug = self._reunion_ahora(st)[0]
                 if b.get("name") or b.get("vocab"):
                     sug = dict(sug, name=b.get("name") or sug.get("name") or "",
                                vocab=b.get("vocab") or sug.get("vocab") or "")
@@ -4996,7 +5010,11 @@ class App:
         if pedido.get("subir"):
             sug = {}  # un audio que ya existe: ni Teams ni Outlook
         if sug is None:
-            sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
+            sug = self._reunion_ahora(st)[0]
+        if not pedido.get("subir") and not plantilla:  # lo preparado en Hoy para esta reunión, si es ahora
+            prep = self._preparada(pedido["nombre"] if "nombre" in pedido else sug.get("name"), st)
+            if prep:
+                pedido = grabar_plan.con_preparada(pedido, prep)
         full, listas = {}, []
         for v in list_vocab():
             try:
@@ -5236,8 +5254,7 @@ class App:
             if mic == "none" and sys_dev == "none":
                 raise ApiError("Elige al menos el micrófono o el audio del ordenador.")
             if "name" not in b and "vocab" not in b:  # sin nombre ni tema (otra app): la reunión en curso, si la hay
-                sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(self.settings.get(), self._vocab_terms(),
-                                                                              outlook=False))
+                sug = self._reunion_ahora()[0]
                 b = dict(b, name=sug.get("name") or "", vocab=sug.get("vocab") or "",
                          participantes=b.get("participantes") or calendario.join_participants(sug.get("participants")),
                          sugerido=b.get("sugerido") or sug.get("source") or "")
@@ -6074,7 +6091,7 @@ class App:
         """GET /api/perfil: el perfil por defecto y lo que se aplicaria ahora mismo a una grabacion (con la reunion
         en curso, si la hay), y los avisos de los destinos de salida (documentos que no se han podido escribir)."""
         st = self.settings.get()
-        sug = self.vigia.sugerencia(lambda: calendario.reunion_actual(st, self._vocab_terms(), outlook=False))
+        sug = self._reunion_ahora(st)[0]
         auto = lambda vid: rec_folder_origin(find_vocab(None, None, vid) if vid else None, st)  # noqa: E731
         avisos = getattr(getattr(self, "jobs", None), "outputs_warnings", None)  # sin cola (tests): ninguno
         return {"perfil": perfil_de(st), "resuelto": resolve_perfil(st, sug, auto_folder=auto),
@@ -6441,7 +6458,184 @@ class App:
         on = b.get("activar") is True
         self.settings.update(lambda d: d.update(outlook_on=on))
         log(f"   calendario: {'activado' if on else 'apagado'} desde Ajustes")
+        ag = getattr(self, "agenda", None)
+        if ag is not None:
+            ag.pedir()  # la agenda de Hoy, ya (o fuera, si se apaga)
         return calendario.estado(on, probar=on)
+
+    # --- la pantalla Hoy (B7) y la agenda de Outlook de un mes
+    def _reunion_ahora(self, st=None, recordar=True):
+        """(sugerencia, info) de la reunión de ahora: la última lectura del vigilante (o la ventana de Teams al momento)
+        y, si no da nombre, la cita de la agenda de Outlook ya leída que encaja con ahora (calendario.reunion_de_ahora).
+        La usan el plan de grabar (tarjeta, Ctrl+Alt+R, aviso, Hoy) y /api/hoy: una sola reunión de ahora para todos.
+        `recordar=False` (Hoy, que pregunta cada 30 s): la lectura al momento no se guarda como la del vigilante, que
+        durante una llamada la quiere con Outlook."""
+        st = st or self.settings.get()
+
+        def leer():
+            return calendario.reunion_actual(st, self._vocab_terms(), outlook=False)
+        if hasattr(self.vigia, "lectura"):
+            lect = self.vigia.lectura(leer, recordar=recordar)
+        else:  # un vigilante que solo da la sugerencia (los dobles de los tests)
+            lect = {"sugerencia": self.vigia.sugerencia(leer)}
+        ag = getattr(self, "agenda", None)
+        citas = ag.citas() if ag is not None and st.get("outlook_on") else []
+        return calendario.reunion_de_ahora(lect, citas, self._vocab_terms)
+
+    def _ultima_vez(self, nombre):
+        """La última vez que se grabó la reunión que se llama así («La última vez (vie 30 oct): 3 tareas abiertas»): la
+        más reciente de la biblioteca con ese título (el de su .md o el del archivo), sin la que se está grabando, con
+        las tareas sin hacer de su resumen (None sin resumen)."""
+        k = grabar_plan.norm_titulo(nombre)
+        if not k:
+            return None
+        grabando = rel_of(self.rec.path) if getattr(self, "rec", None) and self.rec.alive() else None
+        best = None
+        for a in list(getattr(getattr(self, "library", None), "flat", None) or []):
+            if a.get("recording") or a.get("path") == grabando or not a.get("date"):
+                continue
+            titulo = (a.get("props") or {}).get("titulo") or a.get("label") or ""
+            if grabar_plan.norm_titulo(titulo) == k and (best is None or a["date"] > best["date"]):
+                best = a
+        if best is None:
+            return None
+        tareas = None
+        if best.get("_sum"):
+            try:
+                tareas = grabar_plan.tareas_abiertas(read_text(best["_sum"]))
+            except OSError:
+                tareas = None
+        return {"path": best["path"], "fecha": best["date"], "fecha_txt": grabar_plan.fecha_corta(best["date"]),
+                "resumen": bool(best.get("_sum")), "tareas": tareas}
+
+    PREPARADA_ANTES, PREPARADA_DESPUES = 10, 5  # minutos: lo preparado vale de 10 min antes a 5 min después
+
+    @staticmethod
+    def _clave_preparada(asunto, inicio):
+        return f"{inicio}|{grabar_plan.norm_titulo(asunto)}"
+
+    def _preparada(self, nombre, st=None, now=None):
+        """Lo preparado en Hoy («Preparar» en la agenda: {vocab?, idioma?, contexto?}) para la reunión que se llama así
+        y es ahora (de 10 min antes de empezar a 5 min después de acabar), o None."""
+        k = grabar_plan.norm_titulo(nombre)
+        if not k:
+            return None
+        now = now or datetime.now()
+        for p in ((st or self.settings.get()).get("preparadas") or {}).values():
+            try:
+                ini, fin = datetime.fromisoformat(p["inicio"]), datetime.fromisoformat(p["fin"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (grabar_plan.norm_titulo(p.get("asunto")) == k
+                    and ini - timedelta(minutes=self.PREPARADA_ANTES) <= now <= fin + timedelta(
+                        minutes=self.PREPARADA_DESPUES)):
+                return {x: p[x] for x in ("vocab", "idioma", "contexto") if x in p}
+        return None
+
+    def hoy_preparar(self, b):
+        """POST /api/hoy/preparar {asunto, inicio, fin, vocab?, idioma?, contexto?} (o quitar: true): «Preparar» una
+        cita de la agenda. Lo que se dé (null = lo de siempre) se usa al grabarla, con «Grabar», la tarjeta,
+        Ctrl+Alt+R o el aviso (plan_grabar). Se guarda en settings.json; lo de citas que acabaron hace más de un día,
+        fuera."""
+        asunto = " ".join(str(b.get("asunto") or "").split())[:200]
+        try:
+            ini = datetime.fromisoformat(str(b.get("inicio") or "")[:16])
+            fin = datetime.fromisoformat(str(b.get("fin") or "")[:16])
+        except ValueError:
+            raise ApiError("Esa cita no tiene una hora válida.")
+        if not asunto:
+            raise ApiError("Esa cita no tiene asunto: no se puede preparar.")
+        entrada = {"asunto": asunto, "inicio": ini.isoformat(timespec="minutes"),
+                   "fin": fin.isoformat(timespec="minutes")}
+        if not b.get("quitar"):
+            if b.get("vocab") is not None:
+                vid = str(b["vocab"])
+                if vid and not find_vocab(None, None, vid):
+                    raise ApiError("Ese proyecto ya no está: elige otro.")
+                entrada["vocab"] = vid
+            if b.get("idioma") is not None:
+                lang = str(b["idioma"]).strip().lower()
+                if lang and not IDIOMA_RE.match(lang):
+                    raise ApiError("Idioma no válido: " + lang)
+                entrada["idioma"] = "" if lang == "auto" else lang
+            ctx = " ".join(str(b.get("contexto") or "").split())[:500]
+            if ctx:
+                entrada["contexto"] = ctx
+        guardar = len(entrada) > 3  # sin nada que usar, es quitarla
+        clave = self._clave_preparada(asunto, entrada["inicio"])
+        limite = (datetime.now() - timedelta(days=1)).isoformat(timespec="minutes")
+
+        def upd(d):
+            prep = {k: v for k, v in (d.get("preparadas") or {}).items()
+                    if k != clave and isinstance(v, dict) and str(v.get("fin") or "") >= limite}
+            if guardar:
+                prep[clave] = entrada
+            d["preparadas"] = dict(sorted(prep.items(), key=lambda kv: kv[1].get("inicio") or "")[-200:])
+        self.settings.update(upd)
+        log(f"   hoy: reunión {'preparada' if guardar else 'sin preparar'} ({len(entrada) - 3} cosas)")
+        return {"ok": True, "preparada": entrada if guardar else None}
+
+    def hoy(self, q):
+        """GET /api/hoy[?refrescar=1]: la pantalla Hoy sin esperar a Outlook. La reunión de ahora (título, de dónde
+        sale y, si la agenda la tiene, sus horas) con su plan de grabar (plan.py, el mismo que la tarjeta y Ctrl+Alt+R:
+        «Grabar» manda plan.rec a /api/rec/start), la última vez que se grabó esa reunión y la agenda del próximo mes,
+        leída en segundo plano (_agenda_watch). Si la agenda es vieja (o refrescar=1), se pide otra lectura sin
+        esperarla."""
+        st = self.settings.get()
+        activado = bool(st.get("outlook_on"))
+        ag = getattr(self, "agenda", None)
+        if ag is not None and activado and (q.get("refrescar") in ("1", "true") or ag.toca(calendario.AGENDA_VIEJA)):
+            ag.pedir()
+        sug, info = self._reunion_ahora(st, recordar=False)
+        plan = self.plan_grabar({}, st=st, sug=sug)
+        nombre = plan["nombre"]["valor"]
+        apagado = None
+        if not activado:  # sin hablar con Outlook: apagado, Outlook nuevo, sin Outlook o no es Windows
+            e = calendario.estado(False)
+            apagado = (e["estado"], e["frase"])
+        agenda = ag.publica(activado, apagado) if ag is not None else None
+        prep = st.get("preparadas") or {}
+        for c in (agenda or {}).get("citas") or []:  # lo preparado de cada cita («Preparada · Alfa › General»)
+            p = prep.get(self._clave_preparada(c.get("subject"), c.get("start")))
+            if p:
+                c["preparada"] = {x: p[x] for x in ("vocab", "idioma", "contexto") if x in p}
+        return {"ahora": info, "plan": plan, "ultima": self._ultima_vez(nombre) if nombre else None, "agenda": agenda}
+
+    def _agenda_watch(self):
+        """Hilo de la agenda de Outlook (B7): la lee al poco de arrancar, cada AGENDA_CADA s y cuando Hoy la pide."""
+        ag = self.agenda
+        forzado = ag.despertar.wait(5)  # que el arranque no compita con Outlook
+        while True:
+            ag.despertar.clear()
+            try:
+                self._agenda_paso(forzado)
+            except Exception:
+                log_exc()
+            forzado = ag.despertar.wait(60)
+
+    def _agenda_paso(self, forzado=False, entorno=None):
+        """Una vuelta del hilo de la agenda. Con el calendario apagado, se olvida lo leído. Mientras se graba o hay una
+        llamada no se relee (Outlook es de la reunión y el vigilante lo consulta cada minuto), salvo que aún no haya
+        nada. Lo que se sabe sin hablar con Outlook (cerrado, sin pywin32, Outlook nuevo…) se anota sin consultarlo."""
+        ag, st = self.agenda, self.settings.get()
+        if not st.get("outlook_on"):
+            if ag.datos is not None or ag.fallo is not None:
+                ag.olvidar()
+            return
+        if not (forzado or ag.toca()):
+            return
+        ocupado = bool(getattr(self, "rec", None) and self.rec.alive()) or bool(getattr(self, "meeting", None))
+        if ocupado and ag.datos is not None:
+            return
+        sesion = getattr(self, "agenda_sesion", None)
+        if sesion is not None:  # pruebas de la interfaz (CHULETA_PRUEBAS_OUTLOOK)
+            ag.refrescar(session=sesion)
+            return
+        fallo = calendario.sin_leer(entorno or calendario.entorno_outlook())
+        if fallo:
+            ag.anotar(fallo)
+            return
+        ag.refrescar()
 
     # --- edicion de transcripciones
     _tx_save_lock = threading.Lock()
@@ -8492,6 +8686,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/notes": a.notes_get, "/api/tags": a.tags, "/api/summary": a.summary_get,
                   "/api/vocab": a.vocab, "/api/voces": a.voices_state, "/api/hablantes": a.speakers_get,
                   "/api/reunion/actual": a.reunion_actual, "/api/calendario/estado": a.calendario_estado,
+                  "/api/hoy": a.hoy,
                   "/api/perfil": a.perfil_get,
                   "/api/diagnostico": a.diagnostico, "/api/modelos": a.modelos_state, "/api/probar": a.probar_estado,
                   "/api/agente/estado": a.agente_estado,
@@ -8537,6 +8732,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/rec/monitor": a.rec_monitor, "/api/rec/start": a.rec_start, "/api/rec/stop": a.rec_stop,
                   "/api/rec/toggle": a.rec_toggle, "/api/rec/mic": a.rec_mic, "/api/notes": a.notes_save,
                   "/api/grabar/plan": a.grabar_plan_api, "/api/grabar/recordar": a.grabar_recordar,
+                  "/api/hoy/preparar": a.hoy_preparar,
                   "/api/summarize": a.summarize,
                   "/api/favorite": a.favorite, "/api/folder-icon": a.folder_icon, "/api/delete": a.delete,
                   "/api/transcript/save": a.save_transcript, "/api/transcript/restore": a.restore_transcript,

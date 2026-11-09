@@ -374,8 +374,10 @@ class AvisoResumenLocalTests(TempTree):
             self.assertIn('"aviso_local": bool(st.get("aviso_resumen_local"))', f.read())
 
     def test_la_interfaz_lo_ensena_en_inicio(self):
-        app = static("app.js")
-        self.assertIn("${avisoResumenLocalHtml()}\n    <h1>Tus notas de reunión</h1>", app)
+        app, hoy = static("app.js"), static("hoy.js")
+        # Inicio es «Hoy» (B7): el aviso va arriba, antes del título (y en lo mínimo de app.js sin hoy.js)
+        self.assertRegex(hoy, r"avisoResumenLocalHtml\(\) : ''\}\n    <h1>Hoy ")
+        self.assertIn("${avisoResumenLocalHtml()}\n    <h1>Hoy</h1>", app)
         self.assertIn("api('/api/settings', { summary: { aviso_visto: true } })", app)
         self.assertIn("else if (a === 'aviso-sum-ok' || a === 'aviso-sum-ajuste')", app)
 

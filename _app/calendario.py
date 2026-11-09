@@ -660,8 +660,9 @@ def _recorrer(sel, now, lo, hi, max_citas):
     return out, objs, fuera, n
 
 
-def _candidatas(app, now, lo, hi, fmts, max_citas):
-    """Las citas que tocan [lo, hi] (lo no protegido), sus objetos COM y el formato de fecha que ha valido."""
+def _candidatas(app, now, lo, hi, fmts, max_citas, info=None):
+    """Las citas que tocan [lo, hi] (lo no protegido), sus objetos COM y el formato de fecha que ha valido. `info`:
+    dict donde se apunta cuántas se han recorrido ("n"), para saber si se ha cortado en `max_citas`."""
     ns = app.GetNamespace("MAPI")
     items = ns.GetDefaultFolder(OL_FOLDER_CALENDAR).Items
     items.Sort("[Start]")  # orden obligatorio (docs de IncludeRecurrences): ordenar, incluir repeticiones, filtrar
@@ -677,6 +678,8 @@ def _candidatas(app, now, lo, hi, fmts, max_citas):
                     f"{_codigo(e) or ''})")
             continue
         out, objs, fuera, n = _recorrer(sel, now, lo, hi, max_citas)
+        if info is not None:
+            info["n"] = n
         if out or not fuera:
             return out, objs, nombre
         log(f"   calendario: con el formato de fecha {nombre}, Outlook da {fuera} citas fuera de la hora pedida")
@@ -1018,6 +1021,235 @@ def _estado(activado, probar, now, env, session, fmt, timeout):
     return fin("conectado", f"Outlook clásico: conectado · {agenda}{sufijo}", accion, nivel=2)
 
 
+# ----------------------------------------------------------------------------- la agenda de un mes (pantalla Hoy, B7)
+#
+# Bernardo, msg 1390: «que se carguen las siguientes (un mes al menos)». Hasta aquí la app solo leía la reunión de
+# ahora y la agenda de HOY (agenda_hoy), y de esa solo enseñaba una frase («próxima reunión 12:00»): ninguna pantalla
+# listaba las citas (msg 1380, «conecta bien, pero no veo las siguientes reuniones»). Se lee en segundo plano
+# (server._agenda_watch: cada AGENDA_CADA s, y al abrir Hoy si es más vieja que AGENDA_VIEJA) y se guarda en memoria,
+# no en disco: Hoy la enseña sin esperar a Outlook, y la reunión de ahora sale de ella sin otra consulta COM
+# (cita_ahora). Solo lo no protegido (asunto, horas, lugar, categorías, si es periódica): leerla nunca abre el aviso
+# de seguridad de Outlook. A server.log solo van cifras.
+
+AGENDA_DIAS = 31  # desde hoy a las 00:00: «un mes al menos»
+MAX_CITAS_AGENDA = 600  # 20 al día durante un mes; con más, se corta y se dice
+AGENDA_TIMEOUT = 30.0  # s: en segundo plano, Outlook puede tardar en expandir las periódicas de un mes
+AGENDA_CADA = 600  # s entre lecturas en segundo plano
+AGENDA_VIEJA = 120  # s: al abrir Hoy, una lectura más vieja se vuelve a pedir (sin esperarla)
+VENTANA_AHORA = (10, 5)  # minutos hacia delante y hacia atrás: la misma ventana que outlook_current_meeting
+
+
+def _cita_publica(m):
+    return {"subject": m["subject"], "start": m["start"], "end": m["end"], "location": m["location"],
+            "is_teams": m["is_teams"], "recurring": m["recurring"], "categories": list(m["categories"])}
+
+
+def agenda(now=None, dias=AGENDA_DIAS, timeout=AGENDA_TIMEOUT, session=None, fmt=None, max_citas=MAX_CITAS_AGENDA,
+           espera_otra=10.0):
+    """Las citas del Outlook clásico desde hoy a las 00:00 hasta `dias` días vista, por hora, sin nada protegido →
+    ({"citas", "formato", "cortada"}, None) o (None, (estado, frase)). Las de todo el día y las canceladas no cuentan
+    (como en la reunión de ahora). Las periódicas, con el orden de siempre (Sort → IncludeRecurrences → Restrict) y con
+    tope (`max_citas`): una serie sin fin no deja de dar repeticiones. Nunca lanza."""
+    if not WINDOWS and session is None:
+        return None, ("no_windows", FRASES["no_windows"])
+    now = (now or datetime.now()).replace(second=0, microsecond=0)
+    lo = datetime(now.year, now.month, now.day)
+    hi = lo + timedelta(days=dias) - timedelta(minutes=1)
+    fmts = (("dado", fmt),) if fmt else FORMATOS
+
+    def trabajo(app, caja):
+        info = {}
+        cands, _objs, caja["formato"] = _candidatas(app, now, lo, hi, fmts, max_citas, info)
+        caja["cortada"] = info.get("n", 0) >= max_citas
+        caja["cands"] = _copias(cands)
+
+    caja = _en_com(trabajo, timeout, session, espera_otra=espera_otra)
+    cands, fallo = _leer_caja(caja, timeout)
+    if fallo:
+        return None, fallo
+    citas = sorted((_cita_publica(m) for m in cands), key=lambda m: (m["start"], m["end"], m["subject"]))
+    return {"citas": citas, "formato": caja.get("formato"), "cortada": bool(caja.get("cortada"))}, None
+
+
+def cita_ahora(citas, now=None, teams_title=None, window=VENTANA_AHORA):
+    """De la agenda ya leída, la cita que encaja con «ahora», con la misma ventana y la misma preferencia que
+    outlook_current_meeting (elegir_cita: el título de Teams, la que está en curso, la de más solape…), o None."""
+    now = now or datetime.now()
+    lo, hi = now - timedelta(minutes=window[1]), now + timedelta(minutes=window[0])
+    cands = []
+    for c in citas or []:
+        try:
+            s, e = datetime.fromisoformat(c["start"]), datetime.fromisoformat(c["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if s > hi or e < lo:
+            continue
+        cands.append(dict(c, is_now=s <= now <= e, _overlap=(min(e, hi) - max(s, lo)).total_seconds(),
+                          _dist=abs((s - now).total_seconds())))
+    m = elegir_cita(cands, teams_title)
+    return {k: v for k, v in m.items() if not k.startswith("_")} if m else None
+
+
+# lo que Hoy dice en una línea cuando no hay agenda (o es vieja); el resto de estados, con FRASES
+FRASES_AGENDA = {
+    "apagado": f"Activa el calendario de Outlook y {APP_NAME} te enseñará aquí tus reuniones del próximo mes.",
+    "leyendo": "Leyendo tu agenda de Outlook…",
+}
+_ACCION_AGENDA = {"apagado": {"id": "ajustes", "texto": "Ir a Ajustes"},
+                  "reintentar": {"id": "leer", "texto": "Volver a leer"}}
+_REINTENTABLES = ("cerrado", "sin_permiso", "esperando_permiso", "ocupado", "error")
+
+
+class Agenda:
+    """La agenda de un mes leída en segundo plano y guardada en memoria (ver arriba). La lee server._agenda_watch;
+    la consultan /api/hoy y la reunión de ahora (server._reunion_ahora). Si una lectura falla, se queda la última
+    buena (con su hora) y se dice por qué no se ha podido renovar."""
+
+    def __init__(self, leer=None, reloj=time.time):
+        self.leer, self.reloj = leer or agenda, reloj
+        self.lock = threading.Lock()
+        self.datos, self.leida = None, 0.0  # la última lectura buena y cuándo
+        self.intento, self.fallo = 0.0, None  # el último intento y, si falló (o ni se intentó), (estado, frase)
+        self.leyendo = False
+        self.despertar = threading.Event()  # /api/hoy con una agenda vieja: que el hilo lea ya
+        self._log = None  # lo último escrito en server.log (solo se escribe lo que cambia)
+
+    def citas(self):
+        """Copia de las citas leídas (quien las recibe puede anotarlas sin tocar la caché)."""
+        with self.lock:
+            return [dict(c) for c in (self.datos or {}).get("citas") or []]
+
+    def olvidar(self, fallo=None):
+        """El calendario está apagado (o no se puede leer en este PC): fuera lo leído y, si se da, por qué."""
+        with self.lock:
+            self.datos, self.leida, self.fallo = None, 0.0, fallo
+
+    def anotar(self, fallo):
+        """Se sabe sin hablar con Outlook que no se puede leer (cerrado, sin pywin32…): cuenta como un intento."""
+        with self.lock:
+            self.fallo, self.intento = fallo, self.reloj()
+        self._apuntar(f"   calendario: agenda · {fallo[0]} (0 ms)")
+
+    def toca(self, cada=AGENDA_CADA):
+        with self.lock:
+            return not self.leyendo and self.reloj() - self.intento >= cada
+
+    def pedir(self):
+        self.despertar.set()
+
+    def _apuntar(self, linea):
+        if linea.rsplit(" (", 1)[0] != (self._log or "").rsplit(" (", 1)[0]:
+            log(linea)
+        self._log = linea
+
+    def refrescar(self, now=None, **kw):
+        """Una lectura (bloquea mientras dura: se llama desde el hilo de la agenda). True si ha ido bien."""
+        with self.lock:
+            if self.leyendo:
+                return False
+            self.leyendo = True
+        t0 = time.monotonic()
+        try:
+            datos, fallo = self.leer(now=now, **kw)
+        except Exception:  # agenda() no lanza; un doble o un fallo de programación no deja el hilo muerto
+            log_exc()
+            datos, fallo = None, ("error", "No se ha podido leer la agenda de Outlook (detalle en server.log).")
+        ms = int((time.monotonic() - t0) * 1000)
+        with self.lock:
+            self.leyendo, self.intento = False, self.reloj()
+            if datos is not None:
+                self.datos, self.leida, self.fallo = datos, self.intento, None
+            else:
+                self.fallo = fallo
+        if datos is not None:
+            self._apuntar(f"   calendario: agenda · {len(datos['citas'])} citas"
+                          f"{' (cortada)' if datos.get('cortada') else ''} ({ms} ms)")
+        else:
+            self._apuntar(f"   calendario: agenda · {fallo[0]} ({ms} ms)")
+        return datos is not None
+
+    def publica(self, activado, apagado=None):
+        """Lo que enseña Hoy: {estado, frase, accion, citas, leida, cortada, dias}. estado: "ok", "leyendo", "apagado"
+        o el del fallo (FRASES). Con una lectura buena y un intento posterior fallido, las citas de la buena y la
+        frase del fallo («… Lo de abajo es de las 23:10.»). `apagado`: con el calendario apagado, (estado, frase) de
+        estado(False) (apagado, Outlook nuevo, sin Outlook, no es Windows), que no habla con Outlook."""
+        with self.lock:
+            datos, leida, fallo, leyendo = self.datos, self.leida, self.fallo, self.leyendo
+        r = {"estado": "ok", "frase": "", "accion": None, "citas": [], "leida": None, "cortada": False,
+             "dias": AGENDA_DIAS}
+        if not activado:
+            estado_, frase = apagado if apagado and apagado[0] != "apagado" else ("apagado", FRASES_AGENDA["apagado"])
+            return dict(r, estado=estado_, frase=frase,
+                        accion=dict(_ACCION_AGENDA["apagado"]) if estado_ == "apagado" else None)
+        if datos is not None:
+            r.update(citas=[dict(c) for c in datos.get("citas") or []], cortada=bool(datos.get("cortada")),
+                     leida=datetime.fromtimestamp(leida).isoformat(timespec="minutes"))
+            if fallo:
+                hora = datetime.fromtimestamp(leida)
+                r.update(estado=fallo[0], frase=f"{fallo[1]} Lo de abajo es de las {_hora(hora)}.",
+                         accion=dict(_ACCION_AGENDA["reintentar"]) if fallo[0] in _REINTENTABLES else None)
+            return r
+        if fallo and not leyendo:
+            return dict(r, estado=fallo[0], frase=fallo[1],
+                        accion=dict(_ACCION_AGENDA["reintentar"]) if fallo[0] in _REINTENTABLES else None)
+        return dict(r, estado="leyendo", frase=FRASES_AGENDA["leyendo"])
+
+
+# --- un Outlook falso para las pruebas de la interfaz (tests/test_ui_hoy.py, con CHULETA_PRUEBAS_OUTLOOK=<json>):
+# la app de verdad, con su hilo y su caché, leyendo citas de un fichero en vez de Outlook. Sin la variable no se usa.
+
+class _CitaPrueba:
+    def __init__(self, d, now):
+        self.AllDayEvent, self.MeetingStatus = bool(d.get("todo_el_dia")), 5 if d.get("cancelada") else 1
+        if "en" in d:  # minutos desde ahora, redondeado a 5 min (la reunión de ahora)
+            ini = now + timedelta(minutes=int(d["en"]))
+            ini = ini.replace(minute=ini.minute - ini.minute % 5)
+        else:  # {"dia": 1, "hora": "10:00"}: días desde hoy y la hora
+            h, m = (int(x) for x in str(d.get("hora") or "10:00").split(":"))
+            ini = datetime(now.year, now.month, now.day, h, m) + timedelta(days=int(d.get("dia") or 0))
+        self.Subject, self.Start = str(d.get("asunto") or ""), ini
+        self.End = ini + timedelta(minutes=int(d.get("duracion") or 60))
+        self.Location = str(d.get("lugar") or "Reunión de Microsoft Teams")
+        self.Categories, self.IsRecurring = str(d.get("categorias") or ""), bool(d.get("periodica"))
+
+
+class _ItemsPrueba:
+    def __init__(self, citas):
+        self._c, self._i, self.IncludeRecurrences = list(citas), 0, False
+
+    def Sort(self, prop, desc=False):
+        self._c.sort(key=lambda c: c.Start, reverse=bool(desc))
+
+    def Restrict(self, flt):
+        return _ItemsPrueba(self._c)
+
+    def GetFirst(self):
+        self._i = 0
+        return self.GetNext()
+
+    def GetNext(self):
+        if self._i >= len(self._c):
+            return None
+        self._i += 1
+        return self._c[self._i - 1]
+
+
+def sesion_de_prueba(path):
+    """sesion() para agenda(): las citas de `path` (JSON: [{asunto, en | dia + hora, duracion, lugar, periodica,
+    cancelada, todo_el_dia}]) con las horas relativas a cada lectura."""
+    import json
+    import types
+
+    def sesion():
+        with open(path, encoding="utf-8") as f:
+            datos = json.load(f)
+        now = datetime.now().replace(second=0, microsecond=0)
+        items = _ItemsPrueba(_CitaPrueba(d, now) for d in datos)
+        ns = types.SimpleNamespace(GetDefaultFolder=lambda n: types.SimpleNamespace(Items=items))
+        return types.SimpleNamespace(GetNamespace=lambda name: ns)
+    return sesion
+
+
 # ----------------------------------------------------------------------------- sugerencia (nombre, tema, participantes)
 
 _GENERICOS = frozenset(("general", "notas", "reunion", "reunión", "meeting", "proyecto", "equipo", "team"))
@@ -1104,6 +1336,59 @@ def reunion_actual(settings, vocab_lists, outlook=None, now=None, timeout=8.0, t
     return {"teams": {"title": titulo} if titulo else None, "outlook": cita, "sugerencia": sug, "reason": reason}
 
 
+def _mismo_asunto(a, b):
+    a, b = fold(a or "").strip(), fold(b or "").strip()
+    return bool(a and b and (a == b or a in b or b in a))
+
+
+def reunion_de_ahora(lectura, citas, vocab_lists, now=None):
+    """La reunión de ahora para el plan de grabar y para Hoy → (sugerencia, info).
+
+    `lectura`: la del vigilante o reunion_actual (Teams y, durante una llamada con el calendario encendido, la cita de
+    Outlook). `citas`: la agenda ya leída (Agenda.citas()). `vocab_lists`: las listas de suggest, o una función que las
+    da (solo se leen si hacen falta). Si la lectura da nombre, manda, porque es lo que se ve en pantalla; si no, la
+    cita de la agenda que encaja con ahora (cita_ahora), con fuente "outlook" y sin asistentes (la agenda no los lee).
+    info: {titulo, fuente, teams (hay ventana de reunión de Teams), inicio, fin (ISO, de la cita si es la misma
+    reunión), en_curso, periodica}, o None si no hay reunión."""
+    lectura = lectura or {}
+    now = now or datetime.now()
+    sug = dict(lectura.get("sugerencia") or {})
+    teams = (lectura.get("teams") or {}).get("title") or None
+    cita = lectura.get("outlook") or cita_ahora(citas, now, teams)
+    if not sug.get("name") and cita and (cita.get("subject") or "").strip():
+        sug = suggest(cita, vocab_lists() if callable(vocab_lists) else vocab_lists)
+        sug["source"] = "outlook"
+    if not sug.get("name"):
+        return sug, None
+    info = {"titulo": sug["name"], "fuente": sug.get("source") or "teams", "teams": bool(teams), "inicio": None,
+            "fin": None, "en_curso": True, "periodica": False}
+    if cita and (not teams or _mismo_asunto(cita.get("subject"), teams)):
+        try:
+            s, e = datetime.fromisoformat(cita["start"]), datetime.fromisoformat(cita["end"])
+        except (KeyError, TypeError, ValueError):
+            s = e = None
+        if s and e:
+            info.update(inicio=cita["start"], fin=cita["end"], en_curso=bool(teams) or s <= now <= e,
+                        periodica=bool(cita.get("recurring")))
+    return sug, info
+
+
+def sin_leer(env):
+    """(estado, frase) si lo que se sabe sin hablar con Outlook (entorno_outlook) ya dice que no se puede leer: no es
+    Windows, falta pywin32, no está el Outlook clásico, usa el nuevo o el clásico está cerrado. None: hay que probar."""
+    if not env.get("windows"):
+        return "no_windows", FRASES["no_windows"]
+    nuevo = bool(env.get("nuevo_activado") or env.get("nuevo_abierto"))
+    if env.get("instalado") is False:
+        return ("outlook_nuevo", FRASES["outlook_nuevo"]) if nuevo else ("sin_outlook", FRASES["sin_outlook"])
+    if not env.get("pywin32"):
+        return "sin_pywin32", FRASES["sin_pywin32"]
+    if env.get("abierto") is False:
+        return ("outlook_nuevo", FRASES["outlook_nuevo"]) if env.get("nuevo_abierto") else (
+            "cerrado", FRASES["cerrado"])
+    return None
+
+
 # ----------------------------------------------------------------------------- aviso flotante (vigilante del servidor)
 
 def decidir_aviso(app, recording, activado, abierto, avisado):
@@ -1141,17 +1426,24 @@ class Vigia:
         with self.lock:
             return [list(p) for t, p in self.historial if ahora - t <= max_age]
 
-    def sugerencia(self, leer, max_age=90):
-        """La sugerencia de la última lectura si es reciente; si no, `leer()` (rápida: solo Teams)."""
+    def lectura(self, leer, max_age=90, recordar=True):
+        """La última lectura entera ({teams, outlook, sugerencia, reason}) si es reciente; si no, `leer()` (rápida:
+        solo Teams), que se guarda como la última salvo con `recordar=False`. {} si falla."""
         with self.lock:
             r = self.ultimo if self.ultimo and time.time() - self.ultimo_at <= max_age else None
         if r is None:
             try:
-                r = self.recordar(leer())
+                r = leer()
+                if recordar:
+                    self.recordar(r)
             except Exception:
                 log_exc()
                 return {}
-        return dict(r.get("sugerencia") or {})
+        return r or {}
+
+    def sugerencia(self, leer, max_age=90):
+        """La sugerencia de la última lectura si es reciente; si no, `leer()` (rápida: solo Teams)."""
+        return dict(self.lectura(leer, max_age).get("sugerencia") or {})
 
     def abierto(self):
         return bool(self.proc and self.proc.poll() is None)

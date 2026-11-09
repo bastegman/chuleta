@@ -98,6 +98,13 @@ USO DIARIO
     Si cierras la ventana, la app sigue ahí (Ctrl+Alt+R sigue funcionando): un clic en el icono o
     el acceso directo la vuelven a abrir. Para salir del todo: clic derecho en el icono > Salir
     (o ⚙ Ajustes > Ayuda > Apagar Tenca). En ese menú también está "Arrancar con Windows".
+  - La app abre en "Hoy": arriba, la reunión en la que estás (de Teams o de tu calendario de
+    Outlook) con su proyecto y su idioma, que puedes cambiar, y "Grabar", que empieza ya; si la
+    reunión se repite, lo que quedó abierto la última vez. Debajo, lo que pide algo de ti (sin
+    transcribir, voces sin nombre, sin proyecto…), cada cosa con su botón, y lo de esta semana.
+    Con el calendario activado (Ajustes > Calendario y Teams), también tu agenda del próximo mes
+    (y en "Calendario"), donde puedes "Preparar" una reunión: su proyecto, su idioma y su
+    contexto se usarán al grabarla. La agenda se lee en segundo plano y no sale del PC.
   - ● Grabar abre una tarjeta que dice qué va a pasar: la reunión (el nombre de Teams, de tu
     calendario o el que escribas, con tus reuniones recientes como sugerencia), el proyecto y,
     debajo, "Así se va a grabar": dónde se guarda, idioma, vocabulario, quién transcribe, quién

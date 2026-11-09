@@ -138,7 +138,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         self.assertEqual(pg.url, self.base + "/")  # ?t= entrega la cookie y redirige
         self.assertEqual(pg.title(), "Tenca")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
         # «Arrancar con Windows» (bandeja): sin la app instalada (aquí, y fuera de Windows) la casilla sale desactivada
@@ -174,7 +174,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("[data-nav='c']")
         pg.wait_for_function("location.hash === '#/c/'", timeout=5000)
         pg.click("[data-nav='home']")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=5000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=5000)
         pg.click("#btnRec")
         pg.wait_for_selector("#modal:not(.hidden) .dialog.gr", timeout=5000)
         self.assertIn("Nueva grabación", pg.text_content("#modal"))
@@ -191,7 +191,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         contra un puerto cerrado, con su frase y su botón) y nada se guarda hasta terminar."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         antes = pg.evaluate("api('/api/config')")["procesado"]
         pg.evaluate("abrirConfigurar()")
         pg.wait_for_selector(".dialog.wz h2:has-text('¿Dónde se procesan tus reuniones?')", timeout=5000)
@@ -269,7 +269,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             route.fulfill(json={"error": "grabadora de prueba"}, status=400)  # no se graba: solo se mira el cuerpo
         pg.route("**/api/rec/start", start)
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnRec")
         pg.wait_for_selector(".dialog.gr .gr-cargando", timeout=5000)  # «Buscando la reunión de Teams…»
         # no espera a la reunión más de ~2 s: se pinta el plan igualmente
@@ -338,7 +338,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         (respuesta simulada), marcarlo lo aplica al momento, sin «Guardar», y lo dice."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.click(".aj-nav [data-sec='calendario']")
         pg.wait_for_selector("#agOcultar", state="visible", timeout=10000)
@@ -395,7 +395,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.route("**/api/calendario/estado*", lambda r: r.fulfill(json=apagado))
         pg.route("**/api/calendario/activar", activar)
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#agFilas .gr-fila[data-fila='idioma']", timeout=10000)
         if PERMITIDAS:  # sin grabadora la lista de dispositivos no llega: una frase, no el error de Python
@@ -521,7 +521,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         momento. Y la carpeta de un workstream también se elige en su fila."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.click(".aj-nav [data-sec='proyectos']")
         pg.wait_for_selector("#pjTabla [data-pj-editar='Proyecto']", timeout=10000)
@@ -578,7 +578,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg, errores, red = self.pagina()
         pg.route("**/api/inicio-windows", lambda r: r.fulfill(json={"activado": True}))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#agFilas .gr-fila[data-fila='resume']", timeout=10000)
         pg.wait_for_function("document.querySelector('#sInicioWin').checked", timeout=5000)
@@ -617,7 +617,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg, errores, red = self.pagina()
         self.addCleanup(lambda: pg.unroute_all(behavior="ignoreErrors"))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         cfg = pg.evaluate("api('/api/config')")
         lang, otro = cfg["language"], "pt" if cfg["language"] != "pt" else "de"
         self.addCleanup(pg.evaluate, "b => api('/api/settings', b)", {"language": lang, "rec_sys": cfg["rec_sys"]})
@@ -812,7 +812,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         apagar = []
         pg.route("**/api/apagar", lambda r: (apagar.append(r.request.url), r.abort()))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         encima = "#modalSobre:not(.hidden) .dialog"
 
         def abrir(texto):
@@ -920,7 +920,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         «Guardar» guarda. Antes volvía con la configuración vieja: «(no se encuentra)» y «Guardar» daba 400."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         uno = pg.evaluate("api('/api/vocab/save', { project: 'Cliente R11', name: 'Legal', terms: 'x' })")["id"]
         self.addCleanup(pg.evaluate, "() => Promise.allSettled(['Legal', 'Legal 2'].map(n =>"
                         " api('/api/vocab/delete', { id: `Cliente R11/Vocabulario/${n}.txt` })))")
@@ -970,7 +970,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         adicional, la clave misma) y todo si el guardado falla."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         cfg = pg.evaluate("api('/api/config')")
         antes = {k: cfg[k] for k in ("procesado", "preset", "live_preset", "prompt")}
         self.addCleanup(pg.evaluate, "b => api('/api/settings', b)", antes)
@@ -1160,7 +1160,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         elegida y sin guardar, lleva a Procesado con esa opción marcada y su selector de modelo a la vista."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.click(".aj-nav [data-sec='procesado']")
         pg.click("#modal [data-cfg='cambiar']")
@@ -1182,7 +1182,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.route("**/api/reunion/actual", lambda r: r.fulfill(json=nada))
         pg.route("**/api/rec/monitor", lambda r: r.fulfill(json={"ok": True}))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         antes = pg.evaluate("api('/api/config')")["procesado"]
         self.addCleanup(pg.evaluate, "m => api('/api/settings', {procesado: m}).then(setConfig)", antes)
         pg.evaluate("api('/api/settings', {procesado: 'api'}).then(setConfig)")
@@ -1216,7 +1216,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         archivo»). Con la función real de notas.js y las listas de /api/vocab sustituidas en la página."""
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         self.assertEqual(sorted(pg.evaluate("S.config.root_names")), ["Chuleta", "Notas", "Tenca"])
         r = pg.evaluate("""() => {
           const antes = S.vocab;
@@ -1253,7 +1253,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.route("**/api/reunion/actual", lambda r: r.fulfill(json=nada))
         pg.route("**/api/rec/monitor", lambda r: r.fulfill(json={"ok": True}))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         self.assertEqual(pg.evaluate("[APP_NAME, rootName(), folderName('')]"), ["Tenca", "Chuleta", "Chuleta (raíz)"])
         self.assertEqual(pg.title(), "Tenca")
         pg.click("#btnRec")
@@ -1282,7 +1282,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg, errores, red = self.pagina()
         pg.route("**/api/vocab*", lambda r: r.fulfill(status=500, json={"error": "OneDrive no responde"}))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("[data-secc='algrabar'] .ag-sin-listas", timeout=10000)
         self.assertIn("solo se puede comprobar «Sin proyecto»", pg.inner_text("[data-secc='algrabar'] .ag-sin-listas"))
@@ -1316,7 +1316,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, omega, True)
         self.addCleanup(shutil.rmtree, fuera, True)
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         perfil = {"folder": "Omega/Clientes", "vocab": "Omega/Vocabulario/Gen.txt"}
         pg.evaluate("p => api('/api/settings', {perfil: p})", perfil)
         # al terminar, como estaba (antes de cerrar la página: las limpiezas van al revés)
@@ -1324,7 +1324,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
                                      " summary: {extra: ''}})")
         os.rename(omega, fuera)  # ahora no se encuentran
         pg.reload(wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         # el árbol del servidor se lee como mucho cada segundo: hasta que ya no tenga la carpeta
         pg.wait_for_function("refreshTree(true).then(() => !S.folders.has('Omega/Clientes'))", polling=500,
                              timeout=10000)
@@ -1357,7 +1357,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.route("**/api/rec/devices*", lambda r: r.fulfill(json=devs))
         pg.set_viewport_size({"width": 900, "height": 600})
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#agFilas .gr-fila[data-fila='transcribe']", timeout=10000)
         self.assertTrue(pg.evaluate("document.activeElement.matches('.aj-nav [data-sec].on')"))
@@ -1427,7 +1427,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pendientes = []
         pg.route("**/api/rec/devices*", lambda r: pendientes.append(r))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_function("document.querySelector('#agFilas .gr-fila')", timeout=10000)
         pendientes.pop(0).fulfill(json=devs)
@@ -1471,7 +1471,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.route("**/api/agente/estado", lambda r: r.fulfill(json={
             "encontrado": True, "label": "Claude Code", "origen": "Claude Code de VS Code"}))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.click(".aj-nav [data-sec='procesado']")
         pg.check("#modal input[name='proc'][value='agente']")
@@ -1515,7 +1515,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         nada = {"teams": None, "outlook": None, "reason": None, "sugerencia": {}}
         pg.route("**/api/reunion/actual", lambda r: r.fulfill(json=nada))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         # (dentro de una función: evaluate llama a la función si la expresión acaba en una)
         pg.evaluate("() => { window.vocabLlamadas = 0; window.vocabConectar = after => { window.vocabLlamadas++;"
                     " setTimeout(after, 50); }; }")
@@ -1611,7 +1611,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.assertEqual((r["listas"], [a["motivo"] for a in r["avisos"]]), (1, ["grande"]))
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
         pg.click(".aj-nav [data-sec='proyectos']")
@@ -1649,7 +1649,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         self.api_post("/api/settings", {"perfil": {"vocab": vid}})
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
         self.assertEqual(pg.input_value("#pfVocab"), vid)
@@ -1710,7 +1710,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         errores = []
         pg.on("pageerror", lambda e: errores.append(f"pageerror: {e}"))
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.evaluate("location.hash = '#/a/' + encodeURIComponent('Reuniones/2026-11-06 10-00-00 - Comite.wav')")
         pg.wait_for_selector("[data-act='sum-copy']:has-text('Copiar para correo')", timeout=15000)
         pg.click("[data-act='sum-copy']")
@@ -1776,7 +1776,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         # new_page del test siguiente (ui-smoke de Windows, run 42686380142)
         self.addCleanup(pg.unroute_all, behavior="ignoreErrors")
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         pg.evaluate("p => location.hash = '#/a/' + encodeURIComponent(p)", rel)
         pg.wait_for_function("document.querySelector('#aJob') && document.querySelector('#aJob').innerText"
                              ".includes('Identificando voces')", timeout=15000)

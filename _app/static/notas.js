@@ -903,7 +903,8 @@ function viewCalendar(ym) {
     cells += `<div class="cday${d.getMonth() !== m - 1 ? ' out' : ''}${key === today ? ' today' : ''}"><div class="cnum">${d.getDate()}</div>`
       + list.slice(0, 4).map(a => { const dd = aDate(a); return `<div class="cev st-${statusOf(a)}" data-go="a" data-path="${esc(a.path)}" title="${esc(fullTitle(a))}">`
         + `<span class="ct">${dd ? `${pad(dd.getHours())}:${pad(dd.getMinutes())}` : ''}</span>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(titleOf(a) || nfc(a.label || '') || fmtDur(estDuration(a)))}</div>`; }).join('')
-      + (list.length > 4 ? `<div class="cmore" data-act="cal-day" data-day="${key}">+${list.length - 4} más</div>` : '') + '</div>';
+      + (list.length > 4 ? `<div class="cmore" data-act="cal-day" data-day="${key}">+${list.length - 4} más</div>` : '')
+      + (typeof hoyCalDia === 'function' ? hoyCalDia(key) : '') + '</div>';  // las citas de Outlook que vienen (hoy.js)
   }
   main.innerHTML = `<div class="page wide">
     <div class="db-head"><h1>${I.calendar}${MESES[m - 1][0].toUpperCase() + MESES[m - 1].slice(1)} ${y}</h1>${dbTabs('c')}
@@ -922,7 +923,7 @@ main.addEventListener('click', e => {
 /* ---------------------------------------------------------------- busqueda rapida (Ctrl+P) */
 const ACTIONS = [
   ['<i class="recdot"></i>', 'Grabar ahora', () => openRec()], [I.list, 'Reuniones', () => go('r', '')], [I.calendar, 'Calendario', () => go('c', '')],
-  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar' })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
+  [I.home, 'Hoy', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar' })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
   [I.clipboard, 'Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
 function paletteItems(q) {
   const f = fold(q.trim()), out = [];

@@ -31,6 +31,10 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPR
 - **Dónde se procesa, lo eliges tú**: solo en este PC (nada sale de él), con tu cuenta de Claude (resumen con tu
   suscripción a través de Claude Code, con el paso a paso dentro de la app) o con una API externa; las dos últimas,
   con su aviso.
+- **Hoy**: la pantalla de inicio. La reunión de ahora (de Teams o de tu calendario de Outlook) con su proyecto y su
+  idioma y «Grabar», que empieza ya; si se repite, lo que quedó abierto la última vez; lo que pide algo de ti, cada
+  cosa con su botón; esta semana; y, con el calendario activado, tu agenda del próximo mes, leída en segundo plano,
+  con «Preparar» para dejar elegidos el proyecto, el idioma y el contexto de una reunión que aún no ha empezado.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
 - **Vocabulario** por proyecto y workstream para que Whisper escriba bien nombres y siglas. Las listas se escriben en
   la app o se leen de una carpeta tuya («Usar las listas de una carpeta…»: cada `.txt` es un workstream y se lee en

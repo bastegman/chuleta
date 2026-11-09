@@ -59,6 +59,15 @@ def norm_titulo(s):
     return " ".join(fold(s or "").split())
 
 
+_TAREA_ABIERTA = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[ \][ \t]*\S", re.M)  # sin saltar de línea
+
+
+def tareas_abiertas(texto):
+    """Las tareas sin hacer de un resumen: las líneas «- [ ] Responsable: tarea» de «Próximos pasos» (el formato que
+    pide engines al resumir) que nadie ha marcado como hechas («- [x]»). Para «La última vez» de Hoy."""
+    return len(_TAREA_ABIERTA.findall(texto or ""))
+
+
 def ruta_txt(rel, links=None, raiz=None):
     """Cómo se enseña una carpeta interna: «Tenca\\Proyecto Alfa\\Reuniones\\» o, en una vinculada,
     «<su nombre>\\sub\\». `links`: id -> nombre de las vinculadas. `raiz`: cómo se llama de verdad la carpeta de la app
@@ -133,6 +142,25 @@ def _unir_local(nombres):
     return ("; " if any("," in n for n in nombres) else ", ").join(nombres)
 
 
+def con_preparada(pedido, prep):
+    """El pedido con lo preparado en Hoy para esta reunión («Preparar» en la agenda: proyecto, idioma y contexto) en lo
+    que el pedido no traiga ya: lo cambiado en la tarjeta o en los chips de Hoy manda. `preparada` dice qué viene de
+    ahí (para que cada línea diga «preparado en Hoy»)."""
+    pedido = dict(pedido or {})
+    cambios, de_prep = dict(pedido.get("cambios") or {}), []
+    if "vocab" in (prep or {}) and "vocab" not in pedido:
+        pedido["vocab"] = prep["vocab"]
+        de_prep.append("vocab")
+    for k in ("idioma", "contexto"):
+        if k in (prep or {}) and k not in cambios:
+            cambios[k] = prep[k]
+            de_prep.append(k)
+    pedido["cambios"] = cambios
+    if de_prep:
+        pedido["preparada"] = de_prep
+    return pedido
+
+
 def proyecto_txt(v):
     return f"{v['project']} › {v['name']}" if v else "Sin proyecto"
 
@@ -169,6 +197,7 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     # «cambiado para esta reunión»; al subir varios audios a la vez, para todos ellos
     esta = "estas reuniones" if subir and pedido.get("varios") else "esta reunión"
     cambios = {k: v for k, v in (pedido.get("cambios") or {}).items() if k in CLAVES_CAMBIOS}
+    prep = set(pedido.get("preparada") or ())  # lo que viene de «Preparar» en la agenda de Hoy (con_preparada)
     por_id = {v["id"]: v for v in listas or []}
     historial = historial or []
     motores = motores or {}
@@ -196,6 +225,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         want = str(pedido.get("vocab") or "")
         if not want or want in por_id:
             vid, p_origen, motivo = want, "elegido", "elegido por ti" if want else "sin proyecto, elegido por ti"
+            if "vocab" in prep:  # su propio origen: en la tarjeta no es «cambiado aquí» (no hay nada que quitar)
+                p_origen, motivo = "preparada", "preparado en Hoy" if want else "sin proyecto, preparado en Hoy"
     if vid is None and nombre:
         k = norm_titulo(nombre)
         h = next((h for h in historial if norm_titulo(h["titulo"]) == k and h["vocab"] in por_id), None)
@@ -249,6 +280,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         cambios.pop("idioma")  # uno que no vale (rec_start lo dejaría en «detectar»): no se enseña como si se usara
     if "idioma" in cambios:
         lang, l_origen, l_txt = str(cambios["idioma"] or "").strip().lower(), "reunion", f"cambiado para {esta}"
+        if "idioma" in prep:
+            l_origen, l_txt = "preparada", "preparado en Hoy"
     elif v and v["id"] in (st.get("workstream_langs") or {}):
         lang, l_origen, l_txt = st["workstream_langs"][v["id"]], "workstream", "del workstream"
     elif v and v["project"] in (st.get("project_langs") or {}):
@@ -273,6 +306,8 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
     # --- contexto: esta reunión › Ajustes
     if "contexto" in cambios:
         ctx, x_origen, x_txt = str(cambios["contexto"] or ""), "reunion", f"cambiado para {esta}"
+        if "contexto" in prep:
+            x_origen, x_txt = "preparada", "preparado en Hoy"
     else:
         ctx = str((st.get("perfil") or {}).get("context") or "")
         x_origen, x_txt = "ajustes", "Ajustes › Al grabar"

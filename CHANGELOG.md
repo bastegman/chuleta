@@ -10,6 +10,33 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Hoy, con un mes de agenda de Outlook (09/11/2026)
+
+Bernardo, msg 1380: el calendario «conecta bien al parecer, pero no veo las siguientes reuniones»; msg 1390: «que se
+carguen las siguientes (un mes al menos)». Rama `hoy` (rediseño B7).
+
+- **Causa del «no veo las siguientes reuniones»**: la lectura de Outlook estaba bien (su «Probar» daba la agenda, las
+  horas y los asistentes bien), pero solo pedía las citas de hoy y de ellas solo enseñaba una frase («próxima reunión
+  12:00»). Ninguna pantalla listaba las citas: «Calendario» es el de las reuniones grabadas.
+- **Nuevo: Inicio pasa a ser «Hoy»**. Arriba, la reunión de ahora (la de Teams o la cita de Outlook en curso o a punto
+  de empezar) con su proyecto y su idioma, que se pueden cambiar, y «Grabar», que empieza ya con lo que se ve: el mismo
+  cálculo que la tarjeta de Grabar y Ctrl+Alt+R. Si la reunión se repite, «La última vez (vie 30 oct): 3 tareas
+  abiertas · ver resumen» (las «- [ ]» de su resumen). Debajo, «Para revisar» (de los últimos 30 días: sin transcribir,
+  a medias, con error, voces sin nombre, resumen fallido, sin proyecto, cada una con su botón), «Esta semana» por día y
+  la agenda de Outlook de los próximos 31 días por día (una semana a la vista y «Ver el resto del mes»).
+- La agenda se lee en segundo plano (al arrancar, cada 10 min y al abrir Hoy si tiene más de 2 min), se guarda solo en
+  memoria y no lee nada protegido: nunca abre el aviso de seguridad de Outlook. Mientras se graba o hay una llamada no
+  se relee. Si Outlook está cerrado o no se puede leer, Hoy funciona igual y lo dice en una línea; si ya había una
+  lectura, la enseña con su hora.
+- Sin Teams, la reunión de ahora (para el nombre y el proyecto al grabar, también con Ctrl+Alt+R y el aviso) sale de
+  la agenda ya leída, sin otra consulta a Outlook.
+- Sin reuniones: «Graba tu primera reunión», con el botón, Ctrl+Alt+R, el aviso de Teams y «o arrastra aquí un audio».
+- Fuera de Inicio: las cuatro cifras, la ruta del disco, el selector de modelos (cada fila de «Para revisar» transcribe
+  con el de siempre), las carpetas (siguen a la izquierda) y «Visto recientemente» (sigue en Ctrl+P).
+- Desarrollo y CI: `tests/test_hoy.py` (la agenda con el COM falso, la caché, /api/hoy y hoy.js con node) y
+  `tests/test_ui_hoy.py` (en `ui-smoke.yml`: la app de verdad con `CHULETA_PRUEBAS_OUTLOOK=tests/fake_outlook/agenda.json`,
+  capturas vacía y llena a 1500×920 y 900×600). `test_calendario_windows` mide la agenda con pywin32 real sin Office.
+
 ### Memoria con audios largos (09/11/2026)
 
 Bernardo subió un audio viejo de 55 min (msg 1378): la transcripción en la nube salió bien, pero «Quién habla» se quedó

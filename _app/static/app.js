@@ -834,32 +834,15 @@ function avisoResumenLocalVisto(irAlAjuste) {
 }
 
 function viewHome() {
-  const t = S.tree, all = allAudios();
-  const pending = all.filter(a => (!(a.txt || a.srt) || a.partial) && !jobFor(a.path) && !a.recording);
-  const done = all.filter(a => a.txt || a.srt).length;
-  const secs = sum(all, estDuration);
-  const recent = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.mtime - a.mtime).slice(0, 8);
-  const pct = all.length ? Math.round(100 * done / all.length) : 0;
-  const lives = liveAudios(), loose = ownAudios(t).filter(a => !isLive(a));
+  // Inicio es «Hoy» (rediseño B7, hoy.js): la reunión de ahora, lo que pide algo de ti, esta semana y la agenda de
+  // Outlook. Sin hoy.js, lo mínimo: los avisos y lo último que se ha grabado
+  if (typeof viewHoy === 'function') return viewHoy();
+  const all = allAudios(), recent = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.mtime - a.mtime).slice(0, 8);
   main.innerHTML = `<div class="page">
-    ${lives.map(liveBanner).join('')}
-    ${typeof avisoProbarHtml === 'function' ? avisoProbarHtml() : ''}
+    ${liveAudios().map(liveBanner).join('')}
     ${avisoResumenLocalHtml()}
-    <h1>Tus notas de reunión</h1>
-    <div class="meta">${esc(S.config.root)} · <a href="#" data-act="palette">Ctrl+P para buscar</a></div>
+    <h1>Hoy</h1>
     ${welcomeCard(all)}
-    ${recentCards()}
-    <div class="stats">
-      <div class="card stat"><div class="v">${all.length}</div><div class="l">reuniones</div></div>
-      <div class="card stat"><div class="v">${fmtHours(secs)} h</div><div class="l">de audio</div></div>
-      <div class="card stat"><div class="v">${pct} %</div><div class="l">transcritas (${done})</div><div class="bar"><i style="width:${pct}%"></i></div></div>
-      <div class="card stat"><div class="v">${pending.length}</div><div class="l">sin transcribir</div></div>
-    </div>
-    ${loose.length ? `<h2>Sin clasificar <span class="count">${loose.length}</span><span class="muted" style="font-weight:400;font-size:12.5px">· arrástralos a una carpeta de la izquierda</span></h2>${alist(loose)}` : ''}
-    ${pending.length ? `<h2>Pendientes de transcribir <span class="count">${pending.length}</span></h2>${txBox(pending, 'Transcribir todos los pendientes', { resume: true })}<div style="height:12px"></div>${alist(pending, { folder: true })}` : ''}
-    <h2>Carpetas <span class="count">${subFolders(t).length}</span>
-      <button class="btn sm" data-act="new-folder" data-path="" style="margin-left:auto">${I.plus}Nueva carpeta</button></h2>
-    <div class="fgrid">${subFolders(t).map(fcard).join('')}</div>
     <h2>Recientes</h2>${alist(recent, { folder: true })}
   </div>`;
 }

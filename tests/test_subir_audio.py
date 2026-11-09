@@ -733,7 +733,7 @@ class SubirEnLaInterfazTests(unittest.TestCase):
         pg.on("console", lambda m: self.errores.append(m.text) if m.type == "error" else None)
         pg.on("pageerror", lambda e: self.errores.append(f"pageerror: {e}"))
         pg.goto(f"{self.s.base}/?t={self.s.token}", wait_until="load")
-        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        pg.wait_for_selector("#main h1:has-text('Hoy')", timeout=15000)
         return pg
 
     def captura(self, pg, nombre):

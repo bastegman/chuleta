@@ -115,6 +115,18 @@ class Pywin32RealTests(unittest.TestCase):
         self.assertEqual(calendario.estado(True)["estado"], "sin_outlook")  # sin «Probar», basta el registro
         self.assertEqual(calendario.estado(False)["estado"], "sin_outlook")  # sin Outlook no se ofrece activarlo
 
+    def test_agenda_real_sin_outlook(self):
+        """La agenda de un mes de Hoy (B7) por el camino de verdad (pywin32 y el hilo COM): sin Outlook, «sin_outlook»
+        deprisa; y lo que el hilo de la agenda sabe sin hablar con Outlook (sin_leer) dice lo mismo."""
+        t0 = time.monotonic()
+        datos, fallo = calendario.agenda()
+        dt = time.monotonic() - t0
+        artefacto("agenda.json", {"fallo": fallo, "segundos": round(dt, 2)})
+        self.assertEqual((datos, fallo[0]), (None, "sin_outlook"))
+        self.assertIn("no tiene el Outlook clásico", fallo[1])
+        self.assertLess(dt, 10)
+        self.assertEqual(calendario.sin_leer(calendario.entorno_outlook())[0], "sin_outlook")
+
     def test_reunion_actual_real_sin_outlook(self):
         t0 = time.monotonic()
         m, reason = calendario.outlook_current_meeting()
