@@ -64,7 +64,7 @@ class CapasTests(unittest.TestCase):
                           links={"abc": "OneDrive Alfa"})
         self.assertEqual(vistos[0]["id"], AI)  # la lista elegida, entera
         l = lineas(p)["carpeta"]
-        self.assertEqual((l["rel"], l["valor"], l["origen_txt"]), ("Alfa/R", "Chuleta\\Alfa\\R\\", "carpeta de Alfa"))
+        self.assertEqual((l["rel"], l["valor"], l["origen_txt"]), ("Alfa/R", "Tenca\\Alfa\\R\\", "carpeta de Alfa"))
         p = resolver(pedido={"vocab": AI, "cambios": {"carpeta": ":abc/Actas"}}, links={"abc": "OneDrive Alfa"})
         l = lineas(p)["carpeta"]
         self.assertEqual((l["rel"], l["valor"], l["origen"]), (":abc/Actas", "OneDrive Alfa\\Actas\\", "reunion"))
@@ -74,7 +74,7 @@ class CapasTests(unittest.TestCase):
         p = resolver(pedido={"nombre": "Comité", "vocab": A},
                      carpeta_reunion=lambda base, nombre: f"{base}/2026-11-07 {nombre}")
         l = lineas(p)["carpeta"]
-        self.assertEqual(l["valor"], "Chuleta\\Alfa\\Reuniones\\2026-11-07 Comité\\")
+        self.assertEqual(l["valor"], "Tenca\\Alfa\\Reuniones\\2026-11-07 Comité\\")
         self.assertEqual(p["rec"]["folder"], "Alfa/Reuniones")  # rec_start crea la de la reunión en la base
 
     def test_transcribe_resume_y_audio(self):
@@ -230,7 +230,7 @@ class HistorialTests(unittest.TestCase):
     def test_textos(self):
         self.assertEqual(plan.fecha_corta("2026-11-07T22:00:00"), "sáb 7 nov")
         self.assertEqual(plan.fecha_corta("nada"), "")
-        self.assertEqual(plan.ruta_txt(""), "Chuleta\\")
+        self.assertEqual(plan.ruta_txt(""), "Tenca\\")
         self.assertEqual(plan.ruta_txt(":x"), "Carpeta vinculada\\")
         self.assertEqual(plan.idioma_txt("auto"), "Detectar el idioma")
 
@@ -307,7 +307,7 @@ class ServidorPlanTests(TempTree):
         # si el aviso de Windows corta (400 caracteres), se pierde esto y no lo de antes (revisión de 5e770fc)
         self.assertEqual(texto.count("se guarda en"), 1)
         self.assertTrue(texto.endswith(" · Ctrl+Alt+R para parar · el directo no ha arrancado · se guarda en "
-                                       "Chuleta\\Alfa\\Reuniones\\2026-11-09 Comité\\"), texto)
+                                       "Tenca\\Alfa\\Reuniones\\2026-11-09 Comité\\"), texto)
         # sin proyecto, el resumen ya es la carpeta: no se repite
         self.sug.update(vocab="")
         b = self.app(perfil={"folder": None}, rec_folder="Alfa/Reuniones")
@@ -586,7 +586,7 @@ class ServidorPlanTests(TempTree):
         aj = {"perfil": {"folder": "Fuera/Clientes", "context": "Comité"}}
         b = lineas(a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": aj}))
         self.assertEqual(b["contexto"]["valor"], "Comité")
-        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Chuleta\\Fuera\\Clientes\\)",
+        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Tenca\\Fuera\\Clientes\\)",
                       b["carpeta"]["aviso"])
 
         def origin(v, st, vs=None):

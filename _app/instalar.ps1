@@ -1,30 +1,37 @@
-﻿# Instalador de Chuleta (lo lanza INSTALAR.bat). No necesita permisos de administrador:
+﻿# Instalador de Tenca (lo lanza INSTALAR.bat). No necesita permisos de administrador:
 #   1. Python de 3.10 a 3.13 (si no hay, instala 3.13 con winget solo para este usuario)
 #   2. Librerias: faster-whisper (Whisper local + PyAV para leer audio), soundcard (grabadora), requests y truststore;
 #      opcionales, cada una aparte (si no se instalan o no cargan, la app funciona igual): pywebview (la ventana de la
 #      app sobre WebView2; sin ella se abre en Edge), sherpa-onnx (quien habla) y pywin32 (calendario de Outlook)
-#   3. Accesos directos "Chuleta" en el escritorio y en el menu Inicio: apuntan a pythonw.exe (sin ventana de consola)
+#   3. Accesos directos "Tenca" en el escritorio y en el menu Inicio: apuntan a pythonw.exe (sin ventana de consola)
 #      y llevan el AppUserModelID de la app, para que la barra de tareas agrupe y ancle la ventana como algo propio.
-#      Si hay un acceso directo "Notas" (nombre anterior de la app), sirve para encontrar la instalacion anterior y pasa
-#      a llamarse "Chuleta" (se renombra; no se borra nada).
 #   4. Carpeta propia: si no hay instalacion anterior, la app se copia de la carpeta descomprimida (Descargas...) a
-#      %USERPROFILE%\Chuleta (fuera de Descargas y de OneDrive; si esa carpeta ya existe y no es de Chuleta,
-#      "Chuleta (2)"...) y los accesos directos apuntan alli. -Destino <carpeta> elige otra (nueva o vacia).
-#      Si ya estaba instalada (por este orden: la entrada de "Aplicaciones instaladas", el acceso directo
-#      Chuleta/Notas del escritorio o de Inicio, o %USERPROFILE%\Chuleta), se actualiza en su sitio: ahi estan sus
-#      grabaciones, que nunca se mueven.
-#   5. "Aplicaciones instaladas": HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta (sin
+#      %USERPROFILE%\Tenca (fuera de Descargas y de OneDrive; si esa carpeta ya existe y no es de la app,
+#      "Tenca (2)"...) y los accesos directos apuntan alli. -Destino <carpeta> elige otra (nueva o vacia).
+#      Si ya estaba instalada (por este orden: la entrada de "Aplicaciones instaladas", el acceso directo del
+#      escritorio o de Inicio, o la carpeta propia), se actualiza en su sitio: ahi estan sus grabaciones, que nunca se
+#      mueven. La carpeta conserva su nombre aunque sea el anterior (%USERPROFILE%\Chuleta): renombrarla romperia lo
+#      que apunta a ella (OBS, accesos del usuario, anclajes) y no se gana nada.
+#   5. "Aplicaciones instaladas": HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Tenca (sin
 #      administrador) con la version, el icono y la orden de _app\desinstalar.ps1, que quita la app y NO las reuniones.
+#   6. Nombres anteriores de la app ("Chuleta" hasta el 09/11/2026, "Notas" hasta el 31/10/2026): al instalar encima
+#      no queda nada con ellos. Los accesos directos que apuntan a esta instalacion, en el escritorio, en Inicio y en la
+#      carpeta Inicio de Windows (la copia de "Arrancar con Windows"), pasan a llamarse "Tenca" (se renombra el primero
+#      y se quitan los que sobren: nunca dos), su entrada de "Aplicaciones instaladas" se quita y sus "ABRIR ... .bat"
+#      de la raiz tambien.
+#      Lo que apunta a OTRA copia de la app se queda y se dice; un acceso directo que no es de la app no se toca.
+#      Los anclados a la barra de tareas no se pueden cambiar desde un programa: se avisa de como volver a anclarla.
+#      Los datos no se mueven: ajustes, claves y voces siguen en %LOCALAPPDATA%\AudiosApp, y reuniones y listas en su carpeta.
 # Se puede repetir sin problema. Para probarlo sin tocar nada: -NoShortcut / -NoLaunch, y -Port / -Desktop
 # (otro puerto y otra carpeta de escritorio, como si fuera otro PC: sin -Destino se instala donde esta descomprimido y
-# no se lee ni se escribe la entrada de "Aplicaciones instaladas"). -AppName cambia el nombre visible (el de
-# common.APP_NAME); las carpetas, los .bat y la clave de registro no cambian.
+# no se lee ni se escribe la entrada de "Aplicaciones instaladas" ni la carpeta Inicio de Windows). -AppName cambia el
+# nombre visible (el de common.APP_NAME); las carpetas, los .bat y la clave de registro no cambian.
 # Con escritorio abre su propia ventana (WinForms: pasos, barra y detalle) y esconde la consola; -Consola, -NoShortcut o
 # -NoLaunch (pruebas, CI) lo dejan como consola de siempre.
 # Solo para CI: -AutoCerrar N (o la variable NOTAS_INSTALADOR_AUTOCERRAR=N) cierra la ventana sola N segundos despues de
 # terminar, bien o mal; si termino bien, como si se hubiera pulsado "Abrir". NOTAS_INSTALADOR_SIMULAR_FALLO=pip ensaya la
 # pantalla de error sin tocar la red. Ninguna de las dos se usa en un PC normal.
-param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Chuleta",
+param([switch]$NoShortcut, [switch]$NoLaunch, [int]$Port = 8765, [string]$Desktop = "", [string]$AppName = "Tenca",
       [switch]$Consola, [int]$AutoCerrar = 0, [string]$Destino = "")
 
 $ErrorActionPreference = "Continue"
@@ -53,12 +60,21 @@ $packages = @("faster-whisper==1.2.1", "soundcard>=0.4.3", "requests", "truststo
 # repositorio de la empresa que solo tenga paquetes compilados no se instala; sin ella la app se abre en Edge
 $optional = @("pywebview==6.2.1", "sherpa-onnx==2.0.1", "pywin32==312")  # ventana propia / quien habla / calendario de Outlook
 $MaxPy = 313  # el Python mas nuevo con faster-whisper/ctranslate2 publicados (3.14 aun no tiene wheels)
-$AppId = "Bernardo.Chuleta"  # = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk
-$LegacyName = "Notas"  # nombre anterior de la app: sus accesos directos se reconocen y pasan a llamarse $AppName
-$FolderName = "Chuleta"  # carpeta propia en el perfil del usuario (no cambia con -AppName, como los .bat)
-$UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta"  # "Aplicaciones instaladas"
+# = common.APP_ID: la ventana lo fija en el proceso y el acceso directo lo lleva en el .lnk. No cambia con el nombre:
+# con otro, la ventana saldria como un boton aparte junto al anclaje que ya tenga hecho el usuario (dos iconos)
+$AppId = "Bernardo.Chuleta"
+# nombres anteriores de la app (= common.APP_FORMER_NAMES, del mas reciente al mas antiguo): lo que queda con ellos
+# se migra a $AppName (punto 6 de arriba)
+$LegacyNames = @(@("Chuleta", "Notas") | Where-Object { $_ -ne $AppName })
+$FolderName = "Tenca"  # carpeta propia en el perfil del usuario (no cambia con -AppName, como los .bat)
+$LegacyFolders = @("Chuleta")  # la carpeta propia con el nombre anterior: si es de la app, se sigue usando
+$Launcher = "ABRIR TENCA.bat"  # el .bat de la raiz que abre la app con consola (llama a _app\Tenca.bat)
+$LegacyLaunchers = @("ABRIR CHULETA.bat", "ABRIR NOTAS.bat")  # los de los nombres anteriores: sobran
+$UninstallBase = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+$UninstallKey = "$UninstallBase\Tenca"  # "Aplicaciones instaladas"
+$LegacyUninstallKeys = @("$UninstallBase\Chuleta")  # la entrada del nombre anterior: se quita al instalar encima
 $Publisher = "Bernardo Stegmaier"
-$RepoUrl = "https://github.com/bastegman/chuleta"  # = server.REPO_URL
+$RepoUrl = "https://github.com/bastegman/tenca"  # = server.REPO_URL
 # con -NoShortcut (probar sin tocar nada) o -Desktop (otro PC simulado) no se lee ni se escribe nada del sistema:
 # ni la carpeta propia por defecto ni la entrada de "Aplicaciones instaladas"
 $Sistema = -not $NoShortcut -and -not $Desktop
@@ -130,11 +146,11 @@ function Fail($text) {
 function Hide-Console {
     # la consola de INSTALAR.bat se esconde mientras la ventana esta abierta (INSTALAR.bat solo hace pause si fallamos)
     try {
-        if (-not ("ChuletaLnk.Win" -as [type])) {
-            Add-Type -Namespace ChuletaLnk -Name Win -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);'
+        if (-not ("TencaLnk.Win" -as [type])) {
+            Add-Type -Namespace TencaLnk -Name Win -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);'
         }
-        $h = [ChuletaLnk.Win]::GetConsoleWindow()
-        if ($h -ne [IntPtr]::Zero) { [ChuletaLnk.Win]::ShowWindow($h, 0) | Out-Null }
+        $h = [TencaLnk.Win]::GetConsoleWindow()
+        if ($h -ne [IntPtr]::Zero) { [TencaLnk.Win]::ShowWindow($h, 0) | Out-Null }
     } catch {}
 }
 function New-InstallerWindow {
@@ -152,12 +168,12 @@ function New-InstallerWindow {
         $f.ClientSize = New-Object System.Drawing.Size(760, 600)
         $f.Font = New-Object System.Drawing.Font("Segoe UI", 10)
         $f.BackColor = [System.Drawing.Color]::White
-        try { $f.Icon = New-Object System.Drawing.Icon((Join-Path $app "static\chuleta.ico")) } catch {}
+        try { $f.Icon = New-Object System.Drawing.Icon((Join-Path $app "static\tenca.ico")) } catch {}
         $logo = New-Object System.Windows.Forms.PictureBox
         $logo.Location = New-Object System.Drawing.Point(24, 20)
         $logo.Size = New-Object System.Drawing.Size(64, 64)
         $logo.SizeMode = "Zoom"
-        try { $logo.Image = [System.Drawing.Image]::FromFile((Join-Path $app "static\chuleta.png")) } catch {}
+        try { $logo.Image = [System.Drawing.Image]::FromFile((Join-Path $app "static\tenca.png")) } catch {}
         $title = New-Object System.Windows.Forms.Label
         $title.Text = $AppName
         $title.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold)
@@ -232,11 +248,11 @@ function Set-ShortcutAppId($path, $id) {
     # Windows agrupa la ventana bajo este acceso directo y "Anclar a la barra de tareas" ancla el acceso directo
     # (icono y argumentos) y no pythonw.exe a secas. Si falla, el acceso directo funciona igual.
     try {
-        if (-not ("ChuletaLnk.PropertyStore" -as [type])) {
+        if (-not ("TencaLnk.PropertyStore" -as [type])) {
             Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-namespace ChuletaLnk {
+namespace TencaLnk {
   [StructLayout(LayoutKind.Sequential, Pack = 4)]
   public struct PropertyKey { public Guid fmtid; public uint pid; public PropertyKey(Guid f, uint p) { fmtid = f; pid = p; } }
   [StructLayout(LayoutKind.Explicit)]
@@ -272,7 +288,7 @@ namespace ChuletaLnk {
 }
 "@
         }
-        [ChuletaLnk.PropertyStore]::SetAppId($path, $id)
+        [TencaLnk.PropertyStore]::SetAppId($path, $id)
         return $true
     } catch {
         Say "    (el acceso directo no lleva AppUserModelID: $($_.Exception.Message))" Yellow
@@ -347,7 +363,7 @@ function Unblock-AppFiles($appDir, $rootDir) {
     # quita la marca de Internet (Zone.Identifier) solo a los ficheros del paquete: _app y los de la raiz que trae el
     # zip. Sin esto Windows pregunta al abrirlos; las reuniones y demas ficheros del usuario conservan su marca
     Get-ChildItem -LiteralPath $appDir -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
-    foreach ($n in @("INSTALAR.bat", "ABRIR CHULETA.bat", "LEEME.txt", "LICENSE")) {
+    foreach ($n in @("INSTALAR.bat", $Launcher, "LEEME.txt", "LICENSE")) {
         $f = Join-Path $rootDir $n
         if (Test-Path -LiteralPath $f -PathType Leaf) { Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue }
     }
@@ -399,60 +415,120 @@ function Same-Path($a, $b) {
 }
 
 function Test-Instalacion($dir) {
-    # una carpeta de Chuleta instalada (o descomprimida): <dir>\_app\server.py
+    # una carpeta de la app instalada (o descomprimida): <dir>\_app\server.py
     return [bool]($dir -and (Test-Path -LiteralPath (Join-Path $dir "_app\server.py")))
 }
 
+function Get-LnkInfo($lnkPath) {
+    # a que apunta un acceso directo: @{ app = <carpeta _app> o ""; deLaApp = $true si es de la app (abre server.py, o un
+    # lanzador .bat de la app) }. La carpeta: WorkingDirectory (pythonw.exe desde el 31/10/2026) o la del destino (los
+    # antiguos apuntaban a _app\Notas.bat); vale si tiene server.py
+    $r = @{ app = ""; deLaApp = $false }
+    try { $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath) } catch { return $r }
+    $wd, $tp, $ar = "$($sc.WorkingDirectory)", "$($sc.TargetPath)", "$($sc.Arguments)"
+    $bats = @("Tenca.bat") + @($LegacyNames | ForEach-Object { "$_.bat" })
+    $r.deLaApp = ($ar -match 'server\.py') -or ($tp -and ($bats -contains (Split-Path -Leaf $tp)))
+    # tambien la carpeta del server.py de los argumentos: uno sin WorkingDirectory no se tomara por roto
+    $deArgs = $(if ($ar -match '"?([^"]*server\.py)"?') { Split-Path -Parent $Matches[1] } else { "" })
+    foreach ($d in @($wd, $(if ($tp) { Split-Path -Parent $tp } else { "" }), $deArgs)) {
+        if ($d -and (Test-Path -LiteralPath (Join-Path $d "server.py"))) { $r.app = $d; break }
+    }
+    return $r
+}
+
+function Get-LnkAntiguos($dir, $appDir) {
+    # los accesos directos con un nombre anterior de la app en $dir que sobran: los que apuntan a $appDir, que
+    # se migran, y los de la app que ya no apuntan a nada (una carpeta borrada). Cada uno: @{ path; name; tipo = "esta" o
+    # "rota" }. Uno que apunta a otra copia de la app (otra carpeta con server.py) se queda y se dice; uno que no es de
+    # la app (un documento que se llame igual) no se toca
+    $out = @()
+    foreach ($n in $LegacyNames) {
+        $p = Join-Path $dir "$n.lnk"
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        $i = Get-LnkInfo $p
+        if ($i.app -and (Same-Path $i.app $appDir)) { $out += @{ path = $p; name = $n; tipo = "esta" } }
+        elseif ($i.app) { Say "    Se conserva el acceso directo '$n' en $dir : es de otra copia ($($i.app))." Yellow }
+        elseif ($i.deLaApp) { $out += @{ path = $p; name = $n; tipo = "rota" } }
+        else { Log-File "    se conserva $p (no es de la app)" }
+    }
+    return $out
+}
+
+function Remove-LnkAntiguos($lista, $dir) {
+    # quita los accesos directos que sobran (Get-LnkAntiguos) y lo dice; si no se puede, se avisa y se sigue
+    foreach ($x in @($lista)) {
+        if (-not $x) { continue }
+        try {
+            Remove-Item -LiteralPath $x.path -Force -ErrorAction Stop
+            if ($x.tipo -eq "rota") { Say "    Quitado el acceso directo '$($x.name)' en $dir : ya no abría nada." }
+            else { Say "    Quitado el acceso directo '$($x.name)' en $dir : ahora es '$AppName'." }
+        } catch { Say "    No se pudo quitar el acceso directo '$($x.name)' en $dir ($($_.Exception.Message)): bórralo a mano." Yellow }
+    }
+}
+
 function Find-Instalacion {
-    # la instalacion que ya hay en este PC: @{ root; app; how } o $null. Por este orden:
-    #   a) la entrada de "Aplicaciones instaladas" (InstallLocation), si sigue teniendo _app\server.py
-    #   b) el acceso directo de la app ("Chuleta.lnk") o el del nombre anterior ("Notas.lnk"), en el escritorio y, si
-    #      alli no hay ninguno, en el menu Inicio
-    #   c) %USERPROFILE%\Chuleta
+    # la instalacion que ya hay en este PC: @{ root; app; how; antes } o $null (antes: el nombre anterior con el que se
+    # ha encontrado, o ""). Por este orden:
+    #   a) la entrada de "Aplicaciones instaladas" (InstallLocation), la de ahora o la del nombre anterior, si sigue
+    #      teniendo _app\server.py
+    #   b) el acceso directo de la app ("Tenca.lnk") o el de un nombre anterior ("Chuleta.lnk", "Notas.lnk"), en el
+    #      escritorio y, si alli no hay ninguno, en el menu Inicio
+    #   c) la carpeta propia: %USERPROFILE%\Tenca o la del nombre anterior (%USERPROFILE%\Chuleta)
     # a) y c) solo sin -NoShortcut ni -Desktop ($Sistema); b) tambien con -Desktop (su escritorio)
     if ($Sistema) {
-        try {
-            $loc = "$((Get-ItemProperty -LiteralPath $UninstallKey -ErrorAction Stop).InstallLocation)".Trim()
-            if (Test-Instalacion $loc) { return @{ root = $loc; app = (Join-Path $loc "_app"); how = "Aplicaciones instaladas" } }
-        } catch {}
+        foreach ($k in @(@($UninstallKey) + $LegacyUninstallKeys)) {
+            try {
+                $loc = "$((Get-ItemProperty -LiteralPath $k -ErrorAction Stop).InstallLocation)".Trim()
+                $antes = $(if ($k -eq $UninstallKey) { "" } else { Split-Path -Leaf $k })
+                if (Test-Instalacion $loc) { return @{ root = $loc; app = (Join-Path $loc "_app"); how = "Aplicaciones instaladas"; antes = $antes } }
+            } catch {}
+        }
     }
     try {
         $dirs = @($(if ($Desktop) { $Desktop } else { [Environment]::GetFolderPath("Desktop") }))
         if (-not $Desktop) { $dirs += [Environment]::GetFolderPath("Programs") }
         foreach ($dir in $dirs) {
-            foreach ($name in @("$AppName.lnk", "$LegacyName.lnk")) {
-                $lnkPath = Join-Path $dir $name
+            foreach ($n in @(@($AppName) + $LegacyNames)) {
+                $lnkPath = Join-Path $dir "$n.lnk"
                 if (-not (Test-Path -LiteralPath $lnkPath)) { continue }
-                $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
                 # el acceso directo apunta a pythonw.exe (desde el 31/10/2026) o a Notas.bat: la carpeta de la app es
                 # WorkingDirectory en los dos casos (y la del destino, en los antiguos)
-                $oldApp = $sc.WorkingDirectory
-                if (-not $oldApp -or -not (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) { $oldApp = Split-Path -Parent $sc.TargetPath }
-                if ($oldApp -and (Test-Path -LiteralPath (Join-Path $oldApp "server.py"))) {
-                    $oldApp = (Resolve-Path -LiteralPath $oldApp).Path
-                    return @{ root = (Split-Path -Parent $oldApp); app = $oldApp; how = "acceso directo $name ($dir)" }
+                $i = Get-LnkInfo $lnkPath
+                if ($i.app) {
+                    $oldApp = (Resolve-Path -LiteralPath $i.app).Path
+                    return @{ root = (Split-Path -Parent $oldApp); app = $oldApp; how = "acceso directo $n.lnk ($dir)"
+                              antes = $(if ($n -eq $AppName) { "" } else { $n }) }
                 }
             }
         }
     } catch {}
     if ($Sistema) {
-        $own = Join-Path $script:UserHome $FolderName
-        if (Test-Instalacion $own) { return @{ root = $own; app = (Join-Path $own "_app"); how = "carpeta $own" } }
+        foreach ($f in @(@($FolderName) + $LegacyFolders)) {
+            $own = Join-Path $script:UserHome $f
+            if (Test-Instalacion $own) { return @{ root = $own; app = (Join-Path $own "_app"); how = "carpeta $own"; antes = "" } }
+        }
     }
     return $null
 }
 
+function Test-CarpetaDeLaApp($dir) {
+    # ya es de la app (con _app) o lo fue: el desinstalador deja el LEEME.txt junto a las reuniones, y su primera linea
+    # empieza por el nombre de la app (el de ahora o uno anterior: "TENCA · ...", "CHULETA · ...")
+    if (Test-Instalacion $dir) { return $true }
+    $l1 = "$(Get-Content -LiteralPath (Join-Path $dir 'LEEME.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)".TrimStart([char]0xFEFF)
+    foreach ($n in @(@($FolderName) + $LegacyFolders)) { if ($l1 -like "$($n.ToUpper()) *") { return $true } }
+    return $false
+}
+
 function Test-CarpetaLibre($dir) {
-    # vale como carpeta nueva: no existe, esta vacia, ya es de Chuleta (con _app) o lo fue (el desinstalador deja el
+    # vale como carpeta nueva: no existe, esta vacia, ya es de la app (con _app) o lo fue (el desinstalador deja el
     # LEEME.txt junto a las reuniones: al reinstalar se vuelve a la misma carpeta y se ven otra vez)
     if (-not (Test-Path -LiteralPath $dir)) { return $true }
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $false }
     try { $first = Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | Select-Object -First 1 }
     catch { return $false }  # no se puede listar: no se sabe que hay dentro, no se usa
     if (-not $first) { return $true }
-    if (Test-Instalacion $dir) { return $true }
-    $l1 = "$(Get-Content -LiteralPath (Join-Path $dir 'LEEME.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)"
-    return ($l1.TrimStart([char]0xFEFF) -like "$($FolderName.ToUpper()) *")
+    return (Test-CarpetaDeLaApp $dir)
 }
 
 function Test-TieneReuniones($rootDir, $appDir) {
@@ -463,7 +539,13 @@ function Test-TieneReuniones($rootDir, $appDir) {
 }
 
 function Get-CarpetaNueva {
-    # %USERPROFILE%\Chuleta o, si esa ya tiene otras cosas, "Chuleta (2)", "Chuleta (3)"... ($null si ninguna vale)
+    # la carpeta propia que ya fue de la app (desinstalada: quedan alli sus reuniones con el LEEME), con el nombre de
+    # ahora o con el anterior (%USERPROFILE%\Chuleta); si no hay, %USERPROFILE%\Tenca o, si esa ya tiene otras cosas,
+    # "Tenca (2)", "Tenca (3)"... ($null si ninguna vale)
+    foreach ($f in @(@($FolderName) + $LegacyFolders)) {
+        $dir = Join-Path $script:UserHome $f
+        if ((Test-Path -LiteralPath $dir -PathType Container) -and (Test-CarpetaDeLaApp $dir)) { return $dir }
+    }
     for ($i = 1; $i -le 20; $i++) {
         $dir = Join-Path $script:UserHome $(if ($i -eq 1) { $FolderName } else { "$FolderName ($i)" })
         if (Test-CarpetaLibre $dir) { return $dir }
@@ -485,7 +567,7 @@ function Copy-AppFiles($fromApp, $fromRoot, $toApp, $toRoot) {
     }
     # la version del paquete (la ensena Ajustes > Acerca de), el manual y los .bat de la raiz tambien se renuevan
     if (Test-Path -LiteralPath (Join-Path $fromApp "version.txt")) { Copy-Item -LiteralPath (Join-Path $fromApp "version.txt") -Destination $toApp -Force }
-    foreach ($n in @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat")) {
+    foreach ($n in @("LEEME.txt", "LICENSE", "INSTALAR.bat", $Launcher)) {
         if (Test-Path -LiteralPath (Join-Path $fromRoot $n)) {
             Copy-Item -LiteralPath (Join-Path $fromRoot $n) -Destination (Join-Path $toRoot $n) -Force
         }
@@ -526,7 +608,7 @@ function Register-App($appDir, $rootDir, $version) {
         $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $appDir "desinstalar.ps1") + '"'
         $values = [ordered]@{
             DisplayName = @($AppName, "String"); DisplayVersion = @($version, "String"); Publisher = @($Publisher, "String")
-            DisplayIcon = @((Join-Path $appDir "static\chuleta.ico"), "String"); InstallLocation = @($rootDir, "String")
+            DisplayIcon = @((Join-Path $appDir "static\tenca.ico"), "String"); InstallLocation = @($rootDir, "String")
             InstallDate = @((Get-Date -Format "yyyyMMdd"), "String"); EstimatedSize = @($kb, "DWord")
             NoModify = @(1, "DWord"); NoRepair = @(1, "DWord"); URLInfoAbout = @($RepoUrl, "String")
             UninstallString = @($cmd, "String"); QuietUninstallString = @("$cmd -Silencioso", "String")
@@ -541,14 +623,142 @@ function Register-App($appDir, $rootDir, $version) {
             }
         } finally { $rk.Close() }
         Say "    $AppName $version, en Aplicaciones instaladas (para quitarla: Configuración > Aplicaciones > $AppName > Desinstalar)" Green
-        return $true
     } catch {
         Say "    No se ha podido añadir a Aplicaciones instaladas ($($_.Exception.Message)): la app funciona igual; para quitarla, _app\desinstalar.ps1." Yellow
         return $false
     }
+    Remove-RegistroAntiguo $rootDir
+    return $true
+}
+
+function Remove-RegistroAntiguo($rootDir) {
+    # la entrada de "Aplicaciones instaladas" con el nombre anterior ("Chuleta"): si es de esta carpeta, o de una que ya
+    # no tiene la app, sobra (si no, saldrian dos: la nueva y la vieja). Solo despues de escribir la nueva: si eso
+    # falla, la vieja sigue sirviendo para desinstalar. Si es de otra copia que sigue instalada, se queda y se dice
+    foreach ($k in $LegacyUninstallKeys) {
+        if (-not (Test-Path -LiteralPath $k)) { continue }
+        $n = Split-Path -Leaf $k
+        $loc = ""
+        try { $loc = "$((Get-ItemProperty -LiteralPath $k -ErrorAction Stop).InstallLocation)".Trim() } catch {}
+        if ($loc -and -not (Same-Path $loc $rootDir) -and (Test-Instalacion $loc)) {
+            Say "    Se conserva la entrada '$n' de Aplicaciones instaladas: es de otra copia ($loc)." Yellow
+            continue
+        }
+        # DeleteSubKeyTree: sin preguntar aunque tuviera subclaves (el borrado de PowerShell sin -Recurse preguntaria)
+        try {
+            [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree(($k -replace '^HKCU:\\', ''), $false)
+            Say "    Quitada de Aplicaciones instaladas la entrada antigua '$n' (ahora es '$AppName')."
+            if (-not $script:antes) { $script:antes = $n }
+        } catch { Say "    No se pudo quitar la entrada antigua '$n' de Aplicaciones instaladas ($($_.Exception.Message))." Yellow }
+    }
+}
+
+function Remove-LanzadoresAntiguos($rootDir) {
+    # los .bat de la raiz con un nombre anterior ("ABRIR CHULETA.bat", "ABRIR NOTAS.bat") hacen lo mismo que $Launcher:
+    # sobran. Solo si son de la app (pequenos y llaman a _app\): uno del usuario con ese nombre se queda. Los de dentro
+    # de _app (_app\Chuleta.bat, _app\Notas.bat) se dejan: no se ven, y un anclaje antiguo puede apuntar a ellos
+    if (-not (Test-Path -LiteralPath (Join-Path $rootDir $Launcher) -PathType Leaf)) { return }  # sin el nuevo, no
+    foreach ($n in $LegacyLaunchers) {
+        $f = Join-Path $rootDir $n
+        if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+        $t = "$(Get-Content -LiteralPath $f -Raw -ErrorAction SilentlyContinue)"
+        if ($t.Length -gt 4096 -or $t -notmatch '_app\\') { Say "    Se conserva $f (no es de la app)."; continue }
+        try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop; Say "    Quitado $n (ahora es $Launcher)." }
+        catch { Say "    No se pudo quitar $f ($($_.Exception.Message))." Yellow }
+    }
+}
+
+function Update-Arranque($progLnk, $appDir, $startup = $null) {
+    # "Arrancar con Windows" (icono de la bandeja) = una copia del acceso directo del menu Inicio en la carpeta Inicio
+    # de Windows (server.inicio_windows_poner). Si estaba puesto, con el nombre de ahora o con uno anterior, queda UNA
+    # copia, "$AppName.lnk", igual que la de Inicio (no dos: la app se abriria dos veces al entrar); las del nombre
+    # anterior se quitan. Si no estaba puesto, no se pone. $startup: la carpeta Inicio de Windows (los tests dan otra)
+    if (-not $startup) { $startup = [Environment]::GetFolderPath("Startup") }
+    if (-not $startup -or -not (Test-Path -LiteralPath $startup -PathType Container)) { return }
+    $nuevo = Join-Path $startup "$AppName.lnk"
+    $antiguos = @(Get-LnkAntiguos $startup $appDir)
+    $activo = (Test-Path -LiteralPath $nuevo) -or @($antiguos | Where-Object { $_.tipo -eq "esta" }).Count -gt 0
+    if ($activo) {
+        if (-not (Test-Path -LiteralPath $progLnk)) {
+            Say "    Arrancar con Windows: sin el acceso directo del menú Inicio no se puede poner al día (se deja como estaba)." Yellow
+            return
+        }
+        try { Copy-Item -LiteralPath $progLnk -Destination $nuevo -Force -ErrorAction Stop }
+        catch {
+            Say "    Arrancar con Windows: no se pudo poner al día $nuevo ($($_.Exception.Message)); se deja como estaba." Yellow
+            return
+        }
+        Say "    Arrancar con Windows: sigue activado ($nuevo)." Green
+    }
+    Remove-LnkAntiguos $antiguos $startup
+}
+
+function Report-Anclajes($appDir) {
+    # anclada a la barra de tareas con un nombre anterior: Windows no deja que un programa ancle, desancle ni renombre
+    # un anclaje (es del usuario). Sigue funcionando (mismo AppUserModelID: la ventana se agrupa en el); solo se avisa
+    # de como dejarla con el nombre nuevo. Devuelve los nombres encontrados
+    $out = @()
+    if (-not $env:APPDATA) { return $out }
+    $dir = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+    foreach ($n in $LegacyNames) {
+        $p = Join-Path $dir "$n.lnk"
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        $i = Get-LnkInfo $p
+        if ($i.app -and (Same-Path $i.app $appDir)) {
+            Say ("    En la barra de tareas sigue anclada como '$n' (Windows no deja que un instalador cambie un anclaje). " +
+                 "Para verla como '$AppName': clic derecho en ese icono > Desanclar de la barra de tareas; después, con " +
+                 "$AppName abierta, clic derecho en su icono > Anclar a la barra de tareas.") Yellow
+            $out += $n
+        }
+    }
+    return $out
+}
+
+function Set-AccesoDirecto($dir, $appDir, $pyw, $sinConsola) {
+    # "$AppName.lnk" en $dir (escritorio o menu Inicio), apuntando a pythonw.exe server.py de $appDir (o a Tenca.bat, si
+    # no hay pythonw.exe), con su icono y su AppUserModelID. Los del nombre anterior ("Chuleta.lnk", "Notas.lnk") de esta
+    # instalacion: si aun no hay "$AppName.lnk", el primero pasa a llamarse asi (se renombra: conserva su sitio en el
+    # escritorio) y se actualiza como los demas; los que sobren se quitan despues de crear el nuevo: nunca quedan dos
+    try {
+        $lnkPath = Join-Path $dir "$AppName.lnk"
+        $antiguos = @(Get-LnkAntiguos $dir $appDir)
+        if (-not (Test-Path -LiteralPath $lnkPath)) {
+            $primero = @($antiguos | Where-Object { $_.tipo -eq "esta" }) | Select-Object -First 1
+            if ($primero) {
+                try {
+                    Rename-Item -LiteralPath $primero.path -NewName "$AppName.lnk" -ErrorAction Stop
+                    Say "    El acceso directo '$($primero.name)' pasa a llamarse '$AppName' ($dir)."
+                    $antiguos = @($antiguos | Where-Object { $_.path -ne $primero.path })
+                    if (-not $script:antes) { $script:antes = $primero.name }
+                } catch { Say "    No se pudo renombrar '$($primero.name).lnk' en $dir ($($_.Exception.Message)): se crea '$AppName' y se quita el antiguo." Yellow }
+            }
+        }
+        $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath)
+        if ($sinConsola) {
+            $lnk.TargetPath = $pyw
+            $lnk.Arguments = '"' + (Join-Path $appDir "server.py") + '"'
+            $lnk.WindowStyle = 1
+        } else {
+            $lnk.TargetPath = Join-Path $appDir "Tenca.bat"
+            $lnk.Arguments = ""
+            $lnk.WindowStyle = 7  # la ventana de consola, minimizada
+        }
+        $lnk.WorkingDirectory = $appDir
+        $lnk.IconLocation = (Join-Path $appDir "static\tenca.ico") + ",0"
+        $lnk.Description = "$AppName`: grabar, transcribir y resumir reuniones"
+        $lnk.Save()
+        $null = Set-ShortcutAppId $lnkPath $AppId
+        Say "    $lnkPath" Green
+        if ($antiguos.Count -and -not $script:antes) { $script:antes = $antiguos[0].name }
+        Remove-LnkAntiguos $antiguos $dir
+    } catch {
+        Say "    No se pudo crear en $dir (usa $Launcher)" Yellow
+    }
 }
 
 $script:UserHome = $(if ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath("UserProfile") })
+$script:antes = ""  # el nombre anterior de la app si esta instalacion lo llevaba (se dice al final)
+$script:anclados = @()  # anclajes de la barra de tareas con un nombre anterior (Report-Anclajes)
 $Gui = $false
 if (-not ($Consola -or $NoShortcut -or $NoLaunch) -and [Environment]::UserInteractive) { $Gui = New-InstallerWindow }
 Log-File ("modo: " + $(if ($Gui) { "ventana" } else { "consola" }) + " · AutoCerrar=$AutoCerrar · PowerShell $($PSVersionTable.PSVersion)")
@@ -567,7 +777,7 @@ Unblock-AppFiles $app $root
 Step "Comprobando si $AppName está abierta..."
 $running = Invoke-Api "/api/ping" $false 5
 # 401/403: contesta una version con la API protegida y no he podido usar su token: esta abierta igual. Sin respuesta a
-# tiempo pero con un server.py de Chuleta escuchando en el puerto: esta abierta y ocupada
+# tiempo pero con un server.py de la app escuchando en el puerto: esta abierta y ocupada
 $ocupada = $false
 if ($running.code -eq 0) {
     try {
@@ -605,7 +815,7 @@ if (($running.code -eq 200 -and $running.body.app -eq "audios") -or $running.cod
         $p = Get-CimInstance Win32_Process -Filter "ProcessId=$owner"
         for ($k = 0; $k -lt 2 -and $p; $k++) {  # tambien el "py" y la ventana de consola que lo lanzaron (instalaciones antiguas)
             $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)"
-            if ($p -and ($p.Name -eq "py.exe" -or ($p.Name -eq "cmd.exe" -and ($p.CommandLine -like "*$AppName.bat*" -or $p.CommandLine -like "*$LegacyName.bat*")))) { $ids += $p.ProcessId }
+            if ($p -and ($p.Name -eq "py.exe" -or ($p.Name -eq "cmd.exe" -and @(@("Tenca") + $LegacyNames | Where-Object { "$($p.CommandLine)" -like "*$_.bat*" }).Count -gt 0))) { $ids += $p.ProcessId }
         }
         $ids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 1
@@ -617,7 +827,8 @@ if (($running.code -eq 200 -and $running.body.app -eq "audios") -or $running.cod
 
 # --- donde queda la app: si ya estaba instalada en otra carpeta (p. ej. el zip nuevo se ha descomprimido en Descargas),
 # se actualiza aquella: ahi estan sus grabaciones, y el acceso directo ya apunta a ella. Si no, se copia a su carpeta
-# propia (%USERPROFILE%\Chuleta, o -Destino) y la descomprimida deja de hacer falta.
+# propia (%USERPROFILE%\Tenca, o -Destino) y la descomprimida deja de hacer falta. Con un nombre anterior de la app
+# (%USERPROFILE%\Chuleta), igual: la carpeta y lo que hay en ella no se mueven ni se renombran.
 $origen = $null  # la carpeta descomprimida, si la app ha quedado en otra
 $prev = $null
 # python.txt lo escribe este instalador: si esta carpeta ya se instalo (quiza con sus grabaciones), se actualiza ella
@@ -628,17 +839,18 @@ if ($yaInstalada) {
 } elseif ($prev -and -not (Same-Path $prev.root $root)) {
     $old, $oldRoot = $prev.app, $prev.root
     if ($Destino -and -not (Same-Path $Destino $oldRoot)) { Say "    -Destino no se usa: ya está instalada en $oldRoot (para cambiarla de carpeta, desinstálala antes; tus reuniones no se borran)." Yellow }
-    Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..."
+    if ($prev.antes) {
+        $script:antes = $prev.antes
+        Step "Ya tenías $($prev.antes) (ahora se llama $AppName) en $oldRoot : actualizo esa (con tus grabaciones)..."
+    } else { Step "Ya tenías $AppName en $oldRoot : actualizo esa (con tus grabaciones)..." }
     Say "    Encontrada por: $($prev.how)"
     Copy-AppFiles $app $root $old $oldRoot
-    # lo que queda del nombre anterior no se borra (sigue funcionando), solo se dice
-    $sobrantes = @("ABRIR NOTAS.bat", "_app\Notas.bat") | Where-Object { Test-Path -LiteralPath (Join-Path $oldRoot $_) }
-    if ($sobrantes) { Say "    De la versión anterior quedan $($sobrantes -join ' y ') en $oldRoot : ya no hacen falta (puedes borrarlos)." }
     if (Test-TieneReuniones $root $app) { Say "    Actualizada. Ojo: $root tiene grabaciones; no la borres sin revisarla." Yellow }
     else { Say "    Actualizada. La carpeta que acabas de descomprimir ya no hace falta: puedes borrarla." Green }
     $origen = $root
     $app, $root = $old, $oldRoot
 } elseif ($prev) {
+    if ($prev.antes) { $script:antes = $prev.antes }
     Say "    Instalada en esta misma carpeta (encontrada por: $($prev.how)): se actualiza en su sitio"
 } else {
     $dest = $null
@@ -659,6 +871,8 @@ if ($yaInstalada) {
         $app, $root = (Join-Path $dest "_app"), $dest
     }
 }
+# los "ABRIR ... .bat" de la raiz con un nombre anterior sobran (hacen lo mismo que el nuevo)
+Remove-LanzadoresAntiguos $root
 
 Step "Buscando Python (de 3.10 a 3.13)..."
 $py = Find-Python
@@ -732,45 +946,16 @@ if (-not $coreOk) {
 # pythonw.exe (junto a python.exe): el mismo interprete sin ventana de consola; el log completo queda en server.log
 $pyw = Join-Path (Split-Path -Parent $py) "pythonw.exe"
 $sinConsola = Test-Path -LiteralPath $pyw
-if (-not $sinConsola) { Say "    No hay pythonw.exe junto a $py : el acceso directo abrirá una ventana de consola (Chuleta.bat)" Yellow }
+if (-not $sinConsola) { Say "    No hay pythonw.exe junto a $py : el acceso directo abrirá una ventana de consola (Tenca.bat)" Yellow }
 
 if (-not $NoShortcut) {
     Step "Creando el acceso directo '$AppName'..."
-    $ws = New-Object -ComObject WScript.Shell
     $places = if ($Desktop) { @($Desktop) } else { @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs")) }  # escritorio y menu Inicio
-    foreach ($dir in $places) {
-        try {
-            $lnkPath = Join-Path $dir "$AppName.lnk"
-            # el acceso directo del nombre anterior pasa a llamarse como la app: se renombra (nada se borra) y despues
-            # se actualiza como los demas; si ya hay uno con el nombre nuevo, el antiguo se deja donde esta y se avisa
-            $legacy = Join-Path $dir "$LegacyName.lnk"
-            if ($AppName -ne $LegacyName -and (Test-Path -LiteralPath $legacy)) {
-                if (Test-Path -LiteralPath $lnkPath) {
-                    Say "    Se conserva el acceso directo antiguo '$LegacyName' en $dir (ya había uno '$AppName')." Yellow
-                } else {
-                    try { Rename-Item -LiteralPath $legacy -NewName "$AppName.lnk" -ErrorAction Stop; Say "    El acceso directo '$LegacyName' pasa a llamarse '$AppName' ($dir)." }
-                    catch { Say "    No se pudo renombrar '$LegacyName.lnk' en $dir ($($_.Exception.Message)): se deja y se crea '$AppName'." Yellow }
-                }
-            }
-            $lnk = $ws.CreateShortcut($lnkPath)
-            if ($sinConsola) {
-                $lnk.TargetPath = $pyw
-                $lnk.Arguments = '"' + (Join-Path $app "server.py") + '"'
-                $lnk.WindowStyle = 1
-            } else {
-                $lnk.TargetPath = Join-Path $app "Chuleta.bat"
-                $lnk.Arguments = ""
-                $lnk.WindowStyle = 7  # la ventana de consola, minimizada
-            }
-            $lnk.WorkingDirectory = $app
-            $lnk.IconLocation = (Join-Path $app "static\chuleta.ico") + ",0"
-            $lnk.Description = "$AppName`: grabar, transcribir y resumir reuniones"
-            $lnk.Save()
-            $null = Set-ShortcutAppId $lnkPath $AppId
-            Say "    $lnkPath" Green
-        } catch {
-            Say "    No se pudo crear en $dir (usa ABRIR CHULETA.bat)" Yellow
-        }
+    foreach ($dir in $places) { Set-AccesoDirecto $dir $app $pyw $sinConsola }
+    if (-not $Desktop) {
+        # "Arrancar con Windows" (carpeta Inicio de Windows) y los anclajes de la barra de tareas: solo los de verdad
+        Update-Arranque (Join-Path ([Environment]::GetFolderPath("Programs")) "$AppName.lnk") $app
+        $script:anclados = @(Report-Anclajes $app)
     }
 }
 
@@ -785,6 +970,9 @@ $ver = $verRaw
 $ver = if ($ver) { " (versión $ver)" } else { "" }
 Say "  Listo$ver." Green
 Say "  Instalada en $root" Green
+# instalada encima de la app con su nombre anterior: se dice que es la misma y que no se ha perdido nada
+$renombrada = $(if ($script:antes) { "$($script:antes) ahora se llama ${AppName}: tus reuniones, voces y ajustes siguen donde estaban." } else { "" })
+if ($renombrada) { Say "  $renombrada" Green }
 $borrable = $origen -and -not (Test-TieneReuniones $origen (Join-Path $origen "_app"))
 if ($borrable) { Say "  La carpeta que descomprimiste ($origen) ya no hace falta: puedes borrarla." Green }
 Say "  Si es la primera vez: Ajustes (rueda dentada) > Dónde se procesan tus reuniones: solo en este PC, con tu cuenta de Claude o con una API." Green
@@ -793,12 +981,14 @@ Say "  Instrucciones completas en LEEME.txt" Green
 $abrir = -not $NoLaunch
 if ($Gui) {
     $borrable = if ($borrable) { " La carpeta descomprimida ya se puede borrar." } else { "" }
-    Finish-Ui $true "Listo$ver. Instalada en $root.$borrable Si es la primera vez: Ajustes > Dónde se procesan tus reuniones. Para apagar $AppName del todo: Ajustes > Apagar $AppName."
+    $siguiente = $(if ($renombrada) { " $renombrada" } else { " Si es la primera vez: Ajustes > Dónde se procesan tus reuniones." })
+    $anclaje = $(if ($script:anclados.Count) { " En la barra de tareas, desancla '$($script:anclados[0])' y ancla $AppName (cómo, en el detalle)." } else { "" })
+    Finish-Ui $true "Listo$ver. Instalada en $root.$borrable$siguiente$anclaje Para apagar $AppName del todo: Ajustes > Apagar $AppName."
     $abrir = $script:ui.abrir
 }
 if ($abrir) {
     if ($sinConsola) { Start-Process -FilePath $pyw -ArgumentList "server.py" -WorkingDirectory $app }
-    else { Start-Process -FilePath (Join-Path $app "Chuleta.bat") -WorkingDirectory $app -WindowStyle Minimized }
+    else { Start-Process -FilePath (Join-Path $app "Tenca.bat") -WorkingDirectory $app -WindowStyle Minimized }
 }
 if (-not $Gui -and -not ($NoShortcut -or $NoLaunch) -and [Environment]::UserInteractive) {
     Write-Host ""

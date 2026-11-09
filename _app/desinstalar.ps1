@@ -1,11 +1,12 @@
-﻿# Desinstalador de Chuleta. Lo lanza "Aplicaciones instaladas" (Configuracion > Aplicaciones > Chuleta > Desinstalar)
-# con la orden que deja instalar.ps1 en HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta. Sin permisos
+﻿# Desinstalador de Tenca. Lo lanza "Aplicaciones instaladas" (Configuracion > Aplicaciones > Tenca > Desinstalar)
+# con la orden que deja instalar.ps1 en HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Tenca. Sin permisos
 # de administrador.
-# Quita la aplicacion: los accesos directos de esta instalacion (escritorio e Inicio), su entrada de "Aplicaciones
-# instaladas", la carpeta _app y los .bat de la raiz. NUNCA toca las reuniones: audios, transcripciones (.txt/.srt),
-# notas (.md), resumenes, hablantes, carpetas de proyecto y listas de Vocabulario se quedan en la carpeta de la app
-# (la de _app), igual que el LEEME.txt y la licencia. En _app solo borra lo que es de la app (codigo, iconos, version y
-# python.txt); si alli hay algo mas, se queda y se dice.
+# Quita la aplicacion: los accesos directos de esta instalacion (escritorio, Inicio y la copia de "Arrancar con
+# Windows"), su entrada de "Aplicaciones instaladas", la carpeta _app y los .bat de la raiz; tambien los que aun
+# lleven un nombre anterior de la app ("Chuleta", "Notas") si son de esta instalacion. NUNCA toca las reuniones:
+# audios, transcripciones (.txt/.srt), notas (.md), resumenes, hablantes, carpetas de proyecto y listas de Vocabulario
+# se quedan en la carpeta de la app (la de _app), igual que el LEEME.txt y la licencia. En _app solo borra lo que es
+# de la app (codigo, iconos, version y python.txt); si alli hay algo mas, se queda y se dice.
 #   -Silencioso   sin ventana (QuietUninstallString, CI). No borra %LOCALAPPDATA%\AudiosApp salvo con -BorrarDatos
 #   -BorrarDatos  borra tambien ajustes, claves, huellas de voz y registros (%LOCALAPPDATA%\AudiosApp); con ventana,
 #                 deja la casilla marcada
@@ -13,16 +14,20 @@
 # Solo para CI: -AutoCerrar N responde solo a los N segundos de cada pantalla (la de confirmar, como "Cancelar"; con
 # -AutoConfirmar, como "Desinstalar"; la final, "Cerrar"). Windows nunca lanza el desinstalador con ellas.
 # Para poder borrar _app, el script se copia a %TEMP% y se relanza desde alli (-Relanzado -App <carpeta _app>).
-# Lo que hace queda en %TEMP%\chuleta-desinstalar.log. Codigo de salida: 0 desinstalada (o cancelado en la ventana),
+# Lo que hace queda en %TEMP%\tenca-desinstalar.log. Codigo de salida: 0 desinstalada (o cancelado en la ventana),
 # 1 incompleta o error, 2 la app esta grabando (no se ha tocado nada).
 param([switch]$Silencioso, [switch]$BorrarDatos, [int]$Port = 8765, [int]$AutoCerrar = 0, [switch]$AutoConfirmar,
       [switch]$Relanzado, [string]$App = "")
 
 $ErrorActionPreference = "Continue"
-$AppName = "Chuleta"
-$LegacyName = "Notas"  # nombre anterior de la app: su acceso directo, si apunta aqui, tambien sobra
-$UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Chuleta"
-$script:logFile = Join-Path $env:TEMP "chuleta-desinstalar.log"
+$AppName = "Tenca"
+# nombres anteriores de la app (= common.APP_FORMER_NAMES): sus accesos directos y su entrada, si son de esta
+# instalacion, tambien sobran
+$LegacyNames = @("Chuleta", "Notas")
+$UninstallBase = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+$UninstallKey = "$UninstallBase\Tenca"
+$LegacyUninstallKeys = @("$UninstallBase\Chuleta")
+$script:logFile = Join-Path $env:TEMP "tenca-desinstalar.log"
 function Log($text) {
     try { Add-Content -LiteralPath $script:logFile -Value ((Get-Date -Format "HH:mm:ss") + " " + ("$text" -replace "`r", "")) -Encoding UTF8 } catch {}
 }
@@ -36,7 +41,7 @@ $Datos = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "AudiosApp" } el
 if (-not $Relanzado) {
     try { Add-Content -LiteralPath $script:logFile -Value ("==== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " desinstalar.ps1 desde " + $App) -Encoding UTF8 } catch {}
     try { Set-Location -LiteralPath $env:TEMP; [Environment]::CurrentDirectory = $env:TEMP } catch {}
-    $tmp = Join-Path $env:TEMP ("chuleta-desinstalar-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".ps1")
+    $tmp = Join-Path $env:TEMP ("tenca-desinstalar-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".ps1")
     try { Copy-Item -LiteralPath $PSCommandPath -Destination $tmp -Force -ErrorAction Stop } catch {
         Log "X no se pudo copiar a $tmp : $($_.Exception.Message)"
         exit 1
@@ -70,7 +75,7 @@ $AppFolders = [ordered]@{
 }
 $CodeTxt = @("version.txt", "python.txt", "export\LEEME.txt")
 # los .bat de la raiz (sin _app no funcionan); el LEEME.txt y la licencia se quedan junto a las reuniones
-$RootLaunchers = @("INSTALAR.bat", "ABRIR CHULETA.bat", "ABRIR NOTAS.bat")
+$RootLaunchers = @("INSTALAR.bat", "ABRIR TENCA.bat", "ABRIR CHULETA.bat", "ABRIR NOTAS.bat")
 
 # --- 2. presentacion: ventana (WinForms, como el instalador) o nada (-Silencioso). La logica no depende de esto.
 $script:ui = $null
@@ -79,7 +84,7 @@ function Say($text) {
     if ($script:ui) { $script:ui.status.Text = $text; [System.Windows.Forms.Application]::DoEvents() }
 }
 function Load-Image($path) {
-    # en memoria: Image.FromFile deja el fichero abierto y _app\static\chuleta.png no se podria borrar
+    # en memoria: Image.FromFile deja el fichero abierto y _app\static\tenca.png no se podria borrar
     try { return [System.Drawing.Image]::FromStream((New-Object System.IO.MemoryStream(, [System.IO.File]::ReadAllBytes($path)))) } catch { return $null }
 }
 function New-UninstallWindow {
@@ -95,12 +100,12 @@ function New-UninstallWindow {
         $f.ClientSize = New-Object System.Drawing.Size(640, 392)
         $f.Font = New-Object System.Drawing.Font("Segoe UI", 10)
         $f.BackColor = [System.Drawing.Color]::White
-        try { $f.Icon = New-Object System.Drawing.Icon((New-Object System.IO.MemoryStream(, [System.IO.File]::ReadAllBytes((Join-Path $App "static\chuleta.ico"))))) } catch {}
+        try { $f.Icon = New-Object System.Drawing.Icon((New-Object System.IO.MemoryStream(, [System.IO.File]::ReadAllBytes((Join-Path $App "static\tenca.ico"))))) } catch {}
         $logo = New-Object System.Windows.Forms.PictureBox
         $logo.Location = New-Object System.Drawing.Point(24, 20)
         $logo.Size = New-Object System.Drawing.Size(64, 64)
         $logo.SizeMode = "Zoom"
-        $logo.Image = Load-Image (Join-Path $App "static\chuleta.png")
+        $logo.Image = Load-Image (Join-Path $App "static\tenca.png")
         $title = New-Object System.Windows.Forms.Label
         $title.Text = $AppName
         $title.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold)
@@ -252,14 +257,14 @@ function Invoke-Api($path, $post = $false, $timeout = 2) {
     }
 }
 function Test-Grabadora {
-    # alguna grabadora de Chuleta (recorder.py) en marcha: puede estar grabando una reunion
+    # alguna grabadora de la app (recorder.py) en marcha: puede estar grabando una reunion
     try {
         return (@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
             $_.Name -match '^pythonw?\.exe$' -and "$($_.CommandLine)" -match 'recorder\.py' }).Count -gt 0)
     } catch { return $true }  # sin poder mirarlo, se supone que si
 }
 function Get-AppProcesses {
-    # procesos de esta instalacion: el servidor (si Stop-App vio que era Chuleta) y los que llevan _app o la carpeta de
+    # procesos de esta instalacion: el servidor (si Stop-App vio que era la app) y los que llevan _app o la carpeta de
     # la ventana (AudiosApp\webview) en la linea de ordenes: worker.py, recorder.py, voices.py, el aviso y WebView2
     $marks = @($App)
     if ($Datos) { $marks += (Join-Path $Datos "webview") }
@@ -274,8 +279,8 @@ function Get-AppProcesses {
     }
     return @($out | Where-Object { $_ })
 }
-function Test-ServidorChuleta($id) {
-    # el proceso es un server.py de Chuleta (de esta carpeta o de otra)
+function Test-ServidorApp($id) {
+    # el proceso es un server.py de la app (de esta carpeta o de otra)
     if (-not $id) { return $false }
     $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
     return [bool]($p -and "$($p.CommandLine)" -match 'server\.py')
@@ -284,10 +289,10 @@ function Stop-App {
     # "no" (no estaba abierta), "ok" (apagada) o "grabando" (no se toca nada)
     $ping = Invoke-Api "/api/ping" $false 5
     $lp = Get-ListenerPid
-    # abierta: contesta como Chuleta; 401/403 (API protegida sin token valido); o no contesta a tiempo pero en el
-    # puerto escucha un server.py de Chuleta (ocupada)
+    # abierta: contesta como la app; 401/403 (API protegida sin token valido); o no contesta a tiempo pero en el
+    # puerto escucha un server.py de la app (ocupada)
     $abierta = ($ping.code -eq 200 -and $ping.body.app -eq "audios") -or $ping.code -eq 401 -or $ping.code -eq 403 -or
-               ($ping.code -eq 0 -and (Test-ServidorChuleta $lp))
+               ($ping.code -eq 0 -and (Test-ServidorApp $lp))
     if (-not $abierta) { return "no" }
     $script:appPid = $lp  # su proceso cuenta para Wait-AppGone
     $ap = Invoke-Api "/api/apagar" $true 20
@@ -326,14 +331,14 @@ function Wait-AppGone {
     return "procesos"
 }
 function Remove-Shortcuts {
-    # Chuleta.lnk (y Notas.lnk, el nombre anterior) en el escritorio, en Inicio y en la carpeta Inicio de Windows (la
-    # copia que pone "Arrancar con Windows" del icono de la bandeja), solo si apuntan a esta instalacion: otra copia
-    # de Chuleta en otra carpeta conserva el suyo
+    # Tenca.lnk (y Chuleta.lnk o Notas.lnk, los nombres anteriores) en el escritorio, en Inicio y en la carpeta Inicio
+    # de Windows (la copia que pone "Arrancar con Windows" del icono de la bandeja), solo si apuntan a esta instalacion:
+    # otra copia de la app en otra carpeta conserva el suyo
     $n = 0
     $ws = New-Object -ComObject WScript.Shell
     foreach ($dir in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"),
                        [Environment]::GetFolderPath("Startup"))) {
-        foreach ($name in @("$AppName.lnk", "$LegacyName.lnk")) {
+        foreach ($name in @(@("$AppName.lnk") + @($LegacyNames | ForEach-Object { "$_.lnk" }))) {
             $lnk = Join-Path $dir $name
             if (-not (Test-Path -LiteralPath $lnk)) { continue }
             $sc = $ws.CreateShortcut($lnk)
@@ -348,12 +353,14 @@ function Remove-Shortcuts {
     return $n
 }
 function Remove-Registro {
-    # la entrada de "Aplicaciones instaladas", si es la de esta carpeta
-    if (-not (Test-Path -LiteralPath $UninstallKey)) { Log "sin entrada en Aplicaciones instaladas"; return }
-    $loc = "$((Get-ItemProperty -LiteralPath $UninstallKey -ErrorAction SilentlyContinue).InstallLocation)"
-    if ($loc -and -not (Same-Path $loc $Root)) { Log "la entrada de Aplicaciones instaladas es de $loc : se conserva"; return }
-    try { Remove-Item -LiteralPath $UninstallKey -Recurse -Force -ErrorAction Stop; Log "borrada la entrada $UninstallKey" }
-    catch { Log "X no se pudo borrar $UninstallKey : $($_.Exception.Message)"; $script:fallos += $UninstallKey }
+    # la entrada de "Aplicaciones instaladas" (y la del nombre anterior, si quedara), si es la de esta carpeta
+    foreach ($key in @(@($UninstallKey) + $LegacyUninstallKeys)) {
+        if (-not (Test-Path -LiteralPath $key)) { Log "sin entrada $key"; continue }
+        $loc = "$((Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).InstallLocation)"
+        if ($loc -and -not (Same-Path $loc $Root)) { Log "la entrada $key es de $loc : se conserva"; continue }
+        try { Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction Stop; Log "borrada la entrada $key" }
+        catch { Log "X no se pudo borrar $key : $($_.Exception.Message)"; $script:fallos += $key }
+    }
 }
 function Test-Enlace($item) {
     # junction o enlace simbolico (los ficheros de OneDrive tambien son "reparse points", pero no enlaces)
@@ -462,7 +469,7 @@ function Invoke-Desinstalar($borrarDatos) {
 
 function Exit-Desinstalar($code) {
     # la copia de %TEMP% se borra sola al terminar, por cualquier camino (tambien al cancelar o si algo falla)
-    if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -like "chuleta-desinstalar-*.ps1" -and (Same-Path (Split-Path -Parent $PSCommandPath) $env:TEMP)) {
+    if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -like "tenca-desinstalar-*.ps1" -and (Same-Path (Split-Path -Parent $PSCommandPath) $env:TEMP)) {
         Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     }
     exit $code

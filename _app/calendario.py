@@ -23,7 +23,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from common import BAD_NAME, WINDOWS, fold, log, log_exc
+from common import APP_NAME, BAD_NAME, WINDOWS, fold, log, log_exc
 
 # ----------------------------------------------------------------------------- nivel 1: ventana de Teams
 
@@ -185,19 +185,20 @@ TYPE_E_LIBNOTREGISTERED = _hr(0x8002801D)
 
 # lo que se le dice al usuario en cada estado (una frase, sin asuntos ni nombres)
 FRASES = {
-    "apagado": "Tienes el Outlook clásico: activa el calendario y Chuleta sugerirá el nombre y los asistentes de "
+    "apagado": f"Tienes el Outlook clásico: activa el calendario y {APP_NAME} sugerirá el nombre y los asistentes de "
                "cada reunión.",
-    "apagado_sin_saber": "Activa el calendario de Outlook y Chuleta sugerirá el nombre y los asistentes de cada "
+    "apagado_sin_saber": f"Activa el calendario de Outlook y {APP_NAME} sugerirá el nombre y los asistentes de cada "
                          "reunión.",
-    "cerrado": "Outlook clásico está cerrado: ábrelo y Chuleta leerá tu calendario.",
-    "outlook_nuevo": "Usas el Outlook nuevo, que no deja leer tu agenda a otras aplicaciones: Chuleta saca el nombre "
-                     "de la reunión de la ventana de Teams.",
-    "sin_outlook": "Este PC no tiene el Outlook clásico: Chuleta saca el nombre de la reunión de la ventana de Teams.",
-    "sin_pywin32": "Falta pywin32, la librería con la que Chuleta lee Outlook: vuelve a ejecutar INSTALAR.bat.",
-    "sin_permiso": "Outlook está abierto pero no deja conectarse a Chuleta: espera unos segundos y vuelve a probar; si "
-                   "sigue igual, cierra Outlook y ábrelo normal (no como administrador).",
-    "esperando_permiso": "Outlook te está preguntando si dejas que Chuleta lea tu calendario: contesta en su ventana "
-                         "(«Permitir») y vuelve a probar.",
+    "cerrado": f"Outlook clásico está cerrado: ábrelo y {APP_NAME} leerá tu calendario.",
+    "outlook_nuevo": f"Usas el Outlook nuevo, que no deja leer tu agenda a otras aplicaciones: {APP_NAME} saca el "
+                     "nombre de la reunión de la ventana de Teams.",
+    "sin_outlook": f"Este PC no tiene el Outlook clásico: {APP_NAME} saca el nombre de la reunión de la ventana de "
+                   "Teams.",
+    "sin_pywin32": f"Falta pywin32, la librería con la que {APP_NAME} lee Outlook: vuelve a ejecutar INSTALAR.bat.",
+    "sin_permiso": f"Outlook está abierto pero no deja conectarse a {APP_NAME}: espera unos segundos y vuelve a "
+                   "probar; si sigue igual, cierra Outlook y ábrelo normal (no como administrador).",
+    "esperando_permiso": f"Outlook te está preguntando si dejas que {APP_NAME} lea tu calendario: contesta en su "
+                         "ventana («Permitir») y vuelve a probar.",
     "ocupado": "Outlook no responde (¿tiene una ventana o un aviso abiertos?): ciérralos y vuelve a probar.",
     "no_windows": "El calendario de Outlook solo se lee en Windows.",
     "libreria": "Office no tiene bien registrado Outlook para otras aplicaciones: repara Office desde «Aplicaciones "
@@ -810,7 +811,7 @@ def _hora(d):
 
 def _comprobar_horas(item):
     """¿Outlook (Start frente a StartUTC) y Windows llevan el mismo desfase con UTC a esa hora? Si no, las horas que
-    lee Chuleta no serían las que enseña Outlook."""
+    lee la app no serían las que enseña Outlook."""
     s, u = _local(getattr(item, "Start")), _local(getattr(item, "StartUTC"))
     outlook = round((s - u).total_seconds() / 60)
     windows = round(s.astimezone().utcoffset().total_seconds() / 60)
@@ -953,8 +954,9 @@ def _estado(activado, probar, now, env, session, fmt, timeout):
                                 "pregunta": "Directiva de la empresa: Outlook pregunta antes de dar los asistentes",
                                 "aprueba": "Directiva de la empresa: deja leer los asistentes"}[politica])
     if env.get("admin"):
-        paso("admin", None, "Chuleta está abierta como administrador")
-    paso("activado", activado, "Calendario activado en Chuleta" if activado else "Calendario apagado en Chuleta")
+        paso("admin", None, f"{APP_NAME} está abierta como administrador")
+    paso("activado", activado,
+         f"Calendario activado en {APP_NAME}" if activado else f"Calendario apagado en {APP_NAME}")
 
     # sin «Probar», lo que se sabe sin hablar con Outlook decide (no se le molesta en balde)
     if not probar:
@@ -1011,7 +1013,7 @@ def _estado(activado, probar, now, env, session, fmt, timeout):
     agenda = _frase_agenda(datos)
     if not activado:
         return fin("apagado", f"Outlook clásico responde ({agenda}), pero el calendario está apagado: actívalo para "
-                              "que Chuleta lo use al grabar.", "activar")
+                              f"que {APP_NAME} lo use al grabar.", "activar")
     sufijo, accion = _sufijo_asistentes(asist, politica)
     return fin("conectado", f"Outlook clásico: conectado · {agenda}{sufijo}", accion, nivel=2)
 

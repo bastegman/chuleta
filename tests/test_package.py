@@ -26,7 +26,7 @@ class BuildPackageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="chuleta-pkg-")
-        cls.dest = os.path.join(cls.tmp, "Chuleta - instalador.zip")
+        cls.dest = os.path.join(cls.tmp, "Tenca - instalador.zip")
         cls.n = server.build_package(cls.dest)
         cls.zip = zipfile.ZipFile(cls.dest)
         cls.names = set(cls.zip.namelist())
@@ -36,39 +36,39 @@ class BuildPackageTests(unittest.TestCase):
         cls.zip.close()
 
     def test_layout(self):
-        for n in ("Chuleta/INSTALAR.bat", "Chuleta/ABRIR CHULETA.bat", "Chuleta/LEEME.txt", "Chuleta/LICENSE",
-                  "Chuleta/_app/server.py", "Chuleta/_app/engines.py", "Chuleta/_app/worker.py", "Chuleta/_app/live.py",
-                  "Chuleta/_app/recorder.py", "Chuleta/_app/Chuleta.bat", "Chuleta/_app/instalar.ps1",
-                  "Chuleta/_app/version.txt", "Chuleta/_app/static/index.html", "Chuleta/_app/static/app.js",
-                  "Chuleta/_app/static/notas.js", "Chuleta/_app/static/app.css", "Chuleta/_app/static/chuleta.ico",
-                  "Chuleta/_app/static/chuleta.png", "Chuleta/_app/calendario.py", "Chuleta/_app/aviso.py",
-                  "Chuleta/_app/static/reunion.js", "Chuleta/_app/export/ABRIR CHULETA.bat"):
+        for n in ("Tenca/INSTALAR.bat", "Tenca/ABRIR TENCA.bat", "Tenca/LEEME.txt", "Tenca/LICENSE",
+                  "Tenca/_app/server.py", "Tenca/_app/engines.py", "Tenca/_app/worker.py", "Tenca/_app/live.py",
+                  "Tenca/_app/recorder.py", "Tenca/_app/Tenca.bat", "Tenca/_app/instalar.ps1",
+                  "Tenca/_app/version.txt", "Tenca/_app/static/index.html", "Tenca/_app/static/app.js",
+                  "Tenca/_app/static/notas.js", "Tenca/_app/static/app.css", "Tenca/_app/static/tenca.ico",
+                  "Tenca/_app/static/tenca.png", "Tenca/_app/calendario.py", "Tenca/_app/aviso.py",
+                  "Tenca/_app/static/reunion.js", "Tenca/_app/export/ABRIR TENCA.bat"):
             self.assertIn(n, self.names)
         self.assertEqual(self.n, len(self.names))
-        self.assertTrue(all(n.startswith("Chuleta/") for n in self.names))
+        self.assertTrue(all(n.startswith("Tenca/") for n in self.names))
         self.assertFalse(any("Notas" in n for n in self.names))  # nada del nombre anterior (notas.js es la función)
         self.assertFalse(any("Vocabulario" in n or n.endswith((".wav", ".pyc")) or "__pycache__" in n
                              for n in self.names))
         self.assertFalse(any("tests/" in n or n.endswith("README.md") for n in self.names))
-        self.assertIn("Chuleta/LICENSE", self.names)  # MIT: el aviso acompaña a cada copia
+        self.assertIn("Tenca/LICENSE", self.names)  # MIT: el aviso acompaña a cada copia
 
     def test_crlf_bom_y_version(self):
-        leeme = self.zip.read("Chuleta/LEEME.txt")
+        leeme = self.zip.read("Tenca/LEEME.txt")
         self.assertTrue(leeme.startswith("﻿".encode("utf-8")))
         self.assertIn(b"\r\n", leeme)
         self.assertNotIn(b"{FECHA}", leeme)
-        version = self.zip.read("Chuleta/_app/version.txt")
+        version = self.zip.read("Tenca/_app/version.txt")
         self.assertFalse(version.startswith("﻿".encode("utf-8")))  # sin BOM: PowerShell 5 lo lee con -Encoding UTF8
         self.assertRegex(version, rb"^" + VERSION_RE + rb"\r\n$")
         self.assertIn(version.strip(), leeme.split(b"\r\n")[0])  # la 1.ª línea del LEEME lleva la misma versión
-        ps1 = self.zip.read("Chuleta/_app/instalar.ps1")
+        ps1 = self.zip.read("Tenca/_app/instalar.ps1")
         self.assertTrue(ps1.startswith("﻿".encode("utf-8")))
         self.assertNotIn(b"\n\n\r", ps1)
         self.assertFalse(re.search(rb"(?<!\r)\n", ps1))  # todo CRLF
-        bat = self.zip.read("Chuleta/INSTALAR.bat")
+        bat = self.zip.read("Tenca/INSTALAR.bat")
         self.assertFalse(bat.startswith("﻿".encode("utf-8")))  # cmd.exe no quiere BOM
         self.assertFalse(re.search(rb"(?<!\r)\n", bat))
-        py = self.zip.read("Chuleta/_app/server.py")
+        py = self.zip.read("Tenca/_app/server.py")
         self.assertNotIn(b"\r\n", py)  # el código va tal cual
 
     def test_version_explicita(self):
@@ -77,10 +77,10 @@ class BuildPackageTests(unittest.TestCase):
         n = server.build_package(dest, version="2026-01-02 · abc1234")
         with zipfile.ZipFile(dest) as z:
             self.assertEqual(n, len(z.namelist()))
-            self.assertEqual(z.read("Chuleta/_app/version.txt"), "2026-01-02 · abc1234\r\n".encode("utf-8"))
-            primera = z.read("Chuleta/LEEME.txt").split(b"\r\n")[0].decode("utf-8-sig")
+            self.assertEqual(z.read("Tenca/_app/version.txt"), "2026-01-02 · abc1234\r\n".encode("utf-8"))
+            primera = z.read("Tenca/LEEME.txt").split(b"\r\n")[0].decode("utf-8-sig")
             self.assertIn("(versión 2026-01-02 · abc1234)", primera)
-            self.assertIn(b"{FECHA}", z.read("Chuleta/_app/export/LEEME.txt"))  # la plantilla sigue con el marcador
+            self.assertIn(b"{FECHA}", z.read("Tenca/_app/export/LEEME.txt"))  # la plantilla sigue con el marcador
 
     def test_version_por_defecto(self):
         """Sin versión explícita: la de _app/version.txt de esta copia (una copia instalada que vuelve a exportar) o,
@@ -95,9 +95,9 @@ class BuildPackageTests(unittest.TestCase):
         extra = os.path.join(self.tmp, "Legal.txt")
         with open(extra, "w", encoding="utf-8") as f:
             f.write("a, b\n")
-        server.build_package(dest, [(extra, "Chuleta/Alfa/Vocabulario/Legal.txt")])
+        server.build_package(dest, [(extra, "Tenca/Alfa/Vocabulario/Legal.txt")])
         with zipfile.ZipFile(dest) as z:
-            self.assertEqual(z.read("Chuleta/Alfa/Vocabulario/Legal.txt"), "﻿a, b\r\n".encode("utf-8"))
+            self.assertEqual(z.read("Tenca/Alfa/Vocabulario/Legal.txt"), "﻿a, b\r\n".encode("utf-8"))
 
 
 class TemplatesTests(unittest.TestCase):
@@ -106,7 +106,7 @@ class TemplatesTests(unittest.TestCase):
             return f.read()
 
     def test_raiz_y_export_coinciden(self):
-        for name in ("INSTALAR.bat", "ABRIR CHULETA.bat"):
+        for name in ("INSTALAR.bat", "ABRIR TENCA.bat"):
             self.assertEqual(self.read(name), self.read("_app", "export", name), name)
         root, tpl = self.read("LEEME.txt"), self.read("_app", "export", "LEEME.txt")
         m = re.search(rb"\(versi\xc3\xb3n (" + VERSION_RE + rb")\)", root.split(b"\r\n")[0])
@@ -142,10 +142,10 @@ class TemplatesTests(unittest.TestCase):
         # (AVISO_SIN_VETADAS), y el paso sale en verde. En local, con la lista en un fichero fuera del repo (escrita en
         # la orden quedaría en el historial):
         #   macOS/Linux:
-        #     NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py
+        #     NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/tenca-vetadas.txt)" .venv/bin/python tests/run.py
         #   Windows (PowerShell, desde la raíz del repo):
         #     $env:NOTAS_EXIGIR_VETADAS = "1"
-        #     $env:NOTAS_PALABRAS_VETADAS = Get-Content -Raw "$HOME\chuleta-vetadas.txt"; python tests\run.py
+        #     $env:NOTAS_PALABRAS_VETADAS = Get-Content -Raw "$HOME\tenca-vetadas.txt"; python tests\run.py
         # Revisa lo que git tiene en el índice (un fichero nuevo cuenta desde su `git add`); sin git, la raíz y _app,
         # tests, scripts, .github y design. Al fallar da fichero, línea y número de patrón, nunca el texto encontrado:
         # el log de la CI de un repo público es público.
@@ -170,7 +170,7 @@ class TemplatesTests(unittest.TestCase):
         """El test de agnosticismo revisa también CHANGELOG, tests, scripts y workflows, y al fallar no repite el texto
         encontrado. Se prueba con patrones inventados que casan con textos fijos de esos ficheros, nunca con la lista
         real."""
-        marcas = [("CHANGELOG.md", r"^# Cambios"), ("README.md", r"^# Chuleta"), ("LEEME.txt", r"^chuleta · grabar"),
+        marcas = [("CHANGELOG.md", r"^# Cambios"), ("README.md", r"^# Tenca"), ("LEEME.txt", r"^tenca · grabar"),
                   ("tests/run.py", r"MIN_TESTS = \d+"), ("scripts/build_zip.py", r"def version_string\("),
                   (".github/workflows/tests.yml", r"^name: tests\b")]
         encontrados = []
@@ -259,7 +259,7 @@ class TemplatesTests(unittest.TestCase):
                     self.assertEqual(salida.getvalue(), AVISO_SIN_VETADAS + "\n" if avisar else "")
         self.assertTrue(AVISO_SIN_VETADAS.startswith("::warning title=Agnosticismo sin ejecutar::"))
         self.assertNotRegex(AVISO_SIN_VETADAS, "[%\r\n]")  # GitHub cortaría el mensaje (o habría que escaparlos)
-        for texto in ("no se ha ejecutado", 'NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python '
+        for texto in ("no se ha ejecutado", 'NOTAS_PALABRAS_VETADAS="$(cat ~/tenca-vetadas.txt)" .venv/bin/python '
                                             "tests/run.py"):
             self.assertIn(texto, AVISO_SIN_VETADAS)
 
@@ -293,7 +293,7 @@ AVISO_SIN_VETADAS = (
     "del secreto NOTAS_PALABRAS_VETADAS o no trae ningún patrón (no existe o está vacío en Settings -> Secrets and "
     "variables -> Actions, o el run es de un fork o de Dependabot, que no reciben los secretos). En local, con la "
     "lista en un fichero fuera del repo: "
-    'NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py '
+    'NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/tenca-vetadas.txt)" .venv/bin/python tests/run.py '
     "(en Windows, ver test_sin_rastro_de_clientes en tests/test_package.py)")
 
 
@@ -303,7 +303,7 @@ def avisar_sin_vetadas():
     return os.environ.get("NOTAS_AVISAR_SIN_VETADAS", "").strip().lower() in ("true", "1")
 
 
-_RAIZ_SIN_GIT = ("CHANGELOG.md", "README.md", "LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat",
+_RAIZ_SIN_GIT = ("CHANGELOG.md", "README.md", "LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR TENCA.bat",
                  "make_icons.py", "requirements.txt", "requirements-dev.txt", "setup.cfg", ".gitignore",
                  ".gitattributes")
 
@@ -363,24 +363,24 @@ class BuildZipScriptTests(unittest.TestCase):
     def test_script_genera_el_zip_instalable(self):
         import subprocess
         import sys
-        dest = os.path.join(tempfile.mkdtemp(prefix="chuleta-dist-"), "Chuleta - instalador.zip")
+        dest = os.path.join(tempfile.mkdtemp(prefix="chuleta-dist-"), "Tenca - instalador.zip")
         r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_zip.py"), dest],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         with zipfile.ZipFile(dest) as z:
             names = set(z.namelist())
-            self.assertIn("Chuleta/INSTALAR.bat", names)
-            self.assertIn("Chuleta/ABRIR CHULETA.bat", names)
-            self.assertIn("Chuleta/LEEME.txt", names)
-            self.assertIn("Chuleta/LICENSE", names)
-            self.assertIn("Chuleta/_app/server.py", names)
-            self.assertIn("Chuleta/_app/version.txt", names)
-            self.assertIn("Chuleta/_app/static/app.js", names)
-            self.assertIn("Chuleta/_app/export/LEEME.txt", names)
+            self.assertIn("Tenca/INSTALAR.bat", names)
+            self.assertIn("Tenca/ABRIR TENCA.bat", names)
+            self.assertIn("Tenca/LEEME.txt", names)
+            self.assertIn("Tenca/LICENSE", names)
+            self.assertIn("Tenca/_app/server.py", names)
+            self.assertIn("Tenca/_app/version.txt", names)
+            self.assertIn("Tenca/_app/static/app.js", names)
+            self.assertIn("Tenca/_app/export/LEEME.txt", names)
             self.assertFalse(any("Vocabulario" in n for n in names))
-            version = z.read("Chuleta/_app/version.txt").strip()
+            version = z.read("Tenca/_app/version.txt").strip()
             self.assertRegex(version, rb"^" + VERSION_RE + rb"$")
-            leeme = z.read("Chuleta/LEEME.txt")
+            leeme = z.read("Tenca/LEEME.txt")
             self.assertIn(version, leeme.split(b"\r\n")[0])
             self.assertNotIn(b"{FECHA}", leeme)
             self.assertEqual(z.testzip(), None)
@@ -414,10 +414,10 @@ class BuildZipScriptTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         with zipfile.ZipFile(dest) as z:
             names = set(z.namelist())
-            self.assertIn("Chuleta/Proyecto Alfa/Vocabulario/General.txt", names)
+            self.assertIn("Tenca/Proyecto Alfa/Vocabulario/General.txt", names)
             self.assertEqual([n for n in names if "Vocabulario" in n],
-                             ["Chuleta/Proyecto Alfa/Vocabulario/General.txt"])
-            body = z.read("Chuleta/Proyecto Alfa/Vocabulario/General.txt")  # build_package deja los .txt con BOM y CRLF
+                             ["Tenca/Proyecto Alfa/Vocabulario/General.txt"])
+            body = z.read("Tenca/Proyecto Alfa/Vocabulario/General.txt")  # build_package deja los .txt con BOM y CRLF
             self.assertEqual(body.decode("utf-8-sig").splitlines(), ["# siglas", "API, SLA"])
         self.assertIn("1 listas de vocabulario", r.stdout)
 

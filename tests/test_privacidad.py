@@ -875,7 +875,7 @@ class GitignoreTests(unittest.TestCase):
     def test_lo_del_proyecto_si(self):
         self.assertEqual(self.git("ls-files", "-ci", "--exclude-standard").stdout.strip(), "")  # nada versionado cae
         for p in ("README.md", "CHANGELOG.md", "LEEME.txt", "LICENSE", "requirements.txt", "setup.cfg",
-                  "ABRIR CHULETA.bat", "INSTALAR.bat", "_app/server.py", "_app/static/app.js", "_app/export/LEEME.txt",
+                  "ABRIR TENCA.bat", "INSTALAR.bat", "_app/server.py", "_app/static/app.js", "_app/export/LEEME.txt",
                   "tests/test_nuevo.py", "scripts/e2e/nuevo.ps1", ".github/workflows/nuevo.yml", "design/x.svg"):
             self.assertEqual(self.git("check-ignore", "--no-index", "-q", p).returncode, 1, p)
 

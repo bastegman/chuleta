@@ -50,7 +50,7 @@ def norm_titulo(s):
 
 
 def ruta_txt(rel, links=None):
-    """Cómo se enseña una carpeta interna: «Chuleta\\Proyecto Alfa\\Reuniones\\» o, en una vinculada,
+    """Cómo se enseña una carpeta interna: «Tenca\\Proyecto Alfa\\Reuniones\\» o, en una vinculada,
     «<su nombre>\\sub\\». `links`: id -> nombre de las vinculadas."""
     rel = (rel or "").replace("\\", "/").strip("/")
     if rel.startswith(":"):
@@ -335,7 +335,7 @@ def audio_txt(mic, sys_dev):
 
 
 def resumen(plan):
-    """Una línea para el aviso de Ctrl+Alt+R, el toast y el chip: «Comité → Chuleta\\Alfa\\… · Español + inglés»."""
+    """Una línea para el aviso de Ctrl+Alt+R, el toast y el chip: «Comité → Tenca\\Alfa\\… · Español + inglés»."""
     by = {l["clave"]: l for l in plan["lineas"]}
     nombre = plan["nombre"]["valor"] or "Sin nombre"
     proy = plan["proyecto"]

@@ -313,7 +313,7 @@ class TokenDeSesionTests(ServidorBase):
 
     def test_estaticos_sin_token(self):
         """La página y sus .js/.css no llevan datos: se sirven sin token (la interfaz explica qué hacer si falta)."""
-        for path in ("/", "/app.js", "/app.css", "/chuleta.png"):
+        for path in ("/", "/app.js", "/app.css", "/tenca.png"):
             self.assertEqual(self.call("GET", path)[0], 200, path)
 
     def test_media_con_cookie(self):
@@ -791,7 +791,7 @@ class SondasTests(ServidorBase):
         base = os.path.join(self.out, "base")
         write_token_file(os.path.join(base, "ico", "data"), TOKEN)  # lo que deja el servidor de la variante
         reloj = types.SimpleNamespace(time=time.time, sleep=mock.Mock())  # sin las esperas de 6 y 4 s
-        ventana = (101, "Chuleta", "Chrome_WidgetWin_1", 4321)
+        ventana = (101, "Tenca", "Chrome_WidgetWin_1", 4321)
         with mock.patch.object(self.spike, "URL", self.url), \
                 mock.patch.object(self.spike, "make_variant", return_value="server.py"), \
                 mock.patch.object(self.spike, "subprocess") as sp, mock.patch.object(self.spike, "time", reloj), \
@@ -809,7 +809,7 @@ class SondasTests(ServidorBase):
         self.assert_abre_la_interfaz(app[0][len("--app="):])
 
     def test_las_variantes_del_spike_tienen_los_iconos_de_la_app(self):
-        """make_variant parte de la cabecera de iconos de index.html. Tras el renombrado (chuleta.ico) el spike seguía
+        """make_variant parte de la cabecera de iconos de index.html. Tras el renombrado (tenca.ico) el spike seguía
         buscando la de notas.ico: las 4 variantes acababan en AssertionError sin llegar a abrir Edge (run 41212715121
         del workflow lookfeel-spike), y la sonda de WebView2 cargaba static/notas.ico, que ya no existe."""
         self.assertTrue(os.path.isfile(self.probe.ICO), self.probe.ICO)

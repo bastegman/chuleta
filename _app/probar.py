@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""«Probar» del asistente «Configurar Chuleta» (07/11/2026): una prueba real de punta a punta con la configuración que
+"""«Probar» del asistente «Configurar» de la app (07/11/2026): una prueba real de punta a punta con la configuración que
 se está eligiendo, sin guardarla.
 
 Graba 3 s del micro («Di: hola, esto es una prueba»), los transcribe con el modo elegido y, si el modo resume, le pide
@@ -14,6 +14,7 @@ import time
 import uuid
 
 import explicar
+from common import APP_NAME
 
 FRASE = "Hola, esto es una prueba"
 SEGUNDOS = 3
@@ -21,7 +22,7 @@ SEGUNDOS = 3
 PASOS = {"local": ("modelos", "micro", "transcribir"),
          "agente": ("cuenta", "modelos", "micro", "transcribir", "resumir"),
          "api": ("micro", "transcribir", "resumir")}
-TEXTO_MUESTRA = "Hola, esto es una prueba de Chuleta."  # lo que se resume si no hay voz que resumir
+TEXTO_MUESTRA = f"Hola, esto es una prueba de {APP_NAME}."  # lo que se resume si no hay voz que resumir
 OJO_MICRO = (" Ojo: no se ha oído tu voz. Revisa el micro en ● Grabar: la barra «Nivel» tiene que moverse al "
              "hablar.")
 AVISO_SIN_TEXTO = ("La transcripción funciona, pero no ha entendido la frase de prueba: revisa el idioma en "

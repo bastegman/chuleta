@@ -3,7 +3,7 @@
 
     python3 scripts/medir_eco.py GRABACION.wav [--ventana 5] [--json]
 
-Lee un WAV PCM de 16 bits (el de Chuleta: 48 kHz estereo), lo pasa a mono a 8 kHz y, por ventanas de 5 s solapadas a
+Lee un WAV PCM de 16 bits (el de Tenca: 48 kHz estereo), lo pasa a mono a 8 kHz y, por ventanas de 5 s solapadas a
 la mitad, calcula la autocorrelacion normalizada (eco.xcorr, la misma que usa la grabadora) entre 50 ms y 1,5 s. Por
 debajo de 50 ms no se mira: el oido funde dos copias tan cercanas en una (no se oye «doble») y la voz, casi periodica
 (el tono, 80-400 Hz), da ahi picos a varios periodos. Hace falta la copia en 2 ventanas y en un 25 % de las que
@@ -41,7 +41,7 @@ def read_wav(path):
         sr, ch, sw, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
         raw = w.readframes(n)
     if sw != 2:
-        raise SystemExit("Solo WAV PCM de 16 bits (el que graba Chuleta)")
+        raise SystemExit("Solo WAV PCM de 16 bits (el que graba Tenca)")
     x = np.frombuffer(raw, "<i2").astype(np.float32) / 32768
     if ch > 1:
         x = x[:len(x) // ch * ch].reshape(-1, ch).mean(axis=1)

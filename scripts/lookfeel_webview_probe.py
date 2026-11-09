@@ -7,7 +7,7 @@ con pywebview (WebView2) en vez de `msedge --app`, y qué AUMID e iconos lleva e
 Arranca `_app/server.py --no-browser` en el puerto 8767, fija SetCurrentProcessExplicitAppUserModelID("Bernardo.Notas"),
 abre `webview.create_window("Notas", URL + "?t=<token>")` (con el token de la sesión, como la app), localiza su HWND
 (mismo pid, título «Notas»), mide el AUMID y los iconos WM_GETICON/GCLP_HICON antes y después de ponerle
-`static/chuleta.ico` con WM_SETICON (ctypes), guarda los iconos como PNG, cierra la ventana y escribe
+`static/tenca.ico` con WM_SETICON (ctypes), guarda los iconos como PNG, cierra la ventana y escribe
 SALIDA/webview.json y SALIDA/webview.md. Cualquier excepción queda anotada con su texto exacto: si la ventana no se
 puede crear, eso es el resultado.
 """
@@ -29,7 +29,7 @@ import lookfeel_spike as spike  # noqa: E402  (las funciones Win32 de medición)
 PORT = 8767
 URL = f"http://127.0.0.1:{PORT}/"
 APP_ID = "Bernardo.Notas"
-ICO = os.path.join(REPO, "_app", "static", "chuleta.ico")
+ICO = os.path.join(REPO, "_app", "static", "tenca.ico")
 user32, shell32 = ctypes.windll.user32, ctypes.windll.shell32
 
 

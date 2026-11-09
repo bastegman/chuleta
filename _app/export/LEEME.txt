@@ -1,4 +1,4 @@
-﻿CHULETA · grabar, transcribir y resumir reuniones              (versión {FECHA})
+﻿TENCA · grabar, transcribir y resumir reuniones                (versión {FECHA})
 ==================================================================================
 
 Qué es
@@ -15,12 +15,12 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
      ("Windows protegió su PC"). Luego descomprime el .zip donde sea (Descargas vale).
 
   2. Doble clic en INSTALAR.bat
-       - Instala Chuleta en su propia carpeta: C:\Users\<tu usuario>\Chuleta (fuera de Descargas y de
+       - Instala Tenca en su propia carpeta: C:\Users\<tu usuario>\Tenca (fuera de Descargas y de
          OneDrive). Ahí se guardan las grabaciones, transcripciones y notas. Al terminar te dice dónde
          ha quedado; la carpeta que descomprimiste ya no hace falta y la puedes borrar.
        - Si no tienes Python, lo instala (solo para tu usuario).
-       - Instala las librerías y crea el acceso directo "Chuleta" en el escritorio y en el menú Inicio.
-       - Chuleta aparece en Configuración > Aplicaciones > Aplicaciones instaladas, con su versión y
+       - Instala las librerías y crea el acceso directo "Tenca" en el escritorio y en el menú Inicio.
+       - Tenca aparece en Configuración > Aplicaciones > Aplicaciones instaladas, con su versión y
          su botón Desinstalar.
        - Si aun así Windows avisa con "Windows protegió su PC": "Más información" > "Ejecutar de todas
          formas" (el aviso es porque el instalador no lleva firma digital; no hay nada malo en él).
@@ -28,13 +28,13 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
          carpeta nueva o vacía). Solo vale la primera vez: si ya la tienes instalada, se actualiza
          donde está.
 
-  3. Se abre Chuleta. Lo primero: "Configurar Chuleta" (en la portada; luego, en ⚙ Ajustes >
+  3. Se abre Tenca. Lo primero: "Configurar Tenca" (en la portada; luego, en ⚙ Ajustes >
      Procesado): eliges dónde se procesan tus reuniones y al final lo pruebas. Una de tres:
        - Solo en este PC: Whisper transcribe en tu ordenador y nada sale de él (sin resumen con IA).
        - Con tu cuenta de Claude: transcribe en tu PC y resume con Claude usando tu suscripción (personal o
          de empresa) a través de Claude Code. El asistente te guía: "Abrir PowerShell", instalar Claude
          Code con una línea, escribir claude en esa misma ventana y entrar con tu cuenta en el navegador
-         (si es la de tu empresa, con su inicio de sesión de siempre), y "Probar". Chuleta no ve ni
+         (si es la de tu empresa, con su inicio de sesión de siempre), y "Probar". Tenca no ve ni
          guarda tus credenciales. Si ya usas Claude Code en VS Code, encuentra esa copia y su sesión;
          la app de escritorio de Claude no basta (su sesión es solo suya).
        - API externa: transcripción rápida en la nube y resumen con Groq (gratis: la API key se crea en
@@ -48,14 +48,21 @@ INSTALAR (una sola vez, unos 5 minutos, sin permisos de administrador)
 
 ACTUALIZAR A UNA VERSIÓN NUEVA
 ----------------------------------------------------------------------------------
-  Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Chuleta (o la versión
-  anterior, que se llamaba Notas), el instalador la encuentra (por Aplicaciones instaladas o por su
-  acceso directo), la cierra (salvo que esté grabando) y actualiza la de siempre, en su carpeta, con
-  tus grabaciones: nunca las mueve. La carpeta recién descomprimida ya no hace falta. El acceso
-  directo "Notas" pasa a llamarse "Chuleta" (no se borra nada). La versión instalada se ve al final
-  de Ajustes, en "Acerca de", y en Aplicaciones instaladas.
+  Descomprime el zip nuevo donde sea y ejecuta su INSTALAR.bat. Si ya tenías Tenca (o una versión
+  anterior, cuando se llamaba Chuleta o Notas), el instalador la encuentra (por Aplicaciones
+  instaladas o por su acceso directo), la cierra (salvo que esté grabando) y actualiza la de siempre,
+  en su carpeta, con tus grabaciones: nunca las mueve. La carpeta recién descomprimida ya no hace
+  falta. La versión instalada se ve al final de Ajustes, en "Acerca de", y en Aplicaciones instaladas.
 
-  Si la misma carpeta de reuniones la usan varias copias de Chuleta (en otro PC, o en una carpeta
+  Si venías de Chuleta (el nombre anterior): sus accesos directos del escritorio y del menú Inicio,
+  "Arrancar con Windows" y su entrada en Aplicaciones instaladas pasan a llamarse Tenca, sin
+  duplicados. No cambia nada más: tus reuniones y listas de vocabulario siguen en su carpeta, que
+  conserva su nombre (p. ej. C:\Users\<tu usuario>\Chuleta), y tus ajustes, claves y voces siguen en
+  %LOCALAPPDATA%\AudiosApp. Si la tenías anclada a la barra de tareas, Windows no deja que un
+  instalador le cambie el nombre: clic derecho en el icono > Desanclar de la barra de tareas y,
+  con Tenca abierta, clic derecho en su icono > Anclar a la barra de tareas.
+
+  Si la misma carpeta de reuniones la usan varias copias de Tenca (en otro PC, o en una carpeta
   de OneDrive compartida), actualízalas todas a la vez: una copia de una versión anterior envía al
   resumen con IA y a las copias en otras carpetas los participantes que propuso Outlook o Teams
   aunque no los hayas confirmado, y la del 30/10 (cuando se llamaba Notas) no entiende el idioma ni el
@@ -64,29 +71,30 @@ ACTUALIZAR A UNA VERSIÓN NUEVA
 
 DESINSTALAR
 ----------------------------------------------------------------------------------
-  - Configuración > Aplicaciones > Aplicaciones instaladas > Chuleta > Desinstalar (en el Panel de
-    control: Programas y características > Chuleta).
+  - Configuración > Aplicaciones > Aplicaciones instaladas > Tenca > Desinstalar (en el Panel de
+    control: Programas y características > Tenca).
   - Quita la aplicación: los accesos directos, su entrada en Aplicaciones instaladas y la carpeta
     _app. Tus reuniones (audios, transcripciones, notas, resúmenes, hablantes, carpetas de proyecto y
-    listas de vocabulario) NO se borran: se quedan en la carpeta Chuleta, junto a este LEEME.txt.
+    listas de vocabulario) NO se borran: se quedan en su carpeta, junto a este LEEME.txt.
     Las carpetas vinculadas tampoco se tocan.
   - La casilla "Borrar también mis ajustes, claves y voces guardadas" (desmarcada) borra además
     %LOCALAPPDATA%\AudiosApp: ajustes, API keys, huellas de voz y registros. Es definitivo.
-  - Si Chuleta está grabando, el desinstalador no toca nada: para la grabación y vuelve a empezar.
+  - Si Tenca está grabando, el desinstalador no toca nada: para la grabación y vuelve a empezar.
   - Python y sus librerías se quedan (los puede usar otro programa); si no los quieres, se quitan
     aparte, también en Aplicaciones instaladas.
-  - Si vuelves a instalar, Chuleta vuelve a C:\Users\<tu usuario>\Chuleta y enseña otra vez tus
-    reuniones. Si la tenías en otra carpeta: INSTALAR.bat -Destino "esa carpeta".
+  - Si vuelves a instalar, Tenca vuelve a la misma carpeta (C:\Users\<tu usuario>\Tenca, o
+    ...\Chuleta si venías de ahí) y enseña otra vez tus reuniones. Si la tenías en otra carpeta:
+    INSTALAR.bat -Destino "esa carpeta".
 
 
 USO DIARIO
 ----------------------------------------------------------------------------------
-  - Abre con el acceso directo "Chuleta" (ya sin ventana negra). Mientras está abierta, Chuleta
+  - Abre con el acceso directo "Tenca" (ya sin ventana negra). Mientras está abierta, Tenca
     tiene su icono en la bandeja del sistema, junto al reloj (la primera vez Windows lo pone en
     los iconos ocultos, la flecha ^: arrástralo junto al reloj si lo quieres siempre a la vista).
     Si cierras la ventana, la app sigue ahí (Ctrl+Alt+R sigue funcionando): un clic en el icono o
     el acceso directo la vuelven a abrir. Para salir del todo: clic derecho en el icono > Salir
-    (o ⚙ Ajustes > Ayuda > Apagar Chuleta). En ese menú también está "Arrancar con Windows".
+    (o ⚙ Ajustes > Ayuda > Apagar Tenca). En ese menú también está "Arrancar con Windows".
   - ● Grabar abre una tarjeta que dice qué va a pasar: la reunión (el nombre de Teams, de tu
     calendario o el que escribas, con tus reuniones recientes como sugerencia), el proyecto y,
     debajo, "Así se va a grabar": dónde se guarda, idioma, vocabulario, quién transcribe, quién
@@ -122,7 +130,7 @@ USO DIARIO
     o en Teams sale con negritas y listas; en el Bloc de notas, como texto limpio.
   - Ctrl+P busca en todas las reuniones. Puedes arrastrar a la ventana audios que ya tengas
     (mp3, m4a, wav, mp4…) y moverlos entre carpetas.
-  - Si grabas con OBS, configúralo para que guarde en la carpeta Chuleta: la app lo detecta y
+  - Si grabas con OBS, configúralo para que guarde en la carpeta de Tenca: la app lo detecta y
     transcribe en directo mientras graba.
   - Cada grabación va en su propia carpeta, "AAAA-MM-DD Nombre", dentro de la carpeta principal
     de su proyecto (sin asignar, la del proyecto: la que tiene su carpeta Vocabulario; si sus
@@ -130,7 +138,7 @@ USO DIARIO
     "Usarlo en" al grabar). Lo grabado antes se queda donde está. Mover o renombrar la reunión
     mueve su carpeta entera. En pleno directo, "Se guarda en ... · Cambiar" elige otra carpeta: la
     grabación sigue y, cuando terminan el directo, el repaso y el resumen, la reunión entera se
-    mueve sola (hasta entonces se puede deshacer; si cierras Chuleta antes, se mueve al volver a
+    mueve sola (hasta entonces se puede deshacer; si cierras Tenca antes, se mueve al volver a
     abrirla). "Una carpeta por reunión" se apaga en Ajustes > Al grabar.
   - ⚙ Ajustes abre en "Al grabar": arriba, "Así se graba ahora una reunión de [proyecto]", lo
     mismo que usarán ● Grabar y Ctrl+Alt+R (cambia con lo que escribas, antes de guardar); debajo,
@@ -145,11 +153,11 @@ USO DIARIO
     que se usarán al grabar. En negro, lo asignado; en gris, lo heredado: sin carpeta asignada,
     la del proyecto (la que tiene su carpeta Vocabulario); sin idioma, el de Al grabar. Con "Editar", lo
     que cambies en la fila se guarda al momento (también la carpeta de cada workstream). Debajo,
-    las listas de vocabulario, las carpetas fuera de Chuleta y las copias en otras carpetas.
+    las listas de vocabulario, las carpetas fuera de Tenca y las copias en otras carpetas.
   - Copias en otras carpetas (en Ajustes > Proyectos): carpetas donde cada reunión se guarda además como
     documento (.md con propiedades, resumen, notas y transcripción; .txt; o Word .docx), por
     ejemplo un vault de Obsidian o la carpeta de documentos del proyecto en OneDrive, con
-    subcarpeta por proyecto si quieres. No vale la carpeta Chuleta, una carpeta vinculada ni una
+    subcarpeta por proyecto si quieres. No vale la carpeta de Tenca, una carpeta vinculada ni una
     carpeta con grabaciones: los documentos chocarían con las notas de cada reunión. Se escribe al
     terminar y al guardar cambios; el audio y los originales no se mueven, y nunca se pisa un
     archivo ajeno ni uno que hayas cambiado allí (lo que no se ha podido escribir sale como aviso
@@ -201,7 +209,7 @@ QUIÉN HABLA (opcional)
 
 PRIVACIDAD
 ----------------------------------------------------------------------------------
-  - Grabaciones, transcripciones y notas: en la carpeta Chuleta, en tu PC.
+  - Grabaciones, transcripciones y notas: en la carpeta de Tenca, en tu PC.
   - Ajustes y API key: en %LOCALAPPDATA%\AudiosApp (fuera de OneDrive; no viajan con la carpeta).
     La API key se guarda cifrada con tu cuenta de Windows (DPAPI): otro usuario u otro PC no la lee.
   - Con la nube, el audio (para transcribir) y el texto (para resumir) se envían al proveedor que
@@ -209,7 +217,7 @@ PRIVACIDAD
     el acuerdo con tu cliente, si lo hay.
   - Con tu cuenta de Claude, el texto de la reunión (no el audio) se envía a Anthropic a través de
     Claude Code con la cuenta con la que iniciaste sesión (la de empresa, bajo su acuerdo; la personal,
-    bajo sus términos). Chuleta no ve ni guarda esas credenciales. Elegir esa opción es el consentimiento:
+    bajo sus términos). Tenca no ve ni guarda esas credenciales. Elegir esa opción es el consentimiento:
     también se resumen solas las reuniones transcritas en local.
   - El resumen automático solo envía las reuniones transcritas en la nube. Lo transcrito en local
     solo se envía al proveedor si lo resumes a mano o si marcas "Resumir también las reuniones
@@ -230,7 +238,7 @@ LÍMITES DEL PLAN GRATUITO DE GROQ (orientativos, se ven en console.groq.com/set
 
 SI TE SIRVE
 ----------------------------------------------------------------------------------
-  - Chuleta es gratis. Si te ayuda en el día a día, puedes invitar al autor a un café por PayPal desde
+  - Tenca es gratis. Si te ayuda en el día a día, puedes invitar al autor a un café por PayPal desde
     ⚙ Ajustes > Ayuda > Acerca de > "invitar al autor a un café", o en este enlace:
     https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR
 
@@ -239,10 +247,10 @@ SI ALGO FALLA
 ----------------------------------------------------------------------------------
   - INSTALAR.bat se puede volver a ejecutar sin problema.
   - Si tu empresa no deja añadir programas a Aplicaciones instaladas, el instalador lo avisa y
-    Chuleta funciona igual; para quitarla: clic derecho en _app\desinstalar.ps1 > "Ejecutar con
+    Tenca funciona igual; para quitarla: clic derecho en _app\desinstalar.ps1 > "Ejecutar con
     PowerShell".
-  - Registro del desinstalador: %TEMP%\chuleta-desinstalar.log.
-  - Si el acceso directo no abre nada, ABRIR CHULETA.bat arranca la app con una ventana de consola
+  - Registro del desinstalador: %TEMP%\tenca-desinstalar.log.
+  - Si el acceso directo no abre nada, ABRIR TENCA.bat arranca la app con una ventana de consola
     donde se ven los mensajes (ciérrala para apagar).
   - Para pedir ayuda: ⚙ Ajustes > Ayuda > "Copiar diagnóstico" copia solo datos técnicos: la
     versión, el sistema, el motor y el modelo y, de las últimas líneas del registro, lo fijo de
@@ -250,7 +258,7 @@ SI ALGO FALLA
     y las rutas salen como <texto>, y las claves no van. Revísalo antes de pegarlo y no lo
     publiques en un sitio público. Los registros (server.log y los demás) sí llevan nombres y
     rutas: no los compartas tal cual.
-  - Si sale "Sesión no válida", abre Chuleta con su acceso directo: la dirección 127.0.0.1
+  - Si sale "Sesión no válida", abre Tenca con su acceso directo: la dirección 127.0.0.1
     guardada en el navegador no vale sola.
   - Si no consigue descargar las librerías, suele ser el proxy de la red: prueba con otra red
     (p. ej. compartiendo datos del móvil) o pide a IT acceso a pypi.org.

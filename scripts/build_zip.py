@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """Genera el zip instalable con el mismo build_package que usa la app («Crear instalador para otra persona»).
 
-    python3 scripts/build_zip.py                       -> dist/Chuleta - instalador.zip, sin listas de vocabulario
+    python3 scripts/build_zip.py                       -> dist/Tenca - instalador.zip, sin listas de vocabulario
     python3 scripts/build_zip.py /ruta/salida.zip
     python3 scripts/build_zip.py --vocab [CARPETA]     -> además, las listas <proyecto>/Vocabulario/*.txt de CARPETA
                                                           (por defecto la raíz del repo), como
-                                                          Chuleta/<proyecto>/Vocabulario/<tema>.txt
+                                                          Tenca/<proyecto>/Vocabulario/<tema>.txt
 
-Layout: Chuleta/INSTALAR.bat, Chuleta/ABRIR CHULETA.bat, Chuleta/LEEME.txt (con la versión en la primera línea),
-Chuleta/LICENSE, Chuleta/_app/*.py|.bat|.ps1, Chuleta/_app/version.txt, Chuleta/_app/static/*, Chuleta/_app/export/*
+Layout: Tenca/INSTALAR.bat, Tenca/ABRIR TENCA.bat, Tenca/LEEME.txt (con la versión en la primera línea),
+Tenca/LICENSE, Tenca/_app/*.py|.bat|.ps1, Tenca/_app/version.txt, Tenca/_app/static/*, Tenca/_app/export/*
 (plantillas con {FECHA}). Necesita numpy (lo importa live.py).
 
 Versión: «AAAA-MM-DD · <sha corto>» (fecha del commit y `git rev-parse --short HEAD`; sin git, la fecha de hoy). Se

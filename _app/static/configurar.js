@@ -1,4 +1,4 @@
-/* Configurar Chuleta (07/11/2026, propuesta de Steve sobre la queja de Bernardo, msg 1169: «Lo de config es un
+/* Configurar la app (07/11/2026, propuesta de Steve sobre la queja de Bernardo, msg 1169: «Lo de config es un
    desastre»). Aquí vive lo que dice dónde se procesan las reuniones, con las mismas palabras en todas partes:
    - la línea del modo («Se transcribe en este PC (Normal) y al terminar la resume Claude con tu cuenta»), que usan el
      diálogo Grabar, la cabecera del directo, la Cola y el chip «EN VIVO»;
@@ -189,7 +189,7 @@ document.addEventListener('modelos', () => {
   if (!$('#jobsPanel').classList.contains('hidden') && typeof renderJobsPanel === 'function') renderJobsPanel();
 });
 
-/* ================================================================ asistente «Configurar Chuleta» (3 pasos)
+/* ================================================================ asistente «Configurar» de la app (3 pasos)
    1 · elegir dónde se procesan · 2 · prepararlo (descarga, Claude Code o la clave) · 3 · «Probar» de punta a punta.
    No guarda nada hasta terminar el paso 3 (como «Aplicar ahora» en Ajustes: un clic de prueba no cambia nada). */
 const W = { paso: 1, modo: 'local', cloud: {}, prueba: null, timer: null, agTimer: null, volver: null, d: null };

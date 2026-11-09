@@ -137,7 +137,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg, errores, red = self.pagina()
         pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
         self.assertEqual(pg.url, self.base + "/")  # ?t= entrega la cookie y redirige
-        self.assertEqual(pg.title(), "Chuleta")
+        self.assertEqual(pg.title(), "Tenca")
         pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
         pg.click("#btnSettings")
         pg.wait_for_selector("#modal:not(.hidden) h3:has-text('Ajustes')", timeout=5000)
@@ -1153,7 +1153,7 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-v code", timeout=10000)
         pg.select_option("#grProy", "")  # sin proyecto: se graba en la de Ajustes, que no está
         pg.wait_for_selector(".dialog.gr [data-fila='carpeta'] .gr-aviso", timeout=10000)
-        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Chuleta\\Fuera\\)",
+        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Tenca\\Fuera\\)",
                       pg.inner_text(".dialog.gr [data-fila='carpeta'] .gr-aviso"))
         pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)

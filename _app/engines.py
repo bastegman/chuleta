@@ -1766,7 +1766,7 @@ def windows_env(base=None):
     encima, las de usuario) y el PATH de windows_path(). Una PowerShell nueva las ve; el servidor, que arrancó antes,
     no (07/11/2026, cuenta de empresa): el proxy y el certificado de la empresa (HTTPS_PROXY, NODE_EXTRA_CA_CERTS),
     CLAUDE_CONFIG_DIR, CLAUDE_CODE_GIT_BASH_PATH o las de Bedrock y las pasarelas, puestas con setx o por IT después
-    de arrancar Chuleta. Las que el registro no tiene se quedan como estaban. Fuera de Windows, `base` tal cual."""
+    de arrancar la app. Las que el registro no tiene se quedan como estaban. Fuera de Windows, `base` tal cual."""
     env = dict(os.environ if base is None else base)
     if not _NT:
         return env
@@ -2186,7 +2186,7 @@ class ClaudeCode(AgenteLocal):
     @staticmethod
     def _env():
         """El entorno del usuario tal como lo veria una PowerShell nueva (windows_env: lo puesto en el registro despues
-        de arrancar Chuleta tambien cuenta), con dos cambios solo para estos procesos (la instalacion de Claude Code
+        de arrancar la app tambien cuenta), con dos cambios solo para estos procesos (la instalacion de Claude Code
         del usuario no cambia):
         - Sin ANTHROPIC_API_KEY ni ANTHROPIC_AUTH_TOKEN: con -p la clave del entorno se usaria siempre, y el gasto iria
           a la API y no a la cuenta del usuario, que es lo que prometen los textos de Ajustes; con una cuenta de empresa

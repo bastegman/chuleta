@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Doble de Chuleta con una grabación en curso, para el E2E del desinstalador (lo arranca scripts/e2e/lookfeel_e2e.ps1).
+"""Doble de Tenca con una grabación en curso, para el E2E del desinstalador (lo arranca scripts/e2e/lookfeel_e2e.ps1).
 
     python scripts/e2e/stub_grabando.py 8765
 
@@ -32,7 +32,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/apagar" and self.headers.get("X-Audios") == "1":
-            return self._json(409, {"error": "Hay una grabación en curso. Para la grabación antes de apagar Chuleta."})
+            return self._json(409, {"error": "Hay una grabación en curso. Para la grabación antes de apagar Tenca."})
         return self._json(403, {"error": "forbidden"})
 
 

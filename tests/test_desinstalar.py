@@ -72,12 +72,12 @@ class FicherosTests(unittest.TestCase):
 
     def test_el_paquete_lleva_el_desinstalador(self):
         tmp = tempfile.mkdtemp(prefix="chuleta-pkg-des-")
-        dest = os.path.join(tmp, "Chuleta - instalador.zip")
+        dest = os.path.join(tmp, "Tenca - instalador.zip")
         server.build_package(dest)
         with zipfile.ZipFile(dest) as z:
             names = set(z.namelist())
-            self.assertIn("Chuleta/_app/desinstalar.ps1", names)
-            b = z.read("Chuleta/_app/desinstalar.ps1")
+            self.assertIn("Tenca/_app/desinstalar.ps1", names)
+            b = z.read("Tenca/_app/desinstalar.ps1")
         self.assertTrue(b.startswith(b"\xef\xbb\xbf"))
         self.assertFalse(re.search(rb"(?<!\r)\n", b))
         self.assertEqual(b, read(DESINSTALAR))  # el del zip es el del repo, sin cambios
@@ -138,8 +138,8 @@ class InstaladorEmpresaTests(unittest.TestCase):
     def test_entrada_de_aplicaciones_instaladas(self):
         """Nombres de la clave Uninstall de Windows (learn.microsoft.com, «Uninstall Registry Key») con su tipo:
         REG_SZ los textos, REG_DWORD EstimatedSize (KB, ARPSIZE), NoModify y NoRepair."""
-        key = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Chuleta"
-        self.assertIn(f'$UninstallKey = "{key}"', self.ps1)
+        self.assertIn('$UninstallBase = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"', self.ps1)
+        self.assertIn('$UninstallKey = "$UninstallBase\\Tenca"', self.ps1)
         body = function_body(self.ps1, "Register-App")
         pairs = dict(re.findall(r'(\w+) = @\([^;]*?, "(String|DWord)"\)', body))
         self.assertEqual(pairs, {
@@ -151,7 +151,7 @@ class InstaladorEmpresaTests(unittest.TestCase):
                       """(Join-Path $appDir "desinstalar.ps1") + '"'""", body)
         self.assertIn('QuietUninstallString = @("$cmd -Silencioso", "String")', body)
         self.assertIn('Get-Date -Format "yyyyMMdd"', body)
-        self.assertIn('Join-Path $appDir "static\\chuleta.ico"', body)
+        self.assertIn('Join-Path $appDir "static\\tenca.ico"', body)
         self.assertIn("[Math]::Ceiling([double]$bytes / 1024)", body)  # KB
         self.assertIn('if (-not $version) { $version = Get-Date -Format "yyyy-MM-dd" }', body)  # sin version.txt
         self.assertIn('$Publisher = "Bernardo Stegmaier"', self.ps1)
@@ -164,14 +164,14 @@ class InstaladorEmpresaTests(unittest.TestCase):
     def test_deteccion_por_orden(self):
         body = function_body(self.ps1, "Find-Instalacion")
         a = body.index("InstallLocation")
-        b = body.index('foreach ($name in @("$AppName.lnk", "$LegacyName.lnk"))')
-        c = body.index("Join-Path $script:UserHome $FolderName")
+        b = body.index("foreach ($n in @(@($AppName) + $LegacyNames))")
+        c = body.index("Join-Path $script:UserHome $f")
         self.assertLess(a, b)
         self.assertLess(b, c)
         self.assertIn('how = "Aplicaciones instaladas"', body)
-        self.assertIn('how = "acceso directo $name ($dir)"', body)
+        self.assertIn('how = "acceso directo $n.lnk ($dir)"', body)
         self.assertIn("Test-Instalacion $loc", body)  # solo si sigue teniendo _app\server.py
-        self.assertIn('$FolderName = "Chuleta"', self.ps1)
+        self.assertIn('$FolderName = "Tenca"', self.ps1)
         self.assertIn('Join-Path $dir "_app\\server.py"', function_body(self.ps1, "Test-Instalacion"))
 
     def test_carpeta_propia(self):
@@ -183,25 +183,27 @@ class InstaladorEmpresaTests(unittest.TestCase):
         self.assertIn("ya no hace falta: puedes borrarla.", self.ps1)
         nueva = function_body(self.ps1, "Get-CarpetaNueva")
         self.assertIn('"$FolderName ($i)"', nueva)
-        libre = function_body(self.ps1, "Test-CarpetaLibre")
-        self.assertIn("LEEME.txt", libre)  # una carpeta que fue de Chuleta (el desinstalador deja el LEEME)
+        libre = function_body(self.ps1, "Test-CarpetaDeLaApp")
+        self.assertIn("LEEME.txt", libre)  # una carpeta que fue de la app (el desinstalador deja el LEEME)
         copia = function_body(self.ps1, "Copy-AppFiles")
-        for n in ('"LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat"', '"Vocabulario"', '"static", "export"',
+        for n in ('"LEEME.txt", "LICENSE", "INSTALAR.bat", $Launcher', '"Vocabulario"', '"static", "export"',
                   "if (-not (Test-Path -LiteralPath $to)) { Copy-Item"):  # las listas que ya hay no se pisan
             self.assertIn(n, copia)
-        # una carpeta ya instalada (python.txt) o la que ya es la de Chuleta no se copian
+        # una carpeta ya instalada (python.txt) o la que ya es la de la app no se copian
         self.assertIn('Test-Path -LiteralPath (Join-Path $app "python.txt")', self.ps1)
         self.assertIn("-not (Same-Path $dest $root)", self.ps1)
         self.assertIn("$Sistema = -not $NoShortcut -and -not $Desktop", self.ps1)
-        self.assertNotIn("Remove-Item", self.ps1)  # el instalador no borra nada
-        self.assertNotIn("Move-Item", self.ps1)  # ni mueve nada: las grabaciones se quedan donde estan
+        # el instalador solo quita lo que sobra con un nombre anterior (accesos directos, .bat de la raiz y la entrada
+        # antigua; test_tenca.InstaladorTextoTests) y no mueve nada: las grabaciones se quedan donde estan
+        self.assertEqual(self.ps1.count("Remove-Item"), 2)
+        self.assertNotIn("Move-Item", self.ps1)
 
     def test_p2_16_solo_desbloquea_el_paquete(self):
         """La marca de Internet (Zone.Identifier) solo se quita a los ficheros del paquete, nunca a las reuniones."""
         self.assertEqual(self.ps1.count("Unblock-File"), 2)  # las dos de Unblock-AppFiles
         body = function_body(self.ps1, "Unblock-AppFiles")
         self.assertIn("Get-ChildItem -LiteralPath $appDir -Recurse -File", body)
-        self.assertIn('@("INSTALAR.bat", "ABRIR CHULETA.bat", "LEEME.txt", "LICENSE")', body)
+        self.assertIn('@("INSTALAR.bat", $Launcher, "LEEME.txt", "LICENSE")', body)
         self.assertFalse(re.search(r"Get-ChildItem -LiteralPath \$(root|toRoot|rootDir)\b[^\n]*Unblock", self.ps1))
         self.assertIn("Unblock-AppFiles $app $root", self.ps1)
         self.assertIn("Unblock-AppFiles $toApp $toRoot", function_body(self.ps1, "Copy-AppFiles"))
@@ -215,7 +217,7 @@ class InstaladorEmpresaTests(unittest.TestCase):
 
     def test_p2_37_licencia_al_actualizar(self):
         copia = function_body(self.ps1, "Copy-AppFiles")
-        self.assertIn('@("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat")', copia)
+        self.assertIn('@("LEEME.txt", "LICENSE", "INSTALAR.bat", $Launcher)', copia)
 
     def test_registro_tras_los_accesos_directos(self):
         i = self.ps1.index('Step "Creando el acceso directo')
@@ -289,14 +291,18 @@ class DiagnosticoPipTests(unittest.TestCase):
 
 @unittest.skipUnless(powershell(), "sin PowerShell (CHULETA_PWSH, powershell.exe o pwsh)")
 class CarpetaNuevaTests(unittest.TestCase):
-    """Get-CarpetaNueva / Test-CarpetaLibre de instalar.ps1, de verdad, sobre un perfil de usuario temporal."""
+    """Get-CarpetaNueva / Test-CarpetaLibre de instalar.ps1, de verdad, sobre un perfil de usuario temporal. La carpeta
+    propia es %USERPROFILE%\\Tenca; la de antes del renombrado (%USERPROFILE%\\Chuleta), si es de la app, se sigue
+    usando: ahi estan las reuniones."""
 
     def nueva(self, prepare):
-        home = os.path.realpath(tempfile.mkdtemp(prefix="chuleta-home-"))
+        home = os.path.realpath(tempfile.mkdtemp(prefix="tenca-home-"))
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         prepare(home)
-        out = run_ps_functions(INSTALAR, ["Test-Instalacion", "Test-CarpetaLibre", "Get-CarpetaNueva"],
-                               "$FolderName = 'Chuleta'; $script:UserHome = '" + home.replace("'", "''") + "'; "
+        out = run_ps_functions(INSTALAR, ["Test-Instalacion", "Test-CarpetaDeLaApp", "Test-CarpetaLibre",
+                                          "Get-CarpetaNueva"],
+                               "$FolderName = 'Tenca'; $LegacyFolders = @('Chuleta'); "
+                               "$script:UserHome = '" + home.replace("'", "''") + "'; "
                                "Write-Output ('R=' + (Get-CarpetaNueva))")
         m = re.search(r"R=(.*)", out)
         self.assertTrue(m, out)
@@ -308,39 +314,57 @@ class CarpetaNuevaTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write(data)
 
-    def test_perfil_sin_chuleta(self):
-        self.assertEqual(self.nueva(lambda h: None), "Chuleta")
+    def test_perfil_sin_la_app(self):
+        self.assertEqual(self.nueva(lambda h: None), "Tenca")
 
     def test_carpeta_vacia(self):
-        self.assertEqual(self.nueva(lambda h: os.makedirs(os.path.join(h, "Chuleta"))), "Chuleta")
+        self.assertEqual(self.nueva(lambda h: os.makedirs(os.path.join(h, "Tenca"))), "Tenca")
 
     def test_carpeta_ajena(self):
-        # «chuleta» es una palabra corriente: una carpeta con apuntes no es de la app y no se usa
-        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta", "apuntes.txt"))), "Chuleta (2)")
+        # «tenca» (un pájaro) y «chuleta» son palabras corrientes: una carpeta con apuntes no es de la app y no se usa
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Tenca", "apuntes.txt"))), "Tenca (2)")
 
     def test_dos_ajenas(self):
         def prep(h):
-            self.write(os.path.join(h, "Chuleta", "apuntes.txt"))
-            self.write(os.path.join(h, "Chuleta (2)", "otra.txt"))
-        self.assertEqual(self.nueva(prep), "Chuleta (3)")
+            self.write(os.path.join(h, "Tenca", "apuntes.txt"))
+            self.write(os.path.join(h, "Tenca (2)", "otra.txt"))
+        self.assertEqual(self.nueva(prep), "Tenca (3)")
 
     def test_un_fichero_con_ese_nombre(self):
-        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta"))), "Chuleta (2)")
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Tenca"))), "Tenca (2)")
 
     def test_desinstalada_con_reuniones(self):
-        # lo que deja el desinstalador: LEEME.txt de Chuleta y las reuniones -> se vuelve a la misma carpeta
+        # lo que deja el desinstalador: LEEME.txt de la app y las reuniones -> se vuelve a la misma carpeta
+        def prep(h):
+            self.write(os.path.join(h, "Tenca", "LEEME.txt"), "\ufeffTENCA · grabar, transcribir y resumir")
+            self.write(os.path.join(h, "Tenca", "Proyecto Alfa", "reunion.wav"))
+        self.assertEqual(self.nueva(prep), "Tenca")
+
+    def test_chuleta_desinstalada_con_reuniones(self):
+        # Chuleta desinstalada (su LEEME y sus reuniones en %USERPROFILE%\\Chuleta): Tenca vuelve a esa carpeta
         def prep(h):
             self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "\ufeffCHULETA · grabar, transcribir y resumir")
             self.write(os.path.join(h, "Chuleta", "Proyecto Alfa", "reunion.wav"))
         self.assertEqual(self.nueva(prep), "Chuleta")
 
+    def test_tenca_antes_que_chuleta(self):
+        def prep(h):
+            self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "\ufeffCHULETA · grabar, transcribir y resumir")
+            self.write(os.path.join(h, "Tenca", "_app", "server.py"))
+        self.assertEqual(self.nueva(prep), "Tenca")
+
+    def test_chuleta_ajena_no_se_usa(self):
+        # una carpeta «Chuleta» con apuntes (sin LEEME de la app): no es de la app
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta", "apuntes.txt"))), "Tenca")
+
     def test_leeme_ajeno(self):
         def prep(h):
+            self.write(os.path.join(h, "Tenca", "LEEME.txt"), "Mis tencas de examen")
             self.write(os.path.join(h, "Chuleta", "LEEME.txt"), "Mis chuletas de examen")
-        self.assertEqual(self.nueva(prep), "Chuleta (2)")
+        self.assertEqual(self.nueva(prep), "Tenca (2)")
 
     def test_instalada(self):
-        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Chuleta", "_app", "server.py"))), "Chuleta")
+        self.assertEqual(self.nueva(lambda h: self.write(os.path.join(h, "Tenca", "_app", "server.py"))), "Tenca")
 
 
 class DesinstaladorTextoTests(unittest.TestCase):
@@ -353,12 +377,12 @@ class DesinstaladorTextoTests(unittest.TestCase):
                   "Tus reuniones, transcripciones y notas en $Root NO se borran.",
                   "Borrar también mis ajustes, claves y voces guardadas (%LOCALAPPDATA%\\AudiosApp)",
                   "datos biométricos", '"Desinstalar"', '"Cancelar"', '"Abrir la carpeta"',
-                  "$AppName se ha desinstalado. Tus reuniones siguen en $Root", "chuleta-desinstalar.log",
+                  "$AppName se ha desinstalado. Tus reuniones siguen en $Root", "tenca-desinstalar.log",
                   '$h["X-Audios"] = "1"', "/api/apagar", "-eq 409", "-NoNewWindow", "-Relanzado",
-                  "static\\chuleta.png", "static\\chuleta.ico"):
+                  "static\\tenca.png", "static\\tenca.ico"):
             self.assertTrue(s in self.ps1, s)
         self.assertTrue("$chk.Checked = [bool]$BorrarDatos" in self.ps1)  # desmarcada salvo -BorrarDatos
-        # Image.FromFile dejaria chuleta.png abierto y _app sin borrar: las imagenes se cargan en memoria
+        # Image.FromFile dejaria tenca.png abierto y _app sin borrar: las imagenes se cargan en memoria
         self.assertFalse("]::FromFile(" in self.ps1)
         self.assertIn("::FromStream(", self.ps1)
         self.assertIn("$btnCancel.Focus()", self.ps1)  # por defecto, lo que no borra nada
@@ -367,7 +391,7 @@ class DesinstaladorTextoTests(unittest.TestCase):
         """Cada Remove-Item va sobre algo de la app: un acceso directo, la clave, ficheros de _app filtrados por
         Test-AppFile, carpetas vacias de _app, el propio _app vacio, los .bat de la raiz, AudiosApp (solo con la
         casilla) o la copia en %TEMP%. Ninguno sobre la raiz ni con comodines."""
-        allowed = {"$lnk", "$UninstallKey", "$file.FullName", "$self", "$launcher", "$PSCommandPath"}
+        allowed = {"$lnk", "$key", "$file.FullName", "$self", "$launcher", "$PSCommandPath"}
         lines = [ln for ln in self.ps1.split("\n") if "Remove-Item" in ln and not ln.lstrip().startswith("#")]
         self.assertGreater(len(lines), 5)
         for ln in lines:
@@ -469,8 +493,8 @@ class RegistroWindowsTests(unittest.TestCase):
 
     def test_crea_la_clave_y_sus_tipos(self):
         import winreg
-        base = "Software\\ChuletaTest-%d" % os.getpid()
-        key = base + "\\Uninstall\\Chuleta"
+        base = "Software\\TencaTest-%d" % os.getpid()
+        key = base + "\\Uninstall\\Tenca"
 
         def borrar(path):
             try:
@@ -492,9 +516,10 @@ class RegistroWindowsTests(unittest.TestCase):
         with open(os.path.join(app, "server.py"), "wb") as f:
             f.write(b"x" * 5000)
         q = lambda s: "'" + s.replace("'", "''") + "'"  # noqa: E731
-        out = run_ps_functions(INSTALAR, ["Register-App"],
-                               "$UninstallKey = " + q("HKCU:\\" + key) + "; $AppName = 'Chuleta'; "
-                               "$Publisher = 'Bernardo Stegmaier'; $RepoUrl = 'https://github.com/bastegman/chuleta'; "
+        out = run_ps_functions(INSTALAR, ["Register-App", "Remove-RegistroAntiguo", "Same-Path", "Test-Instalacion"],
+                               "$UninstallKey = " + q("HKCU:\\" + key) + "; $AppName = 'Tenca'; "
+                               "$LegacyUninstallKeys = @(" + q("HKCU:\\" + base + "\\Uninstall\\Chuleta") + "); "
+                               "$Publisher = 'Bernardo Stegmaier'; $RepoUrl = 'https://github.com/bastegman/tenca'; "
                                "function Say($t, $c) { Write-Host ('SAY ' + $t) }; "
                                "Write-Output ('R=' + (Register-App " + q(app) + " " + q(root) +
                                " '2026-10-31 abc1234'))")
@@ -512,10 +537,10 @@ class RegistroWindowsTests(unittest.TestCase):
         sz, dw = winreg.REG_SZ, winreg.REG_DWORD
         cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s"' % os.path.join(
             app, "desinstalar.ps1")
-        esperado = {"DisplayName": ("Chuleta", sz), "DisplayVersion": ("2026-10-31 abc1234", sz),
+        esperado = {"DisplayName": ("Tenca", sz), "DisplayVersion": ("2026-10-31 abc1234", sz),
                     "Publisher": ("Bernardo Stegmaier", sz), "InstallLocation": (root, sz),
-                    "DisplayIcon": (os.path.join(app, "static", "chuleta.ico"), sz), "NoModify": (1, dw),
-                    "NoRepair": (1, dw), "URLInfoAbout": ("https://github.com/bastegman/chuleta", sz),
+                    "DisplayIcon": (os.path.join(app, "static", "tenca.ico"), sz), "NoModify": (1, dw),
+                    "NoRepair": (1, dw), "URLInfoAbout": ("https://github.com/bastegman/tenca", sz),
                     "UninstallString": (cmd, sz), "QuietUninstallString": (cmd + " -Silencioso", sz),
                     "EstimatedSize": (5, dw)}
         for name, val in esperado.items():
@@ -552,15 +577,15 @@ class DesinstaladorWindowsTests(unittest.TestCase):
         os.makedirs(os.path.join(app, "export"))
         os.makedirs(os.path.join(app, "__pycache__"))
         shutil.copy(DESINSTALAR, os.path.join(app, "desinstalar.ps1"))
-        for rel in ("server.py", "common.py", "Chuleta.bat", "instalar.ps1", "version.txt", "python.txt",
+        for rel in ("server.py", "common.py", "Tenca.bat", "instalar.ps1", "version.txt", "python.txt",
                     "static\\app.js", "static\\app.css", "static\\index.html", "static\\logo.svg",
                     "export\\LEEME.txt", "export\\INSTALAR.bat", "__pycache__\\server.cpython-313.pyc"):
             with open(os.path.join(app, rel), "w", encoding="utf-8") as f:
                 f.write("x\n")
-        for src in ("chuleta.ico", "chuleta.png"):
+        for src in ("tenca.ico", "tenca.png"):
             shutil.copy(os.path.join(REPO, "_app", "static", src), os.path.join(app, "static", src))
         for name, body in (("INSTALAR.bat", '@echo off\r\npowershell -File "%~dp0_app\\instalar.ps1"\r\n'),
-                           ("ABRIR CHULETA.bat", '@echo off\r\ncall "%~dp0_app\\Chuleta.bat"\r\n'),
+                           ("ABRIR TENCA.bat", '@echo off\r\ncall "%~dp0_app\\Tenca.bat"\r\n'),
                            ("LEEME.txt", "﻿CHULETA · manual\r\n"), ("LICENSE", "MIT\n")):
             with open(os.path.join(root, name), "w", encoding="utf-8", newline="") as f:
                 f.write(body)
@@ -603,7 +628,7 @@ class DesinstaladorWindowsTests(unittest.TestCase):
                               env=env, capture_output=True, text=True, errors="replace", timeout=180)
 
     def log(self, temp):
-        p = os.path.join(temp, "chuleta-desinstalar.log")
+        p = os.path.join(temp, "tenca-desinstalar.log")
         return open(p, encoding="utf-8-sig").read() if os.path.exists(p) else ""
 
     def test_quita_la_app_y_deja_las_reuniones(self):
@@ -616,7 +641,7 @@ class DesinstaladorWindowsTests(unittest.TestCase):
             self.assertEqual(sha(p), h, p)
         self.assertEqual(os.listdir(app), ["mis notas.md"])  # de _app solo queda lo que no es de la app
         self.assertFalse(os.path.exists(os.path.join(root, "INSTALAR.bat")))
-        self.assertFalse(os.path.exists(os.path.join(root, "ABRIR CHULETA.bat")))
+        self.assertFalse(os.path.exists(os.path.join(root, "ABRIR TENCA.bat")))
         self.assertTrue(os.path.exists(os.path.join(root, "LEEME.txt")))
         self.assertTrue(os.path.exists(os.path.join(root, "LICENSE")))
         self.assertTrue(os.path.exists(os.path.join(datos, "voces.json")))  # sin -BorrarDatos, AudiosApp se queda

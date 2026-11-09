@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Claude Code real en Windows, sin sesión iniciada (CI: claude-windows.yml). Mide y comprueba lo que hace Chuleta con
+"""Claude Code real en Windows, sin sesión iniciada (CI: claude-windows.yml). Mide y comprueba lo que hace Tenca con
 «Con tu cuenta de Claude» (07/11/2026, msgs 1185-1187: «Comprobar» tardó minutos en el PC de Bernardo).
 
     python scripts/e2e/claude_windows.py nativo|npm|vscode|pasarela
 
-1. Arranca Chuleta ANTES de instalar Claude Code, con su carpeta de datos en una ruta con espacios, «&» y «%».
+1. Arranca Tenca ANTES de instalar Claude Code, con su carpeta de datos en una ruta con espacios, «&» y «%».
 2. Instala Claude Code: el instalador nativo oficial (irm https://claude.ai/install.ps1 | iex) o npm en una carpeta con
    espacios, «&» y «%» que solo está en el PATH del registro del usuario (como un instalador que cambia el PATH con
    la app ya abierta): así solo la encuentra windows_path(). Con npm, claude.cmd pasa por cmd.exe.
@@ -12,17 +12,17 @@
    sin CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: cuándo sale el proceso y cuándo se cierran sus tuberías (un hijo que
    las herede y siga vivo, p. ej. el actualizador, haría esperar a quien lee hasta EOF), y qué procesos quedan.
 4. Lo que hace Bernardo, por la API de la app: «Comprobar» dos veces y un resumen de una reunión ya transcrita.
-5. Escribe resultados.json y copia server.log en NOTAS_ARTEFACTOS. Falla si Chuleta no encuentra claude, si la
+5. Escribe resultados.json y copia server.log en NOTAS_ARTEFACTOS. Falla si Tenca no encuentra claude, si la
    invocación no llega a «sin sesión iniciada» (argumentos rotos por cmd.exe, por ejemplo) o si algo se cuelga.
 Sin login ni credenciales: Claude Code no tiene sesión y debe decirlo.
 
 Cuenta de empresa (07/11/2026, msgs 1224-1228):
 - vscode: sin programa suelto, solo la extensión de VS Code tal como la deja VS Code al instalarla (el paquete
   win32-x64 de Open VSX, extension/ en %USERPROFILE%\\.vscode\\extensions\\anthropic.claude-code-<versión>-win32-x64).
-  Chuleta debe encontrar su copia, decir «Claude Code de VS Code» y pedir que se entre en VS Code.
-- pasarela: el instalador nativo y, con Chuleta ya abierta, una pasarela de empresa falsa en este equipo puesta en el
+  Tenca debe encontrar su copia, decir «Claude Code de VS Code» y pedir que se entre en VS Code.
+- pasarela: el instalador nativo y, con Tenca ya abierta, una pasarela de empresa falsa en este equipo puesta en el
   registro del usuario (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN falso y ANTHROPIC_MODEL, como haría IT con setx). La
-  pasarela no conoce el modelo de «--model sonnet»: Chuleta debe repetir sin --model y contestar con el de la empresa.
+  pasarela no conoce el modelo de «--model sonnet»: Tenca debe repetir sin --model y contestar con el de la empresa.
   Es la única pasada con una respuesta de verdad de Claude Code (contra la pasarela falsa, sin Anthropic)."""
 import json
 import os
@@ -117,7 +117,7 @@ def puerto():
 class App:
     def __init__(self, root, datos, env):
         self.port, self.datos = puerto(), datos
-        self.log = open(os.path.join(TEMP, f"chuleta-{MODO}.log"), "w", encoding="utf-8")
+        self.log = open(os.path.join(TEMP, f"tenca-{MODO}.log"), "w", encoding="utf-8")
         self.p = subprocess.Popen([sys.executable, os.path.join(root, "_app", "server.py"), "--port", str(self.port),
                                    "--data", datos, "--no-browser"], cwd=root, stdout=self.log,
                                   stderr=subprocess.STDOUT, env=env)
@@ -131,7 +131,7 @@ class App:
             except Exception:
                 pass
             time.sleep(0.3)
-        raise SystemExit("Chuleta no arrancó")
+        raise SystemExit("Tenca no arrancó")
 
     def get(self, path):
         r = urllib.request.Request(self.base + path, headers={"X-Chuleta-Token": self.token})
@@ -238,7 +238,7 @@ class Pasarela:
 
 
 def registro_usuario(valores):
-    """Variables de usuario en el registro, como `setx` o IT con Chuleta ya abierta (la app no las hereda)."""
+    """Variables de usuario en el registro, como `setx` o IT con Tenca ya abierta (la app no las hereda)."""
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
         for n, v in valores.items():
@@ -249,7 +249,7 @@ def instalar_vscode():
     """La extensión de VS Code como la deja VS Code al instalar el paquete: extension/ del .vsix (Open VSX, win32-x64)
     en %USERPROFILE%\\.vscode\\extensions\\anthropic.claude-code-<versión>-win32-x64. Sin VS Code ni programa suelto."""
     t0 = time.time()
-    ua = {"User-Agent": "Chuleta-CI (github actions; claude-windows)"}
+    ua = {"User-Agent": "Tenca-CI (github actions; claude-windows)"}
     meta = urllib.request.urlopen(urllib.request.Request(
         "https://open-vsx.org/api/Anthropic/claude-code/win32-x64/latest", headers=ua), timeout=60).read()
     meta = json.loads(meta, strict=False)
@@ -326,7 +326,7 @@ def main():
         c = app.get("/api/config")["agente"]
         paso("despues_de_instalar", encontrado=c["encontrado"], ruta=c["ruta"])
         if not c["encontrado"]:
-            fallos.append("Chuleta no encuentra claude después de instalarlo")
+            fallos.append("Tenca no encuentra claude después de instalarlo")
         ruta = c["ruta"] or exe
         if not os.path.isfile(ruta):
             fallos.append(f"no hay ejecutable de Claude Code tras instalar: {ruta}")

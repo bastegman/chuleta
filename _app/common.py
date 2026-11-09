@@ -13,17 +13,21 @@ import traceback
 import unicodedata
 
 WINDOWS = sys.platform == "win32"  # grabadora, atajo global, papelera, avisos y Explorador son solo de Windows
-# Nombre visible de la app (antes «Notas»; renombrada a Chuleta el 31/10/2026): titulo de la ventana, mensajes,
-# carpeta raiz y nombre del zip instalable, accesos directos. Centralizado aqui. Lo que NO cambia con el, por
-# compatibilidad con las instalaciones y los datos existentes: la carpeta _app, DATA_DIR (AudiosApp), la cabecera
-# X-Audios, las claves de los .md y la pestana «Notas» (que es la funcion de tomar notas, no la marca).
-APP_NAME = "Chuleta"
-# nombres que tuvo la app: las listas de vocabulario de la raiz se llamaban asi como proyecto, y las reuniones grabadas
-# entonces lo llevan en la cabecera de su .md (server.find_vocab los acepta como alias de la raiz)
-APP_FORMER_NAMES = ("Notas",)
+# Nombre visible de la app («Notas» hasta el 31/10/2026, «Chuleta» hasta el 09/11/2026, «Tenca» desde entonces):
+# titulo de la ventana, mensajes, carpeta raiz y nombre del zip instalable, accesos directos. Centralizado aqui. Lo
+# que NO cambia con el, por compatibilidad con las instalaciones y los datos existentes: la carpeta _app, DATA_DIR
+# (AudiosApp), la cabecera X-Audios, las claves de los .md, la pestana «Notas» (que es la funcion de tomar notas, no
+# la marca) y los identificadores internos de abajo (APP_ID, TOKEN_HEADER, variables de entorno CHULETA_*).
+APP_NAME = "Tenca"
+# nombres que tuvo la app, del mas reciente al mas antiguo: las listas de vocabulario de la raiz se llamaban asi como
+# proyecto, y las reuniones grabadas entonces lo llevan en la cabecera de su .md (server.find_vocab los acepta como
+# alias de la raiz). La carpeta Inicio de Windows puede tener aun el acceso directo de «Arrancar con Windows» con el
+# nombre anterior (server.inicio_windows_*: se migra al de ahora).
+APP_FORMER_NAMES = ("Chuleta", "Notas")
 # AppUserModelID: identifica la ventana en la barra de tareas (agrupa, icono, anclar). La misma cadena va en el
-# acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. Si cambiara,
-# los anclajes hechos dejarian de agrupar la ventana.
+# acceso directo que crea instalar.ps1 (System.AppUserModel.ID del .lnk), que es lo que Windows ancla. No lo ve el
+# usuario y NO cambia con el nombre: si cambiara, la ventana de Tenca saldria como un boton aparte junto al anclaje
+# «Chuleta» que ya tenga hecho (dos iconos), y las notificaciones perderian su ajuste.
 APP_ID = "Bernardo.Chuleta"
 BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")
@@ -214,6 +218,8 @@ def alert(title, text):
 # todos y, sin el, otro usuario podria leer las reuniones o manejar la grabadora. Lo leen el acceso directo (la copia
 # que se abre cuando la app ya corre), el aviso flotante, el instalador y las pruebas.
 TOKEN_FILE = "sesion.token"
+# no cambia con el nombre: el instalador nuevo apaga la version que este abierta (POST /api/apagar) con esta cabecera,
+# y una Chuleta abierta solo acepta X-Chuleta-Token. No lo ve el usuario
 TOKEN_HEADER = "X-Chuleta-Token"
 
 

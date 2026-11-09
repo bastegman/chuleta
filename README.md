@@ -1,8 +1,8 @@
-# Chuleta
+# Tenca
 
 App local de Windows para grabar reuniones, transcribirlas y resumirlas. Funciona en tu propio PC, en su propia
 ventana (WebView2, el motor de Edge que trae Windows), sin instalar nada más que Python y unas librerías. Las
-grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USERPROFILE%\Chuleta` (donde la instala
+grabaciones, transcripciones y notas se guardan en la carpeta de Tenca, `%USERPROFILE%\Tenca` (donde la instala
 `INSTALAR.bat`), y en las carpetas que vincules; qué sale del PC, y cuándo, está en «Privacidad».
 
 - **Grabar** el micrófono y el sonido del ordenador (Teams, Zoom, el navegador…) a la vez, con `Ctrl+Alt+R` desde
@@ -36,7 +36,7 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   y contexto se cambian también sobre la marcha en la página de la reunión.
 - **Copias en otras carpetas** (los destinos de salida): cada reunión, además, como documento (`.md` con propiedades,
   resumen, notas y transcripción; `.txt`; o `.docx`) en las carpetas que elijas (un vault de Obsidian, la de documentos
-  del proyecto en OneDrive, una biblioteca de SharePoint sincronizada…; no la de Chuleta, ni una vinculada, ni una con
+  del proyecto en OneDrive, una biblioteca de SharePoint sincronizada…; no la de Tenca, ni una vinculada, ni una con
   grabaciones), al terminar y al guardar cambios, sin mover el original ni pisar nada ajeno. Si un nombre ya lo usa otra
   reunión o un fichero tuyo, el documento va a `<nombre> (<código>).md`.
 - **Reunión en curso**: al grabar, la app sugiere el nombre, el proyecto y los participantes a partir de la ventana
@@ -50,21 +50,21 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
 
 ## Instalar (Windows, sin permisos de administrador)
 
-1. Consigue el zip `Chuleta - instalador.zip` o este repositorio. Antes de descomprimirlo, clic derecho → Propiedades →
+1. Consigue el zip `Tenca - instalador.zip` o este repositorio. Antes de descomprimirlo, clic derecho → Propiedades →
    «Desbloquear» → Aceptar: así Windows no marca `INSTALAR.bat` como bajado de Internet y no sale el aviso «Unknown
    publisher» («Windows protegió su PC»; si sale igual, «Más información» → «Ejecutar de todas formas»: el instalador
    no lleva firma digital, nada más). Descomprímelo donde sea (Descargas vale). El zip lo
-   crea una copia que ya funciona (⚙ Ajustes → Ayuda → Compartir Chuleta → «Crear instalador para otra persona») o
+   crea una copia que ya funciona (⚙ Ajustes → Ayuda → Compartir Tenca → «Crear instalador para otra persona») o
    `scripts/build_zip.py` (ver «Generar el zip instalable»); el repositorio se descarga entero con Code → Download
    ZIP.
-2. Doble clic en `INSTALAR.bat`. Copia la app a su carpeta propia, `%USERPROFILE%\Chuleta` (fuera de Descargas y de
-   OneDrive; si esa carpeta ya existe con otras cosas, `Chuleta (2)`), donde se guardarán las reuniones; para otra
+2. Doble clic en `INSTALAR.bat`. Copia la app a su carpeta propia, `%USERPROFILE%\Tenca` (fuera de Descargas y de
+   OneDrive; si esa carpeta ya existe con otras cosas, `Tenca (2)`), donde se guardarán las reuniones; para otra
    carpeta, nueva o vacía, `INSTALAR.bat -Destino <carpeta>` (solo la primera vez: si ya está instalada, se actualiza
    donde está). Si no hay Python lo instala, instala las librerías (`requirements.txt`), crea el acceso directo
-   «Chuleta» en el escritorio y en el menú Inicio y la añade a **Aplicaciones instaladas**
-   (`HKCU\…\Uninstall\Chuleta`, sin administrador). Al terminar dice dónde ha quedado; la carpeta descomprimida ya se
+   «Tenca» en el escritorio y en el menú Inicio y la añade a **Aplicaciones instaladas**
+   (`HKCU\…\Uninstall\Tenca`, sin administrador). Al terminar dice dónde ha quedado; la carpeta descomprimida ya se
    puede borrar.
-3. Se abre Chuleta. Lo primero, «Configurar Chuleta», en la portada (más tarde está en ⚙ Ajustes → Procesado): eliges
+3. Se abre Tenca. Lo primero, «Configurar Tenca», en la portada (más tarde está en ⚙ Ajustes → Procesado): eliges
    una de las tres opciones y al final lo pruebas todo:
    **Solo en este PC** (Whisper transcribe en tu ordenador, nada sale de él, sin resumen con IA), **Con tu cuenta de
    Claude** (transcribe en tu PC y resume con Claude usando tu suscripción, personal o de empresa, a través de Claude
@@ -77,21 +77,25 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
    cuenta de Claude; el audio y el texto, al proveedor de la API. En algunas reuniones eso puede ser un bloqueante:
    compruébalo antes (política de tu empresa, acuerdo con tu cliente). Con Azure OpenAI el resumen aún no funciona,
    y con la API lo transcrito en local no se envía solo al resumen: ver «Privacidad».
-4. Mientras está abierta, Chuleta tiene su icono en la bandeja del sistema (junto al reloj; la primera vez Windows lo
+4. Mientras está abierta, Tenca tiene su icono en la bandeja del sistema (junto al reloj; la primera vez Windows lo
    pone en los iconos ocultos, la flecha `^`, y se puede arrastrar junto al reloj). Cerrar la ventana la deja ahí, en
    segundo plano (el atajo `Ctrl+Alt+R` sigue funcionando): un clic en el icono o el acceso directo la vuelven a abrir.
-   Para salir del todo: clic derecho en el icono → Salir (o ⚙ Ajustes → Ayuda → Apagar Chuleta). El mismo menú tiene
+   Para salir del todo: clic derecho en el icono → Salir (o ⚙ Ajustes → Ayuda → Apagar Tenca). El mismo menú tiene
    «Arrancar con Windows» (copia el acceso directo del menú Inicio en la carpeta Inicio de Windows; apagado por
    defecto). Sin WebView2 (la app se abre en Edge) no hay icono: se apaga desde Ajustes.
 5. Para actualizar, descomprime el zip nuevo y ejecuta su `INSTALAR.bat`: encuentra la instalación anterior (por
-   Aplicaciones instaladas, por su acceso directo «Chuleta» o «Notas», el nombre anterior, o en
-   `%USERPROFILE%\Chuleta`), la actualiza en su carpeta con tus grabaciones (nunca las mueve) y renombra el acceso
-   directo «Notas» a «Chuleta»; no borra nada. Si varias copias de Chuleta usan la misma carpeta de reuniones (otro
-   PC, OneDrive), actualízalas todas a la vez (ver «Privacidad»).
+   Aplicaciones instaladas, por su acceso directo o en su carpeta propia, también con los nombres anteriores de la
+   app, «Chuleta» y «Notas») y la actualiza en su carpeta con tus grabaciones (nunca las mueve). Instalada encima de
+   Chuleta, no queda nada con ese nombre: sus accesos directos (escritorio, menú Inicio y «Arrancar con Windows»)
+   pasan a llamarse «Tenca», sin duplicados; su entrada de Aplicaciones instaladas y su `ABRIR CHULETA.bat` se
+   quitan. La carpeta de las reuniones conserva su nombre (`%USERPROFILE%\Chuleta`: renombrarla rompería lo que
+   apunta a ella) y los datos siguen en `%LOCALAPPDATA%\AudiosApp`. Un anclaje de la barra de tareas no lo puede
+   cambiar un instalador: el instalador lo detecta y dice cómo volver a anclarla. Si varias copias de Tenca usan la
+   misma carpeta de reuniones (otro PC, OneDrive), actualízalas todas a la vez (ver «Privacidad»).
 
 ### Red y proxy de empresa
 
-- Las llamadas de Chuleta a sí misma (a `127.0.0.1`, las del acceso directo y del aviso flotante) no pasan por el
+- Las llamadas de Tenca a sí misma (a `127.0.0.1`, las del acceso directo y del aviso flotante) no pasan por el
   proxy del sistema, cuya excepción `<local>` no cubre esa dirección: no hace falta pedir a IT una excepción para
   ella.
 - Las peticiones a la nube (transcripción, resumen y traducción) usan el proxy que Windows tenga configurado a mano, o
@@ -103,25 +107,26 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
 
 ### Desinstalar
 
-**Configuración → Aplicaciones → Aplicaciones instaladas → Chuleta → Desinstalar** (o Panel de control → Programas y
+**Configuración → Aplicaciones → Aplicaciones instaladas → Tenca → Desinstalar** (o Panel de control → Programas y
 características). Quita los accesos directos, la entrada de Aplicaciones instaladas y la carpeta `_app` (solo lo que
 es de la app). **Las reuniones se quedan**: audios, transcripciones, notas, resúmenes, hablantes, carpetas de proyecto
-y listas de vocabulario siguen en la carpeta de Chuleta, junto al `LEEME.txt`, y las carpetas vinculadas no se tocan;
-una reinstalación vuelve a `%USERPROFILE%\Chuleta` (si estaba en otra carpeta, `INSTALAR.bat -Destino <esa carpeta>`).
+y listas de vocabulario siguen en su carpeta, junto al `LEEME.txt`, y las carpetas vinculadas no se tocan; una
+reinstalación vuelve a esa carpeta (`%USERPROFILE%\Tenca`, o `%USERPROFILE%\Chuleta` si venía de ahí; si estaba en
+otra, `INSTALAR.bat -Destino <esa carpeta>`).
 Una casilla, desmarcada por defecto, borra además `%LOCALAPPDATA%\AudiosApp` (ajustes, API keys, huellas de voz y
 registros). Si la app está grabando, no toca nada. Sin ventana: `QuietUninstallString` (`desinstalar.ps1 -Silencioso`,
-que no borra `AudiosApp` salvo con `-BorrarDatos`); registro en `%TEMP%\chuleta-desinstalar.log`. Python y sus
+que no borra `AudiosApp` salvo con `-BorrarDatos`); registro en `%TEMP%\tenca-desinstalar.log`. Python y sus
 librerías se quedan.
 
 El manual completo está en `LEEME.txt`.
 
 ## Privacidad
 
-- Grabaciones, transcripciones y notas viven en la carpeta de Chuleta (y en las carpetas vinculadas), en tu PC. Si una
+- Grabaciones, transcripciones y notas viven en la carpeta de Tenca (y en las carpetas vinculadas), en tu PC. Si una
   de esas carpetas está en OneDrive o SharePoint, se sincroniza como cualquier otra.
 - Con «Con tu cuenta de Claude», el texto de la reunión (transcripción con quién habla si se sabe, notas, contexto,
   participantes confirmados e instrucciones; el audio no) se envía a Anthropic a través de Claude Code con la cuenta
-  con la que iniciaste sesión: la de empresa, bajo el acuerdo de tu empresa; la personal, bajo sus términos. Chuleta
+  con la que iniciaste sesión: la de empresa, bajo el acuerdo de tu empresa; la personal, bajo sus términos. Tenca
   no ve ni guarda esas credenciales: solo lanza `claude -p` en tu PC, sin herramientas, sin guardar la sesión y sin tus
   hooks ni servidores MCP. Elegir esa opción, con su aviso, es el consentimiento: también se resumen solas las
   reuniones transcritas en local (las de los últimos 3 días).
@@ -142,7 +147,7 @@ El manual completo está en `LEEME.txt`.
   participantes cuentan como confirmados. El nombre que se sugiere al grabar (el asunto de la cita o el título de la
   reunión de Teams), si lo aceptas, es el nombre de la grabación: va como título al resumen con IA y a las copias en
   otras carpetas.
-- Si la misma carpeta de reuniones la usan varias copias de Chuleta (otro PC, una carpeta de OneDrive compartida),
+- Si la misma carpeta de reuniones la usan varias copias de Tenca (otro PC, una carpeta de OneDrive compartida),
   actualízalas todas a la vez: una versión anterior toma los participantes sugeridos por confirmados (con la nota) y
   los envía a su resumen y a sus destinos, y la del 30/10 no conoce `idioma` ni `contexto` y, con ellos, toma la
   cabecera del `.md` entera por notas.
@@ -189,11 +194,13 @@ El servidor es Python 3.10–3.13 con la librería estándar más `faster-whispe
 y, opcionales (el instalador no se para si fallan), `pywebview` (la ventana, sobre WebView2; sin ella la interfaz se
 abre en Edge en modo app), `sherpa-onnx` y `pywin32` (importación perezosa); la interfaz es HTML/JS sin compilar
 (`_app/static`). No hay paso de build: el acceso directo lanza `pythonw.exe server.py` (sin consola) y
-`_app/Chuleta.bat` lo mismo con consola. El nombre visible de la app es `common.APP_NAME` (y `-AppName` en el
-instalador); por compatibilidad no cambian con él la carpeta de datos `AudiosApp`, la cabecera `X-Audios` ni las
-claves de los `.md`. La versión que se ve en Ajustes → Ayuda → Acerca de sale de `_app/version.txt` (lo escribe
-`scripts/build_zip.py`: `AAAA-MM-DD · sha`); en una copia de trabajo sin ese fichero se enseña la fecha y hora del
-código.
+`_app/Tenca.bat` lo mismo con consola. El nombre visible de la app es `common.APP_NAME` (y `-AppName` en el
+instalador); por compatibilidad no cambian con él la carpeta de datos `AudiosApp`, la cabecera `X-Audios`, las
+claves de los `.md` ni los identificadores internos que llevan el nombre anterior: el AppUserModelID `Bernardo.Chuleta`
+(con otro, la ventana no se agruparía en los anclajes ya hechos), la cabecera `X-Chuleta-Token` (el instalador nuevo
+apaga con ella la versión abierta) y las variables de entorno `CHULETA_*` y `NOTAS_*` de los procesos y de la CI.
+La versión que se ve en Ajustes → Ayuda → Acerca de sale de `_app/version.txt` (lo escribe `scripts/build_zip.py`:
+`AAAA-MM-DD · sha`); en una copia de trabajo sin ese fichero se enseña la fecha y hora del código.
 
 En macOS/Linux el servidor arranca para desarrollar la interfaz y la lógica (la grabadora, el atajo global, la
 papelera y los avisos son solo de Windows):
@@ -266,7 +273,7 @@ en un sitio público. `server.log` y `voces.log` sí llevan nombres de reuniones
   por línea, sin distinguir mayúsculas, con `^` y `$` por línea). Si encuentra algo, falla con fichero:línea y número
   de patrón, nunca con el texto. Sin el secreto, en un fork o con Dependabot, se salta y deja el aviso «Agnosticismo
   sin ejecutar» en el resumen del run; ningún job falla por eso. En local, con la lista en un fichero fuera del repo:
-  `NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py` (en
+  `NOTAS_EXIGIR_VETADAS=1 NOTAS_PALABRAS_VETADAS="$(cat ~/tenca-vetadas.txt)" .venv/bin/python tests/run.py` (en
   Windows, ver el comentario de ese test).
 
 ### Banco de pruebas del directo en la nube
@@ -304,7 +311,7 @@ servidor la declara, pintado), para saber si el cuello está en Groq, en la red 
 ### Generar el zip instalable
 
 ```
-python3 scripts/build_zip.py            # deja dist/Chuleta - instalador.zip (sin vocabulario) y _app/version.txt
+python3 scripts/build_zip.py            # deja dist/Tenca - instalador.zip (sin vocabulario) y _app/version.txt
 ```
 
 `--vocab [CARPETA]` añade las listas `<proyecto>/Vocabulario/*.txt` de esa carpeta (por defecto, la raíz del repo):
@@ -317,12 +324,12 @@ llevan nombres de personas y empresas, así que ese zip es solo para gente del m
 ```
 
 Rasteriza `_app/static/logo.svg` (y `design/logo-small.svg` para 16 y 20 px) con Chrome o Edge headless y escribe
-`_app/static/chuleta.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
-`_app/static/chuleta.png`. Solo hace falta si cambia el logo.
+`_app/static/tenca.ico` (nueve tamaños, todos en BMP: Windows no siempre pinta bien las entradas PNG pequeñas) y
+`_app/static/tenca.png`. Solo hace falta si cambia el logo.
 
 ## Invitar al autor a un café
 
-Chuleta es gratis. Si te sirve, puedes [invitar al autor a un café por PayPal](https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR). El mismo enlace está en
+Tenca es gratis. Si te sirve, puedes [invitar al autor a un café por PayPal](https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR). El mismo enlace está en
 Ajustes › Ayuda › Acerca de; no hay ventanas emergentes ni recordatorios.
 
 ## Licencia

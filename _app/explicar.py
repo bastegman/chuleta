@@ -7,15 +7,17 @@ Bernardo se perdía en la configuración entre errores como «HTTP 401: …», �
   como están y solo se les añade el botón. No se duplican aquí.
 - Las de Claude Code, la instalación y el proxy que contesta con HTML tienen aquí su frase.
 - El texto técnico original se conserva en «tecnico» (para server.log y el diagnóstico).
-Sin dependencias: se prueba sola (tests/test_ux_configurar.py)."""
+Sin mas dependencia que common (el nombre de la app): se prueba sola (tests/test_ux_configurar.py)."""
 import re
+
+from common import APP_NAME
 
 # acción -> etiqueta del botón (la interfaz decide qué hace cada una)
 ACCIONES = {
     "reintentar": "Probar otra vez",
     "abrir_powershell": "Abrir PowerShell",
     "abrir_url": "Abrir {host}",
-    "asistente": "Configurar Chuleta",
+    "asistente": f"Configurar {APP_NAME}",
     "avanzado": "Ir a Avanzado",
     "procesado": "Revisar en Ajustes",
     "diagnostico": "Copiar diagnóstico",
@@ -73,8 +75,8 @@ def explicar(err, proveedor=None):
         out["accion"] = _accion("abrir_powershell")
         return out
     if "no encuentro claude code" in low:
-        out["frase"] = ("No encuentro Claude Code en este PC: instálalo (paso 2 de «Configurar Chuleta») y vuelve a "
-                        "probar.")
+        out["frase"] = (f"No encuentro Claude Code en este PC: instálalo (paso 2 de «Configurar {APP_NAME}») y "
+                        "vuelve a probar.")
         out["accion"] = _accion("asistente")
         return out
     # las tres de engines.ClaudeCode._why (07/11/2026, fix-claude-windows): ya vienen hechas, solo llevan su botón

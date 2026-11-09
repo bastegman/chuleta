@@ -492,7 +492,7 @@ class WorkflowsWindowsTests(unittest.TestCase):
     """P2-38: lo que solo se puede probar en Windows corre también al llegar a main, no solo en ramas ya fusionadas."""
 
     def test_e2e_y_escritorio_en_main_y_a_mano(self):
-        for nombre, rutas in (("lookfeel-e2e.yml", ("_app/**", "INSTALAR.bat", "ABRIR CHULETA.bat", "requirements.txt",
+        for nombre, rutas in (("lookfeel-e2e.yml", ("_app/**", "INSTALAR.bat", "ABRIR TENCA.bat", "requirements.txt",
                                                     "scripts/build_zip.py", "scripts/e2e/**",
                                                     "scripts/lookfeel_spike.py")),  # lo importa scripts/e2e/ventana.py
                               ("reunion-windows.yml", ("_app/**", "tests/**", "requirements.txt")),
@@ -540,7 +540,7 @@ class WorkflowsWindowsTests(unittest.TestCase):
 
 
 _AVISO = "::warning title=Agnosticismo sin ejecutar::"
-_EN_LOCAL = 'NOTAS_PALABRAS_VETADAS="$(cat ~/chuleta-vetadas.txt)" .venv/bin/python tests/run.py'
+_EN_LOCAL = 'NOTAS_PALABRAS_VETADAS="$(cat ~/tenca-vetadas.txt)" .venv/bin/python tests/run.py'
 
 
 class WorkflowsDependenciasTests(unittest.TestCase):

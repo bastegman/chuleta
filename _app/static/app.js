@@ -1,5 +1,5 @@
 'use strict';
-/* Chuleta: interfaz (vanilla JS, sin dependencias). Habla con server.py en /api/* */
+/* Tenca: interfaz (vanilla JS, sin dependencias). Habla con server.py en /api/* */
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -2414,7 +2414,7 @@ function openSettings(opts) {
         : `<div class="help" style="margin-top:0">Ninguna todavía: las grabaciones se guardan dentro de la carpeta de ${esc(APP_NAME)}${S.config.root ? ` (<code>${esc(S.config.root)}</code>)` : ''}.</div>`;
     };
     drawLinks();
-    d.ajDibujarEnlaces = drawLinks;  // también tras «Otra carpeta (fuera de Chuleta)…» (perfil.js)
+    d.ajDibujarEnlaces = drawLinks;  // también tras «Otra carpeta (fuera de Tenca)…» (perfil.js)
     $('#lnAdd', d).onclick = async () => { if (await linkFolder()) drawLinks(); };
     // «quitar»: la confirmación va encima y, si se quita, la lista y «Reuniones sin proyecto», al día aquí mismo (si
     // era la elegida sin guardar, vuelve a lo guardado: ya no se puede elegir)
@@ -2540,7 +2540,7 @@ function shutdownScreen() {
   S.off = true;  // los sondeos paran: el servidor ya no contesta
   clearTimeout(recTimer); clearTimeout(jobsTimer);
   document.title = `${APP_NAME} · apagada`;
-  document.body.innerHTML = `<div class="page" style="max-width:520px;margin:18vh auto;text-align:center"><img src="/chuleta.png" alt="" style="width:72px;height:72px">
+  document.body.innerHTML = `<div class="page" style="max-width:520px;margin:18vh auto;text-align:center"><img src="/tenca.png" alt="" style="width:72px;height:72px">
     <h2 style="margin:16px 0 8px">${esc(APP_NAME)} se ha apagado</h2><p class="muted">Cierra esta ventana. Para volver a usar ${esc(APP_NAME)}, ábrela con el acceso directo del escritorio.</p></div>`;
 }
 

@@ -410,7 +410,7 @@ def esperar(cond, timeout=5.0):
 class VentanaEnCaminoTests(unittest.TestCase):
     def make(self, wv):
         return window.Window("http://127.0.0.1:8765/", tempfile.mkdtemp(prefix="chuleta-win-"),
-                             os.path.join(APP, "static", "chuleta.ico"), webview=wv)
+                             os.path.join(APP, "static", "tenca.ico"), webview=wv)
 
     def test_en_camino_hasta_que_se_ensena_y_entonces_al_frente(self):
         wv = FakeWv()

@@ -46,7 +46,7 @@ def find(title):
 def main(argv):
     spike.ole32.CoInitialize(None)
     cmd = argv[1] if len(argv) > 1 else "find"
-    title = argv[2] if len(argv) > 2 else "Chuleta"
+    title = argv[2] if len(argv) > 2 else "Tenca"
     info = find(title)
     if cmd == "icons" and info.get("hwnd"):
         out_dir, tag = argv[3], (argv[4] if len(argv) > 4 else "app")

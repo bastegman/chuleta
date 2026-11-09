@@ -2,10 +2,10 @@ name: claude-windows
 
 # «Con tu cuenta de Claude» con Claude Code de verdad en Windows, sin sesión iniciada (07/11/2026, msgs 1185-1187:
 # «Comprobar» tardó minutos en el PC de Bernardo). Instalador nativo oficial y npm (claude.cmd por cmd.exe, en una
-# carpeta con espacios, «&» y «%» que solo está en el PATH del registro). Chuleta arranca antes de instalar. Mide cuánto
+# carpeta con espacios, «&» y «%» que solo está en el PATH del registro). La app arranca antes de instalar. Mide cuánto
 # tarda cada llamada en frío y en caliente, y si quedan procesos con la salida abierta. Sin login ni credenciales.
 # Cuenta de empresa (07/11/2026, msgs 1224-1228): «vscode», solo la copia que trae la extensión de VS Code (paquete de
-# Open VSX); «pasarela», una pasarela de empresa falsa en el propio runner puesta en el registro con Chuleta ya abierta
+# Open VSX); «pasarela», una pasarela de empresa falsa en el propio runner puesta en el registro con la app ya abierta
 # (token falso, sin Anthropic).
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
           python-version: "3.13"
       - name: numpy y requests (lo que usa el servidor para esto)
         run: python -m pip install --disable-pip-version-check numpy requests
-      - name: Claude Code real sin sesión, con Chuleta arrancada antes
+      - name: Claude Code real sin sesión, con la app arrancada antes
         run: python scripts/e2e/claude_windows.py ${{ matrix.instalacion }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()

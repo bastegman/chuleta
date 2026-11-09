@@ -1,17 +1,22 @@
 # E2E del instalador, del arranque y del desinstalador en un runner windows-latest (PowerShell 5.1, el mismo que lanza
 # INSTALAR.bat). Lo mismo que hara una persona: zip -> descomprimir en Descargas-test -> INSTALAR.bat (modo ventana,
-# con autocierre) -> se instala en %USERPROFILE%\Chuleta con su entrada de "Aplicaciones instaladas" -> la app abre su
-# ventana -> acceso directo otra vez -> Apagar; una reunion falsa en Chuleta\Proyecto Alfa; segunda instalacion desde
-# otra carpeta (la encuentra por "Aplicaciones instaladas" y la actualiza en su sitio); tercera sin esa entrada y con el
-# acceso directo del nombre anterior (Notas.lnk: la detecta, la actualiza y lo renombra a Chuleta.lnk); cuarta con los
-# dos accesos directos (conserva Notas.lnk); una instalacion que falla a proposito (pantalla de error). Despues el
-# desinstalador: ventana cancelada (no toca nada), con la app "grabando" (no toca nada), -Silencioso con la app abierta
-# (quita accesos directos, entrada y _app; la reunion sigue igual) y, tras reinstalar en la misma carpeta, ventana con
-# "Borrar tambien mis ajustes" (AudiosApp borrada; la reunion sigue igual). Capturas de pantalla cada 5 s en paralelo y
-# de la ventana del desinstalador.
+# con autocierre) -> se instala en %USERPROFILE%\Tenca con su entrada de "Aplicaciones instaladas" -> la app abre su
+# ventana -> acceso directo otra vez -> Apagar; una reunion falsa en Tenca\Proyecto Alfa; segunda instalacion desde
+# otra carpeta (la encuentra por "Aplicaciones instaladas" y la actualiza en su sitio); tercera disfrazada de Chuleta (el
+# nombre anterior: su entrada de "Aplicaciones instaladas", Chuleta.lnk en el escritorio, en Inicio y en la carpeta
+# Inicio de Windows, ABRIR CHULETA.bat y un Notas.lnk roto): la encuentra por la entrada antigua y no deja nada con el
+# nombre viejo; cuarta solo con los accesos directos Chuleta.lnk (la encuentra por ellos); quinta con Tenca.lnk y un
+# Chuleta.lnk de la misma instalacion (queda uno) y otro de otra copia (se queda); una instalacion que falla a
+# proposito (pantalla de error). Despues el desinstalador: ventana cancelada (no toca nada), con la app "grabando" (no
+# toca nada), -Silencioso con la app abierta (quita accesos directos, entrada y _app; la reunion sigue igual) y, tras
+# reinstalar en la misma carpeta, ventana con "Borrar tambien mis ajustes" (AudiosApp borrada; la reunion sigue igual).
+# Por ultimo (fase v), la Chuleta de verdad (-Chuleta <sha>, la de main que tiene Bernardo) instalada con su propio
+# instalador, abierta, con "Arrancar con Windows" y una reunion y un ajuste suyos, y Tenca instalada encima: la cierra,
+# la actualiza en su carpeta, no queda nada con el nombre viejo ni duplicado, la reunion y los ajustes siguen; y se
+# desinstala. Capturas de pantalla cada 5 s en paralelo y de la ventana del desinstalador.
 # Deja en -Out: capturas/, desinstalar/, server.log, instalar.log, desinstalar.log, iconos del HWND, registro.txt y
 # resumen.json (comprobacion -> ok/valor). Sale con 1 si falla alguna comprobacion con puerta.
-param([string]$Repo = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), [string]$Out = "")
+param([string]$Repo = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), [string]$Out = "", [string]$Chuleta = "")
 
 $ErrorActionPreference = "Continue"
 if (-not $Out) { $Out = Join-Path $Repo "e2e-out" }
@@ -22,8 +27,9 @@ $Port = 8765
 # constante: PowerShell no distingue mayusculas y una asignacion a $base en otra fase la pisaba (todas las
 # peticiones iban despues a una ruta de disco); asi la que lo intente da error en esa linea
 Set-Variable -Name Base -Option Constant -Value "http://127.0.0.1:$Port"
-$App = "Chuleta"      # common.APP_NAME: titulo de la ventana, carpeta raiz del zip, accesos directos
-$Legacy = "Notas"     # nombre anterior: el instalador reconoce y renombra su acceso directo
+$App = "Tenca"        # common.APP_NAME: titulo de la ventana, carpeta raiz del zip, accesos directos
+$Legacy = "Chuleta"   # nombre anterior: el instalador reconoce sus accesos directos, su entrada y sus .bat y los migra
+$Legacy2 = "Notas"    # el de antes de Chuleta: sus accesos directos tambien se reconocen
 $python = (Get-Command python).Source
 $logDir = Join-Path $env:LOCALAPPDATA "AudiosApp"
 $tokenFile = Join-Path $logDir "sesion.token"
@@ -150,7 +156,7 @@ function Copy-Logs($suffix) {
         $f = Join-Path $logDir $n
         if (Test-Path -LiteralPath $f) { Copy-Item -LiteralPath $f -Destination (Join-Path $Out ($n -replace "\.log$", "-$suffix.log")) -Force }
     }
-    $d = Join-Path $env:TEMP "chuleta-desinstalar.log"
+    $d = Join-Path $env:TEMP "tenca-desinstalar.log"
     if (Test-Path -LiteralPath $d) { Copy-Item -LiteralPath $d -Destination (Join-Path $Out "desinstalar.log") -Force }
 }
 
@@ -171,11 +177,12 @@ function Capture-Screen($path) {
     } catch { return $false }
 }
 $UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$App"
-function Get-Registro {
+$LegacyKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$Legacy"
+function Get-Registro($key = $UninstallKey) {
     # valores de la entrada de "Aplicaciones instaladas": nombre -> @{ valor; tipo }
     $o = [ordered]@{}
-    if (-not (Test-Path -LiteralPath $UninstallKey)) { return $null }
-    $k = Get-Item -LiteralPath $UninstallKey
+    if (-not (Test-Path -LiteralPath $key)) { return $null }
+    $k = Get-Item -LiteralPath $key
     foreach ($n in $k.GetValueNames()) { $o[$n] = @{ valor = $k.GetValue($n); tipo = "$($k.GetValueKind($n))" } }
     return $o
 }
@@ -192,7 +199,7 @@ function Run-Orden($cmdline, $label, $timeoutSec) {
 }
 function Last-Uninstall-Log {
     # solo la ultima ejecucion del desinstalador (cada una empieza por "==== fecha desinstalar.ps1 desde ...")
-    $f = Join-Path $env:TEMP "chuleta-desinstalar.log"
+    $f = Join-Path $env:TEMP "tenca-desinstalar.log"
     if (-not (Test-Path -LiteralPath $f)) { return "(no existe $f)" }
     $lines = @(Get-Content -LiteralPath $f -Encoding UTF8)
     $start = 0
@@ -297,7 +304,7 @@ $test1 = Join-Path $env:USERPROFILE "Descargas-test"
 Expand-Archive -LiteralPath $zip -DestinationPath $test1 -Force
 $dir1 = Join-Path $test1 $App
 Check "a.extraido" (Test-Path -LiteralPath (Join-Path $dir1 "INSTALAR.bat")) $dir1
-Check "a.sin_nombre_anterior" (-not (Test-Path -LiteralPath (Join-Path $test1 $Legacy)) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "ABRIR NOTAS.bat")) -and (Test-Path -LiteralPath (Join-Path $dir1 "ABRIR CHULETA.bat")) -and (Test-Path -LiteralPath (Join-Path $dir1 "_app\Chuleta.bat"))) ""
+Check "a.sin_nombre_anterior" (-not (Test-Path -LiteralPath (Join-Path $test1 $Legacy)) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "ABRIR CHULETA.bat")) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "_app\Chuleta.bat")) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "_app\static\chuleta.ico")) -and (Test-Path -LiteralPath (Join-Path $dir1 "ABRIR TENCA.bat")) -and (Test-Path -LiteralPath (Join-Path $dir1 "_app\Tenca.bat"))) ""
 $verTxt = Join-Path $dir1 "_app\version.txt"
 $verZip = $(if (Test-Path -LiteralPath $verTxt) { (Get-Content -LiteralPath $verTxt -Encoding UTF8 -Raw).Trim() } else { "" })
 Check "a.version_txt" ($verZip -match "^\d{4}-\d{2}-\d{2} . [0-9a-f]{7,}$") $verZip
@@ -331,24 +338,28 @@ Check "c.modo_ventana" ($ilog -match "modo: ventana") (($ilog -split "`n" | Sele
 Check "c.sin_winget" (-not ($ilog -match "winget install")) ($ilog -match "No hay Python")
 Check "c.listo" ($ilog -match "Listo") (($ilog -split "`n" | Select-String "Listo" | Select-Object -First 1) -join "")
 Check "c.listo_con_version" ($ilog -match "Listo \(versi.n \d{4}-\d{2}-\d{2} . [0-9a-f]{7,}\)") ""
-Check "c.sin_notas_lnk_que_migrar" (-not ($ilog -match "pasa a llamarse")) ""
+Check "c.sin_lnk_que_migrar" (-not ($ilog -match "pasa a llamarse")) ""
 Check "c.autocierre" ($ilog -match "autocierre tras") ""
 $inst = Join-Path $env:USERPROFILE $App  # la carpeta propia
 Check "c.instala_en_carpeta_propia" (Test-Path -LiteralPath (Join-Path $inst "_app\server.py")) $inst
 Check "c.log_instalando_en" ($ilog -match ("Instalando en " + [regex]::Escape($inst))) (($ilog -split "`n" | Select-String "Instalando en" | Select-Object -First 1) -join "")
 Check "c.log_donde_quedo" ($ilog -match ("Instalada en " + [regex]::Escape($inst))) (($ilog -split "`n" | Select-String "Instalada en" | Select-Object -First 1) -join "")
 Check "c.log_descomprimida_borrable" ($ilog -match "descomprimiste .* ya no hace falta") (($ilog -split "`n" | Select-String "descomprimiste" | Select-Object -First 1) -join "")
-$faltan = @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR CHULETA.bat", "_app\desinstalar.ps1", "_app\instalar.ps1", "_app\version.txt", "_app\static\chuleta.ico", "_app\export\LEEME.txt") | Where-Object { -not (Test-Path -LiteralPath (Join-Path $inst $_)) }
+$faltan = @("LEEME.txt", "LICENSE", "INSTALAR.bat", "ABRIR TENCA.bat", "_app\desinstalar.ps1", "_app\instalar.ps1", "_app\version.txt", "_app\static\tenca.ico", "_app\Tenca.bat", "_app\export\LEEME.txt") | Where-Object { -not (Test-Path -LiteralPath (Join-Path $inst $_)) }
 Check "c.copiados" ($faltan.Count -eq 0) ("faltan: " + ($faltan -join ", "))
 Check "c.version_copiada" (((Get-Content -LiteralPath (Join-Path $inst "_app\version.txt") -Encoding UTF8 -Raw).Trim()) -eq $verZip) ""
 Check "c.descomprimida_intacta" ((Test-Path -LiteralPath (Join-Path $dir1 "_app\server.py")) -and -not (Test-Path -LiteralPath (Join-Path $dir1 "_app\python.txt"))) $dir1
-Check "c.sin_chuleta_2" (-not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "$App (2)"))) ""
+Check "c.sin_carpeta_2" (-not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "$App (2)"))) ""
 
 # ---- d) accesos directos, python.txt, librerias, zombis
 $desk = Join-Path ([Environment]::GetFolderPath("Desktop")) "$App.lnk"
 $prog = Join-Path ([Environment]::GetFolderPath("Programs")) "$App.lnk"
 $deskLegacy = Join-Path ([Environment]::GetFolderPath("Desktop")) "$Legacy.lnk"
 $progLegacy = Join-Path ([Environment]::GetFolderPath("Programs")) "$Legacy.lnk"
+$deskLegacy2 = Join-Path ([Environment]::GetFolderPath("Desktop")) "$Legacy2.lnk"
+$startupDir = [Environment]::GetFolderPath("Startup")  # "Arrancar con Windows": la copia del acceso directo de Inicio
+$startup = Join-Path $startupDir "$App.lnk"
+$startupLegacy = Join-Path $startupDir "$Legacy.lnk"
 $pyTxt = Join-Path $inst "_app\python.txt"
 Check "d.python_txt" (Test-Path -LiteralPath $pyTxt) $(if (Test-Path -LiteralPath $pyTxt) { Get-Content -LiteralPath $pyTxt -Raw } else { "" })
 $pyApp = $(if (Test-Path -LiteralPath $pyTxt) { (Get-Content -LiteralPath $pyTxt -Raw).Trim() } else { $python })
@@ -361,14 +372,16 @@ foreach ($pair in @(@("escritorio", $desk), @("programas", $prog))) {
     Check "d.lnk.$label.target_pythonw" ($l.TargetPath -ieq $pyw) $l.TargetPath
     Check "d.lnk.$label.arguments" ($l.Arguments -like "*server.py*") $l.Arguments
     Check "d.lnk.$label.workdir" ($l.WorkingDirectory -ieq (Join-Path $inst "_app")) $l.WorkingDirectory
-    Check "d.lnk.$label.icon" ($l.IconLocation -like "*static\chuleta.ico*") $l.IconLocation
+    Check "d.lnk.$label.icon" ($l.IconLocation -like "*static\tenca.ico*") $l.IconLocation
     Check "d.lnk.$label.description" ($l.Description -eq "${App}: grabar, transcribir y resumir reuniones") $l.Description
     Check "d.lnk.$label.aumid" ($l.AppUserModelID -eq "Bernardo.Chuleta") $l.AppUserModelID
 }
 Check "d.sin_lnk_antiguo" (-not (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $progLegacy)) ""
+Check "d.sin_arranque" (-not (Test-Path -LiteralPath $startup) -and -not (Test-Path -LiteralPath $startupLegacy)) ""  # apagado por defecto
 # "Aplicaciones instaladas": la clave, sus valores y sus tipos (se vuelcan a registro.txt)
 $reg = Get-Registro
 Check "d.registro.existe" ($null -ne $reg) $UninstallKey
+Check "d.registro.sin_antigua" (-not (Test-Path -LiteralPath $LegacyKey)) $LegacyKey
 if ($reg) {
     ($reg.GetEnumerator() | ForEach-Object { "$($_.Key) [$($_.Value.tipo)] = $($_.Value.valor)" }) | Set-Content -LiteralPath (Join-Path $Out "registro.txt") -Encoding UTF8
     Note "d.registro.volcado" (($reg.GetEnumerator() | ForEach-Object { "$($_.Key)[$($_.Value.tipo)]=$($_.Value.valor)" }) -join " | ")
@@ -376,9 +389,9 @@ if ($reg) {
     $kbApp = [int][Math]::Ceiling([double](Get-ChildItem -LiteralPath (Join-Path $inst "_app") -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1024)
     $espera = [ordered]@{
         DisplayName = @("String", $App); DisplayVersion = @("String", $verZip); Publisher = @("String", "Bernardo Stegmaier")
-        DisplayIcon = @("String", (Join-Path $inst "_app\static\chuleta.ico")); InstallLocation = @("String", $inst)
+        DisplayIcon = @("String", (Join-Path $inst "_app\static\tenca.ico")); InstallLocation = @("String", $inst)
         InstallDate = @("String", (Get-Date -Format "yyyyMMdd")); NoModify = @("DWord", 1); NoRepair = @("DWord", 1)
-        URLInfoAbout = @("String", "https://github.com/bastegman/chuleta"); UninstallString = @("String", $cmdDes)
+        URLInfoAbout = @("String", "https://github.com/bastegman/tenca"); UninstallString = @("String", $cmdDes)
         QuietUninstallString = @("String", "$cmdDes -Silencioso")
     }
     foreach ($n in $espera.Keys) {
@@ -427,7 +440,7 @@ Check "e.config_window_true" ($cfg -and $cfg.window -eq $true) "$($cfg.window)"
 Check "e.config_app_name" ($cfg -and $cfg.app_name -eq $App) "$($cfg.app_name)"
 Check "e.root_carpeta_propia" ($cfg -and $cfg.root -ieq $inst) "root=$($cfg.root)"
 Check "e.config_version_del_zip" ($cfg -and $cfg.version -eq $verZip) "$($cfg.version) vs $verZip"
-Check "e.config_acerca" ($cfg -and $cfg.acerca.repo -eq "https://github.com/bastegman/chuleta" -and $cfg.acerca.licencia -eq "MIT" -and $cfg.acerca.datos -ieq $logDir) ("repo=$($cfg.acerca.repo) licencia=$($cfg.acerca.licencia) datos=$($cfg.acerca.datos)")
+Check "e.config_acerca" ($cfg -and $cfg.acerca.repo -eq "https://github.com/bastegman/tenca" -and $cfg.acerca.licencia -eq "MIT" -and $cfg.acerca.datos -ieq $logDir) ("repo=$($cfg.acerca.repo) licencia=$($cfg.acerca.licencia) datos=$($cfg.acerca.datos)")
 try { $diag = Invoke-RestMethod "$Base/api/diagnostico" -Headers (Api-Headers $false) -TimeoutSec 10 } catch { $diag = $null }
 Check "e.diagnostico" ($diag -and $diag.texto -match "^$App . versi.n " -and $diag.texto -match "server\.log") $(if ($diag) { ($diag.texto -split "`n" | Select-Object -First 3) -join " | " } else { "sin respuesta" })
 Check "e.server_header" (((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -Headers (Api-Headers $false) -TimeoutSec 5).Headers["Server"]) -like "$App/*") ((Invoke-WebRequest "$Base/api/ping" -UseBasicParsing -Headers (Api-Headers $false) -TimeoutSec 5).Headers["Server"])
@@ -551,58 +564,125 @@ if ($lisf.Count -ge 1) {
     Check "f.apagar" (Wait-Process-Gone $pidf 20) "pid $pidf"
 }
 
-# ---- fn) tercera instalacion, de una version anterior al registro y al renombrado: sin entrada de "Aplicaciones
-# instaladas", con accesos directos Notas.lnk (escritorio e Inicio) y los .bat del nombre anterior. Debe detectarla por
-# Notas.lnk, actualizarla, renombrar Notas.lnk -> Chuleta.lnk, crear la entrada y arrancar la app con el titulo nuevo.
-Remove-Item -LiteralPath $UninstallKey -Recurse -Force
+# ---- fn) tercera instalacion, disfrazada de Chuleta (el nombre anterior), como la dejaria su instalador: su entrada
+# de "Aplicaciones instaladas" (no la de Tenca), Chuleta.lnk en el escritorio, en Inicio y en la carpeta Inicio de
+# Windows ("Arrancar con Windows"), ABRIR CHULETA.bat y _app\Chuleta.bat, y un Notas.lnk que ya no abre nada. Debe
+# encontrarla por la entrada antigua, actualizarla en su sitio y no dejar nada con el nombre viejo ni duplicado.
+function Disfrazar-DeChuleta($conRegistro, $conArranque) {
+    $reg = Get-Registro
+    if (Test-Path -LiteralPath $UninstallKey) { Remove-Item -LiteralPath $UninstallKey -Recurse -Force }
+    if ($conRegistro -and $reg) {
+        $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey(($LegacyKey -replace '^HKCU:\\', ''))
+        foreach ($n in $reg.Keys) {
+            $v = $reg[$n].valor
+            if ($n -eq "DisplayName") { $v = $Legacy }
+            if ($n -eq "DisplayIcon") { $v = "$v" -replace 'tenca\.ico$', 'chuleta.ico' }
+            if ($reg[$n].tipo -eq "DWord") { $k.SetValue($n, [int]$v, [Microsoft.Win32.RegistryValueKind]::DWord) }
+            else { $k.SetValue($n, [string]$v, [Microsoft.Win32.RegistryValueKind]::String) }
+        }
+        $k.Close()
+    }
+    foreach ($pair in @(@($desk, $deskLegacy), @($prog, $progLegacy))) {
+        if (Test-Path -LiteralPath $pair[0]) { Move-Item -LiteralPath $pair[0] -Destination $pair[1] -Force }
+    }
+    foreach ($f in @($startup, $startupLegacy)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
+    if ($conArranque) { Copy-Item -LiteralPath $progLegacy -Destination $startupLegacy -Force }  # como inicio_windows_poner
+    Set-Content -LiteralPath (Join-Path $inst "ABRIR CHULETA.bat") -Value "@echo off", "rem Abre Chuleta (lo mismo que el acceso directo `"Chuleta`" del escritorio).", "call `"%~dp0_app\Chuleta.bat`" %*" -Encoding Ascii
+    Set-Content -LiteralPath (Join-Path $inst "_app\Chuleta.bat") -Value "@echo off" -Encoding Ascii
+    # un Notas.lnk de la app que ya no abre nada (su carpeta ya no esta)
+    $s = (New-Object -ComObject WScript.Shell).CreateShortcut($deskLegacy2)
+    $s.TargetPath = $pyw
+    $s.Arguments = '"C:\no-existe\_app\server.py"'
+    $s.WorkingDirectory = "C:\no-existe\_app"
+    $s.Save()
+}
+function Apagar-App($label) {
+    $lis = @(Get-Listener)
+    if ($lis.Count -ge 1) {
+        $p = $lis[0].OwningProcess
+        try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
+        Check "$label.apagar" (Wait-Process-Gone $p 20) "pid $p"
+    }
+}
+function Sin-NombreViejo {
+    # ningun acceso directo con el nombre anterior en el escritorio, en Inicio ni en la carpeta Inicio de Windows
+    return @(@($deskLegacy, $progLegacy, $startupLegacy, $deskLegacy2, (Join-Path ([Environment]::GetFolderPath("Programs")) "$Legacy2.lnk")) | Where-Object { Test-Path -LiteralPath $_ })
+}
+Disfrazar-DeChuleta $true $true
 Set-Content -LiteralPath (Join-Path $inst "LEEME.txt") -Value "VIEJO" -Encoding UTF8
-Set-Content -LiteralPath (Join-Path $inst "_app\static\marca-vieja.txt") -Value "x" -Encoding UTF8
-Set-Content -LiteralPath (Join-Path $inst "ABRIR NOTAS.bat") -Value "@echo off", "call `"%~dp0_app\Notas.bat`" %*" -Encoding Ascii  # restos del nombre anterior (como el real)
-Set-Content -LiteralPath (Join-Path $inst "_app\Notas.bat") -Value "@echo off" -Encoding Ascii
-Rename-Item -LiteralPath $desk -NewName "$Legacy.lnk"
-Rename-Item -LiteralPath $prog -NewName "$Legacy.lnk"
-Check "fn.preparado_lnk_antiguo" ((Test-Path -LiteralPath $deskLegacy) -and (Test-Path -LiteralPath $progLegacy) -and -not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog) -and -not (Test-Path -LiteralPath $UninstallKey)) ""
+Check "fn.preparada" ((Test-Path -LiteralPath $LegacyKey) -and -not (Test-Path -LiteralPath $UninstallKey) -and (Test-Path -LiteralPath $deskLegacy) -and (Test-Path -LiteralPath $progLegacy) -and (Test-Path -LiteralPath $startupLegacy) -and (Test-Path -LiteralPath $deskLegacy2) -and -not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog)) ""
 $rc2 = Run-Installer $dir2 "fn.instalador" 15
 Copy-Logs "fn"
 $ilog2 = Last-Run-Log 400
 Check "fn.exitcode_0" ($rc2 -eq 0) $rc2
-Check "fn.detecta_anterior_por_notas_lnk" ($ilog2 -match "Encontrada por: acceso directo $Legacy\.lnk") (($ilog2 -split "`n" | Select-String "Encontrada por" | Select-Object -First 1) -join "")
-Check "fn.actualiza_la_vieja" ($ilog2 -match [regex]::Escape($inst)) ""
+Check "fn.detecta_por_la_entrada_antigua" ($ilog2 -match "Encontrada por: Aplicaciones instaladas") (($ilog2 -split "`n" | Select-String "Encontrada por" | Select-Object -First 1) -join "")
+Check "fn.dice_el_nombre_anterior" ($ilog2 -match ("Ya ten.as $Legacy \(ahora se llama $App\) en " + [regex]::Escape($inst))) (($ilog2 -split "`n" | Select-String "Ya ten" | Select-Object -First 1) -join "")
 Check "fn.leeme_actualizado" ((Get-Content -LiteralPath (Join-Path $inst "LEEME.txt") -Raw) -notmatch "^VIEJO") ""
-Check "fn.restos_no_se_borran" ((Test-Path -LiteralPath (Join-Path $inst "ABRIR NOTAS.bat")) -and (Test-Path -LiteralPath (Join-Path $inst "_app\Notas.bat"))) ""
-Check "fn.restos_avisados" ($ilog2 -match "ya no hacen falta") (($ilog2 -split "`n" | Select-String "ya no hacen falta" | Select-Object -First 1) -join "")
-Check "fn.lnk_renombrado_log" ($ilog2 -match "pasa a llamarse") (($ilog2 -split "`n" | Select-String "pasa a llamarse") -join " | ")
-Check "fn.lnk_chuleta_escritorio" (Test-Path -LiteralPath $desk) $desk
-Check "fn.lnk_chuleta_inicio" (Test-Path -LiteralPath $prog) $prog
-Check "fn.lnk_notas_ya_no_esta" (-not (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $progLegacy)) ""
+Check "fn.lnk_renombrado" ((($ilog2 -split "`n" | Select-String "El acceso directo '$Legacy' pasa a llamarse '$App'").Count) -eq 2) (($ilog2 -split "`n" | Select-String "pasa a llamarse") -join " | ")
+Check "fn.lnk_tenca" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $prog) -and (Test-Path -LiteralPath $startup)) ""
+$viejos = @(Sin-NombreViejo)
+Check "fn.sin_lnk_con_el_nombre_viejo" ($viejos.Count -eq 0) ($viejos -join ", ")
+Check "fn.lnk_roto_quitado" ($ilog2 -match "Quitado el acceso directo '$Legacy2' .*ya no abr.a nada") (($ilog2 -split "`n" | Select-String "Quitado el acceso" ) -join " | ")
+Check "fn.arranque_sigue" ($ilog2 -match "Arrancar con Windows: sigue activado") (($ilog2 -split "`n" | Select-String "Arrancar con Windows") -join " | ")
+Check "fn.arranque_igual_que_inicio" ((Test-Path -LiteralPath $startup) -and (Get-FileHash -LiteralPath $startup).Hash -eq (Get-FileHash -LiteralPath $prog).Hash) ""
 $l2 = Get-Lnk $desk
-Check "fn.lnk_sigue_en_la_vieja" ($l2.WorkingDirectory -ieq (Join-Path $inst "_app")) $l2.WorkingDirectory
-Check "fn.lnk_icono_nuevo" ($l2.IconLocation -like "*static\chuleta.ico*") $l2.IconLocation
+Check "fn.lnk_sigue_en_la_instalada" ($l2.WorkingDirectory -ieq (Join-Path $inst "_app")) $l2.WorkingDirectory
+Check "fn.lnk_icono_nuevo" ($l2.IconLocation -like "*static\tenca.ico*") $l2.IconLocation
 Check "fn.lnk_aumid" ($l2.AppUserModelID -eq "Bernardo.Chuleta") $l2.AppUserModelID
-Check "fn.listo_con_version" ($ilog2 -match ("Listo \(versi.n " + [regex]::Escape($verZip) + "\)")) (($ilog2 -split "`n" | Select-String "Listo" | Select-Object -First 1) -join "")
 $regn = Get-Registro
-Check "fn.registro_creado" ($regn -and $regn["InstallLocation"].valor -ieq $inst) $(if ($regn) { $regn["InstallLocation"].valor } else { "sin clave" })
+Check "fn.registro_tenca" ($regn -and $regn["InstallLocation"].valor -ieq $inst -and $regn["DisplayName"].valor -eq $App -and $regn["DisplayIcon"].valor -like "*static\tenca.ico") $(if ($regn) { "$($regn['DisplayName'].valor) $($regn['InstallLocation'].valor)" } else { "sin clave" })
+Check "fn.sin_registro_chuleta" (-not (Test-Path -LiteralPath $LegacyKey)) (($ilog2 -split "`n" | Select-String "entrada antigua") -join " | ")
+Check "fn.sin_abrir_chuleta_bat" (-not (Test-Path -LiteralPath (Join-Path $inst "ABRIR CHULETA.bat")) -and (Test-Path -LiteralPath (Join-Path $inst "ABRIR TENCA.bat"))) (($ilog2 -split "`n" | Select-String "ABRIR CHULETA") -join " | ")
+Note "fn.chuleta_bat_interno" (Test-Path -LiteralPath (Join-Path $inst "_app\Chuleta.bat"))  # se queda a proposito (no se ve)
+Check "fn.aviso_renombrada" ($ilog2 -match "$Legacy ahora se llama ${App}: tus reuniones, voces y ajustes siguen donde estaban") ""
+Check "fn.listo_con_version" ($ilog2 -match ("Listo \(versi.n " + [regex]::Escape($verZip) + "\)")) (($ilog2 -split "`n" | Select-String "Listo" | Select-Object -First 1) -join "")
 Check "fn.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
 $cfg2 = Wait-Http "$Base/api/config" 150
 Note "fn.api_tarda_s" $script:ultimaEspera
 if ($script:ultimaEspera -gt 5) { Diag-Lenta "fn" }
-Check "fn.app_arranca_desde_la_vieja" ($cfg2 -and $cfg2.root -ieq $inst) "root=$($cfg2.root)"
-Start-Sleep -Seconds 6
-$wf = Ventana "icons" "actualizada"
-Check "fn.titulo" ($wf.hwnd -and $wf.title -eq $App) "$($wf.title) visible=$($wf.visible)"
-$lisf = @(Get-Listener)
-if ($lisf.Count -ge 1) {
-    $pidf = $lisf[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
-    Check "fn.apagar" (Wait-Process-Gone $pidf 20) "pid $pidf"
-}
+Check "fn.app_arranca_desde_la_instalada" ($cfg2 -and $cfg2.root -ieq $inst -and $cfg2.app_name -eq $App) "root=$($cfg2.root) app_name=$($cfg2.app_name)"
+try { $iw = Invoke-RestMethod "$Base/api/inicio-windows" -Headers (Api-Headers $false) -TimeoutSec 10 } catch { $iw = $null }
+Check "fn.app_ve_el_arranque" ($iw -and $iw.activado -eq $true) "$($iw | ConvertTo-Json -Compress)"
+$wf = Wait-Window $App 30
+Check "fn.titulo" ($wf -and $wf.title -eq $App) $(if ($wf) { "$($wf.title) visible=$($wf.visible)" } else { "sin ventana «$App» en 30 s" })
+Start-Sleep -Seconds 3
+$viejos = @(Sin-NombreViejo)
+Check "fn.la_app_no_rehace_nada_viejo" ($viejos.Count -eq 0 -and (Test-Path -LiteralPath $startup)) ($viejos -join ", ")
+Apagar-App "fn"
 
-Remove-Item -LiteralPath (Join-Path $inst "_app\static\marca-vieja.txt") -Force -ErrorAction SilentlyContinue  # andamio de fn
+# ---- fl) cuarta: Chuleta sin entrada de "Aplicaciones instaladas" ni "Arrancar con Windows" (instalada antes de que
+# existieran): la encuentra por Chuleta.lnk, lo renombra, crea la entrada de Tenca y no pone el arranque
+Disfrazar-DeChuleta $false $false
+Check "fl.preparada" (-not (Test-Path -LiteralPath $LegacyKey) -and -not (Test-Path -LiteralPath $UninstallKey) -and (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $startup) -and -not (Test-Path -LiteralPath $startupLegacy)) ""
+$rcl = Run-Installer $dir2 "fl.instalador" 15
+Copy-Logs "fl"
+$ilogl = Last-Run-Log 400
+Check "fl.exitcode_0" ($rcl -eq 0) $rcl
+Check "fl.detecta_por_chuleta_lnk" ($ilogl -match "Encontrada por: acceso directo $Legacy\.lnk") (($ilogl -split "`n" | Select-String "Encontrada por" | Select-Object -First 1) -join "")
+Check "fl.lnk_tenca" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $prog)) ""
+$viejos = @(Sin-NombreViejo)
+Check "fl.sin_lnk_con_el_nombre_viejo" ($viejos.Count -eq 0) ($viejos -join ", ")
+Check "fl.sin_arranque" (-not (Test-Path -LiteralPath $startup)) ""  # no estaba puesto: no se pone
+$regl = Get-Registro
+Check "fl.registro_creado" ($regl -and $regl["InstallLocation"].valor -ieq $inst) $(if ($regl) { $regl["InstallLocation"].valor } else { "sin clave" })
+Check "fl.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
+$cfgl = Wait-Http "$Base/api/config" 150
+Note "fl.api_tarda_s" $script:ultimaEspera
+Check "fl.app_arranca" ($cfgl -and $cfgl.root -ieq $inst) "root=$($cfgl.root)"
+Apagar-App "fl"
 
-# ---- f2) tercera instalacion con los DOS accesos directos (Chuleta.lnk y un Notas.lnk que el usuario conserva):
-# el antiguo no se toca y se dice en el detalle
+Remove-Item -LiteralPath (Join-Path $inst "_app\Chuleta.bat") -Force -ErrorAction SilentlyContinue  # andamio de fn/fl
+
+# ---- f2) quinta, desde la propia carpeta instalada, con DOS accesos directos de esta instalacion en el escritorio
+# (Tenca.lnk y una copia Chuleta.lnk: queda solo Tenca.lnk) y un Chuleta.lnk en Inicio de OTRA copia de la app (la
+# descomprimida en Otra-carpeta, que tiene su _app\server.py: se queda y se dice)
 Copy-Item -LiteralPath $desk -Destination $deskLegacy -Force
-Check "f2.preparado_los_dos" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($progLegacy)
+$s.TargetPath = $pyw
+$s.Arguments = '"' + (Join-Path $dir2 "_app\server.py") + '"'
+$s.WorkingDirectory = (Join-Path $dir2 "_app")
+$s.Save()
+Check "f2.preparado" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy) -and (Test-Path -LiteralPath $progLegacy)) ""
 $rc22 = Run-Installer $inst "f2.instalador" 15  # desde la propia carpeta instalada: se actualiza en su sitio
 Copy-Logs "f2"
 $ilog22 = Last-Run-Log 400
@@ -610,20 +690,16 @@ Check "f2.exitcode_0" ($rc22 -eq 0) $rc22
 Check "f2.en_su_sitio" ($ilog22 -match "Esta carpeta ya estaba instalada") (($ilog22 -split "`n" | Select-String "ya estaba instalada|Encontrada por" | Select-Object -First 1) -join "")
 Check "f2.reunion_conserva_marca" ($null -ne (Get-Item -LiteralPath $wav -Stream Zone.Identifier -ErrorAction SilentlyContinue)) ""
 Check "f2.reunion_intacta" ((Get-Reunion) -eq $reunion0) ""
-Check "f2.conserva_notas_lnk" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $deskLegacy)) ""
-Check "f2.conserva_avisado" ($ilog22 -match "Se conserva el acceso directo antiguo") (($ilog22 -split "`n" | Select-String "Se conserva" | Select-Object -First 1) -join "")
+Check "f2.sin_duplicado" ((Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $deskLegacy)) ""
+Check "f2.duplicado_quitado_log" ($ilog22 -match "Quitado el acceso directo '$Legacy' en .*ahora es '$App'") (($ilog22 -split "`n" | Select-String "Quitado el acceso") -join " | ")
+Check "f2.otra_copia_se_queda" ((Test-Path -LiteralPath $progLegacy) -and $ilog22 -match "Se conserva el acceso directo '$Legacy' en .*es de otra copia") (($ilog22 -split "`n" | Select-String "Se conserva") -join " | ")
 Check "f2.no_renombra" (-not ($ilog22 -match "pasa a llamarse")) ""
-Check "f2.inicio_sin_antiguo" (-not (Test-Path -LiteralPath $progLegacy)) ""
 $cfg22 = Wait-Http "$Base/api/config" 150
 Note "f2.api_tarda_s" $script:ultimaEspera
 if ($script:ultimaEspera -gt 5) { Diag-Lenta "f2" }
 Check "f2.app_arranca" ($cfg22 -and $cfg22.root -ieq $inst) "root=$($cfg22.root)"
-$lisf2 = @(Get-Listener)
-if ($lisf2.Count -ge 1) {
-    $pidf2 = $lisf2[0].OwningProcess
-    try { $null = Invoke-RestMethod "$Base/api/apagar" -Method Post -ContentType "application/json" -Body "{}" -Headers (Api-Headers $true) -TimeoutSec 30 } catch {}
-    Check "f2.apagar" (Wait-Process-Gone $pidf2 20) "pid $pidf2"
-}
+Apagar-App "f2"
+Remove-Item -LiteralPath $progLegacy -Force -ErrorAction SilentlyContinue  # andamio de f2 (el de la otra copia)
 
 # ---- g) modo fallo: pip simulado que falla (pantalla de error con «Copiar el detalle»)
 $test3 = Join-Path $env:USERPROFILE "Fallo-test"
@@ -695,25 +771,25 @@ $dlog = Last-Uninstall-Log
 $dlog | Set-Content -LiteralPath (Join-Path $Out "desinstalar-u2.log") -Encoding UTF8
 Check "u2.exitcode_0" ($rcu2 -eq 0) $rcu2
 Check "u2.log_final" ($dlog -match ("se ha desinstalado\. Tus reuniones siguen en " + [regex]::Escape($inst))) (($dlog -split "`n" | Select-Object -Last 1) -join "")
-Check "u2.relanzado_desde_temp" ($dlog -match "relanzo: .*chuleta-desinstalar-[0-9a-f]{8}\.ps1") ""
+Check "u2.relanzado_desde_temp" ($dlog -match "relanzo: .*tenca-desinstalar-[0-9a-f]{8}\.ps1") ""
 Start-Sleep -Seconds 1
 $servidores = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^pythonw?\.exe$" -and $_.CommandLine -like "*server.py*" })
 Check "u2.app_no_corre" ($servidores.Count -eq 0 -and @(Get-Listener).Count -eq 0) ("procesos server.py=" + $servidores.Count + " " + (Describe-Listeners))
 $restos = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf((Join-Path $inst "_app"), [StringComparison]::OrdinalIgnoreCase) -ge 0 })
 Check "u2.sin_procesos_de_la_app" ($restos.Count -eq 0) (($restos | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ", ")
-Check "u2.sin_accesos_directos" (-not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog) -and -not (Test-Path -LiteralPath $deskLegacy) -and -not (Test-Path -LiteralPath $progLegacy)) ""
+Check "u2.sin_accesos_directos" (-not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog) -and -not (Test-Path -LiteralPath $startup) -and @(Sin-NombreViejo).Count -eq 0) (@(Sin-NombreViejo) -join ", ")
 Check "u2.sin_clave" (-not (Test-Path -LiteralPath $UninstallKey)) ""
 Check "u2.sin_app" (-not (Test-Path -LiteralPath (Join-Path $inst "_app"))) $(if (Test-Path -LiteralPath (Join-Path $inst "_app")) { (Get-ChildItem -LiteralPath (Join-Path $inst "_app") -Recurse -Force | Select-Object -First 10 | ForEach-Object { $_.FullName }) -join ", " } else { "" })
-Check "u2.sin_bat_raiz" (-not (Test-Path -LiteralPath (Join-Path $inst "INSTALAR.bat")) -and -not (Test-Path -LiteralPath (Join-Path $inst "ABRIR CHULETA.bat")) -and -not (Test-Path -LiteralPath (Join-Path $inst "ABRIR NOTAS.bat"))) ""
+Check "u2.sin_bat_raiz" (-not (Test-Path -LiteralPath (Join-Path $inst "INSTALAR.bat")) -and -not (Test-Path -LiteralPath (Join-Path $inst "ABRIR TENCA.bat")) -and -not (Test-Path -LiteralPath (Join-Path $inst "ABRIR CHULETA.bat")) -and -not (Test-Path -LiteralPath (Join-Path $inst "ABRIR NOTAS.bat"))) ""
 Check "u2.leeme_y_licencia_se_quedan" ((Test-Path -LiteralPath (Join-Path $inst "LEEME.txt")) -and (Test-Path -LiteralPath (Join-Path $inst "LICENSE"))) ""
 $reunion2 = Get-Reunion
 Check "u2.reunion_intacta" ($reunion2 -eq $reunion0) $reunion2
 Check "u2.audiosapp_se_queda" (Test-Path -LiteralPath (Join-Path $logDir "server.log")) ((Get-ChildItem -LiteralPath $logDir -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { $_.Name }) -join ", ")
-Check "u2.temp_limpio" (@(Get-ChildItem -LiteralPath $env:TEMP -Filter "chuleta-desinstalar-*.ps1" -ErrorAction SilentlyContinue).Count -eq 0) ""
+Check "u2.temp_limpio" (@(Get-ChildItem -LiteralPath $env:TEMP -Filter "tenca-desinstalar-*.ps1" -ErrorAction SilentlyContinue).Count -eq 0) ""
 Note "u2.carpeta_tras_desinstalar" ((Get-ChildItem -LiteralPath $inst -Recurse -Force | ForEach-Object { $_.FullName.Substring($inst.Length) }) -join ", ")
 
 # ---- u3) reinstalar desde Descargas-test: vuelve a la MISMA carpeta (el LEEME que dejo el desinstalador la marca como
-# de Chuleta) y ve la reunion; despues, desinstalador con ventana, "Borrar tambien mis ajustes" marcada (-BorrarDatos)
+# de la app) y ve la reunion; despues, desinstalador con ventana, "Borrar tambien mis ajustes" marcada (-BorrarDatos)
 # y confirmacion automatica (-AutoConfirmar, solo CI): apaga la app, quita todo lo de la app y AudiosApp; la reunion se queda
 $env:NOTAS_INSTALADOR_AUTOCERRAR = "15"
 $rc3i = Run-Installer $dir1 "u3.instalador" 15
@@ -751,6 +827,110 @@ $servidores = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^
 Check "u3.app_no_corre" ($servidores.Count -eq 0) ("procesos server.py=" + $servidores.Count)
 $reunion3 = Get-Reunion
 Check "u3.reunion_intacta" ($reunion3 -eq $reunion0) $reunion3
+
+# ---- v) la Chuleta de verdad (-Chuleta <sha>: la version de main que tiene Bernardo), instalada con SU instalador,
+# abierta, con "Arrancar con Windows" puesto desde la propia app, un ajuste suyo y una reunion; y Tenca instalada
+# encima con la Chuleta abierta: la cierra, la encuentra por su entrada, la actualiza en su carpeta (que se sigue
+# llamando Chuleta), no deja nada con el nombre viejo ni duplicado, y la reunion y los ajustes siguen. Despues se
+# desinstala. Va al final: u3 ha dejado el PC sin la app ni AudiosApp
+$vInst = Join-Path $env:USERPROFILE $Legacy
+if (-not $Chuleta) {
+    Check "v.chuleta_sha" $false "falta -Chuleta <sha> (el workflow lo pasa)"
+} else {
+    $vSrcZip = Join-Path $Out "chuleta-fuente.zip"
+    $vSrc = Join-Path $env:USERPROFILE "Chuleta-fuente"
+    $ga = & git -C $Repo archive --format=zip -o $vSrcZip $Chuleta 2>&1
+    Check "v.fuente" ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $vSrcZip)) (($ga | ForEach-Object { "$_" }) -join " ")
+    Expand-Archive -LiteralPath $vSrcZip -DestinationPath $vSrc -Force
+    $vZip = Join-Path $Out "$Legacy - instalador.zip"
+    $vb = & $python (Join-Path $vSrc "scripts\build_zip.py") $vZip --version "e2e-chuleta $($Chuleta.Substring(0, 7))" 2>&1
+    Check "v.zip_chuleta" (Test-Path -LiteralPath $vZip) ($vb -join " ")
+    $vTest = Join-Path $env:USERPROFILE "Descargas-chuleta"
+    Expand-Archive -LiteralPath $vZip -DestinationPath $vTest -Force
+    $vExtr = Join-Path $vTest $Legacy
+    $env:NOTAS_INSTALADOR_AUTOCERRAR = "15"
+    $rcv = Run-Installer $vExtr "v.chuleta_instalador" 20
+    Copy-Logs "v-chuleta"
+    Check "v.chuleta_instalada" ($rcv -eq 0 -and (Test-Path -LiteralPath (Join-Path $vInst "_app\server.py")) -and (Test-Path -LiteralPath $LegacyKey) -and (Test-Path -LiteralPath $deskLegacy) -and (Test-Path -LiteralPath $progLegacy) -and -not (Test-Path -LiteralPath $desk)) "rc=$rcv"
+    $cfgv = Wait-Http "$Base/api/config" 150
+    Note "v.chuleta_api_tarda_s" $script:ultimaEspera
+    Check "v.chuleta_abierta" ($cfgv -and $cfgv.app_name -eq $Legacy -and $cfgv.root -ieq $vInst) "app_name=$($cfgv.app_name) root=$($cfgv.root) version=$($cfgv.version)"
+    # "Arrancar con Windows" desde la propia Chuleta (lo que hace su bandeja) y un ajuste suyo con una marca
+    try { $ar = Invoke-RestMethod "$Base/api/inicio-windows" -Method Post -ContentType "application/json" -Body '{"activado": true}' -Headers (Api-Headers $true) -TimeoutSec 15 } catch { $ar = $null }
+    Check "v.chuleta_arranque" ($ar -and $ar.activado -eq $true -and (Test-Path -LiteralPath $startupLegacy)) "$($ar | ConvertTo-Json -Compress)"
+    $marca = "TENCA-E2E-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+    try { $null = Invoke-RestMethod "$Base/api/settings" -Method Post -ContentType "application/json" -Body (@{ summary = @{ extra = $marca } } | ConvertTo-Json -Compress) -Headers (Api-Headers $true) -TimeoutSec 15 } catch { Note "v.chuleta_ajuste_error" $_.Exception.Message }
+    $ajustes = Join-Path $logDir "settings.json"
+    Check "v.chuleta_ajuste" ((Test-Path -LiteralPath $ajustes) -and ((Get-Content -LiteralPath $ajustes -Raw -Encoding UTF8) -match $marca)) $ajustes
+    # una reunion suya, en su carpeta
+    $vReu = Join-Path $vInst "Proyecto Beta"
+    New-Item -ItemType Directory -Force $vReu | Out-Null
+    $vWav = Join-Path $vReu "2026-11-09 10-00-00 Reunion de Chuleta.wav"
+    & $python -c "import sys, wave; w = wave.open(sys.argv[1], 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(32000)); w.close()" $vWav
+    Set-Content -LiteralPath ($vWav -replace "\.wav$", ".txt") -Value "Transcripcion de Chuleta." -Encoding UTF8
+    Set-Content -LiteralPath ($vWav -replace "\.wav$", ".md") -Value "---`nproyecto: Proyecto Beta`n---`n`nNotas de Chuleta" -Encoding UTF8
+    function Get-ReunionV { return ((@(Get-ChildItem -LiteralPath $vReu -Recurse -File | Sort-Object FullName) | ForEach-Object { $_.Name + "=" + (Get-FileHash -LiteralPath $_.FullName).Hash }) -join ";") }
+    $vReunion0 = Get-ReunionV
+    # lo que hay en AudiosApp (sin los registros, el token ni la ventana, que cambian solos)
+    function Get-DatosV { return @(Get-ChildItem -LiteralPath $logDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '\.log$|^sesion\.token$' } | ForEach-Object { $_.Name } | Sort-Object) }
+    $vDatos0 = Get-DatosV
+    Note "v.datos_antes" ($vDatos0 -join ", ")
+    Start-Sleep -Seconds 3
+    $vPidChuleta = $(if (@(Get-Listener).Count) { @(Get-Listener)[0].OwningProcess } else { 0 })
+
+    # Tenca encima, con la Chuleta abierta (como Bernardo: descomprime el zip nuevo y doble clic en INSTALAR.bat)
+    $rcv2 = Run-Installer $dir1 "v.instalador" 20
+    Copy-Logs "v"
+    $ilogv = Last-Run-Log 400
+    $ilogv | Set-Content -LiteralPath (Join-Path $Out "instalar-v.log") -Encoding UTF8
+    Check "v.exitcode_0" ($rcv2 -eq 0) $rcv2
+    Check "v.cierra_la_chuleta_abierta" ($ilogv -match "Cerrada la versi.n que estaba abierta" -and (Wait-Process-Gone $vPidChuleta 5)) (($ilogv -split "`n" | Select-String "abierta" | Select-Object -First 2) -join " | ")
+    Check "v.detecta_por_la_entrada_de_chuleta" ($ilogv -match "Encontrada por: Aplicaciones instaladas") (($ilogv -split "`n" | Select-String "Encontrada por" | Select-Object -First 1) -join "")
+    Check "v.actualiza_la_de_chuleta" ($ilogv -match ("Ya ten.as $Legacy \(ahora se llama $App\) en " + [regex]::Escape($vInst))) (($ilogv -split "`n" | Select-String "Ya ten" | Select-Object -First 1) -join "")
+    Check "v.no_instala_en_otra" (-not ($ilogv -match "Instalando en ") -and -not (Test-Path -LiteralPath (Join-Path $inst "_app"))) ""
+    Check "v.lnk_tenca" ((Test-Path -LiteralPath $desk) -and (Test-Path -LiteralPath $prog) -and (Test-Path -LiteralPath $startup)) ""
+    $viejos = @(Sin-NombreViejo)
+    Check "v.sin_lnk_con_el_nombre_viejo" ($viejos.Count -eq 0) ($viejos -join ", ")
+    Check "v.arranque_igual_que_inicio" ((Test-Path -LiteralPath $startup) -and (Get-FileHash -LiteralPath $startup).Hash -eq (Get-FileHash -LiteralPath $prog).Hash) ""
+    $lv = Get-Lnk $desk
+    Check "v.lnk_apunta_a_la_de_chuleta" ($lv.WorkingDirectory -ieq (Join-Path $vInst "_app") -and $lv.IconLocation -like "*static\tenca.ico*" -and $lv.AppUserModelID -eq "Bernardo.Chuleta") "$($lv.WorkingDirectory) | $($lv.IconLocation) | $($lv.AppUserModelID)"
+    $regv = Get-Registro
+    Check "v.registro_tenca" ($regv -and $regv["DisplayName"].valor -eq $App -and $regv["InstallLocation"].valor -ieq $vInst -and $regv["DisplayVersion"].valor -eq $verZip) $(if ($regv) { "$($regv['DisplayName'].valor) $($regv['InstallLocation'].valor) $($regv['DisplayVersion'].valor)" } else { "sin clave" })
+    Check "v.sin_registro_chuleta" (-not (Test-Path -LiteralPath $LegacyKey)) ""
+    $jv = Start-Job -ScriptBlock { param($a, $b) @(Get-Package -Name $a, $b -ProviderName Programs -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.Version)" }) } -ArgumentList $App, $Legacy
+    if (Wait-Job $jv -Timeout 90) { $pkv = @(Receive-Job $jv -ErrorAction SilentlyContinue) } else { $pkv = @("sin respuesta en 90 s"); Stop-Job $jv }
+    Remove-Job $jv -Force -ErrorAction SilentlyContinue
+    Check "v.aplicaciones_instaladas_una_sola" ($pkv.Count -eq 1 -and "$($pkv[0])" -like "$App *") ($pkv -join "; ")
+    Check "v.sin_abrir_chuleta_bat" (-not (Test-Path -LiteralPath (Join-Path $vInst "ABRIR CHULETA.bat")) -and (Test-Path -LiteralPath (Join-Path $vInst "ABRIR TENCA.bat"))) ""
+    Check "v.aviso_renombrada" ($ilogv -match "$Legacy ahora se llama ${App}: tus reuniones, voces y ajustes siguen donde estaban") ""
+    Check "v.reunion_intacta" ((Get-ReunionV) -eq $vReunion0) $vReunion0
+    Check "v.ajuste_intacto" ((Get-Content -LiteralPath $ajustes -Raw -Encoding UTF8) -match $marca) ""
+    $vDatos1 = Get-DatosV
+    $faltanV = @($vDatos0 | Where-Object { $vDatos1 -notcontains $_ })
+    Check "v.datos_siguen" ($faltanV.Count -eq 0 -and (Test-Path -LiteralPath $logDir)) ("faltan: " + ($faltanV -join ", ") + " · ahora: " + ($vDatos1 -join ", "))
+    $cfgv2 = Wait-Http "$Base/api/config" 150
+    Note "v.api_tarda_s" $script:ultimaEspera
+    if ($script:ultimaEspera -gt 5) { Diag-Lenta "v" }
+    Check "v.app_es_tenca" ($cfgv2 -and $cfgv2.app_name -eq $App -and $cfgv2.root -ieq $vInst -and $cfgv2.version -eq $verZip) "app_name=$($cfgv2.app_name) root=$($cfgv2.root) version=$($cfgv2.version)"
+    $treev = Wait-Tree "Reunion de Chuleta" 40
+    Check "v.app_ve_la_reunion" ($treev -match "Proyecto Beta" -and $treev -match "Reunion de Chuleta") $(if ($treev) { "$($treev.Length) caracteres" } else { "sin respuesta" })
+    try { $iwv = Invoke-RestMethod "$Base/api/inicio-windows" -Headers (Api-Headers $false) -TimeoutSec 10 } catch { $iwv = $null }
+    Check "v.arranque_sigue_activado" ($iwv -and $iwv.activado -eq $true) "$($iwv | ConvertTo-Json -Compress)"
+    $wv = Wait-Window $App 30
+    Check "v.titulo" ($wv -and $wv.title -eq $App) $(if ($wv) { "$($wv.title)" } else { "sin ventana «$App» en 30 s" })
+    Check "v.un_servidor" (@(Get-Listener).Count -eq 1) (Describe-Listeners)
+    Start-Sleep -Seconds 3
+    $viejos = @(Sin-NombreViejo)
+    Check "v.la_app_no_rehace_nada_viejo" ($viejos.Count -eq 0 -and (Test-Path -LiteralPath $startup)) ($viejos -join ", ")
+    $null = Capture-Screen (Join-Path $Out "capturas\v-tenca-encima.png")
+    # y se desinstala (QuietUninstallString de la entrada de Tenca): no queda nada de la app con ningun nombre
+    $ordenV = $(if ($regv) { $regv["QuietUninstallString"].valor } else { "" })
+    $rcvu = $(if ($ordenV) { Run-Orden $ordenV "v.desinstalar" 180 } else { $null })
+    Check "v.desinstalar_exitcode_0" ($rcvu -eq 0) $rcvu
+    $viejos = @(Sin-NombreViejo)
+    Check "v.desinstalada_sin_restos" (-not (Test-Path -LiteralPath $desk) -and -not (Test-Path -LiteralPath $prog) -and -not (Test-Path -LiteralPath $startup) -and $viejos.Count -eq 0 -and -not (Test-Path -LiteralPath $UninstallKey) -and -not (Test-Path -LiteralPath $LegacyKey) -and -not (Test-Path -LiteralPath (Join-Path $vInst "_app"))) ($viejos -join ", ")
+    Check "v.desinstalada_reunion_intacta" ((Get-ReunionV) -eq $vReunion0) ""
+}
 
 # ---- h) cierre: no dejar ningun servidor vivo en el runner
 $lish = @(Get-Listener)

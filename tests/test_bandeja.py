@@ -117,7 +117,7 @@ class BandejaTests(unittest.TestCase):
         acciones = {"abrir": lambda: self.hechos.append("abrir"), "grabar": lambda: self.hechos.append("grabar"),
                     "salir": lambda: self.hechos.append("salir"),
                     "inicio": (lambda: self.inicio[0], lambda v: self.inicio.__setitem__(0, v))}
-        self.b = bandeja.Bandeja("chuleta.ico", acciones, lambda: self.estado, wf=wf())
+        self.b = bandeja.Bandeja("tenca.ico", acciones, lambda: self.estado, wf=wf())
         self.addCleanup(self.b.close)
 
     def textos(self):
@@ -129,7 +129,7 @@ class BandejaTests(unittest.TestCase):
         self.assertTrue(self.b.alive)
         self.assertTrue(self.b.icon.Visible)
         self.assertEqual(self.b.icon.Text, server.APP_NAME)
-        self.assertEqual(self.b.icon.Icon, ("icono", "chuleta.ico"))
+        self.assertEqual(self.b.icon.Icon, ("icono", "tenca.ico"))
         self.assertEqual(self.textos(), [f"Abrir {server.APP_NAME}", "Grabar  (Ctrl+Alt+R)", "-",
                                          "Arrancar con Windows", "-", "Salir"])
         self.assertTrue(self.b.items["abrir"].Font.startswith("negrita"))
@@ -320,7 +320,7 @@ class FakeWin:
 class VentanaConBandejaTests(unittest.TestCase):
     def make(self, tray):
         self.data = tempfile.mkdtemp(prefix="chuleta-bandeja-")
-        w = window.Window("http://127.0.0.1:8765/", self.data, os.path.join(APP, "static", "chuleta.ico"),
+        w = window.Window("http://127.0.0.1:8765/", self.data, os.path.join(APP, "static", "tenca.ico"),
                           webview=object(), tray=tray)
         w.w, w.alive = FakeWin(), True
         return w

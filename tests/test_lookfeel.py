@@ -31,17 +31,17 @@ def read(*parts):
 
 class NombreCentralizadoTests(unittest.TestCase):
     def test_constantes(self):
-        self.assertEqual(common.APP_NAME, "Chuleta")
+        self.assertEqual(common.APP_NAME, "Tenca")
         self.assertEqual(common.APP_ID, "Bernardo.Chuleta")  # no cambia con el nombre: los anclajes hechos lo llevan
         self.assertRegex(common.APP_ID, r"^[A-Za-z0-9._-]{1,128}$")  # AppUserModelID: sin espacios, <= 128
         self.assertIs(server.APP_NAME, common.APP_NAME)
-        self.assertEqual(server.PKG_ROOT, "Chuleta")  # raíz del zip instalable
-        self.assertEqual(server.Handler.server_version, "Chuleta/1.0")
-        self.assertEqual(server.REPO_URL, "https://github.com/bastegman/chuleta")
+        self.assertEqual(server.PKG_ROOT, "Tenca")  # raíz del zip instalable
+        self.assertEqual(server.Handler.server_version, "Tenca/1.0")
+        self.assertEqual(server.REPO_URL, "https://github.com/bastegman/tenca")
 
     def test_server_sin_literales_sueltos(self):
-        """Ni «Notas» (nombre anterior) ni «Chuleta» como literal en server.py: el nombre sale de common.APP_NAME.
-        Solo se permiten en docstrings."""
+        """Ni «Notas» ni «Chuleta» (nombres anteriores) ni «Tenca» como literal en server.py: el nombre sale de
+        common.APP_NAME. Solo se permiten en docstrings."""
         tree = ast.parse(read("server.py"))
         docs = set()
         for node in ast.walk(tree):
@@ -53,7 +53,7 @@ class NombreCentralizadoTests(unittest.TestCase):
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Constant) and isinstance(node.value, str)) or id(node) in docs:
                 continue
-            if re.search(r"Notas|Chuleta", node.value):
+            if re.search(r"Notas|Chuleta|Tenca", node.value):
                 sueltos.append((node.lineno, node.value))
         self.assertEqual(sueltos, [])
 
@@ -75,7 +75,7 @@ class NombreCentralizadoTests(unittest.TestCase):
         self.assertIn("let APP_NAME = document.title;", app)
         self.assertIn("if (c.app_name) APP_NAME = c.app_name;", app)
         # literales con el nombre de la app en app.js: ninguno (los textos usan ${APP_NAME}), ni el nuevo ni el anterior
-        self.assertEqual(re.findall(r"""['"][^'"\n]*\b(?:Notas|Chuleta)\b[^'"\n]*['"]""", app), [])
+        self.assertEqual(re.findall(r"""['"][^'"\n]*\b(?:Notas|Chuleta|Tenca)\b[^'"\n]*['"]""", app), [])
         self.assertNotIn("Notas · versión", app)
         self.assertNotIn("Quitarla de Notas", app)
         self.assertNotIn("Bienvenido a Notas", read("static", "notas.js"))
@@ -86,10 +86,10 @@ class NombreCentralizadoTests(unittest.TestCase):
         self.assertIn('title="{{APP_NAME}} ha detectado', html)
         self.assertNotIn("<title>Notas", html)
         self.assertNotIn("Notas ", html)
-        self.assertIn('href="/chuleta.ico"', html)
-        self.assertIn('href="/chuleta.png"', html)
+        self.assertIn('href="/tenca.ico"', html)
+        self.assertIn('href="/tenca.png"', html)
         self.assertNotIn("notas.ico", html)
-        for n in ("chuleta.ico", "chuleta.png", "notas.js"):
+        for n in ("tenca.ico", "tenca.png", "notas.js"):
             self.assertTrue(os.path.isfile(os.path.join(STATIC, n)), n)
         # los iconos renombrados: ninguna referencia a los nombres antiguos en el código ni en la interfaz (el aviso
         # flotante, la pantalla de apagado y el instalador los cargan por ruta)
@@ -98,8 +98,8 @@ class NombreCentralizadoTests(unittest.TestCase):
         for n in files:
             with open(os.path.join(APP, n), encoding="utf-8-sig") as f:
                 src = f.read()
-            self.assertNotIn("notas.ico", src, n)
-            self.assertNotIn("notas.png", src, n)
+            for viejo in ("notas.ico", "notas.png", "chuleta.ico", "chuleta.png"):
+                self.assertNotIn(viejo, src, n)
 
     def test_acerca_de_en_ajustes(self):
         """Al final de Ajustes: nombre, versión, licencia, repositorio, carpeta de datos con «Abrir» y «Copiar
@@ -492,9 +492,9 @@ class InstaladorTests(unittest.TestCase):
         ps1 = self.read_repo("_app", "instalar.ps1").decode("utf-8-sig")
         for s in ("[switch]$Consola", "pythonw.exe", "Set-ShortcutAppId", "/api/apagar", "System.Windows.Forms",
                   "GetConsoleWindow", "New-InstallerWindow", "Finish-Ui", '"pywebview==6.2.1"', "Abrir $AppName",
-                  "Copiar el detalle", "$sc.WorkingDirectory", '[string]$AppName = "Chuleta"', "[int]$AutoCerrar",
+                  "Copiar el detalle", "$sc.WorkingDirectory", '[string]$AppName = "Tenca"', "[int]$AutoCerrar",
                   "NOTAS_INSTALADOR_AUTOCERRAR", "NOTAS_INSTALADOR_SIMULAR_FALLO", "instalar.log",
-                  'static\\chuleta.ico', 'static\\chuleta.png', 'Join-Path $app "Chuleta.bat"',
+                  'static\\tenca.ico', 'static\\tenca.png', 'Join-Path $appDir "Tenca.bat"',
                   "instalación (sin permisos de administrador)", "Espera a que termine la instalación",
                   "Dónde se procesan tus reuniones", "(versión $ver)", "Join-Path $app 'version.txt'",
                   "-Encoding UTF8"):
@@ -507,18 +507,18 @@ class InstaladorTests(unittest.TestCase):
         self.assertTrue(ps1.endswith("\n") and "\r\n" in ps1)  # CRLF (PowerShell 5.1)
 
     def test_instalador_migra_el_acceso_directo_antiguo(self):
-        """Notas.lnk (nombre anterior) sirve para encontrar la instalación anterior y pasa a llamarse Chuleta.lnk:
-        se renombra, nunca se borra; si ya existe el nuevo se conserva el viejo y se dice en el detalle."""
+        """Chuleta.lnk o Notas.lnk (nombres anteriores) sirven para encontrar la instalación anterior y el primero de
+        cada carpeta pasa a llamarse Tenca.lnk; los que sobren de esta instalación se quitan (detalle y pruebas de
+        verdad en tests/test_tenca.py y en el E2E de Windows)."""
         ps1 = self.read_repo("_app", "instalar.ps1").decode("utf-8-sig")
-        for s in ('$LegacyName = "Notas"', 'foreach ($name in @("$AppName.lnk", "$LegacyName.lnk"))',
-                  '$legacy = Join-Path $dir "$LegacyName.lnk"',
-                  'Rename-Item -LiteralPath $legacy -NewName "$AppName.lnk"',
-                  "Se conserva el acceso directo antiguo '$LegacyName'", "pasa a llamarse '$AppName'",
-                  '-like "*$LegacyName.bat*"', '@("ABRIR NOTAS.bat", "_app\\Notas.bat")', "ya no hacen falta",
-                  '(Join-Path $fromApp "version.txt")', '"ABRIR CHULETA.bat"'):
+        for s in ('$LegacyNames = @(@("Chuleta", "Notas") | Where-Object { $_ -ne $AppName })',
+                  'foreach ($n in @(@($AppName) + $LegacyNames))',
+                  'Rename-Item -LiteralPath $primero.path -NewName "$AppName.lnk"',
+                  "pasa a llamarse '$AppName'", "Remove-LnkAntiguos $antiguos $dir",
+                  '"*$_.bat*"', '(Join-Path $fromApp "version.txt")', '"INSTALAR.bat", $Launcher'):
             self.assertIn(s, ps1, s)
-        self.assertNotIn("Remove-Item", ps1)  # el instalador no borra nada del usuario
         self.assertNotIn("NotasLnk", ps1)
+        self.assertNotIn("ChuletaLnk", ps1)
 
     def test_instalar_bat_solo_para_si_falla(self):
         for parts in (("INSTALAR.bat",), ("_app", "export", "INSTALAR.bat")):
@@ -582,7 +582,7 @@ class FakeWebview:
 class VentanaPropiaTests(unittest.TestCase):
     def make(self, wv):
         self.tmp = tempfile.mkdtemp(prefix="notas-win-")
-        return window.Window("http://127.0.0.1:8765/", self.tmp, os.path.join(STATIC, "chuleta.ico"), webview=wv)
+        return window.Window("http://127.0.0.1:8765/", self.tmp, os.path.join(STATIC, "tenca.ico"), webview=wv)
 
     def test_run_configura_la_ventana(self):
         wv = FakeWebview()
@@ -595,7 +595,7 @@ class VentanaPropiaTests(unittest.TestCase):
         kw = wv.started[0]
         self.assertFalse(kw["private_mode"])
         self.assertEqual(kw["storage_path"], os.path.join(self.tmp, "webview"))
-        self.assertTrue(kw["icon"].endswith("chuleta.ico"))
+        self.assertTrue(kw["icon"].endswith("tenca.ico"))
         # cerrar = ocultar: el evento closing devuelve False y hide() llega poco despues (Timer)
         self.assertEqual(wv.closing_results, [False])
         time.sleep(0.3)

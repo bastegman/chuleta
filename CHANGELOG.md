@@ -10,6 +10,39 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Renombrado a Tenca (09/11/2026)
+
+La app pasa a llamarse **Tenca** (Bernardo, msg 1249). Lo de abajo, con «Chuleta», es el historial de antes.
+
+- **Nombre**: `common.APP_NAME = "Tenca"`: título de la ventana y de la pestaña, raíz del árbol, mensajes, avisos y
+  toasts, el icono de la bandeja, el diagnóstico, la cabecera `Server`, el zip (`Tenca - instalador.zip`) y su carpeta
+  raíz (`Tenca/`), y el acceso directo «Tenca». Los textos que aún llevaban el nombre escrito a mano (el calendario de
+  Outlook, «Configurar …», la prueba de «Probar») salen ahora de `APP_NAME`. Ficheros renombrados conservando la
+  historia: `ABRIR CHULETA.bat` → `ABRIR TENCA.bat` (raíz y `_app/export`), `_app/Chuleta.bat` → `_app/Tenca.bat`,
+  `_app/static/chuleta.ico`/`.png` → `tenca.ico`/`.png`. Repositorio: `github.com/bastegman/tenca`.
+- **Instalar encima de Chuleta** no deja nada con el nombre viejo ni duplicados: encuentra la instalación también por
+  la entrada «Chuleta» de Aplicaciones instaladas, por `Chuleta.lnk` y por `%USERPROFILE%\Chuleta`; la actualiza en
+  su carpeta; el primer `Chuleta.lnk` de esa instalación en el escritorio y en el menú Inicio pasa a llamarse
+  `Tenca.lnk` y los que sobren se quitan (nunca dos); «Arrancar con Windows», si estaba puesto, queda como una sola
+  copia `Tenca.lnk` en la carpeta Inicio de Windows; la entrada «Chuleta» de Aplicaciones instaladas se quita después
+  de escribir la de «Tenca»; y `ABRIR CHULETA.bat` (o `ABRIR NOTAS.bat`) de la raíz se quita si es de la app. Lo que
+  apunta a otra copia de la app en otra carpeta se queda y se dice; un acceso directo que no es de la app no se toca.
+  Al final dice «Chuleta ahora se llama Tenca: tus reuniones, voces y ajustes siguen donde estaban».
+- **No se mueve nada**: la carpeta de las reuniones conserva su nombre (`%USERPROFILE%\Chuleta`; renombrarla rompería
+  OBS, los accesos del usuario y los anclajes) y los datos siguen en `%LOCALAPPDATA%\AudiosApp` (ajustes, claves,
+  voces). Las reuniones y listas de vocabulario con `proyecto: Chuleta` siguen siendo de la raíz
+  (`APP_FORMER_NAMES`). Una reinstalación tras desinstalar Chuleta vuelve a su carpeta.
+- **Anclajes de la barra de tareas**: Windows no deja que un programa los cambie. Siguen funcionando y agrupando la
+  ventana (el AppUserModelID no cambia); el instalador detecta un «Chuleta» anclado de esta instalación y dice cómo
+  volver a anclarla.
+- **La app** también migra «Arrancar con Windows»: si encuentra la copia `Chuleta.lnk` en la carpeta Inicio, la
+  sustituye por `Tenca.lnk` al arrancar; activarlo o desactivarlo desde la bandeja quita también la antigua.
+- **Desinstalador**: quita también los accesos directos y la entrada con el nombre anterior si son de esta instalación;
+  su registro pasa a `%TEMP%\tenca-desinstalar.log`.
+- **No cambia, a propósito** (no lo ve el usuario y cambiarlo rompería algo): el AppUserModelID `Bernardo.Chuleta` (la
+  ventana dejaría de agruparse en los anclajes hechos), la cabecera `X-Chuleta-Token` (el instalador nuevo apaga con
+  ella la Chuleta abierta) y las variables de entorno `CHULETA_*` y `NOTAS_*`.
+
 ### Ajustes por lo que haces: «Al grabar» primero, «Proyectos» y «Calendario y Teams» (07/11/2026)
 Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configurado es lo que se usa (msg 1196).
 - Ajustes abre en **«Al grabar»**: arriba, «Así se graba ahora una reunión de [proyecto]», el mismo cálculo que la

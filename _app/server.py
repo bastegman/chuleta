@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Chuleta: app local para ordenar, escuchar, leer y transcribir las grabaciones de reuniones.
+Tenca: app local para ordenar, escuchar, leer y transcribir las grabaciones de reuniones.
 
   - Servidor HTTP de la libreria estandar en http://127.0.0.1:8765 (solo accesible desde este PC)
   - Interfaz en _app/static (HTML + JS sin compilar)
   - Transcripcion local (faster-whisper) o en la nube (engines.py)
   - Las transcripciones se guardan como siempre: <audio>.txt y <audio>.srt junto al audio
 
-Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Chuleta.bat lo arranca con consola
+Arranque: acceso directo del escritorio (pythonw.exe server.py, sin consola; _app/Tenca.bat lo arranca con consola
 para ver los mensajes). La interfaz se abre en una ventana propia (window.py, WebView2) o, si no se puede, en Edge.
 """
 import atexit
@@ -77,10 +77,10 @@ DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ _-](\d{2})-(\d{2})-(\d{2})")
 
 
 VERSION_FILE = os.path.join(APP_DIR, "version.txt")  # lo escribe scripts/build_zip.py: «AAAA-MM-DD · sha corto»
-REPO_URL = "https://github.com/bastegman/chuleta"
+REPO_URL = "https://github.com/bastegman/tenca"  # el repo se llamaba «chuleta» (GitHub redirige)
 # Acerca de > «invitar al autor a un café»: la pagina de donaciones de PayPal del autor (abre el navegador del sistema)
 DONAR_URL = "https://www.paypal.com/donate?business=bdo.st.f%40gmail.com&currency_code=EUR"
-PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Chuleta/INSTALAR.bat, Chuleta/_app/...)
+PKG_ROOT = APP_NAME  # carpeta raiz del zip instalable (Tenca/INSTALAR.bat, Tenca/_app/...)
 
 
 def code_mtime():
@@ -217,7 +217,7 @@ def in_app_tree(p):
 
 # ----------------------------------------------------------------------------- paquete para otra persona
 
-EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR CHULETA.bat y LEEME.txt (van a la raiz)
+EXPORT_DIR = os.path.join(APP_DIR, "export")  # INSTALAR.bat, ABRIR TENCA.bat y LEEME.txt (van a la raiz)
 
 
 def export_code():
@@ -4012,6 +4012,8 @@ DIAG_LINES = (
     "arrancar con Windows: activado",
     "arrancar con Windows: desactivado",
     "arrancar con Windows: acceso directo actualizado",
+    "arrancar con Windows: sigue activado, ahora como «{t}»",  # la copia con el nombre anterior de la app
+    "arrancar con Windows: quitado el acceso directo antiguo «{t}»",
     "   arrancar con Windows: {e}",
     "ventana oculta: la app sigue en segundo plano (el acceso directo la vuelve a abrir)",
     "apagando ({t})",
@@ -6593,7 +6595,7 @@ class App:
             raise ApiError(explicar.explicar(e, proveedor=prov)["frase"])
         return {"ok": True, "seconds": round(secs, 2)}
 
-    # --- «Probar» del asistente «Configurar Chuleta» (probar.py): prueba real con lo que se está eligiendo, sin guardar
+    # --- «Probar» del asistente «Configurar» de la app (probar.py): prueba real con lo que se elige, sin guardar
     def _candidata(self, b):
         """(ajustes con lo elegido en el asistente encima, sin guardarlos; True si hay algo elegido). La clave nueva
         solo si es una de verdad (no la máscara que enseña Ajustes)."""
@@ -7280,7 +7282,7 @@ class App:
                     raw = f.read()
                 raw.decode("utf-8")
             except UnicodeDecodeError:  # cp1252 o UTF-16 (de una carpeta conectada): en el zip, en UTF-8
-                tmp = tmp or tempfile.mkdtemp(prefix="chuleta-listas-")
+                tmp = tmp or tempfile.mkdtemp(prefix="tenca-listas-")
                 src = os.path.join(tmp, f"{len(vocab)}.txt")
                 with open(src, "w", encoding="utf-8", newline="") as f:  # sin newline="", Windows dobla los \r\n
                     f.write(_decode_list(raw))
@@ -8112,20 +8114,41 @@ def _startup_lnks():
     return os.path.join(progs, f"{APP_NAME}.lnk"), os.path.join(startup, f"{APP_NAME}.lnk")
 
 
+def _startup_antiguos(destino):
+    """Las copias de «Arrancar con Windows» con un nombre anterior de la app («Chuleta.lnk»...) que haya en la carpeta
+    Inicio de Windows: las puso la app con ese nombre (en esa carpeta solo las pone ella), siguen abriendola al entrar
+    y no deben quedar junto a la de ahora (la app se abriria dos veces). instalar.ps1 ya las migra; esto cubre lo que
+    quede (una instalacion que no pudo, o una copia puesta a mano)."""
+    from common import APP_FORMER_NAMES
+    carpeta = os.path.dirname(destino)
+    return [p for p in (os.path.join(carpeta, f"{n}.lnk") for n in APP_FORMER_NAMES) if os.path.isfile(p)]
+
+
+def _startup_quitar(rutas):
+    for p in rutas:
+        try:
+            os.remove(p)
+            log(f"arrancar con Windows: quitado el acceso directo antiguo «{os.path.basename(p)[:-4]}»")
+        except OSError as e:
+            log(f"   arrancar con Windows: {e}")
+
+
 def inicio_windows_leer():
     """«Arrancar con Windows»: True o False; None si no se puede (fuera de Windows, o sin el acceso directo del menu
-    Inicio, que es el que se copia: una copia descomprimida sin instalar)."""
+    Inicio, que es el que se copia: una copia descomprimida sin instalar). Tambien True con una copia que aun lleve un
+    nombre anterior de la app: sigue abriendola al entrar en Windows."""
     origen, destino = _startup_lnks()
     if not origen:
         return None
-    if os.path.isfile(destino):
+    if os.path.isfile(destino) or _startup_antiguos(destino):
         return True
     return False if os.path.isfile(origen) else None
 
 
 def inicio_windows_poner(activado):
     """Copia (o quita) el acceso directo del menu Inicio en la carpeta Inicio de Windows (shell:startup): mismo destino,
-    iconos y AppUserModelID, sin registro ni permisos de administrador. Devuelve el estado que queda."""
+    iconos y AppUserModelID, sin registro ni permisos de administrador. Las copias con un nombre anterior de la app se
+    quitan en los dos casos (nunca dos). Devuelve el estado que queda."""
     origen, destino = _startup_lnks()
     if not origen:
         return None
@@ -8139,19 +8162,31 @@ def inicio_windows_poner(activado):
             log("arrancar con Windows: desactivado")
     except OSError as e:
         log(f"   arrancar con Windows: {e}")
+        return inicio_windows_leer()
+    if activado and not os.path.isfile(destino):
+        return inicio_windows_leer()  # sin el de Inicio no hay copia nueva: las antiguas siguen siendo lo unico que hay
+    _startup_quitar(_startup_antiguos(destino))
     return inicio_windows_leer()
 
 
 def inicio_windows_al_dia():
     """Al arrancar: si esta activado y el acceso directo del menu Inicio ha cambiado (lo rehace INSTALAR.bat al
-    actualizar), la copia de la carpeta Inicio se pone igual."""
+    actualizar), la copia de la carpeta Inicio se pone igual. Si la copia aun lleva un nombre anterior de la app
+    («Chuleta.lnk»), pasa a ser «<APP_NAME>.lnk» (sigue activado) y la antigua se quita."""
     origen, destino = _startup_lnks()
     try:
+        antiguos = _startup_antiguos(destino) if destino else []
+        if origen and os.path.isfile(origen) and (antiguos and not os.path.isfile(destino)):
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            shutil.copy2(origen, destino)
+            log(f"arrancar con Windows: sigue activado, ahora como «{APP_NAME}»")
         if origen and os.path.isfile(destino) and os.path.isfile(origen):
             with open(origen, "rb") as a, open(destino, "rb") as b:
                 if a.read() != b.read():
                     shutil.copy2(origen, destino)
                     log("arrancar con Windows: acceso directo actualizado")
+        if antiguos and os.path.isfile(destino):
+            _startup_quitar(antiguos)
     except OSError as e:
         log(f"   arrancar con Windows: {e}")
 
@@ -8301,7 +8336,7 @@ def main():
         f"{os.getpid()}")  # el pid: con dos copias a la vez, las dos escriben en el mismo server.log
     if no_browser:  # para abrirla a mano (desarrollo): el token no va al log, que sale entero en el diagnostico
         log(f"  Interfaz: {URL}?t=<el contenido de {os.path.join(DATA_DIR, TOKEN_FILE)}>")
-    ico = os.path.join(STATIC_DIR, "chuleta.ico")
+    ico = os.path.join(STATIC_DIR, "tenca.ico")
     WINDOW = None if no_browser else Window(ui_url(), DATA_DIR, ico, tray=make_tray(ico))
     inicio_windows_al_dia()
     if WINDOW is not None and WINDOW.available:
