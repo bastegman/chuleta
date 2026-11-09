@@ -97,7 +97,8 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   asistente con «Probar» o «Cambiar…») con cambios sin guardar, se pregunta: «Tienes cambios sin guardar», con
   «Guardar y seguir», «Descartar» y «Volver» (también con Escape o un clic fuera). Si no se puede guardar, se queda en
   Ajustes y lo dice. Sin cambios, se sigue sin preguntar. Cuentan también los destinos de «Copias en otras carpetas» y
-  las claves adicionales del directo. Mientras esa pregunta o una confirmación están abiertas, el teclado no sale de
+  las claves adicionales del directo. Lo que ya guardaron «Aplicar ahora» o «Probar conexión» no cuenta: la clave
+  probada se enseña como «Guardada». Mientras esa pregunta o una confirmación están abiertas, el teclado no sale de
   ellas, y al cerrarlas se vuelve a donde se estaba en Ajustes.
 - Al volver de esos subdiálogos, o al abrir Ajustes de cualquier forma, se ve lo guardado. Eso incluye una lista de
   «Proyecto al grabar» renombrada o borrada en su editor: sale con su nombre nuevo o en «Automático», y «Guardar»

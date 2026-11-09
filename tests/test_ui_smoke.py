@@ -590,8 +590,13 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             pg.wait_for_function(f"!document.querySelector('{pregunta}')", timeout=5000)
             self.assertTrue(pg.evaluate(visible, "#modal .dialog.aj"))
             self.assertEqual((pg.input_value("#sLang"), pg.inner_text(".aj-pend")), (idioma, pend))
-        # sin cambios: el editor, sin preguntar; su «Cancelar» vuelve a Ajustes
+        # sin cambios: el editor, sin preguntar; su «Cancelar» vuelve a Ajustes. Tampoco cuenta un campo que pasa a
+        # guardarse solo después de abrir (Outlook al activarlo, en la rama del calendario; revisión 12)
         abrir()
+        pg.evaluate("document.querySelector('#sPrompt').dataset.seGuardaSolo = ''")
+        pg.evaluate("document.querySelector('.aj-main').click()")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
         editar()
         pg.wait_for_selector("#modal #veName", timeout=5000)
         self.assertFalse(pg.evaluate(visible, pregunta))
@@ -609,6 +614,8 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             for tecla in ("Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab"):
                 pg.keyboard.press(tecla)
                 self.assertTrue(pg.evaluate("!!document.activeElement.closest('#modalSobre')"), tecla)
+            pg.evaluate("document.querySelector('#btnSettings').focus()")  # a lo de debajo: vuelve a la capa
+            self.assertTrue(pg.evaluate("!!document.activeElement.closest('#modalSobre')"))
             if salir == "volver":
                 pg.click(f"{pregunta} [data-m='volver']")
             elif salir == "escape":
@@ -663,10 +670,19 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click("#modal [data-m='no']")
         pg.wait_for_selector("#modal .aj-nav", timeout=5000)
         self.assertTrue(pg.evaluate("!!document.querySelector('#pfOuts [data-out-del]')"))  # lo guardado, otra vez
-        # y una clave adicional del directo escrita (con «API externa»); una fila vacía, no
+        # y una clave adicional del directo escrita (con «API externa»); una fila vacía, no; quitar una guardada, sí
         pg.keyboard.press("Escape")
-        pg.evaluate("b => api('/api/settings', b).then(setConfig)", {"procesado": "api"})
-        self.addCleanup(pg.evaluate, "p => api('/api/settings', { procesado: p })", cfg["procesado"])
+        prov = cfg["cloud"]["provider"]
+        pg.evaluate("b => api('/api/settings', b).then(setConfig)",
+                    {"procesado": "api", "cloud": {"extra_keys_by": {prov: ["gsk_guardada_r12"]}}})
+        self.addCleanup(pg.evaluate, "b => api('/api/settings', b)",
+                        {"procesado": cfg["procesado"], "cloud": {"extra_keys_by": {prov: []}}})
+        abrir()
+        pg.wait_for_selector("#dkRows [data-xkey-del]", state="attached", timeout=5000)
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        pg.evaluate("document.querySelector('#dkRows [data-xkey-del]').click()")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        pg.keyboard.press("Escape")
         abrir()
         pg.evaluate("document.querySelector('#dkAdd').click()")
         pg.wait_for_timeout(100)
@@ -793,11 +809,15 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         rel = pg.input_value("#pfFolder")
         self.addCleanup(pg.evaluate, "p => api('/api/link/remove', { path: p }).catch(() => null)", rel)
         self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
-        pg.evaluate("p => document.querySelector(`[data-unlink='${p}']`).click()", rel)
+        # «quitar», en su sección y con un clic de verdad (el foco, en el botón)
+        seccion = pg.evaluate("document.querySelector('#sLinks').closest('section').dataset.secc")
+        pg.click(f".aj-nav [data-sec='{seccion}']")
+        pg.click(f"[data-unlink='{rel}']")
         pg.wait_for_selector(encima, timeout=5000)
         pg.click(f"{encima} [data-m='ok']")
         pg.wait_for_function("p => !document.querySelector(`[data-unlink='${p}']`)", arg=rel, timeout=5000)
         mismo("escrito con una carpeta")
+        self.assertEqual(pg.evaluate("document.activeElement.id"), "lnAdd")  # su «quitar» ya no está
         self.assertEqual(pg.input_value("#pfFolder"), "__auto")
         self.assertNotIn(rel, pg.evaluate("[...document.querySelectorAll('#pfFolder option')].map(o => o.value)"))
         pg.keyboard.press("Escape")
@@ -888,6 +908,67 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             self.assertEqual(pg.inner_text(".aj-pend"), "", accion)
             self.assertEqual(guardar(), queda, accion)
             self.assertFalse(pg.evaluate("document.querySelector('#toasts').innerText.includes('ya no existe')"))
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_guardar_una_parte(self):
+        """Revisión 12 de B2: «Aplicar ahora» y «Probar conexión» guardan una parte de Ajustes; lo guardado pasa a ser
+        su punto de partida: no queda «Hay cambios sin guardar» (ni la pregunta al editar una lista) con todo guardado,
+        y la clave guardada se enseña como «Guardada: …». Lo demás escrito sigue contando."""
+        pg, errores, red = self.pagina()
+        self.addCleanup(lambda: pg.unroute_all(behavior="ignoreErrors"))
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        cfg = pg.evaluate("api('/api/config')")
+        antes = {k: cfg[k] for k in ("procesado", "preset", "live_preset")}
+        self.addCleanup(pg.evaluate, "b => api('/api/settings', b)", antes)
+        pregunta = "#modalSobre:not(.hidden) .dialog"
+
+        def sin_preguntar():  # editar una lista no pregunta: no hay nada sin guardar
+            pg.wait_for_selector("#sVocab [data-vedit]", state="attached", timeout=10000)
+            pg.evaluate("document.querySelector('#sVocab [data-vedit]').click()")
+            pg.wait_for_selector("#modal #veName", timeout=5000)
+            self.assertFalse(pg.evaluate(f"!!document.querySelector('{pregunta}')"))
+            pg.click("#modal [data-m='no']")
+            pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        # «Aplicar ahora» de «API externa» (motores en la nube) a «Solo en este PC»: el servidor pone los del PC
+        pg.evaluate("api('/api/settings', { procesado: 'api', preset: 'nube', live_preset: 'nube' }).then(setConfig)")
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='procesado']")
+        self.assertEqual(pg.input_value("#lPreset"), "nube")
+        pg.check("#modal input[name='proc'][value='local']")
+        pg.click("#procAplicar")
+        pg.wait_for_selector("#procGuardado .ok-aplicado", timeout=5000)
+        self.assertNotEqual(pg.input_value("#lPreset"), "nube")  # los del PC, ya guardados
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        sin_preguntar()
+        pg.keyboard.press("Escape")
+        # «Probar conexión» con una clave escrita (simulado: ni se guarda de verdad ni se llama al proveedor)
+        pg.evaluate("api('/api/settings', { procesado: 'api' }).then(setConfig)")
+        guardada = pg.evaluate("api('/api/config')")
+        guardada["cloud"].update(has_key=True, api_key="gsk_…r12")
+        pg.route("**/api/settings", lambda r: r.fulfill(json=guardada))
+        pg.route("**/api/cloud/test", lambda r: r.fulfill(json={"seconds": 0.4}))
+        pg.click("#btnSettings")
+        pg.click(".aj-nav [data-sec='procesado']")
+        pg.fill("#cKey", "gsk_escrita_r12")
+        modelo = pg.evaluate("[...document.querySelectorAll('#cModel option')].map(o => o.value)"
+                             ".find(v => v !== document.querySelector('#cModel').value)")
+        pg.select_option("#cModel", modelo)  # y otro modelo: también se guarda al probar
+        guardada["cloud"]["model"] = modelo
+        pg.click("#cTest")
+        pg.wait_for_function("document.querySelector('#cTestRes').innerText.includes('Funciona')", timeout=5000)
+        self.assertEqual(pg.input_value("#cKey"), "")
+        self.assertIn("Guardada: gsk_…r12", pg.get_attribute("#cKey", "placeholder"))
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        pg.unroute("**/api/settings")
+        pg.unroute("**/api/cloud/test")
+        # lo demás escrito sigue contando
+        pg.click(".aj-nav [data-sec='resumen']")
+        pg.fill("#sExtra", "escrito tras probar")
+        pg.wait_for_function("document.querySelector('.aj-pend').innerText.includes('sin guardar')", timeout=5000)
+        pg.keyboard.press("Escape")
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)

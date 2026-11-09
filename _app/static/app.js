@@ -2229,6 +2229,7 @@ function openSettings(opts) {
         d.modelosPoll?.();
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);
         ajTarjeta();
+        ponerAlDia(['lPreset', 'pfPreset']);  // el servidor ha puesto los motores del modo
         marcar();  // el modo ya está aplicado: deja de ser «sin guardar»
       } catch (err) { res.innerHTML = `<span style="color:var(--err)">✖ No se ha podido aplicar: ${esc(err.message)}</span>`; }
     });
@@ -2299,8 +2300,20 @@ function openSettings(opts) {
     const tarde = campos().filter(x => !(x.id in inicial));
     tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
     Object.assign(inicial, otros());  // los destinos y las claves, ya pintados por sus bind*
-    // quitar o añadir un destino o una clave es un clic, no un «change»: el aviso se mira después de cada clic
-    d.addEventListener('click', e => { if (e.target.closest('.aj-main')) setTimeout(marcar, 0); });
+    // tras guardar una parte desde aquí («Aplicar ahora», «Probar conexión»), lo guardado es el nuevo punto de partida
+    // de esos campos (revisión 12: seguía «Hay cambios sin guardar» con todo guardado, y editar una lista preguntaba).
+    // Los motores, con lo que pinta motoresRefrescar como guardado (dataset.ini): si se habían cambiado aquí, siguen
+    // contando
+    const ponerAlDia = ids => {
+      ids.forEach(id => {
+        const el = $('#' + id, d);
+        if (el) inicial[id] = 'ini' in el.dataset ? el.dataset.ini : el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+      });
+      if (ids.includes('__claves')) inicial.__claves = otros().__claves;
+    };
+    // quitar o añadir un destino o una clave es un clic, no un «change»: el aviso se mira después de cada clic (de
+    // cualquiera: el de quitar una fila la saca del DOM antes de llegar aquí, revisión 12)
+    d.addEventListener('click', () => setTimeout(marcar, 0));
     // el modo que pide quien abre, marcado y sin aplicar (con su aviso y sus campos, que pinta su «change»): «Revisar
     // en Ajustes» del asistente con «Con tu cuenta de Claude» elegido (revisión 6)
     const pedido = opts && typeof opts === 'object' && opts.proc;
@@ -2347,6 +2360,14 @@ function openSettings(opts) {
         if (typeof motoresRefrescar === 'function') motoresRefrescar(d);  // la primera clave pone la nube
         procPintar();  // «Probar conexión» guarda: el modo elegido ya está aplicado
         ajTarjeta();
+        // la nube que se acaba de guardar ya no es «sin guardar»; la clave, guardada, se enseña como tal
+        const k = $('#cKey', d);
+        if (k && k.value) {
+          k.value = '';
+          if (S.config.cloud?.has_key) k.placeholder = `Guardada: ${S.config.cloud.api_key || ''} (escribe para cambiarla)`;
+        }
+        ponerAlDia(['cProv', 'cModel', 'cBase', 'cAzEp', 'cAzDep', 'cAzVer', 'cLiveModel', 'cLiveModelCustom', 'cChunk',
+          'cPar', 'lPreset', 'pfPreset', '__claves']);
         marcar();
         const r = await api('/api/cloud/test', {});
         res.innerHTML = `<span style="color:var(--ok)">✓ Funciona (respuesta en ${String(r.seconds).replace('.', ',')} s)</span>`;
@@ -2367,6 +2388,7 @@ function openSettings(opts) {
       const u = e.target.closest('[data-unlink]');
       if (!u || !await unlinkFolder(u.dataset.unlink)) return;
       drawLinks();
+      $('#lnAdd', d)?.focus();  // su «quitar» ya no existe: el foco, en «Añadir» (no en el cuerpo de la página)
       const f = $('#pfFolder', d);
       if (f && typeof perfilFolderOpts === 'function') {
         const v = f.value, sigue = v === PERFIL_AUTO || flatFolders().some(x => x.path === v);
