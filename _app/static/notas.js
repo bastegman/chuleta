@@ -405,7 +405,7 @@ main.addEventListener('click', async e => {
     await api('/api/notes', { path: a.path, body });
     S.notes = null; a.has_notes = true;
     toast('Resumen añadido a 📝 Notas (ahí lo puedes editar)');
-  } else if (act.dataset.act === 'settings') openSettings({ sec: 'procesado', nuevo: true });  // los avisos de Inicio son de Procesado
+  } else if (act.dataset.act === 'settings') openSettings({ sec: 'procesado' });  // los avisos de Inicio son de Procesado
 });
 /* progreso del resumen y recarga al terminar (lo llama el sondeo de trabajos de app.js) */
 function onSummaryJobs(prev) {
@@ -802,7 +802,7 @@ main.addEventListener('click', e => {
 /* ---------------------------------------------------------------- busqueda rapida (Ctrl+P) */
 const ACTIONS = [
   ['<i class="recdot"></i>', 'Grabar ahora', () => openRec()], [I.list, 'Reuniones', () => go('r', '')], [I.calendar, 'Calendario', () => go('c', '')],
-  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar', nuevo: true })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
+  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar' })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
   [I.clipboard, 'Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
 function paletteItems(q) {
   const f = fold(q.trim()), out = [];

@@ -25,13 +25,14 @@ function ajAlGrabarHtml() {
 /* opciones de micrófono y audio del PC con lo guardado elegido (sin la lista de dispositivos: las genéricas) */
 function ajDispositivos(devs) {
   const c = S.config || {}, def = list => nfc(((list || []).find(x => x.default) || {}).name || '');
-  const o = (v, l, s) => `<option value="${esc(v)}"${v === s ? ' selected' : ''}>${esc(l)}</option>`;
+  const o = (v, l, s, t = '') => `<option value="${esc(v)}"${v === s ? ' selected' : ''}${t ? ` title="${esc(t)}"` : ''}>${esc(l)}</option>`;
   const mic = c.rec_mic || 'default', sys = c.rec_sys || 'all';
-  // cortos: van dos en una fila («Micrófono · audio del PC»); el entero, al pasar el ratón (title)
-  let m = o('default', `El de Windows${def(devs?.mics) ? ` · ahora ${def(devs.mics)}` : ''}`, mic)
+  // cortos: van dos en una fila («Micrófono · audio del PC»); cuál es ahora el de Windows, al pasar el ratón (title)
+  const ahora = list => def(list) ? `ahora: ${def(list)}` : '';
+  let m = o('default', 'El de Windows', mic, ahora(devs?.mics))
     + (devs?.mics?.length ? `<optgroup label="Fijar un micrófono">${devs.mics.map(x => o(x.id, nfc(x.name), mic)).join('')}</optgroup>` : '')
     + o('none', 'Sin micrófono', mic);
-  let s = o('all', 'Todo lo que suena', sys) + o('default', `La de Windows${def(devs?.outputs) ? ` · ahora ${def(devs.outputs)}` : ''}`, sys)
+  let s = o('all', 'Todo lo que suena', sys) + o('default', 'La de Windows', sys, ahora(devs?.outputs))
     + (devs?.outputs?.length ? `<optgroup label="Fijar una salida">${devs.outputs.map(x => o(x.id, nfc(x.name), sys)).join('')}</optgroup>` : '')
     + o('none', 'Sin el audio del PC', sys);
   // un dispositivo guardado que no está en la lista se enseña tal cual, para no cambiarlo sin querer
@@ -105,14 +106,16 @@ function bindAjAlGrabar(d) {
     }
     nue.forEach((x, i) => { if (ant[i].outerHTML !== x.outerHTML) ant[i].replaceWith(x); });
   };
-  const pedir = async () => {
+  const pedir = async (extra = {}) => {
     const n = ++seq;
     try {
-      const plan = await api('/api/grabar/plan', { nombre: '', participantes: '', vocab: proy.value, ajustes: ajAlGrabarValores(d) });
+      const plan = await api('/api/grabar/plan', { nombre: '', participantes: '', vocab: proy.value, ajustes: ajAlGrabarValores(d), ...extra });
       if (n === seq && document.body.contains(box)) pintar(plan);
+      return plan;
     } catch (err) {
-      if (n !== seq || !document.body.contains(box)) return;
+      if (n !== seq || !document.body.contains(box)) return null;
       box.innerHTML = `<div class="notice" title="${esc(err.message)}">No se ha podido calcular cómo se grabaría ahora. <button class="btn sm" type="button" data-ag-reintentar>Probar otra vez</button></div>`;
+      return null;
     }
   };
   box.addEventListener('click', e => { if (e.target.closest('[data-ag-reintentar]')) pedir(); });
@@ -121,7 +124,7 @@ function bindAjAlGrabar(d) {
     if (!e.target.closest('[data-aj-listas-otra]')) return;
     e.preventDefault();
     d.ajMarcar?.();
-    openSettings({ sec: S.ajSec });
+    openSettings({ sec: S.ajSec, volver: true });
   });
   const como = $('.ag-como-btn', d), comoTxt = $('#agComo', d);
   if (como && comoTxt) como.onclick = () => { comoTxt.hidden = !comoTxt.hidden; como.setAttribute('aria-expanded', String(!comoTxt.hidden)); };
@@ -152,7 +155,10 @@ function bindAjAlGrabar(d) {
   // micrófono y audio del PC: los de Ajustes (lo de una reunión se cambia en su tarjeta). Con la lista de
   // dispositivos, sin cambiar lo elegido (ni lo que ya hayas tocado)
   const c = S.config || {}, mic = $('#agMic', d), sys = $('#agSys', d), tocado = {};
-  const titulo = s => { s.title = s.options[s.selectedIndex]?.textContent || ''; };  // el texto entero, si no cabe
+  const titulo = s => {  // el texto entero y, con el de Windows, cuál es ahora
+    const x = s.options[s.selectedIndex];
+    s.title = [x?.textContent, x?.title].filter(Boolean).join(' · ');
+  };
   mic.addEventListener('change', () => { tocado.mic = true; titulo(mic); });
   sys.addEventListener('change', () => { tocado.sys = true; titulo(sys); });
   titulo(mic); titulo(sys);
@@ -198,9 +204,10 @@ function bindAjAlGrabar(d) {
     if ([...proy.options].map(o => o.value).join('|') + '#' + proy.value !== antes) pedir();
   };
   d.ajListasCambiadas = otraVez;
-  d.ajPlanPedir = pedir;
+  d.ajPlanPedir = () => pedir();
   ajListas(d).then(otraVez);
-  pedir();
+  // el primero, con la carpeta de cada proyecto: Proyectos la toma de aquí al abrir (una petición menos)
+  d.ajPrimerPlan = pedir({ proyectos: true });
 }
 
 /* ---------------------------------------------------------------- Proyectos: carpeta e idioma de cada uno */
@@ -284,7 +291,10 @@ function bindAjProyectos(d) {
     } catch { if (n === seq) car = false; }
     if (n === seq && !box.querySelector('.pj-ed')) dibujar();  // una fila a medio editar no se pisa
   };
-  ajListas(d).then(pintar);
+  // al abrir, la carpeta de cada proyecto llega con el primer plan de Al grabar; si no, se pide
+  Promise.all([ajListas(d), d.ajPrimerPlan]).then(([, p]) => {
+    if (seq === 0 && p?.carpetas) { car = p.carpetas; dibujar(); } else if (seq === 0) pintar();
+  });
   // al volver a Proyectos (quizá con otra carpeta en Al grabar), otra vez
   d.addEventListener('click', e => { if (e.target.closest('.aj-nav [data-sec="proyectos"], [data-sec-ir="proyectos"]')) pintar(); });
   // cuando cambian las listas (una carpeta de listas conectada o quitada, rama vocab-carpeta), la tabla y el plan
@@ -428,6 +438,9 @@ function bindAjCalendario(d) {
     meet.addEventListener('change', atar);
     atar();
   }
+  // la ayuda larga («¿Cómo funciona?») explica Teams y Outlook: bajo sus filas, no bajo el aviso de llamada
+  const como = $('[data-secc="calendario"] fieldset details.ag-como', d);
+  if (como) $('.ct-filas', d)?.after(como);
   const fila = $('#ctOutFila', d), oe = $('#ctOutEstado', d), of = $('#ctOutFrase', d), oa = $('#ctOutAcc', d);
   const casilla = $('#rnOutlook', d), probar = $('#rnProbar', d)?.closest('.row'), est = $('#rnEstado', d);
   if (!fila || !casilla) return;

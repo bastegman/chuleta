@@ -1639,7 +1639,7 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'k' && !e.altKey) { e.preventDefault(); const g = $('#gq'); if (g && $('#modal').classList.contains('hidden')) { g.focus(); g.select(); } return; }  // la caja de búsqueda de arriba (su kbd dice Ctrl K)
   if ((e.ctrlKey || e.metaKey) && k === 'f' && $('#tq')) { e.preventDefault(); $('#tq').focus(); $('#tq').select(); return; }
   if (e.key === 'Escape') {
-    if (!$('#modal').classList.contains('hidden')) return cerrarSinVolver();
+    if (!$('#modal').classList.contains('hidden')) return closeModal(false);
     if (!$('#jobsPanel').classList.contains('hidden')) return $('#jobsPanel').classList.add('hidden');
     if (typing) el.blur();
     return;
@@ -1759,6 +1759,7 @@ function openModal(html, onOpen, cls = '') {
   const m = $('#modal');
   m.innerHTML = `<div class="dialog ${cls}">${html}</div>`;
   m.classList.remove('hidden');
+  document.body.classList.toggle('aj-abierto', cls === 'aj');  // los avisos, arriba solo con Ajustes (su «Guardar» abajo)
   onOpen && onOpen($('.dialog', m));
   const f = $('.dialog [autofocus]', m) || $('.dialog input, .dialog button.primary', m);
   f && f.focus();
@@ -1771,10 +1772,7 @@ function closeModal(v) {
   const r = modalResolve; modalResolve = null;
   r && r(v);
 }
-/* Escape o un clic fuera: se deja lo que haya abierto sin volver a Ajustes, así que lo escrito allí y sin guardar no
-   vuelve la próxima vez (revisión 3 de B2: un subdiálogo de Ajustes cerrado así dejaba el borrador para el siguiente ⚙) */
-function cerrarSinVolver() { S.ajBorrador = null; closeModal(false); }
-$('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') cerrarSinVolver(); });
+$('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(false); });
 function ask(title, html, ok = 'Aceptar') {
   return openModal(`<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`, d => {
     d.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) closeModal(b.dataset.m === 'ok'); });
@@ -1935,7 +1933,11 @@ function openSettings(opts) {
   const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
     || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
   S.ajSec = sec;
-  if (opts?.nuevo) S.ajBorrador = null;  // ⚙, la paleta, Inicio: se abre de nuevo, no se vuelve de un subdiálogo
+  // lo escrito y sin guardar (S.ajBorrador) solo vuelve al volver de un subdiálogo abierto desde Ajustes (una lista, el
+  // asistente, «Apagar» › «Cancelar»…), que llaman a openSettings() sin nada o con volver: true. Cualquier otra forma
+  // de abrir Ajustes (⚙, la paleta, Inicio, la tarjeta, un error) es abrirlo de nuevo, sin lo de antes (revisiones 3 y
+  // 4 de B2: un borrador abandonado volvía después y «Guardar» deshacía lo guardado entretanto por otro camino)
+  if (opts && !(typeof opts === 'object' && !(opts instanceof Event) && opts.volver)) S.ajBorrador = null;
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
@@ -1952,7 +1954,7 @@ function openSettings(opts) {
     ${typeof ajProyectosHtml === 'function' ? ajProyectosHtml() : ''}
     <fieldset><legend>${I.book}Listas de vocabulario</legend>
       <div id="sVocab" class="help" style="margin-top:0">Cargando…</div>
-      <label>Vocabulario de las reuniones sin proyecto</label>
+      <label for="sPrompt">Vocabulario de las reuniones sin proyecto</label>
       <textarea id="sPrompt" placeholder="Nombres propios, empresas, siglas, productos…">${esc(S.config.prompt)}</textarea>
       <div class="help">Se le pasa a Whisper como contexto para que escriba bien nombres propios y siglas. Opcional: si notas frases raras o repetidas, déjalo vacío.</div>
     </fieldset>
@@ -2075,6 +2077,7 @@ function openSettings(opts) {
       // solo lo cambiado: al volver de un subdiálogo se repone eso, no la foto entera (que pisaría lo guardado entretanto
       // por otro camino, como «Usarlo en» en la tarjeta)
       S.ajBorrador = cambios ? Object.fromEntries(Object.entries(ahora).filter(([k, v]) => v !== inicial[k])) : null;
+      if (S.ajBorrador && procSinAplicar()) S.ajBorrador.__proc = $('input[name="proc"]:checked', d).value;  // y el modo
       $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
     };
     d.ajMarcar = marcar;
@@ -2096,7 +2099,7 @@ function openSettings(opts) {
       const x = e.target.closest('[data-cfg]');
       if (!x || typeof abrirConfigurar !== 'function') return;
       e.preventDefault();
-      const volver = () => openSettings({ sec: 'procesado' });
+      const volver = () => openSettings({ sec: 'procesado', volver: true });
       abrirConfigurar(x.dataset.cfg === 'probar' ? { paso: 3, volver, empezar: true } : { volver });  // «Probar»: ya
     });
     // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
@@ -2235,6 +2238,9 @@ function openSettings(opts) {
     const tarde = campos().filter(x => !(x.id in inicial));
     tarde.forEach(x => { inicial[x.id] = x.type === 'checkbox' || x.type === 'radio' ? x.checked : x.value; });
     ponerBorrador(tarde);
+    // el modo marcado y sin aplicar, también (con su aviso y sus campos, que pinta su «change»)
+    const proc = S.ajBorrador?.__proc && $(`input[name="proc"][value="${S.ajBorrador.__proc}"]`, d);
+    if (proc && !proc.checked) { proc.checked = true; proc.dispatchEvent(new Event('change', { bubbles: true })); }
     if (S.ajBorrador) marcar();
     const collect = () => {
       const p = $('#cProv', d).value;
@@ -2264,7 +2270,9 @@ function openSettings(opts) {
       if ('seGuardaSolo' in ($('#rnOutlook', d)?.dataset || {})) delete out.outlook_on;
       return out;
     };
-    for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = el.value; }
+    // como se pintaron con lo guardado (la foto inicial, antes de reponer el borrador): un motor repuesto cuenta como
+    // cambiado y «Guardar» lo manda (revisión 4 de B2)
+    for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = String(inicial[el.id] ?? el.value); }
     $('#cTest', d).onclick = async () => {
       const res = $('#cTestRes', d);
       res.textContent = 'Probando…';
@@ -2337,7 +2345,7 @@ function openSettings(opts) {
 }
 // ⚙ abre siempre en «Al grabar» (rediseño B2): lo que se usará al grabar, arriba. Volver de un subdiálogo (editar una
 // lista, el asistente…) sí vuelve a la sección en la que estabas (openSettings sin sección)
-$('#btnSettings').onclick = () => openSettings({ sec: 'algrabar', nuevo: true });
+$('#btnSettings').onclick = () => openSettings({ sec: 'algrabar' });
 
 /* ---------------------------------------------------------------- apagar */
 async function confirmShutdown() {

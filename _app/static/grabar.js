@@ -166,17 +166,20 @@ function grDevsAviso(msg, resto = '') {
 }
 
 function grValorHtml(l) {
-  if (l.clave === 'carpeta') return `<code class="gr-ruta" title="${esc(l.valor)}">${esc(l.valor)}</code>`;
+  // el aviso de una línea (la carpeta que no se encuentra, un proyecto sin carpeta propia, la API key que falta…), en
+  // la tarjeta como en Ajustes: es al grabar cuando importa (revisión 4 de B2)
+  const aviso = l.aviso ? `<span class="gr-aviso">${esc(l.aviso)}</span>` : '';
+  if (l.clave === 'carpeta') return `<code class="gr-ruta" title="${esc(l.valor)}">${esc(l.valor)}</code>${aviso}`;
   if (l.clave === 'audio') {
     const nom = (list, id) => (list || []).find(x => x.id === id)?.name;
     const mic = l.mic === 'none' ? 'Sin micrófono' : 'Tu micro', pc = l.sys === 'none' ? 'sin el audio del PC' : 'el PC';
     const t = [l.mic === 'default' ? 'Micrófono predeterminado de Windows' : nom(G.devs?.mics, l.mic) || '',
       l.sys === 'all' ? 'Todo lo que suena en el ordenador' : nom(G.devs?.outputs, l.sys) || ''].filter(Boolean).join(' · ');
     return `<span class="gr-audio" title="${esc(t)}"><b>${mic}</b>${l.mic === 'none' ? '' : grMedidor('mic')}<b>· ${pc}</b>${l.sys === 'none' ? '' : grMedidor('sys')}</span>`
-      + (G.devsErr ? grDevsAviso(G.devsErr) : '') + (l.aviso ? `<span class="gr-aviso">${esc(l.aviso)}</span>` : '');
+      + (G.devsErr ? grDevsAviso(G.devsErr) : '') + aviso;
   }
-  if (l.clave === 'contexto') return esc(l.valor);
-  return `<b>${esc(l.valor)}</b>`;
+  if (l.clave === 'contexto') return esc(l.valor) + aviso;
+  return `<b>${esc(l.valor)}</b>${aviso}`;
 }
 /* medidor pequeño con la estructura que espera updateMeters() de app.js */
 function grMedidor(kind) {

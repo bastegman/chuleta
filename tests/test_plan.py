@@ -278,6 +278,12 @@ class ServidorPlanTests(TempTree):
         self.assertEqual(tarjeta["rec"]["language"], "es-pt")
         self.assertEqual(tarjeta["proyecto"]["origen"], "historial")
         self.assertIn("Comité de seguimiento → Alfa › General · Español + portugués", nt.call_args[0][1])
+        # lo que avisa el plan sale también en el aviso de Windows (revisión 4 de B2): aquí, la API key que falta
+        b = self.app(procesado="api", perfil={"folder": None})
+        b.rec_start = lambda body: {"path": "x.wav", "workstream": None}
+        with mock.patch.object(server, "cue"), mock.patch.object(server, "notify") as nt:
+            b.rec_toggle({"source": "hotkey"})
+        self.assertIn("Falta la API key: ponla en Ajustes › Procesado.", nt.call_args[0][1])
         self.assertTrue(r["recording"])
         # el aviso flotante manda nombre y tema de la reunión que vio: el mismo plan
         vistos.clear()
@@ -556,7 +562,8 @@ class ServidorPlanTests(TempTree):
         aj = {"perfil": {"folder": "Fuera/Clientes", "context": "Comité"}}
         b = lineas(a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": aj}))
         self.assertEqual(b["contexto"]["valor"], "Comité")
-        self.assertIn("No se encuentra la carpeta de Ajustes (Chuleta\\Fuera\\Clientes\\)", b["carpeta"]["aviso"])
+        self.assertIn("No se encuentra la carpeta de las reuniones sin proyecto (Chuleta\\Fuera\\Clientes\\)",
+                      b["carpeta"]["aviso"])
 
         def origin(v, st):
             return ("Alfa/Reuniones", "carpeta_proyecto") if v and v["project"] == "Alfa" else ("", "ultimo")
@@ -564,9 +571,8 @@ class ServidorPlanTests(TempTree):
                 mock.patch.object(server.App, "rec_folder_for", lambda s, v, st: origin(v, st)[0]):
             sin = self.app(perfil={"folder": None})
             b = lineas(sin.grabar_plan_api({"nombre": "", "vocab": "Beta/Vocabulario/Legal.txt"}))
-            self.assertEqual(b["carpeta"]["aviso"],
-                             "Beta no tiene carpeta propia: asígnale una en Ajustes › Proyectos o con «Cambiar» "
-                             "al grabar.")
+            self.assertEqual(b["carpeta"]["aviso"], "Beta no tiene carpeta propia: asígnale una en Ajustes › Proyectos "
+                                                    "o, al grabar, con «Cambiar» y «Todas las de Beta».")
             b = lineas(sin.grabar_plan_api({"nombre": "", "vocab": "Alfa/Vocabulario/General.txt"}))
             self.assertNotIn("aviso", b["carpeta"])
         b = lineas(self.app(procesado="api", perfil={"folder": None}).grabar_plan_api({"nombre": "", "vocab": ""}))

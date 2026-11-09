@@ -1513,7 +1513,7 @@ def check_perfil(b, known=None, actual=None):
         if vid is not None:
             vid = str(vid).strip()
             if vid and vid != actual.get("vocab") and not find_vocab(None, None, vid):
-                raise ApiError("Ese tema de vocabulario ya no existe.")
+                raise ApiError("Ese workstream ya no existe.")
         out["vocab"] = vid
     if "context" in b:
         out["context"] = " ".join(str(b["context"] or "").split())[:engines.ABOUT_CHARS]
@@ -1698,7 +1698,7 @@ def import_vocab(src, project=None):
             if e.is_dir() and not e.name.startswith((".", "_")) and vocab_dir(e.path):
                 found.append((e.name, vocab_dir(e.path)))
     if not found:
-        raise ApiError("En esa carpeta no hay listas de vocabulario (<Proyecto>\\Vocabulario\\<Tema>.txt).")
+        raise ApiError("En esa carpeta no hay listas de vocabulario (<Proyecto>\\Vocabulario\\<Workstream>.txt).")
     existing = list_vocab()
     copied, skipped, projects = 0, 0, []
     for proj, folder in found:
@@ -3452,7 +3452,9 @@ class App:
                     body.update(participantes=b["participantes"], sugerido=b.get("sugerido") or sug.get("source") or "")
                 cue("start")  # antes de empezar: asi el pitido no queda grabado
                 r = self.rec_start(body)
-                notify(f"● Grabando en {APP_NAME}", p["resumen"] + " · Ctrl+Alt+R para parar"
+                # lo que avisa el plan (la carpeta, un proyecto sin carpeta propia, la API key), también aquí
+                del_plan = "".join(f" · {x['aviso']}" for x in p["lineas"] if x.get("aviso"))
+                notify(f"● Grabando en {APP_NAME}", p["resumen"] + " · Ctrl+Alt+R para parar" + del_plan
                        + (f" · {r['aviso']}" if r.get("aviso") else ""))
                 return dict(r, recording=True, plan=p)
             except ApiError as e:
@@ -3577,14 +3579,14 @@ class App:
         if fija is not None and perfil_folder(st) is None and car and car["origen"] in ("ajustes", "ultima") \
                 and not car.get("aviso"):
             links = {k: l["name"] for k, l in LINKS.items()}
-            car["aviso"] = (f"No se encuentra la carpeta de Ajustes ({grabar_plan.ruta_txt(fija, links)}): se guarda "
-                            "aquí.")
+            ruta = grabar_plan.ruta_txt(fija, links)
+            car["aviso"] = f"No se encuentra la carpeta de las reuniones sin proyecto ({ruta}): se guarda aquí."
         # un proyecto sin carpeta propia (sus listas vienen de una carpeta conectada y no se le ha asignado ninguna)
         # graba en la de Ajustes o en la última usada, que puede ser la de otro cliente: se dice cómo fijarle una
         proy = p["proyecto"].get("proyecto")
         if proy and car and car["origen"] in ("ajustes", "ultima") and not car.get("aviso"):
-            car["aviso"] = (f"{proy} no tiene carpeta propia: asígnale una en Ajustes › Proyectos o con «Cambiar» "
-                            "al grabar.")
+            car["aviso"] = (f"{proy} no tiene carpeta propia: asígnale una en Ajustes › Proyectos o, al grabar, con "
+                            f"«Cambiar» y «Todas las de {proy}».")
         # un nombre escrito con \ / : * ? " < > | (p. ej. «Comité: Q4») no vale como nombre de archivo y rec_start lo
         # rechazaría al empezar: se graba sin esos signos, como la carpeta de la reunión (rec_destino), y se dice
         n = p["rec"].get("name") or ""
@@ -4364,7 +4366,7 @@ class App:
     def vocab_delete(self, b):
         v = find_vocab(None, None, b.get("id"))
         if not v:
-            raise ApiError("Ese tema ya no existe.")
+            raise ApiError("Ese workstream ya no existe.")
         to_recycle_bin([v["_abs"]])  # a la papelera: se puede recuperar
 
         def upd(d):  # el ultimo tema elegido y el fijo del perfil, si eran este: el perfil vuelve a «automatico»
