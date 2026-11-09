@@ -1572,7 +1572,9 @@ def ajustes_previstos(st, a):
     if isinstance(a.get("perfil"), dict):
         try:
             claves = ("folder", "vocab", "context")
-            update_perfil(st, check_perfil({k: x for k, x in a["perfil"].items() if k in claves}))
+            # con el perfil guardado como referencia: su carpeta o su lista, aunque ahora no se encuentren, no tiran el
+            # resto de lo escrito (el contexto) como «no vale» (revisión 3 de B2)
+            update_perfil(st, check_perfil({k: x for k, x in a["perfil"].items() if k in claves}, actual=perfil_de(st)))
         except ApiError:
             pass
     return st
@@ -2318,7 +2320,7 @@ class Jobs:
             return None
         # con Azure OpenAI: que el resumen aun no funciona ahi (no "configura la nube")
         return (engines.chat_missing(c)
-                or "El resumen necesita una API key de la nube (Ajustes ⚙ → Transcripción en la nube).")
+                or "El resumen necesita una API key de la nube (Ajustes ⚙ → Procesado).")
 
     def summary_ready(self):
         return self.summary_missing() is None
@@ -3468,7 +3470,8 @@ class App:
                 "proveedor": (engines.PROVIDERS.get((st.get("cloud") or {}).get("provider") or "groq") or {}).get(
                     "label") or "la nube",
                 "resumen_auto": st.get("summary_auto", True) is not False,
-                "resumen_local": bool(st.get("summary_auto_local"))}
+                "resumen_local": bool(st.get("summary_auto_local")),
+                "sin_clave": not ((st.get("cloud") or {}).get("api_key") or "").strip()}
 
     # orígenes de la regla de carpetas (rama `carpetas`, rec_folder_origin) -> (origen, texto) de la tarjeta
     _ORIGENES_REGLA = {"workstream": "workstream", "proyecto": "proyecto", "carpeta_proyecto": "proyecto",
@@ -3567,6 +3570,21 @@ class App:
             sugerir_titulo=lambda nombre: calendario.suggest({"subject": nombre}, listas),
             motores=self._motores(st), links={k: l["name"] for k, l in LINKS.items()},
             carpeta_reunion=self._carpeta_reunion(st, plantilla))
+        # la carpeta de Ajustes (la de las reuniones sin proyecto) guardada que ahora no se encuentra (una vinculada
+        # desconectada): se graba en otra y se dice por qué en su línea (revisión 3 de B2)
+        fija = perfil_de(st)["folder"]
+        car = next((x for x in p["lineas"] if x["clave"] == "carpeta"), None)
+        if fija is not None and perfil_folder(st) is None and car and car["origen"] in ("ajustes", "ultima") \
+                and not car.get("aviso"):
+            links = {k: l["name"] for k, l in LINKS.items()}
+            car["aviso"] = (f"No se encuentra la carpeta de Ajustes ({grabar_plan.ruta_txt(fija, links)}): se guarda "
+                            "aquí.")
+        # un proyecto sin carpeta propia (sus listas vienen de una carpeta conectada y no se le ha asignado ninguna)
+        # graba en la de Ajustes o en la última usada, que puede ser la de otro cliente: se dice cómo fijarle una
+        proy = p["proyecto"].get("proyecto")
+        if proy and car and car["origen"] in ("ajustes", "ultima") and not car.get("aviso"):
+            car["aviso"] = (f"{proy} no tiene carpeta propia: asígnale una en Ajustes › Proyectos o con «Cambiar» "
+                            "al grabar.")
         # un nombre escrito con \ / : * ? " < > | (p. ej. «Comité: Q4») no vale como nombre de archivo y rec_start lo
         # rechazaría al empezar: se graba sin esos signos, como la carpeta de la reunión (rec_destino), y se dice
         n = p["rec"].get("name") or ""

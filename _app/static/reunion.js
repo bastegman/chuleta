@@ -13,18 +13,18 @@ function reunionLinea(r) {
     const partes = [`Ahora: <b>${esc(o.subject || '(sin asunto)')}</b>`, `${reunionHora(o.start)}–${reunionHora(o.end)}`];
     if (o.organizer) partes.push(`organiza ${esc(o.organizer)}`);
     partes.push(`${(o.attendees || []).length} ${(o.attendees || []).length === 1 ? 'asistente' : 'asistentes'}`);
-    partes.push(s.vocab_label ? `tema sugerido: <b>${esc(s.vocab_label)}</b>` : 'ningún tema encaja');
+    partes.push(s.vocab_label ? `proyecto sugerido: <b>${esc(s.vocab_label)}</b>` : 'ningún proyecto encaja');
     if (o.blocked?.length) partes.push(`Outlook no dejó leer: ${esc(o.blocked.join(', '))}`);
     return partes.join(' · ');
   }
-  const teams = t ? `Teams: <b>${esc(t.title)}</b>${s.vocab_label ? ` · tema sugerido: <b>${esc(s.vocab_label)}</b>` : ''}`
+  const teams = t ? `Teams: <b>${esc(t.title)}</b>${s.vocab_label ? ` · proyecto sugerido: <b>${esc(s.vocab_label)}</b>` : ''}`
     : 'sin ventana de reunión de Teams abierta';
   return r.reason ? `<span style="color:var(--warn)">${esc(r.reason)}</span> · ${teams}` : teams.replace(/^s/, 'S');
 }
 
 function reunionFieldsetHtml() {
   const c = S.config || {};
-  return `<fieldset><legend>${I.calendar}Reuniones</legend>
+  return `<fieldset><legend>${I.calendar}Aviso al detectar una llamada</legend>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="rnOutlook" ${c.outlook_on ? 'checked' : ''}> Leer mi calendario de Outlook para sugerir el nombre, el proyecto y los participantes al grabar</label>
       <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="rnProbar">Probar</button><span id="rnProbarRes" class="muted" style="font-size:12.5px"></span></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:12px"><input type="checkbox" id="rnAviso" ${c.rec_aviso !== false ? 'checked' : ''}> <span>Aviso flotante con «Grabar» al detectar una llamada <span class="muted" style="font-weight:400">(si «Llamada detectada» está activado en Al grabar)</span></span></label>

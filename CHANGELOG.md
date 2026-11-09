@@ -41,16 +41,19 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   tarjeta de grabar, al confirmar participantes, al borrar una reunión y en «Copiar diagnóstico».
 - **Calendario y Teams**, sin repetir nada: Outlook sale una vez, en su fila, con «Activar» o «Desactivar» y, activado,
   «Probar»; mientras no se guarde, lo dice («Se activa al pulsar Guardar»). Con el estado del calendario (`GET
-  /api/calendario/estado`), la frase es ese estado y «Activar» y «Desactivar» guardan al momento. Fuera de Windows no
-  se ofrece activarlo. La ayuda larga, plegada en «¿Cómo funciona?». El aviso flotante dice que depende de «Llamada
-  detectada» (Al grabar) y, con ella apagada, no se puede marcar: era una segunda casilla casi igual que no decía de
-  cuál colgaba. La línea de Teams ya no consulta Outlook cada vez que se abre Ajustes.
+  /api/calendario/estado`), la frase es ese estado, el chip toma su color (en aviso si dice que algo falla),
+  «Activar» y «Desactivar» guardan al momento (y «Guardar» ya no los pisa mientras Outlook pregunta) y «Probar con mi
+  calendario» se puede usar antes de activarlo. Fuera de Windows no se ofrece activarlo. La ayuda larga, plegada en
+  «¿Cómo funciona?», bajo «Aviso al detectar una llamada» (se llamaba «Reuniones»). El aviso flotante dice que depende
+  de «Llamada detectada» (Al grabar) y, con ella apagada, no se puede marcar: era una segunda casilla casi igual que no
+  decía de cuál colgaba. La línea de Teams ya no consulta Outlook cada vez que se abre Ajustes.
 - «Llamada detectada» (Al grabar) vuelve a decir lo que hace: «avisarme si estoy en una llamada y no estoy
   grabando». Decía «aviso con «Grabar»», que es el aviso flotante, otro ajuste.
 - «Al grabar» cabe en una pantalla a 1500×920 (antes 828 px para 655), también con «Una carpeta por reunión» y con
   contexto: las pistas de cada regla van bajo su nombre, «¿Cómo funciona?» en la línea de arriba, sin la línea del pie
   (repetía el enlace a Proyectos), y la carpeta y el contexto del plan en una línea (enteros, al pasar el ratón). El
-  micrófono y la salida, con nombres cortos («El de Windows · ahora …», «Todo lo que suena»), ya no se cortan.
+  micrófono y la salida llevan nombres cortos («El de Windows · ahora …», «Todo lo que suena»): se ve lo que importa y
+  el nombre entero, al pasar el ratón. Los avisos de esa pantalla, en una línea.
 - En la tabla de Proyectos, editar una fila ya no cambia los anchos de la tabla ni corta los desplegables por la
   mitad.
 - Un nombre de reunión escrito con signos que no admite un archivo (`\ / : * ? " < > |`, p. ej. «Comité: Q4») ya no
@@ -77,11 +80,27 @@ Lo que pidió: Ajustes era «un listado sin fin» y no se sabía si lo configura
   enlace de dentro (el origen de una línea del plan, «Proyectos» en la ayuda) lleva el foco a esa sección.
 - Deshacer un cambio en Ajustes ya quita «Hay cambios sin guardar»: los campos de la nube, que se pintan después,
   contaban siempre como cambiados.
-- Los idiomas se llaman igual en todas partes, en español («Portugués», «Francés», «Alemán», «Catalán»): los
-  desplegables decían «Português» o «Deutsch» y el plan, «Portugués» o «Alemán».
+- Los idiomas se llaman igual en el plan y en los desplegables, en español («Portugués», «Alemán», «Solo inglés»,
+  «Detectar el idioma»); el desplegable añade a veces una aclaración entre paréntesis («(mezcla)»). Antes decían
+  «Português» o «Deutsch» en un sitio y «Portugués» o «Alemán» en otro, e «Inglés» frente a «Solo inglés».
 - Los asistentes de una cita de Outlook de empresa («Apellido, Nombre») se unen con «; », como en el resto de la app:
   con «, » eran el doble de personas en la tarjeta y en la pista de quién habla.
-- El editor de listas dice «workstream», como la tarjeta y Proyectos.
+- «Workstream» y «proyecto» en vez de «tema»: en el editor de listas, en la página de la reunión y en el directo
+  («Proyecto»), en la frase de «Probar» («proyecto sugerido»), en el LEEME y en «Incluir mis listas de vocabulario».
+- Lo escrito y sin guardar en Ajustes vuelve al volver de un subdiálogo (una lista, el asistente, «Apagar» con
+  «Cancelar»), y solo eso: se repone lo cambiado, no la foto entera de Ajustes. Si ese subdiálogo se cierra con Escape o
+  con un clic fuera, o se abre Ajustes de nuevo con ⚙, se descarta. Antes volvía con el siguiente ⚙ y «Guardar»
+  deshacía lo guardado entretanto con «Usarlo en».
+- La carpeta de las reuniones sin proyecto que no se encuentra no tira el resto de lo escrito en el plan (el contexto),
+  y el plan dice por qué graba en otra («No se encuentra la carpeta de Ajustes (…): se guarda aquí»). Un proyecto sin
+  carpeta propia (con sus listas en una carpeta conectada) lo dice en su línea, con dónde asignársela.
+- «Proyecto al grabar» fijo cambia también el proyecto del plan de arriba, para que se vea su efecto.
+- En la fila que se edita en Proyectos, la carpeta va con su ruta («Alfa › Reuniones»): cerrado, el desplegable decía
+  solo «Reuniones».
+- Con «API externa» y sin su clave, el plan lo dice en «Transcribe» y «Resume» («Falta la API key»). Los errores que
+  mandaban a «Ajustes ⚙ → Transcripción en la nube» mandan a «Procesado».
+- «Activar» y «Desactivar» de Outlook dicen a un lector de pantalla qué activan; con el teclado, el foco sigue en el
+  botón tras activar.
 - Con la copia de Claude Code de VS Code y una organización que no admite API keys, el botón es «Probar otra vez»
   (se entra en el panel de VS Code), no «Abrir PowerShell».
 - No se puede dejar en Ajustes «Sin micrófono» y «Sin el audio del PC» a la vez (no se grabaría nada): el plan lo avisa

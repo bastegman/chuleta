@@ -12,14 +12,14 @@ grabaciones, transcripciones y notas se guardan en la carpeta de Chuleta, `%USER
   pausas, solo con la voz, al ritmo que permite el cupo gratuito de Groq (y con claves de respaldo de otras cuentas
   del mismo proveedor, si las añades); con «Modo seguir» y, si quieres, traducción al español en una columna.
 - **Corregir** la transcripción en la propia página y **tomar notas** por reunión (bloques, propiedades, etiquetas,
-  estado, participantes, tema).
+  estado, participantes, proyecto).
 - **Resumen con IA** con puntos clave, decisiones y próximos pasos enlazados al minuto del audio. Al terminar se hace
   solo si la reunión se transcribió en la nube; lo transcrito en local, a mano o si lo permites en Ajustes.
 - **Dónde se procesa, lo eliges tú**: solo en este PC (nada sale de él), con tu cuenta de Claude (resumen con tu
   suscripción a través de Claude Code, con el paso a paso dentro de la app) o con una API externa; las dos últimas,
   con su aviso.
 - **Organizar**: carpetas, carpetas vinculadas (p. ej. de OneDrive), favoritos, tabla, calendario y búsqueda.
-- **Vocabulario** por proyecto y tema para que Whisper escriba bien nombres y siglas (y se pueden importar las listas
+- **Vocabulario** por proyecto y workstream para que Whisper escriba bien nombres y siglas (y se pueden importar las listas
   de otra carpeta).
 - **Grabar con una tarjeta que dice qué va a pasar**: la reunión, el proyecto y «Así se va a grabar» (dónde se
   guarda, idioma, vocabulario, quién transcribe y resume, el audio), cada línea con de dónde sale: esta reunión, el

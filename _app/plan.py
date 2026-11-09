@@ -21,8 +21,8 @@ from datetime import datetime
 from common import APP_NAME, fold
 
 # etiquetas cortas de los idiomas (las largas, con su explicación, están en app.js: LANGS)
-IDIOMAS = {"es-en": "Español + inglés", "": "Detectar el idioma", "auto": "Detectar el idioma", "es": "Español",
-           "en": "Inglés", "pt": "Portugués", "fr": "Francés", "it": "Italiano", "de": "Alemán", "ca": "Catalán",
+IDIOMAS = {"es-en": "Español + inglés", "": "Detectar el idioma", "auto": "Detectar el idioma", "es": "Solo español",
+           "en": "Solo inglés", "pt": "Portugués", "fr": "Francés", "it": "Italiano", "de": "Alemán", "ca": "Catalán",
            "es-pt": "Español + portugués", "en-pt": "Inglés + portugués"}
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 DIAS = ("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
@@ -259,11 +259,16 @@ def resolver(st, listas, sug=None, historial=None, pedido=None, carpeta_de=None,
         t_origen, t_txt = "procesado", "Ajustes › Procesado"
     # con «Solo grabar» transcribe la cola al terminar, con el motor de después (Ajustes › Procesado)
     p_tx = presets.get(preset) if live else presets.get(st.get("preset") or "rapido")
+    # con «API externa» y sin su clave, lo que va a la nube no se podrá hacer: se dice en su línea, no al terminar
+    sin_clave = motores.get("procesado") == "api" and motores.get("sin_clave")
+    falta = {"aviso": "Falta la API key: ponla en Ajustes › Procesado."} if sin_clave else {}
     lineas.append(_linea("transcribe", "Transcribe", transcribe_txt(live, p_tx or {}, motores),
-                         t_origen, t_txt, live=live, preset=preset))
+                         t_origen, t_txt, live=live, preset=preset,
+                         **(falta if (p_tx or {}).get("engine") == "cloud" else {})))
 
     # --- resume: lo decide Ajustes › Procesado (no hay cambio por reunión)
-    lineas.append(_linea("resume", "Resume", resume_txt(p_tx or {}, motores), "procesado", "Ajustes › Procesado"))
+    lineas.append(_linea("resume", "Resume", resume_txt(p_tx or {}, motores), "procesado", "Ajustes › Procesado",
+                         **falta))
 
     # --- audio: micrófono y audio del PC
     mic = str(cambios["mic"]) if "mic" in cambios else (st.get("rec_mic") or "default")

@@ -86,7 +86,7 @@ const presetIcon = p => !p ? '' : PRESET_ICONS[p.id] ? I[PRESET_ICONS[p.id]] : (
 
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const DIA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-const LANGS = [['es-en', 'Español + inglés (spanglish)'], ['', 'Detectar (cualquier idioma)'], ['es', 'Solo español'], ['en', 'Solo inglés'],
+const LANGS = [['es-en', 'Español + inglés (spanglish)'], ['', 'Detectar el idioma (cualquiera)'], ['es', 'Solo español'], ['en', 'Solo inglés'],
   ['pt', 'Portugués'], ['fr', 'Francés'], ['it', 'Italiano'], ['de', 'Alemán'], ['ca', 'Catalán'],
   ['es-pt', 'Español + portugués (mezcla)'], ['en-pt', 'Inglés + portugués (mezcla)']];
 const langSelect = (id, sel) => `<select id="${id}" title="Idioma de la reunión">${LANGS.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
@@ -300,7 +300,7 @@ function renderLiveHero(a) {
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
     <div id="directoBar"></div>
-    ${S.vocab.length ? `<div class="lh-ws">${I.topic}Tema ${wsSelect(a)}</div>` : ''}
+    ${S.vocab.length ? `<div class="lh-ws">${I.topic}Proyecto ${wsSelect(a)}</div>` : ''}
     ${typeof perfilLiveHtml === 'function' ? perfilLiveHtml(a) : ''}
     ${j ? `<div class="lh-bar" title="Transcrito / grabado"><i data-lh-bar style="width:${(100 * Math.min(1, j.transcribed / Math.max(1, j.recorded))).toFixed(1)}%"></i></div>` : ''}
     ${typeof modoLineaHtml === 'function' ? modoLineaHtml(sel, { cambiar: 'lh-modelos', abierto: S.lhModelos, falta: !j }) + prepHtml(j) : ''}
@@ -1639,7 +1639,7 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'k' && !e.altKey) { e.preventDefault(); const g = $('#gq'); if (g && $('#modal').classList.contains('hidden')) { g.focus(); g.select(); } return; }  // la caja de búsqueda de arriba (su kbd dice Ctrl K)
   if ((e.ctrlKey || e.metaKey) && k === 'f' && $('#tq')) { e.preventDefault(); $('#tq').focus(); $('#tq').select(); return; }
   if (e.key === 'Escape') {
-    if (!$('#modal').classList.contains('hidden')) return closeModal(false);
+    if (!$('#modal').classList.contains('hidden')) return cerrarSinVolver();
     if (!$('#jobsPanel').classList.contains('hidden')) return $('#jobsPanel').classList.add('hidden');
     if (typing) el.blur();
     return;
@@ -1771,7 +1771,10 @@ function closeModal(v) {
   const r = modalResolve; modalResolve = null;
   r && r(v);
 }
-$('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(false); });
+/* Escape o un clic fuera: se deja lo que haya abierto sin volver a Ajustes, así que lo escrito allí y sin guardar no
+   vuelve la próxima vez (revisión 3 de B2: un subdiálogo de Ajustes cerrado así dejaba el borrador para el siguiente ⚙) */
+function cerrarSinVolver() { S.ajBorrador = null; closeModal(false); }
+$('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') cerrarSinVolver(); });
 function ask(title, html, ok = 'Aceptar') {
   return openModal(`<h3>${esc(title)}</h3><div>${html}</div><div class="btns"><button class="btn" data-m="no">Cancelar</button><button class="btn primary" data-m="ok">${esc(ok)}</button></div>`, d => {
     d.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) closeModal(b.dataset.m === 'ok'); });
@@ -1932,6 +1935,7 @@ function openSettings(opts) {
   const sec = (opts && typeof opts === 'object' && AJ_SECS.some(x => x[0] === opts.sec) && opts.sec)
     || (AJ_SECS.some(x => x[0] === S.ajSec) && S.ajSec) || 'algrabar';
   S.ajSec = sec;
+  if (opts?.nuevo) S.ajBorrador = null;  // ⚙, la paleta, Inicio: se abre de nuevo, no se vuelve de un subdiálogo
   const enApi = S.config.procesado === 'api';  // (no «api»: taparía la función api() en todo Ajustes)
   const c = S.config.cloud, P = S.config.providers;
   const ac = S.config.acerca || {};
@@ -2013,7 +2017,7 @@ function openSettings(opts) {
     </section>
     <section data-secc="ayuda"${sec === 'ayuda' ? '' : ' hidden'}>
     <fieldset><legend>${I.package}Compartir ${esc(APP_NAME)}</legend>
-      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario por tema <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="xVocab"> Incluir mis listas de vocabulario <span class="muted" style="font-weight:400">· suelen llevar nombres de personas y empresas: solo para gente del mismo proyecto</span></label>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="xExport" type="button">Crear instalador para otra persona</button><span id="xRes" class="muted" style="font-size:12.5px"></span></div>
       <div class="help">Crea en el escritorio <b>${esc(APP_NAME)} - instalador.zip</b> con la app completa y un INSTALAR.bat. No lleva tus grabaciones, notas, ajustes ni tu API key: la otra persona conecta su propio proveedor. Compártelo por un enlace de OneDrive o Teams (el correo suele bloquear los .zip con .bat).<br>
         <b>Para actualizar a alguien que ya lo tiene</b>: mándale el zip nuevo y que ejecute su INSTALAR.bat. El instalador cierra la versión abierta y actualiza la que ya tenía, en su carpeta de siempre (con sus grabaciones).</div>
@@ -2068,7 +2072,9 @@ function openSettings(opts) {
     };
     const marcar = () => {
       const ahora = foto(), cambios = Object.keys(ahora).some(k => ahora[k] !== inicial[k]) || procSinAplicar();
-      S.ajBorrador = cambios ? ahora : null;
+      // solo lo cambiado: al volver de un subdiálogo se repone eso, no la foto entera (que pisaría lo guardado entretanto
+      // por otro camino, como «Usarlo en» en la tarjeta)
+      S.ajBorrador = cambios ? Object.fromEntries(Object.entries(ahora).filter(([k, v]) => v !== inicial[k])) : null;
       $('.aj-pend', d).textContent = cambios ? 'Hay cambios sin guardar' : '';
     };
     d.ajMarcar = marcar;
@@ -2095,7 +2101,8 @@ function openSettings(opts) {
     });
     // la tarjeta, al día tras «Aplicar ahora» o «Probar conexión»
     function ajTarjeta() { const t = $('.cfg-estado', d); if (t && typeof cfgEstadoHtml === 'function') t.outerHTML = cfgEstadoHtml(); }
-    $('#sOff', d).onclick = () => { closeModal(false); confirmShutdown(); };
+    // la confirmación ocupa el hueco de Ajustes, como un subdiálogo: con «Cancelar» se vuelve con lo no guardado
+    $('#sOff', d).onclick = () => { marcar(); confirmShutdown(); };
     // «Arrancar con Windows» (la bandeja deja /api/inicio-windows): se aplica al marcarla, como en el menú del icono;
     // null = no se puede (fuera de Windows o una copia sin instalar)
     const ini = $('#sInicioWin', d);
@@ -2252,6 +2259,9 @@ function openSettings(opts) {
         const el = $(id, d);
         if (el && el.value === el.dataset.ini) delete out[k];
       }
+      // lo que se guarda solo (Outlook con su estado: «Activar» guarda al momento y Outlook puede tardar en contestar)
+      // no lo pisa «Guardar» con lo que haya en la casilla (revisión 3 de B2)
+      if ('seGuardaSolo' in ($('#rnOutlook', d)?.dataset || {})) delete out.outlook_on;
       return out;
     };
     for (const id of ['#lPreset', '#pfPreset']) { const el = $(id, d); if (el) el.dataset.ini = el.value; }
@@ -2327,7 +2337,7 @@ function openSettings(opts) {
 }
 // ⚙ abre siempre en «Al grabar» (rediseño B2): lo que se usará al grabar, arriba. Volver de un subdiálogo (editar una
 // lista, el asistente…) sí vuelve a la sección en la que estabas (openSettings sin sección)
-$('#btnSettings').onclick = () => openSettings({ sec: 'algrabar' });
+$('#btnSettings').onclick = () => openSettings({ sec: 'algrabar', nuevo: true });
 
 /* ---------------------------------------------------------------- apagar */
 async function confirmShutdown() {

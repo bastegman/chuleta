@@ -120,14 +120,16 @@ class CapasTests(unittest.TestCase):
 
     def test_los_idiomas_se_llaman_igual_que_en_los_desplegables(self):
         """«Portugués» en el plan y «Português» en el desplegable eran dos nombres del mismo idioma (revisión 2,
-        P2-5): los de un solo idioma, iguales que en app.js (LANGS)."""
+        P2-5), y «Inglés» y «Solo inglés» (revisión 3): todos, iguales que en app.js (LANGS), que solo añade una
+        aclaración entre paréntesis («(mezcla)», «(spanglish)»)."""
         import json
         import re
         with open(os.path.join(os.path.dirname(plan.__file__), "static", "app.js"), encoding="utf-8") as fh:
             m = re.search(r"^const LANGS = (\[.*?\]\]);$", fh.read(), re.S | re.M)
         langs = dict(json.loads(m.group(1).replace("'", '"')))
-        for code in ("pt", "fr", "it", "de", "ca"):
-            self.assertEqual(plan.IDIOMAS[code], langs[code], code)
+        self.assertEqual(set(langs), set(plan.IDIOMAS) - {"auto"})
+        for code, txt in langs.items():
+            self.assertEqual(plan.IDIOMAS[code], re.sub(r" \(.*\)$", "", txt), code)
 
     def test_un_motor_que_no_se_ofrece_no_se_promete(self):
         p = resolver({"live_preset": "nube"}, pedido={})
@@ -545,6 +547,32 @@ class ServidorPlanTests(TempTree):
         self.assertEqual(resume({"procesado": "agente"}), "Claude con tu cuenta, al terminar")
         self.assertEqual(resume({"procesado": "nada"}), "No se resume: todo se queda en este PC")  # no vale: se ignora
         self.assertEqual(a.settings.get()["procesado"], "local")
+
+    def test_carpetas_que_no_se_encuentran_o_que_faltan_se_dicen(self):
+        """Revisión 3 de B2: con la carpeta de Ajustes guardada y perdida, el plan sigue con el resto de lo escrito (el
+        contexto) y dice por qué graba en otra; un proyecto sin carpeta propia (listas de una carpeta conectada, sin
+        asignar) dice dónde asignársela; con «API externa» y sin clave, lo dice en Transcribe y Resume."""
+        a = self.app(perfil={"folder": "Fuera/Clientes"})
+        aj = {"perfil": {"folder": "Fuera/Clientes", "context": "Comité"}}
+        b = lineas(a.grabar_plan_api({"nombre": "", "vocab": "", "ajustes": aj}))
+        self.assertEqual(b["contexto"]["valor"], "Comité")
+        self.assertIn("No se encuentra la carpeta de Ajustes (Chuleta\\Fuera\\Clientes\\)", b["carpeta"]["aviso"])
+
+        def origin(v, st):
+            return ("Alfa/Reuniones", "carpeta_proyecto") if v and v["project"] == "Alfa" else ("", "ultimo")
+        with mock.patch.object(server, "rec_folder_origin", origin, create=True), \
+                mock.patch.object(server.App, "rec_folder_for", lambda s, v, st: origin(v, st)[0]):
+            sin = self.app(perfil={"folder": None})
+            b = lineas(sin.grabar_plan_api({"nombre": "", "vocab": "Beta/Vocabulario/Legal.txt"}))
+            self.assertEqual(b["carpeta"]["aviso"],
+                             "Beta no tiene carpeta propia: asígnale una en Ajustes › Proyectos o con «Cambiar» "
+                             "al grabar.")
+            b = lineas(sin.grabar_plan_api({"nombre": "", "vocab": "Alfa/Vocabulario/General.txt"}))
+            self.assertNotIn("aviso", b["carpeta"])
+        b = lineas(self.app(procesado="api", perfil={"folder": None}).grabar_plan_api({"nombre": "", "vocab": ""}))
+        self.assertEqual(b["resume"].get("aviso"), "Falta la API key: ponla en Ajustes › Procesado.")
+        con_clave = self.app(procesado="api", cloud={"provider": "groq", "api_key": "x"})
+        self.assertNotIn("aviso", lineas(con_clave.grabar_plan_api({"nombre": "", "vocab": ""}))["resume"])
 
     def test_perfil_guardado_que_ahora_no_se_encuentra(self):
         """Revisión 2 de B2, P1-3: la carpeta o la lista del perfil que ahora no se encuentran (una vinculada

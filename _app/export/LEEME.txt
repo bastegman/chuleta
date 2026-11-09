@@ -144,9 +144,9 @@ USO DIARIO
     archivo ajeno ni uno que hayas cambiado allí (lo que no se ha podido escribir sale como aviso
     en ese mismo apartado). Los participantes sin confirmar no van. Al borrar una reunión, sus
     documentos que nadie haya cambiado allí van también a la papelera.
-  - Vocabulario por proyecto y tema: en Ajustes > Proyectos (o en ● Grabar > Proyecto) creas un
-    proyecto y sus temas, cada uno con su lista de nombres, siglas y productos separados por
-    comas (los más importantes primero). Al grabar eliges el proyecto y el tema y Whisper los
+  - Vocabulario por proyecto y workstream: en Ajustes > Proyectos (o en ● Grabar > Proyecto)
+    creas un proyecto y sus workstreams, cada uno con su lista de nombres, siglas y productos
+    separados por comas (los más importantes primero). Al grabar eliges el workstream y Whisper los
     escribe bien. Whisper solo lee unos 45 términos: el propio editor te dice cuáles se quedan
     fuera. Si ya tienes listas en otra carpeta (de un compañero, de otra copia), "Importar listas
     de otra carpeta…" las copia sin pisar las tuyas.

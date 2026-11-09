@@ -601,7 +601,7 @@ console.log(reunionLinea({outlook: null, teams: null, sugerencia: {}, reason: nu
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.strip().splitlines()
         self.assertEqual(lines[0], "Ahora: <b>Comité &lt;Q4&gt;</b> · 10:00–11:00 · organiza Ana · 2 asistentes · "
-                                   "tema sugerido: <b>Alfa · General</b>")
+                                   "proyecto sugerido: <b>Alfa · General</b>")
         self.assertIn("Outlook clásico no está abierto.", lines[1])
         self.assertIn("Teams: <b>Semanal</b>", lines[1])
         self.assertEqual(lines[2], "Sin ventana de reunión de Teams abierta")

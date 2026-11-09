@@ -222,7 +222,7 @@ main.addEventListener('change', e => {
   const a = curAudio();
   if (!a || e.target.dataset.prop !== 'workstream' || e.target.value === '__lost') return;
   const v = S.vocab.find(x => x.id === e.target.value);
-  saveProps(a, wsPatch(v)).then(() => toast(!v ? 'Sin tema: se usará el vocabulario general'
+  saveProps(a, wsPatch(v)).then(() => toast(!v ? 'Sin proyecto: se usará el vocabulario general'
     : liveJob(a) ? `🗂 ${esc(v.name)}: el directo usa este vocabulario desde el siguiente trozo`
     : (a.txt || a.srt) ? `🗂 ${esc(v.name)} guardado · se aplicará si la vuelves a transcribir` : `🗂 ${esc(v.name)}: se usará al transcribirla`));
 });
@@ -254,7 +254,7 @@ function propsHtml(a) {
     <div class="prow"><span class="pk">${I.clock}Duración</span><span class="pv">${fmtDur(estDuration(a))} <span class="muted">· ${fmtSize(a.size)} · ${esc(a.ext.slice(1).toUpperCase())}</span></span></div>
     <div class="prow"><span class="pk">${I.folder}Carpeta</span><span class="pv"><a href="${a.folder ? href('f', a.folder) : '#/'}">${esc(a.folder ? pathLabel(a.folder) : 'Sin clasificar')}</a>
       <button class="btn ghost sm" data-act="move" data-path="${esc(a.path)}">cambiar</button></span></div>
-    <div class="prow"><span class="pk">${I.topic}Tema</span><span class="pv">${wsSelect(a)}</span></div>
+    <div class="prow"><span class="pk">${I.topic}Proyecto</span><span class="pv">${wsSelect(a)}</span></div>
     ${typeof perfilPropsHtml === 'function' ? perfilPropsHtml(a) : ''}
     <div class="prow"><span class="pk">${I.state}Estado</span><span class="pv"><select class="pstate ${ESTADO_CLS[st] || ''}" data-prop="estado">${ESTADOS.map(([v, l]) => `<option value="${esc(v)}"${v === st ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>
     <div class="prow"><span class="pk">${I.tag}Etiquetas</span><span class="pv tags">${tags}<input class="tag-add" data-tag-add list="tagList" placeholder="+ añadir" autocomplete="off" spellcheck="false"></span></div>
@@ -405,7 +405,7 @@ main.addEventListener('click', async e => {
     await api('/api/notes', { path: a.path, body });
     S.notes = null; a.has_notes = true;
     toast('Resumen añadido a 📝 Notas (ahí lo puedes editar)');
-  } else if (act.dataset.act === 'settings') openSettings({ sec: 'procesado' });  // los avisos de Inicio son de Procesado
+  } else if (act.dataset.act === 'settings') openSettings({ sec: 'procesado', nuevo: true });  // los avisos de Inicio son de Procesado
 });
 /* progreso del resumen y recarga al terminar (lo llama el sondeo de trabajos de app.js) */
 function onSummaryJobs(prev) {
@@ -802,7 +802,7 @@ main.addEventListener('click', e => {
 /* ---------------------------------------------------------------- busqueda rapida (Ctrl+P) */
 const ACTIONS = [
   ['<i class="recdot"></i>', 'Grabar ahora', () => openRec()], [I.list, 'Reuniones', () => go('r', '')], [I.calendar, 'Calendario', () => go('c', '')],
-  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar' })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
+  [I.home, 'Inicio', () => go('home', '')], [I.gear, 'Ajustes', () => openSettings({ sec: 'algrabar', nuevo: true })], [I.plus, 'Nueva carpeta', () => openNewFolder('')],
   [I.clipboard, 'Copiar aviso de grabación', () => copy(CONSENT_TEXT, 'Aviso copiado: pégalo en el chat de la reunión')]];
 function paletteItems(q) {
   const f = fold(q.trim()), out = [];

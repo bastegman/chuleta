@@ -404,8 +404,13 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             self.assertEqual(pg.evaluate(botones), ["Activar"])
             self.assertEqual(pg.inner_text("#ctOutEstado"), "Apagado")
             self.assertTrue(pg.is_visible("#ctOutFila #rnEstado"))
-            pg.click("#ctOutAcc [data-ct-outlook='1']")
+            self.assertEqual(pg.get_attribute("#ctOutAcc [data-ct-outlook]", "aria-label"),
+                             "Activar el calendario de Outlook")
+            # con el teclado: el foco sigue en el botón de la fila, también tras activar (revisión 3, P1-c)
+            pg.focus("#ctOutAcc [data-ct-outlook='1']")
+            pg.keyboard.press("Enter")
             pg.wait_for_function(f"{acc}.includes('Desactivar')", timeout=5000)
+            pg.wait_for_function("document.activeElement.matches(\"#ctOutAcc [data-ct-outlook='0']\")", timeout=5000)
             self.assertEqual(pg.evaluate(botones), ["Desactivar"])
             self.assertTrue(pg.is_checked("#rnOutlook"))
             self.assertEqual(pg.inner_text("#ctOutEstado"), "Activado")
@@ -414,9 +419,21 @@ class InterfazEnNavegadorTests(unittest.TestCase):
             pg.wait_for_function(f"{acc}.includes('Activar')", timeout=5000)
             self.assertFalse(pg.is_checked("#rnOutlook"))
             self.assertEqual([c["activar"] for c in activados], [True, False])
+            # «Guardar» no manda lo que se guarda solo: no pisa un «Activar» que aún espera a Outlook (revisión 3, P1-b)
+            enviados = []
+            pg.route("**/api/settings", lambda r: (enviados.append(json.loads(r.request.post_data or "{}"))
+                                                   if r.request.method == "POST" else None, r.continue_())[1])
+            pg.click("#modal [data-m='ok']")
+            pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+            self.assertTrue(enviados and all("outlook_on" not in b for b in enviados), enviados)
+            pg.unroute("**/api/settings")
+            pg.click("#btnSettings")
+            pg.click(".aj-nav [data-sec='calendario']")
         elif pg.evaluate("/win/i.test(navigator.platform)"):
             self.assertEqual(pg.inner_text("#ctOutEstado"), "No conectado")
             self.assertEqual(pg.evaluate(botones), ["Activar"])
+            self.assertEqual(pg.get_attribute("#ctOutAcc [data-ct-outlook]", "aria-label"),
+                             "Activar el calendario de Outlook")
             self.assertFalse(pg.is_visible("#rnProbar"))  # «Probar» es de Outlook: con Outlook activado, en su fila
             pg.click("#ctOutAcc [data-ct-outlook='1']")
             self.assertTrue(pg.is_checked("#rnOutlook"))
@@ -483,7 +500,10 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.select_option("#pjTabla tr.pj-ed [data-pj-f]", "Proyecto")
         pg.select_option("#pjTabla tr.pj-ed [data-pj-l]", "de")  # enseguida, el otro desplegable
         pg.click(f"#pjTabla [data-pjw-editar='{ws}']")  # y enseguida otra fila
-        pg.select_option("#pjTabla tr.pj-ed [data-pj-l]", "fr")
+        # la fila nueva, en cuanto se abre (la vieja se cierra tras guardar lo pendiente: no se elige en ella)
+        fila_ws = f"#pjTabla tr.pj-ed[data-alcance='workstream'][data-vocab='{ws}']"
+        pg.wait_for_selector(fila_ws, timeout=5000)
+        pg.select_option(f"{fila_ws} [data-pj-l]", "fr")
         pg.click("#pjTabla [data-pj-no]")
         todo = ("api('/api/config').then(c => (c.project_folders_asignadas || c.project_folders)?.Proyecto"
                 " === 'Proyecto'"
@@ -534,6 +554,52 @@ class InterfazEnNavegadorTests(unittest.TestCase):
         pg.click(".aj-nav [data-sec='algrabar']")
         pg.wait_for_function(f"{resume} === {json.dumps(r0)}", timeout=5000)
         pg.keyboard.press("Escape")
+        err, red = self.limpiar(errores, red)
+        self.assertEqual(err, [], (err, red))
+        self.assertEqual(red, [], red)
+
+    def test_ajustes_lo_no_guardado_vuelve_solo_al_volver(self):
+        """Revisión 3 de B2, P0-a: lo escrito y sin guardar en Ajustes vuelve al volver de un subdiálogo (una lista,
+        «Apagar» → «Cancelar»), y solo lo cambiado. Si el subdiálogo se cierra con Escape, o se abre ⚙ de nuevo, se
+        descarta: antes volvía con el siguiente ⚙ y «Guardar» deshacía lo guardado entretanto por otro camino."""
+        pg, errores, red = self.pagina()
+        pg.goto(f"{self.base}/?t={self.token}", wait_until="networkidle")
+        pg.wait_for_selector("#main h1:has-text('Tus notas')", timeout=15000)
+        cfg = pg.evaluate("api('/api/config')")
+        lang, otro = cfg["language"], "pt" if cfg["language"] != "pt" else "de"
+        sys0 = cfg["rec_sys"]
+        self.addCleanup(pg.evaluate, f"api('/api/settings', {{rec_sys: {json.dumps(sys0)}}})")
+        abrir = "openVocabEditor(S.vocab[0], openSettings)"  # como «editar» en Proyectos: ocupa el hueco de Ajustes
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila", timeout=10000)
+        # vuelve: «Cancelar» del editor lleva de vuelta, con lo escrito
+        pg.select_option("#sLang", otro)
+        pg.evaluate(abrir)
+        pg.click("#modal [data-m='no']")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertEqual(pg.input_value("#sLang"), otro)
+        self.assertIn("sin guardar", pg.inner_text(".aj-pend"))
+        # «Apagar» → «Cancelar», igual
+        pg.click(".aj-nav [data-sec='ayuda']")
+        pg.click("#sOff")
+        pg.click("#modal [data-m='no']")
+        pg.wait_for_selector("#modal .aj-nav", timeout=5000)
+        self.assertEqual(pg.input_value("#sLang"), otro)
+        # no vuelve: el editor cerrado con Escape, y entretanto se guarda otra cosa por otro camino
+        pg.evaluate(abrir)
+        pg.keyboard.press("Escape")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        pg.evaluate("api('/api/settings', {rec_sys: 'default'}).then(setConfig)")  # como «Usarlo en» en la tarjeta
+        pg.click("#btnSettings")
+        pg.wait_for_selector("#agFilas .gr-fila", timeout=10000)
+        self.assertEqual(pg.input_value("#sLang"), lang)
+        self.assertEqual(pg.inner_text(".aj-pend"), "")
+        pg.fill("#pfContext", "Comité")
+        pg.fill("#pfContext", "")  # escrito y borrado: nada que guardar de aquí
+        pg.click("#modal [data-m='ok']")
+        pg.wait_for_function("document.querySelector('#modal').classList.contains('hidden')", timeout=5000)
+        c = pg.evaluate("api('/api/config')")
+        self.assertEqual((c["language"], c["rec_sys"]), (lang, "default"))  # lo guardado entretanto, intacto
         err, red = self.limpiar(errores, red)
         self.assertEqual(err, [], (err, red))
         self.assertEqual(red, [], red)

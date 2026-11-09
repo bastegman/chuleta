@@ -164,8 +164,8 @@ class AppJsTests(unittest.TestCase):
         with open(os.path.join(APP, "static", "app.js"), encoding="utf-8") as fh:
             m = re.search(r"const AJ_SECS = (\[.*?\]\]);", fh.read(), re.S)
         secs = dict(json.loads(m.group(1).replace("'", '"')))
-        muertas = re.compile(r"Ajustes\s*(?:›|→|>|&gt;)\s*(?:<b>)?«?(Grabar|Vocabulario|Carpetas|Reuniones|Perfil de "
-                             r"reuni[oó]n|Transcripci[oó]n|Destinos de salida)\b")
+        muertas = re.compile(r"Ajustes\s*(?:⚙\s*)?(?:›|→|>|&gt;)\s*(?:<b>)?«?(Grabar|Vocabulario|Carpetas|Reuniones|"
+                             r"Perfil de reuni[oó]n|Transcripci[oó]n|Destinos de salida)\b")
         sec = re.compile(r"""data-sec(?:-ir)?=\\?["']([\w-]+)|\bsec: ?["']([\w-]+)["']""")
         malos = []
         textos = [os.path.join(REPO, f)

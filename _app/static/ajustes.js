@@ -119,6 +119,7 @@ function bindAjAlGrabar(d) {
   // «Probar otra vez» de las listas (aquí o en Proyectos): Ajustes otra vez, en la misma sección y con lo no guardado
   d.addEventListener('click', e => {
     if (!e.target.closest('[data-aj-listas-otra]')) return;
+    e.preventDefault();
     d.ajMarcar?.();
     openSettings({ sec: S.ajSec });
   });
@@ -133,6 +134,14 @@ function bindAjAlGrabar(d) {
   };
   listas();
   proy.onchange = () => { elegido = true; pedir(); };
+  // «Proyecto al grabar» fijo: el plan de arriba pasa a ese proyecto, para que se vea lo que cambia (el selector de
+  // arriba elige qué plan enseñar y, si no, lo taparía)
+  $('#pfVocab', d)?.addEventListener('change', e => {
+    const v = e.target.value;
+    if (v === PERFIL_AUTO || ![...proy.options].some(o => o.value === v)) return;
+    proy.value = v;
+    elegido = true;
+  });
   // las reglas de abajo cambian el plan de arriba al momento, aunque no se hayan guardado
   ['sLang', 'agMic', 'agSys', 'agDirecto', 'pfFolder', 'pfVocab', 'pfContext', 'agPorReunion', 'lPreset', 'pfPreset',
     'sAuto', 'sAutoAg', 'sAutoLocal', 'sPrompt'].forEach(id => {
@@ -166,7 +175,7 @@ function bindAjAlGrabar(d) {
   }).catch(err => {
     const av = $('#agDevsAviso', d);
     if (!av || !document.body.contains(av)) return;
-    av.outerHTML = grDevsAviso(err.message, ': aquí solo están los predeterminados de Windows').replace('<span ', '<span id="agDevsAviso" ');
+    av.outerHTML = grDevsAviso(err.message).replace('<span ', '<span id="agDevsAviso" ');  // en una línea
   });
   // al volver a Al grabar (quizá tras guardar algo en Proyectos), otra vez; y cuando cambian las listas
   d.addEventListener('click', e => { if (e.target.closest('.aj-nav [data-sec="algrabar"], [data-sec-ir="algrabar"]')) pedir(); });
@@ -183,7 +192,8 @@ function bindAjAlGrabar(d) {
       pv.innerHTML = perfilVocabOpts(val);
     }
     const av = $('.ag-sin-listas', d);
-    if (S.vocabError && !S.vocab?.length && !av) $('.ag-plan', d)?.insertAdjacentHTML('afterend', ajListasFalloHtml(': solo se puede comprobar «Sin proyecto»'));
+    // aquí, en una línea (Al grabar tiene que caber en una pantalla); en Proyectos y en las listas, con su recuadro
+    if (S.vocabError && !S.vocab?.length && !av) $('.ag-plan', d)?.insertAdjacentHTML('afterend', '<div class="ag-sin-listas help warn-txt" style="margin-top:4px">No se han podido leer las listas de vocabulario: solo se puede comprobar «Sin proyecto». <a href="#" data-aj-listas-otra>Probar otra vez</a></div>');
     else if (av && !S.vocabError) av.remove();
     if ([...proy.options].map(o => o.value).join('|') + '#' + proy.value !== antes) pedir();
   };
@@ -251,9 +261,13 @@ function ajProyectosTabla(car, idioma0) {
 /* opciones de carpeta de una fila: la heredada primero y la asignada aunque ya no exista (para no perderla en silencio) */
 function ajCarpetaOpts(sel, heredadaTxt) {
   const falta = sel !== PERFIL_AUTO && S.folders.size > 0 && !S.folders.has(sel);  // sin árbol aún, no se sabe
+  // con la ruta entera («Alfa › Reuniones»): cerrado, el desplegable solo enseña la opción elegida, y «Reuniones» a
+  // secas no decía de qué proyecto era
+  const ruta = f => f.path ? (typeof perfilCarpetaTxt === 'function' ? perfilCarpetaTxt(f.path) : f.path).split('\\').join(' › ') : f.name;
   return `<option value="${PERFIL_AUTO}"${sel === PERFIL_AUTO ? ' selected' : ''}>${esc(heredadaTxt)}</option>`
-    + (falta ? `<option value="${esc(sel)}" selected>${esc(sel)} (no se encuentra)</option>` : '')
-    + folderOpts(falta ? null : sel).replace(/<option value="__pick">[^<]*<\/option>/, '');
+    + (falta ? `<option value="${esc(sel)}" selected>${esc(typeof perfilCarpetaTxt === 'function' ? perfilCarpetaTxt(sel) : sel)} (no se encuentra)</option>` : '')
+    + flatFolders().filter(f => fold(f.name) !== 'vocabulario')
+      .map(f => `<option value="${esc(f.path)}"${!falta && f.path === sel ? ' selected' : ''}>${esc(ruta(f))}</option>`).join('');
 }
 function bindAjProyectos(d) {
   const box = $('#pjTabla', d);
@@ -423,26 +437,31 @@ function bindAjCalendario(d) {
   if (est) { est.style.marginTop = '0'; of.append(est); }
   if (probar) { probar.style.marginTop = '6px'; of.append(probar); }  // «Probar» es de Outlook: en su fila
   fila.classList.remove('hidden');
-  const boton = (on, txt) => `<button class="btn sm" type="button" data-ct-outlook="${on ? '1' : '0'}">${txt}</button>`;
+  // con su nombre entero para un lector de pantalla: «Activar» a secas no dice qué activa
+  const boton = (on, txt, off = false) => `<button class="btn sm" type="button" data-ct-outlook="${on ? '1' : '0'}" aria-label="${txt} el calendario de Outlook"${off ? ' disabled' : ''}>${txt}</button>`;
   if (est) {
-    // fix-calendario: «Activar» y «Desactivar» guardan al momento, así que la casilla no cuenta como «sin guardar»
+    // fix-calendario: «Activar» y «Desactivar» guardan al momento, así que la casilla no cuenta como «sin guardar» ni
+    // la manda «Guardar» (app.js, collect)
     casilla.dataset.seGuardaSolo = '';
     const pintar = () => {
       const on = casilla.checked, activar = $('[data-rn-accion="activar"]', est);
       activar?.classList.add('hidden');  // el suyo, en la columna de la derecha, como «Desactivar»
       const soloWin = fueraWin && !on && !activar;  // fuera de Windows el servidor no ofrece nada
-      chip(oe, on ? 'ok' : soloWin ? 'aviso' : '', on ? 'Activado' : soloWin ? 'Solo en Windows' : 'Apagado');
+      // activado, el color es el de su estado: verde si conecta, aviso si la frase dice que no (falta pywin32…)
+      const tono = $('span[style*="--ok"]', est) ? 'ok' : $('span[style*="--warn"], span[style*="--err"]', est) ? 'aviso' : '';
+      chip(oe, on ? tono : soloWin ? 'aviso' : '', on ? 'Activado' : soloWin ? 'Solo en Windows' : 'Apagado');
       // «Probar» ya está en la frase cuando es lo que toca (Outlook cerrado): no dos veces (su resultado, sí). Fuera
       // de Windows no hay nada que probar
       $('#rnProbar', d)?.classList.toggle('hidden', soloWin || !!$('[data-rn-accion="probar"]', est));
       // mientras reunion.js activa, su botón está desactivado: el de aquí, igual
-      const nuevo = on ? boton(false, 'Desactivar') : activar ? boton(true, 'Activar').replace('<button ', activar.disabled ? '<button disabled ' : '<button ') : '';
+      const nuevo = on ? boton(false, 'Desactivar') : activar ? boton(true, 'Activar', activar.disabled) : '';
       if (oa.innerHTML === nuevo) return;
-      // con el teclado, el foco no se pierde (un botón desactivado mientras guarda ya lo había soltado)
+      // con el teclado, el foco no se pierde: si el botón nuevo está desactivado (activando), se espera al siguiente
       const foco = oa.contains(document.activeElement) || oa.dataset.foco;
-      delete oa.dataset.foco;
       oa.innerHTML = nuevo;
-      if (foco) ($('[data-ct-outlook]', oa) || $('#rnProbar', d))?.focus();
+      if (!foco) return;
+      const b = $('[data-ct-outlook]', oa), destino = b ? (b.disabled ? null : b) : ($('#rnProbar:not(.hidden)', d) || $('.aj-nav [data-sec="calendario"]', d));
+      if (destino) { destino.focus(); delete oa.dataset.foco; } else oa.dataset.foco = '1';
     };
     new MutationObserver(pintar).observe(est, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
     pintar();

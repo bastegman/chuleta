@@ -88,7 +88,7 @@ const vocab = [{id: 'A/Vocabulario/General.txt', project: 'A', name: 'General', 
 console.log(perfilGroups(vocab).map(([p, vs]) => p + ':' + vs.length).join(','));
 console.log(perfilLangOptions('', 'pt'));
 console.log(perfilLangOptions('auto', 'pt')
-  .includes('<option value="auto" selected>Detectar (cualquier idioma)</option>'));
+  .includes('<option value="auto" selected>Detectar el idioma (cualquiera)</option>'));
 console.log(perfilLangOptions('es-pt', '').includes('<option value="es-pt" selected>'));
 console.log(perfilLangOf({props: {idioma: 'auto'}}) === '', perfilLangOf({props: {idioma: 'en'}}),
   perfilLangOf({props: {}}));""")
