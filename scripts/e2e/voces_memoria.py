@@ -117,6 +117,9 @@ def medir(app, audio, datos, salida, etiqueta):
     t0 = time.time()
     r = subprocess.run([sys.executable, "-c", HIJO, app, res, "--diarize", audio, "--out", side, "--data", datos,
                         "--threads", "2"], capture_output=True, timeout=3600)
+    if not os.path.isfile(res):  # el hijo no llegó al final: lo que dijo, para leerlo en la CI
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[-4000:])
+        raise SystemExit(f"{etiqueta}: el proceso de voces terminó con {r.returncode} sin resultado")
     with open(res, encoding="utf-8") as f:
         out = json.load(f)
     with open(side, encoding="utf-8") as f:
@@ -135,6 +138,7 @@ def main():
     ap.add_argument("--antes", help="carpeta _app de la versión de antes (p. ej. la de fe29522)")
     ap.add_argument("--tope", type=float, default=None, help="MB de memoria comprometida que la de ahora no pasa")
     a = ap.parse_args()
+    a.salida = os.path.abspath(a.salida)  # el hijo cambia de carpeta: todas las rutas, absolutas (run 42692402938)
     os.makedirs(a.salida, exist_ok=True)
     trabajo = os.path.join(a.salida, "trabajo")
     shutil.rmtree(trabajo, ignore_errors=True)
