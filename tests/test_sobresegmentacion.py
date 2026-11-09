@@ -880,6 +880,7 @@ class FusionarPersonasMasTests(Reunion):
         self.v.forget(luis)
         with self.assertRaises(server.ApiError):
             self.app.voices_merge({"id_a": ana, "id_b": luis})
+        self.assertEqual(self.leer()["hablantes"]["h3"]["persona"], luis)  # sin tocar ninguna reunion
 
     def test_falla_al_final_y_se_deshace(self):
         luis, ana = self.preparar()
@@ -907,7 +908,7 @@ class FusionarPersonasMasTests(Reunion):
                 mock.patch.object(server, "log_exc"):
             with self.assertRaises(server.ApiError) as e:
                 self.app.voices_merge({"id_a": ana, "id_b": luis})
-        self.assertIn("1 reunión(es) se han quedado con la persona elegida", e.exception.msg)
+        self.assertIn("1 reunión se ha quedado con la persona elegida", e.exception.msg)
 
 
 class EvalScoreTests(unittest.TestCase):

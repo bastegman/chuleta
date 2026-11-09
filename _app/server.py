@@ -6783,14 +6783,20 @@ class App:
         try:
             v.merge(keep, other)
         except (KeyError, ValueError) as e:  # cambio entretanto (otra pestaña)
-            if v.find(other) is None:  # other ya no esta (olvidada o fusionada con otra): deshacer la dejaria huerfana
-                raise ApiError("Alguna de las dos personas ya no existe. Sus reuniones ya muestran a la que se queda.")
+            hay_keep, hay_other = v.find(keep) is not None, v.find(other) is not None
+            if not hay_other:  # other ya no esta (olvidada o fusionada con otra): deshacer la dejaria huerfana
+                raise ApiError("Alguna de las dos personas ya no existe."
+                               + (" Sus reuniones ya muestran a la que se queda." if hay_keep else ""))
             sin_deshacer = self._merge_deshacer(hechas, keep, other)
-            raise ApiError(("Alguna de las dos personas ya no existe." if isinstance(e, KeyError) else
-                            "Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
-                            "«No soy yo»; si eres tú, «Soy yo».")
-                           + (f" {sin_deshacer} reunión(es) se han quedado con la persona elegida (¿abiertas en otro "
-                              "programa?)." if sin_deshacer else " No se ha cambiado ninguna reunión."))
+            aviso = ("Alguna de las dos personas ya no existe." if isinstance(e, KeyError) else
+                     "Tu persona no se fusiona con otras: si ese hablante no eres tú, ponle su nombre o pulsa "
+                     "«No soy yo»; si eres tú, «Soy yo».")
+            if not sin_deshacer:
+                aviso += " No se ha cambiado ninguna reunión."
+            elif hay_keep:
+                aviso += (f" {sin_deshacer} {'reunión se ha' if sin_deshacer == 1 else 'reuniones se han'} quedado con "
+                          "la persona elegida (¿abiertas en otro programa?).")
+            raise ApiError(aviso)
         log(f"🗣 personas fusionadas ({n} reuniones actualizadas)")
         return {"id": keep, "reuniones": n, "personas": v.public()}
 
@@ -6801,13 +6807,18 @@ class App:
         for rel, hs in hechas:
             with self._voices_lock():
                 try:
-                    side = voices.sidecar_path(safe(alias_of(rel), "file"))
+                    abs_path = safe(alias_of(rel), "file")
+                except ApiError:
+                    continue  # la reunion ya no esta (borrada entretanto): no hay nada que deshacer
+                try:
+                    side = voices.sidecar_path(abs_path)
                     data = json.loads(voices.read_text(side))
                     for h in hs:
                         if (data.get("hablantes") or {}).get(h, {}).get("persona") == keep:
                             data["hablantes"][h]["persona"] = other
                     voices.write_sidecar(side, data)
-                except (ApiError, OSError, ValueError, AttributeError):
+                    self.jobs.schedule_outputs(rel_of(abs_path))  # los documentos, otra vez con el nombre de antes
+                except (OSError, ValueError, AttributeError):
                     log_exc()
                     malas += 1
         return malas
