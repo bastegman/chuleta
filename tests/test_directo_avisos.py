@@ -823,12 +823,15 @@ class ServidorTests(unittest.TestCase):
         self.app.vigia.avisado = "Teams"
         visto = []
         stop = rec.stop
-        rec.stop = lambda timeout=10: (visto.append(self.app.parada_auto), stop(timeout))[1]
+        # y un «No terminar» que llega mientras se para (la grabadora aún viva) dice que ya se está parando
+        rec.stop = lambda timeout=10: (visto.append(self.app.parada_auto), visto.append(self.app.rec_seguir({})),
+                                       stop(timeout))[2]
         for _ in range(31):
             self.tic("libre", dt=1.0)
         self.assertEqual(rec.stopped, 1)  # rec_stop de siempre: la grabadora se para y se guarda
         # el porqué ya estaba puesto al parar (el sondeo que ve «ya no se graba» lo ve también)
         self.assertEqual(visto[0]["motivo"], "llamada")
+        self.assertEqual(visto[1], {"ok": True, "seguia": False, "grabando": False})
         self.assertIsNone(self.app.vigia.avisado)  # la reunión siguiente puede volver a ofrecer «● Grabar»
         self.assertIsNone(self.app.rec)
         s = self.app.rec_status({})
