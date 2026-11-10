@@ -130,6 +130,9 @@ PROVIDERS = {
     "custom": {"label": "Otra (compatible con OpenAI)", "url": "", "models": ["whisper-large-v3"], "keys": ""},
 }
 LIVE_MODEL_DEFAULT = "whisper-large-v3-turbo"  # directo en Groq: ~1 s por trozo; el repaso final usa cloud.model
+# marca de server._candidata en cloud: «Probar» del asistente con «API externa» y sin proveedor elegido. Solo con ella
+# el motor rechaza un proveedor vacio; unos ajustes guardados nunca la llevan (CloudEngine.endpoint)
+SIN_PROVEEDOR = "_sin_proveedor"
 # directo en la nube: pocos intentos por trozo y esperas cortas (un trozo que no sale se salta y lo recupera el repaso
 # final, en vez de retener el directo minutos) y la lectura segun lo largo que sea el trozo: 20 s + 0,2 s por segundo
 # de audio (los de ponerse al dia llegan a 10 min y la API tarda mas en contestarlos)
@@ -1497,8 +1500,14 @@ class CloudEngine:
             return base + "/audio/transcriptions", {"Authorization": f"Bearer {key}"}, \
                 (model or cfg.get("model") or "").strip() or "whisper-large-v3"
         p = PROVIDERS.get(provider)
-        if p is None:  # vacío o desconocido: no se manda a Groq (ni a nadie) un audio sin un proveedor elegido
-            raise EngineError("Elige el proveedor de la API externa en Ajustes ⚙ → Procesado.")
+        if p is None:
+            # «Probar» del asistente con «API externa» y sin proveedor (server._candidata lo marca): a nadie. Unos
+            # ajustes GUARDADOS con un proveedor vacio o desconocido (de una version anterior o escritos a mano)
+            # siguen yendo a Groq, como hasta fe29522: a quien ya transcribia con Groq no se le corta (fix-groq, msgs
+            # 1468-1470: «para mí debería seguir funcionando»)
+            if cfg.get(SIN_PROVEEDOR):
+                raise EngineError("Elige el proveedor de la API externa en Ajustes ⚙ → Procesado.")
+            p = PROVIDERS["groq"]
         model = model or cfg.get("model") or p["models"][0]
         return p["url"], {"Authorization": f"Bearer {key}"}, model
 

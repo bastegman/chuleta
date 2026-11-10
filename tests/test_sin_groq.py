@@ -79,10 +79,12 @@ class GuardarTests(TempTree):
         self.assertEqual(st["cloud"]["provider"], "groq")
 
     def test_el_motor_no_manda_a_groq_sin_proveedor(self):
+        """La prueba del asistente sin proveedor (marcada por _candidata) no sale. Unos ajustes GUARDADOS con un
+        proveedor vacío van a Groq, como hasta fe29522 (fix-groq, tests/test_fix_groq.py)."""
         from support import engines
         for p in ("", "inventado"):
             with self.subTest(p=p), self.assertRaises(engines.EngineError) as cm:
-                engines.CloudEngine.endpoint({"provider": p, "api_key": "k"})
+                engines.CloudEngine.endpoint({"provider": p, "api_key": "k", engines.SIN_PROVEEDOR: True})
             self.assertIn("Elige el proveedor", str(cm.exception))
         self.assertIn("api.groq.com", engines.CloudEngine.endpoint({"api_key": "k"})[0])  # sin la clave: como siempre
 

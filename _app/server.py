@@ -7741,7 +7741,10 @@ class App:
         if key and "…" not in key and "•" not in key:
             st["cloud"]["api_key"] = key
         if st.get("procesado") == "api" and not elegido:
-            st["cloud"]["provider"] = ""  # el motor lo rechaza con «Elige el proveedor…»: nada sale hacia Groq
+            # el motor lo rechaza con «Elige el proveedor…» (por la marca: sin ella, unos ajustes guardados con un
+            # proveedor vacio van a Groq, como siempre): nada sale hacia Groq
+            st["cloud"]["provider"] = ""
+            st["cloud"][engines.SIN_PROVEEDOR] = True
         return st, True
 
     @staticmethod
