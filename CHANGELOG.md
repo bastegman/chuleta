@@ -10,6 +10,18 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Groq vuelve a transcribir con unos ajustes de antes (10/11/2026)
+
+- Con unos ajustes en los que el proveedor de la nube no es ninguno de los que hay (vacío o de una versión anterior),
+  «Sin Groq por defecto» hacía que el motor lo rechazara. El directo pasaba entonces, sin decirlo, a Whisper en el PC
+  y se quedaba descargando o cargando el modelo, y al terminar no salía nada. Hasta el 09/11 eso era Groq, y vuelve a
+  serlo: al arrancar, ese proveedor pasa a Groq (lo dice el log) y el motor también lo trata como Groq. Solo «Probar»
+  del asistente con «API externa» y sin proveedor elegido sigue sin mandar nada a nadie.
+- En ese mismo caso, Ajustes › Procesado enseñaba «Azure OpenAI» (el primero de la lista) y «Guardar» lo dejaba en
+  Azure sin endpoint. Unos ajustes así (Azure sin endpoint ni deployment y con una clave de Groq) vuelven a Groq al
+  arrancar.
+- Una instalación nueva sigue sin sugerir ni preseleccionar Groq.
+
 ### Memoria con audios largos (09/11/2026)
 
 Bernardo subió un audio viejo de 55 min (msg 1378): la transcripción en la nube salió bien, pero «Quién habla» se quedó

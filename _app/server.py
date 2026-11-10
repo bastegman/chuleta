@@ -612,6 +612,28 @@ def proveedor_elegido(st):
             or any(c.get(f) for f in engines.EXTRA_KEYS_FIELDS.values()))
 
 
+def reparar_proveedor(d):
+    """Al arrancar (fix-groq, msgs 1468-1474): unos ajustes con un proveedor de la nube que no existe (vacio o de una
+    version anterior) pasan a Groq, que es lo que hacia el motor hasta fe29522 y otra vez desde fix-groq; asi Ajustes
+    lo ensena elegido y «Guardar» no lo cambia. Con 0d5169b, en ese caso el desplegable no marcaba ninguno, el navegador
+    marcaba el primero (Azure OpenAI) y un «Guardar» lo dejaba en Azure sin endpoint: si quedo asi (Azure sin endpoint
+    ni deployment, y una clave de Groq, «gsk_…»), vuelve a Groq. Una instalacion nueva no cambia (ya lleva "groq" y
+    nada elegido). Devuelve lo que se ha cambiado (una frase para el log) o None."""
+    c = d.get("cloud")
+    if not isinstance(c, dict):
+        return None
+    p = c.get("provider")
+    if p not in engines.PROVIDERS:
+        c["provider"] = "groq"
+        return f"«{p if isinstance(p, str) else type(p).__name__}» no es ninguno de los que hay: pasa a Groq"
+    clave = c.get("api_key") if isinstance(c.get("api_key"), str) else ""
+    if (p == "azure" and not str(c.get("azure_endpoint") or "").strip()
+            and not str(c.get("azure_deployment") or "").strip() and clave.strip().startswith("gsk_")):
+        c["provider"] = "groq"
+        return "Azure OpenAI sin endpoint ni deployment y con una clave de Groq: pasa a Groq"
+    return None
+
+
 def agente_de(st):
     """(clase del agente, {tipo, modelo}): el configurado, o Claude Code si no se reconoce."""
     a = st.get("agente") if isinstance(st.get("agente"), dict) else {}
@@ -4826,6 +4848,7 @@ class App:
         self.settings = Store(os.path.join(DATA_DIR, "settings.json"), DEFAULT_SETTINGS)
         if self.settings.get().get("procesado") not in PROCESADOS:  # ajustes de antes: se decide una vez y se guarda
             self.settings.update(lambda d: d.update(procesado=procesado_de(d)))
+        self._reparar_proveedor()
         self._aviso_resumen_local()
         self._load_links()
         if not self.settings.get().get("carpetas_v"):  # la carpeta por reunion (07/11/2026): una vez
@@ -4900,6 +4923,18 @@ class App:
                 log(f"   no se pudo grabar (Ctrl+Alt+R): {e.msg}")  # el toast se va; el log se queda
                 notify("No se pudo grabar", e.msg)
                 raise
+
+    def _reparar_proveedor(self):
+        """Al arrancar: reparar_proveedor (fix-groq). Se mira sobre una copia y solo se escribe si hay algo que
+        reparar. Devuelve la frase del log o None."""
+        if not reparar_proveedor(self.settings.get()):
+            return None
+        hecho = []
+        self.settings.update(lambda d: hecho.append(reparar_proveedor(d)))
+        if hecho and hecho[0]:
+            log(f"   proveedor de la nube: {hecho[0]}")
+            return hecho[0]
+        return None
 
     def _migrar_nombre_raiz(self):
         """Al arrancar, despues de cargar las vinculadas: los ajustes del proyecto de la raiz pasan al nombre de su
