@@ -11,6 +11,11 @@ import unittest
 from support import TempTree, engines  # noqa: F401  (support prepara sys.path)
 from test_e2e_procesado import CLAVE, GroqFalso
 
+try:
+    import av  # noqa: F401  (write_flac: la petición de verdad manda un FLAC)
+except ImportError:  # pragma: no cover
+    av = None
+
 
 class MotorTests(unittest.TestCase):
     def test_ajustes_guardados_con_proveedor_vacio_van_a_groq(self):
@@ -31,6 +36,7 @@ class MotorTests(unittest.TestCase):
                 engines.CloudEngine.endpoint({"provider": p, "api_key": "k", engines.SIN_PROVEEDOR: True})
             self.assertIn("Elige el proveedor", str(cm.exception))
 
+    @unittest.skipUnless(av, "PyAV no instalado (el FLAC de la petición de verdad lo necesita)")
     def test_transcribe_de_verdad_contra_un_groq_falso(self):
         """Una petición real (CloudEngine.test, la de «Probar conexión») con unos ajustes guardados sin proveedor:
         llega a Groq con la clave guardada. Con 0d5169b fallaba antes de salir («Elige el proveedor…»)."""
