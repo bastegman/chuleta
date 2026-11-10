@@ -12,18 +12,22 @@ está en este repositorio. «Desarrollo y CI» es para quien mantiene el reposit
 
 ### Avisos del directo (10/11/2026)
 
-Rediseño B6, puntos 1-3 (msg 1378). Rama `directo-avisos`. En la cabecera del directo, con lo que la app ya lee:
+Rediseño B6, puntos 1-3 (msgs 1378 y 1479). Rama `directo-avisos`. En la cabecera del directo, con lo que la app ya lee:
 
 - **Fuente callada**: «El micro no recibe sonido desde hace 1 min» si el micro da silencio digital (silenciado con la
   tecla del portátil o en Windows, sin permiso, con el nivel a 0) más de un minuto. Escuchar callado no avisa: un
   micro de verdad da el ruido de la sala. Un micro con puerta de ruido (ceros entre frases) se reconoce y no avisa.
   «El ordenador no suena desde hace 1 min» solo en una llamada, después de haber oído algo y sin contar el rato en
   que hablas tú (en una reunión presencial o en la sala de espera no avisa).
-- **«La llamada ha terminado: paro en 30 s · No terminar»**: cuando Teams suelta el micro (el registro de
-  privacidad apunta el fin) y su ventana de reunión se cierra, si esa llamada era la de la grabación (cubre el 60 % de
-  lo grabado y dura 2 min o más). Sin pulsar nada, para como «Parar». Nunca para si Teams vuelve a coger el micro, si
-  la ventana sigue o si no se puede leer; tras «No terminar», hasta otra llamada. Cerrar Teams también cuenta
-  como fin de la llamada (msg 1479).
+- **«La llamada ha terminado: paro en 30 s · No terminar»** (msg 1479: «que me sugiera cortar automáticamente la
+  reunión cuando se cierra el teams o la reunión»): cuando Teams suelta el micro (el registro de privacidad apunta el
+  fin) o se cierra, y ninguna ventana de esa reunión sigue abierta, durante 5 s. Solo si esa llamada era la de la
+  grabación: empezó como mucho 2 min después de empezar a grabar, cubre el 60 % de lo grabado y dura 2 min o más (una
+  llamada a mitad de una reunión presencial no para nada). Sin pulsar nada, para como «Parar» y el aviso flotante puede
+  ofrecer grabar la reunión siguiente. Si en la cuenta atrás ya empieza la reunión siguiente (otra ventana), sigue
+  contando: no acaba en la misma grabación. Nunca para si vuelves a entrar en la misma reunión, si no se pueden leer
+  las ventanas o la lista de procesos, ni con «Avisarme si estoy en una llamada» apagado; tras «No terminar», hasta
+  que otra llamada termine.
 - **«Lo último suena a portugués · Cambiar»**: con un idioma fijo, cuando dos trozos seguidos (30 s de voz) suenan a
   otro idioma de los que se pueden elegir. «Cambiar» es el cambio de idioma de siempre (rehace el último minuto); si ya
   se habían oído 60 s del fijado y hay mezcla de los dos, propone la mezcla. «No» no lo vuelve a proponer en esa

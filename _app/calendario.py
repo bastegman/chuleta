@@ -135,13 +135,26 @@ def teams_meeting_title(exe_names=TEAMS_EXES):
         return None
 
 
-def teams_reunion_abierta(exe_names=TEAMS_EXES):
-    """¿Hay una ventana de reunión o llamada de Teams? True / False, o None si no se sabe (fuera de Windows o si no se
-    pueden leer las ventanas): el fin de la llamada (directo_avisos.FinDeLlamada) no para nada con un None."""
+def meeting_titles(windows, exe_names=TEAMS_EXES):
+    """Los títulos (limpios) de TODAS las ventanas de reunión o llamada de Teams entre (título, exe[, hwnd])."""
+    exes = {e.lower() for e in exe_names}
+    out = set()
+    for w in windows:
+        if (w[1] or "").replace("\\", "/").rsplit("/", 1)[-1].lower() in exes:
+            t = parse_title(w[0])
+            if t:
+                out.add(t)
+    return out
+
+
+def teams_reuniones(exe_names=TEAMS_EXES):
+    """Los títulos de las ventanas de reunión o llamada de Teams abiertas (set, vacío si no hay), o None si no se sabe
+    (fuera de Windows o si no se pueden leer): el fin de la llamada (directo_avisos.FinDeLlamada) no para nada con un
+    None. Con los títulos distingue volver a entrar en la misma reunión de empezar la siguiente."""
     if not WINDOWS:
         return None
     try:
-        return pick_meeting_window(_ventanas(), exe_names) is not None
+        return meeting_titles(_ventanas(), exe_names)
     except Exception:
         log_exc()
         return None

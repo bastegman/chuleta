@@ -6,8 +6,8 @@ alimentan lecturas que la app ya hace (el estado de la grabadora cada 0,25 s, el
 
 1. Callada: el micro o el sonido del ordenador llevan más de un minuto sin recibir nada («El micro no recibe sonido
    desde hace 1 min»). Ver la clase para el criterio y por qué no salta en los silencios normales de una reunión.
-2. FinDeLlamada: la llamada de Teams que se estaba grabando ha terminado: «paro en 30 s · No terminar». Nunca
-   para si la llamada sigue o si la lectura duda.
+2. FinDeLlamada: la llamada de Teams que se estaba grabando ha terminado (o se ha cerrado Teams): «paro en 30 s · No
+   terminar» (msg 1479). Nunca para si la llamada sigue o si la lectura duda.
 3. Propuesta: con un idioma fijo, lo último suena a otro: «Lo último suena a portugués · Cambiar». Varios bloques
    seguidos, nunca uno suelto, y nunca lo ya rechazado en esa grabación.
 """
@@ -30,7 +30,9 @@ HABLA_S = 5.0       # tras hablar por el micro, 5 s que aún son «hablando» (l
 PASO_MAX_S = 2.0    # entre dos lecturas de 0,25 s: un hueco mayor (el PC se durmió) no cuenta entero
 
 # --- 2. fin de la llamada
-CONFIRMA_S = 10.0   # el micro de Teams suelto y sin ventana de reunión al menos esto antes de proponer
+CONFIRMA_S = 5.0    # el micro de Teams suelto y sin sus ventanas al menos esto antes de proponer (las dos señales a la
+#                     vez ya son fuertes; menos espera = menos reuniones seguidas que se cuelan, msg 1479)
+VINCULO_S = 120.0   # la llamada empezó como mucho 2 min después de empezar a grabar: es la de esta grabación
 PARA_EN_S = 30.0    # «paro en 30 s»
 CUBRE = 0.6         # la llamada cubre al menos el 60 % de lo grabado hasta que terminó (no una llamada corta
 CUBRE_MIN_S = 120.0  # en medio de una reunión presencial) y ha durado al menos 2 min
@@ -57,7 +59,7 @@ def _pruebas():
     except ValueError:
         return
     for k, v in cambios.items():
-        if k in ("AVISO_S", "CONFIRMA_S", "PARA_EN_S", "CUBRE", "CUBRE_MIN_S", "SEGUIDOS_VOZ_S") \
+        if k in ("AVISO_S", "CONFIRMA_S", "PARA_EN_S", "CUBRE", "CUBRE_MIN_S", "VINCULO_S", "SEGUIDOS_VOZ_S") \
                 and isinstance(v, (int, float)):
             globals()[k] = float(v)
 
@@ -145,11 +147,12 @@ class Callada:
     def estado(self, now):
         """{"mic": segundos, "sys": segundos} de las fuentes que hay que avisar (vacío: ninguna)."""
         out = {}
-        if self.mic_muerto is not None and not self.mic_puerta and now - self.mic_muerto >= self.avisar_s:
-            out["mic"] = int(now - self.mic_muerto)
-        if self.llamada_desde is not None and self.llamada_activa and self.sys_escucha >= self.avisar_s:
-            desde = max(self.sys_sonido or self.llamada_desde, self.llamada_desde)
-            out["sys"] = int(now - desde)
+        muerto = self.mic_muerto
+        if muerto is not None and not self.mic_puerta and now - muerto >= self.avisar_s:
+            out["mic"] = int(now - muerto)
+        llamada, sonido = self.llamada_desde, self.sys_sonido  # lo cambia el hilo que lee la grabadora
+        if llamada is not None and self.llamada_activa and self.sys_escucha >= self.avisar_s:
+            out["sys"] = int(now - max(sonido or llamada, llamada))
         return out
 
     def _notas(self, now):
@@ -166,27 +169,47 @@ class Callada:
 class FinDeLlamada:
     """¿Ha terminado la llamada de Teams que se estaba grabando? Se llama con cada lectura (tic) y devuelve lo que toca
     hacer: None, "propone" (enseñar «paro en 30 s»), "cancela" (la llamada sigue o ya no se sabe: se quita el aviso) o
-    "para" (pasados los 30 s sin «No terminar»: parar como un «Parar» normal).
+    "para" (pasados los 30 s sin «No terminar»: parar como un «Parar» normal; msg 1479).
 
-    Señales, las dos a la vez: el micro de Teams en el registro de privacidad («uso»: lo tiene abierto; «libre»: lo
-    soltó, con su hora de fin, o Teams se ha cerrado; «duda»: no se sabe qué procesos hay) y la ventana de la reunión de
-    Teams (True / False / None si no se puede leer).
-    Solo «libre» y sin ventana cuenta como terminada; todo lo demás cancela. Y la llamada tiene que ser la de esta
-    grabación: cubrir al menos el CUBRE de lo grabado hasta que terminó y durar CUBRE_MIN_S (una llamada corta en medio
-    de una reunión presencial no para nada). Tras «No terminar», no se vuelve a proponer hasta que haya otra
-    llamada y termine."""
+    Señales: el micro de Teams en el registro de privacidad («uso»: lo tiene abierto; «libre»: lo soltó, con su hora
+    de fin, o Teams se ha cerrado; «duda»: no se sabe qué procesos hay) y los títulos de las ventanas de reunión de
+    Teams (un set; None si no se pueden leer). Mientras dura la llamada se apuntan sus títulos. Terminada = micro
+    «libre» y ninguna de sus ventanas abierta (si nunca se pudo leer su título: ninguna ventana de reunión), durante
+    CONFIRMA_S. Todo lo demás cancela, salvo una cosa: si en la cuenta atrás Teams vuelve a coger el micro con SOLO
+    ventanas de otra reunión (la siguiente, empezada en menos de 30 s), la cuenta sigue: es justo lo que no debe acabar
+    en la misma grabación (revisión del 10/11/2026). Con su misma ventana (has vuelto a entrar) o sin poder leerlas,
+    cancela.
+
+    Y la llamada tiene que ser la de esta grabación: empezó como mucho VINCULO_S después de empezar a grabar, cubre al
+    menos CUBRE de lo grabado hasta que terminó y dura CUBRE_MIN_S. Así una llamada en medio de una reunión presencial
+    no para nada (si llega en sus 2 primeros minutos y cubre lo grabado, sí lo propone: la cuenta atrás y el aviso de
+    Windows lo dicen). Tras «No terminar», no se vuelve a proponer hasta que haya otra llamada y termine."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self._reset(None, None)
 
     def _reset(self, grabacion, now):
-        self.grabacion, self.inicio, self.ultimo, self.ultimo_uso = grabacion, now, now, None
+        self.grabacion, self.inicio, self.ultimo, self.ultimo_uso, self.primer_uso = grabacion, now, now, None, None
         self.en_llamada_s, self.libre_desde, self.para_en, self.seguir = 0.0, None, None, False
+        self.titulos, self.parando = set(), False
 
-    def tic(self, grabacion, now, mic, ventana_fn=lambda: None):
-        """grabacion: la que se está grabando (su ruta) o None; mic: "uso" | "libre" | "duda"; ventana_fn: ¿hay ventana
-        de reunión de Teams? (True/False/None); solo se mira cuando hace falta."""
+    def _vinculada(self):
+        """La llamada es la de esta grabación (ver la clase)."""
+        if self.primer_uso is None or self.primer_uso - self.inicio > VINCULO_S or self.en_llamada_s < CUBRE_MIN_S:
+            return False
+        # lo grabado hasta la última lectura con la llamada en marcha (las dos cuentas, con las mismas lecturas)
+        return self.en_llamada_s >= CUBRE * max(0.0, self.ultimo_uso - self.inicio)
+
+    def _sin_sus_ventanas(self, t):
+        """Ninguna ventana de esta llamada abierta (True), alguna (False) o no se sabe (None)."""
+        if t is None:
+            return None
+        return not (t & self.titulos) if self.titulos else not t
+
+    def tic(self, grabacion, now, mic, titulos_fn=lambda: None):
+        """grabacion: la que se está grabando (su ruta) o None; mic: "uso" | "libre" | "duda"; titulos_fn: los títulos
+        de las ventanas de reunión de Teams (set, o None si no se pueden leer)."""
         with self.lock:
             if grabacion is None:
                 if self.grabacion is not None:
@@ -197,18 +220,21 @@ class FinDeLlamada:
             dt = min(TIC_MAX_S, max(0.0, now - (self.ultimo if self.ultimo is not None else now)))
             self.ultimo = now
             if mic == "uso":
+                t = titulos_fn()
+                if self.para_en is not None:
+                    if t and self.titulos and not (t & self.titulos):  # solo ventanas de otra reunión: sigue
+                        return self._vence(now)
+                    self.libre_desde = None
+                    return self._cancelar()
                 self.en_llamada_s += dt
                 self.libre_desde, self.seguir, self.ultimo_uso = None, False, now
-                return self._cancelar()
-            if mic != "libre" or self.seguir or self.en_llamada_s < CUBRE_MIN_S:
-                self.libre_desde = None
-                return self._cancelar()
-            # lo grabado hasta la última lectura con la llamada en marcha (las dos cuentas, con las mismas lecturas)
-            if self.en_llamada_s < CUBRE * max(0.0, self.ultimo_uso - self.inicio):
-                self.libre_desde = None
-                return self._cancelar()
-            if ventana_fn() is not False:  # la ventana sigue (en espera, silenciado) o no se sabe: no
-                self.libre_desde = None
+                if self.primer_uso is None:
+                    self.primer_uso = now
+                if t:
+                    self.titulos |= t
+                return None
+            if mic != "libre" or self.seguir or not self._vinculada() or not self._sin_sus_ventanas(titulos_fn()):
+                self.libre_desde = None  # la llamada sigue, no se sabe o no era la de esta grabación
                 return self._cancelar()
             if self.libre_desde is None:
                 self.libre_desde = now
@@ -217,10 +243,13 @@ class FinDeLlamada:
                     return None
                 self.para_en = now + PARA_EN_S
                 return "propone"
-            if now >= self.para_en:
-                self.para_en, self.seguir = None, True
-                return "para"
-            return None
+            return self._vence(now)
+
+    def _vence(self, now):
+        if now >= self.para_en:
+            self.para_en, self.seguir, self.parando = None, True, True
+            return "para"
+        return None
 
     def _cancelar(self):
         if self.para_en is None:
@@ -238,10 +267,11 @@ class FinDeLlamada:
             return None if self.para_en is None else max(0, int(round(self.para_en - now)))
 
     def seguir_grabando(self):
-        """«No terminar»: fuera el aviso; no se vuelve a proponer hasta otra llamada. True si había aviso."""
+        """«No terminar»: fuera el aviso; no se vuelve a proponer hasta que haya otra llamada y termine (la siguiente
+        pasa a ser «la de ahora», con sus ventanas). True si había aviso."""
         with self.lock:
             habia = self.para_en is not None
-            self.para_en, self.libre_desde, self.seguir = None, None, True
+            self.para_en, self.libre_desde, self.seguir, self.titulos = None, None, True, set()
             return habia
 
 

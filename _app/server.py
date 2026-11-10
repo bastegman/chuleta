@@ -4845,10 +4845,10 @@ REC_ARRANQUE_S = 10.0
 
 
 def teams_estado():
-    """(micro de Teams, ¿ventana de reunión de Teams?) para directo_avisos.FinDeLlamada: ("uso" | "libre" | "duda",
-    función que devuelve True / False / None). La ventana solo se busca si hace falta (al terminar la llamada).
-    CHULETA_PRUEBAS_TEAMS (solo los E2E): un JSON {"mic": "libre", "ventana": false} en vez del registro y las
-    ventanas; si no se puede leer, "duda" (nunca se para nada)."""
+    """(micro de Teams, títulos de las ventanas de reunión de Teams) para directo_avisos.FinDeLlamada: ("uso" |
+    "libre" | "duda", función que devuelve un set de títulos o None si no se pueden leer). Las ventanas solo se leen
+    cuando hace falta. CHULETA_PRUEBAS_TEAMS (solo los E2E): un JSON {"mic": "libre", "ventanas": ["Comité"]} en vez
+    del registro y las ventanas; si no se puede leer, "duda" (nunca se para nada)."""
     fake = os.environ.get("CHULETA_PRUEBAS_TEAMS")
     if fake:
         try:
@@ -4856,8 +4856,9 @@ def teams_estado():
                 d = json.load(f)
         except (OSError, ValueError):
             return "duda", lambda: None
-        return str(d.get("mic") or "duda"), lambda: d.get("ventana")
-    return teams_mic_estado(), calendario.teams_reunion_abierta
+        v = d.get("ventanas")
+        return str(d.get("mic") or "duda"), lambda: None if v is None else set(v)
+    return teams_mic_estado(), calendario.teams_reuniones
 
 
 class App:
@@ -6590,12 +6591,17 @@ class App:
                 r = self.rec
                 if not (r and r.alive() and rel_of(r.path) == grabando):
                     return  # entretanto se paró a mano (o es otra grabación)
+                # antes de parar: el sondeo de la interfaz que vea «ya no se graba» tiene que ver también el porqué (si
+                # no, en Windows, con el sonido de cue, salía «Grabación guardada» a secas: ui-smoke del 10/11/2026)
+                self.parada_auto = {"motivo": "llamada", "path": grabando, "at": time.time()}
                 try:
                     res = self.rec_stop({})
                 except ApiError:
+                    self.parada_auto = None
                     return
+            # la reunión siguiente (ya empezada, o la que empiece) puede volver a ofrecer el aviso flotante «● Grabar»
+            self.vigia.avisado = None
             cue("stop")
-            self.parada_auto = {"motivo": "llamada", "path": res["path"], "at": time.time()}
             log(f"■ {res['path']}: parada al terminar la llamada de Teams (sin «No terminar» en "
                 f"{directo_avisos.PARA_EN_S:.0f} s)")
             notify("■ Grabación parada", "La llamada ha terminado · la transcripción termina sola")
@@ -6605,8 +6611,9 @@ class App:
         habia = self.fin_llamada.seguir_grabando()
         if habia:
             log("   «No terminar»: la grabación sigue aunque la llamada haya terminado")
-        # grabando: si el clic llegó tarde (ya se había parado), la interfaz lo dice en vez de «se sigue grabando»
-        return {"ok": True, "seguia": habia, "grabando": bool(self.rec and self.rec.alive())}
+        # grabando: si el clic llegó tarde (ya se había parado o se está parando), la interfaz lo dice
+        parando = self.fin_llamada.parando
+        return {"ok": True, "seguia": habia, "grabando": bool(self.rec and self.rec.alive()) and not parando}
 
     def _vocab_terms(self):
         """Listas de vocabulario con sus términos: con ellas calendario.suggest elige el tema de la reunión. La que no

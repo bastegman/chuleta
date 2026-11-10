@@ -219,13 +219,25 @@ class FinTests(unittest.TestCase):
         self.t = 0.0
         self.ventanas = 0
 
-    def tic(self, mic, ventana=False, dt=8.0, grab="a.wav"):
+    def tic(self, mic, ventana=None, dt=8.0, grab="a.wav"):
+        """ventana: los títulos de las ventanas de reunión de Teams (set); por defecto, la de la reunión con el micro
+        en uso y ninguna con el micro suelto. True = la de la reunión; False = ninguna; None explícito = no se leen."""
         self.t += dt
+        if ventana is None:
+            ventana = {"Comité"} if mic == "uso" else set()
+        elif ventana is True:
+            ventana = {"Comité"}
+        elif ventana is False:
+            ventana = set()
 
         def v():
             self.ventanas += 1
             return ventana
         return self.f.tic(grab, self.t, mic, v)
+
+    def tic_ilegible(self, mic, dt=1.0):
+        self.t += dt
+        return self.f.tic("a.wav", self.t, mic, lambda: None)
 
     def llamada(self, minutos):
         acciones = [self.tic("uso") for _ in range(int(minutos * 60 / 8))]
@@ -233,12 +245,12 @@ class FinTests(unittest.TestCase):
 
     def test_al_colgar_propone_y_para_a_los_30_s(self):
         self.llamada(20)
-        self.assertEqual(self.ventanas, 0)  # durante la llamada no se buscan ventanas
-        self.assertIsNone(self.tic("libre"))  # 1.ª lectura con el micro suelto: aún no (confirmar 10 s)
-        self.assertIsNone(self.tic("libre", dt=1.0))
-        acciones = [self.tic("libre", dt=1.0) for _ in range(9)]
+        self.assertEqual(self.f.titulos, {"Comité"})  # durante la llamada se apuntan sus ventanas
+        self.assertIsNone(self.tic("libre"))  # 1.ª lectura con el micro suelto: aún no (confirmar 5 s)
+        acciones = [self.tic("libre", dt=1.0) for _ in range(7)]
         self.assertEqual(acciones.count("propone"), 1, acciones)
-        self.assertEqual(self.f.quedan(self.t), 30 - (8 - acciones.index("propone")))
+        self.assertEqual(acciones.index("propone"), 4)  # a los 5 s
+        self.assertEqual(self.f.quedan(self.t), 30 - 2)
         self.assertTrue(self.f.pendiente())
         acciones = [self.tic("libre", dt=1.0) for _ in range(31)]
         self.assertEqual(acciones.count("para"), 1, acciones)
@@ -259,7 +271,7 @@ class FinTests(unittest.TestCase):
         self.llamada(20)
         acciones = [self.tic("libre", ventana=True, dt=1.0) for _ in range(120)]
         self.assertEqual(set(acciones), {None})
-        acciones = [self.tic("libre", ventana=None, dt=1.0) for _ in range(120)]  # no se pueden leer: duda
+        acciones = [self.tic_ilegible("libre") for _ in range(120)]  # no se pueden leer: duda
         self.assertEqual(set(acciones), {None})
 
     def test_la_ventana_reaparece_en_la_cuenta_atras(self):
@@ -276,6 +288,66 @@ class FinTests(unittest.TestCase):
             self.tic("libre", dt=1.0)
         self.assertEqual(self.tic("duda", dt=1.0), "cancela")
 
+    def test_la_reunion_siguiente_no_cancela(self):
+        # cuelgas y entras en la siguiente antes de que acabe la cuenta (msg 1479): con su ventana (otro título), la
+        # cuenta sigue y para; la reunión siguiente no acaba en la misma grabación
+        for hueco in (6, 20, 29):
+            self.setUp()
+            self.llamada(30)
+            acciones = [self.tic("libre", dt=1.0) for _ in range(hueco)]
+            self.assertIn("propone", acciones, hueco)
+            acciones = [self.tic("uso", ventana={"Seguimiento semanal"}, dt=1.0) for _ in range(40)]
+            self.assertEqual(acciones.count("para"), 1, (hueco, acciones))
+            self.assertNotIn("cancela", acciones)
+
+    def test_volver_a_entrar_en_la_misma_cancela(self):
+        self.llamada(30)
+        for _ in range(10):
+            self.tic("libre", dt=1.0)
+        self.assertEqual(self.tic("uso", ventana={"Comité", "Seguimiento semanal"}, dt=1.0), "cancela")
+        self.setUp()
+        self.llamada(30)
+        for _ in range(10):
+            self.tic("libre", dt=1.0)
+        self.assertEqual(self.tic("uso", ventana=set(), dt=1.0), "cancela")  # micro sin ventana: no se sabe
+        self.setUp()
+        self.llamada(30)
+        for _ in range(10):
+            self.tic("libre", dt=1.0)
+        self.assertEqual(self.tic_ilegible("uso"), "cancela")
+
+    def test_la_ventana_de_la_siguiente_no_impide_proponer(self):
+        # al colgar se abre ya la ventana de la reunión siguiente (antes de entrar): las de esta llamada no están
+        self.llamada(30)
+        acciones = [self.tic("libre", ventana={"Seguimiento semanal"}, dt=1.0) for _ in range(8)]
+        self.assertIn("propone", acciones)
+
+    def test_sin_titulo_de_la_llamada_hace_falta_que_no_haya_ninguna_ventana(self):
+        # la llamada sin ventana propia reconocible (no se apuntó ningún título): cualquier ventana de reunión, duda
+        for _ in range(int(20 * 60 / 8)):
+            self.tic("uso", ventana=set())
+        acciones = [self.tic("libre", ventana={"Otra"}, dt=1.0) for _ in range(60)]
+        self.assertEqual(set(acciones), {None})
+        acciones = [self.tic("libre", ventana=set(), dt=1.0) for _ in range(8)]
+        self.assertIn("propone", acciones)
+
+    def test_llamada_que_empieza_tarde_en_una_presencial_no(self):
+        # revisión del 10/11: reunión presencial grabada; a los 5 min, una llamada de Teams de 10 min (cubre el 67 %
+        # hasta que termina): no es la de esta grabación
+        for _ in range(int(300 / 8)):
+            self.tic("libre")
+        self.llamada(10)
+        acciones = [self.tic("libre", dt=1.0) for _ in range(60)]
+        self.assertEqual(set(acciones), {None})
+
+    def test_llamada_en_los_dos_primeros_minutos_si(self):
+        # lo que no se puede distinguir de grabar una reunión de Teams: la cuenta atrás y el aviso de Windows lo dicen
+        for _ in range(int(90 / 8)):
+            self.tic("libre")
+        self.llamada(4)
+        acciones = [self.tic("libre", dt=1.0) for _ in range(8)]
+        self.assertIn("propone", acciones)
+
     def test_una_llamada_corta_en_una_reunion_presencial_no(self):
         # grabas una reunión presencial; a los 10 min entra una llamada de Teams de 3 min y cuelgas
         for _ in range(int(600 / 8)):
@@ -289,13 +361,19 @@ class FinTests(unittest.TestCase):
         acciones = [self.tic("libre", dt=1.0) for _ in range(60)]
         self.assertEqual(set(acciones), {None})
 
-    def test_empezar_a_grabar_antes_de_entrar_vale(self):
-        # 4 min antes de entrar y 40 de llamada: cubre el 90 %
-        for _ in range(int(240 / 8)):
+    def test_empezar_a_grabar_antes_de_entrar(self):
+        # 1,5 min antes de entrar y 40 de llamada: vale; 4 min antes, ya no es «la de esta grabación» (VINCULO_S)
+        for _ in range(int(90 / 8)):
             self.tic("libre")
         self.llamada(40)
         acciones = [self.tic("libre", dt=1.0) for _ in range(15)]
         self.assertIn("propone", acciones)
+        self.setUp()
+        for _ in range(int(240 / 8)):
+            self.tic("libre")
+        self.llamada(40)
+        acciones = [self.tic("libre", dt=1.0) for _ in range(15)]
+        self.assertEqual(set(acciones), {None})
 
     def test_seguir_grabando(self):
         self.llamada(20)
@@ -305,8 +383,10 @@ class FinTests(unittest.TestCase):
         acciones = [self.tic("libre", dt=1.0) for _ in range(120)]
         self.assertEqual(set(acciones), {None})  # ya no se propone en esta llamada
         self.assertFalse(self.f.seguir_grabando())  # sin aviso: nada que quitar
-        # otra llamada en la misma grabación que también termina: sí
-        self.llamada(30)
+        # otra llamada en la misma grabación (otra reunión, otro título) que también termina: sí
+        acciones = [self.tic("uso", ventana={"Seguimiento"}) for _ in range(int(30 * 60 / 8))]
+        self.assertEqual(set(acciones), {None})
+        self.assertEqual(self.f.titulos, {"Seguimiento"})
         acciones = [self.tic("libre", dt=1.0) for _ in range(15)]
         self.assertIn("propone", acciones)
 
@@ -656,6 +736,14 @@ class LivePropuestaTests(unittest.TestCase):
         self.assertEqual(r.vistos[:1], [{"idioma": "pt", "cambiar_a": "pt", "desde": "es"}], r.logs)
         self.assertTrue(any("idioma pt desde ya; se rehacen en él los últimos" in x for x in r.logs), r.logs)
 
+    def test_en_la_nube_con_una_mezcla_el_idioma_es_el_detectado(self):
+        # revisión del 10/11: con «es-pt» fijado, lang tiene que seguir siendo el detectado (es), no «es-pt», o el
+        # filtro de ecos de clean_segments deja pasar las alucinaciones en otro alfabeto
+        r = self.session(LARGO[:20], 85.0, preset="nube", language="es-pt", cloud_oye="spanish")
+        self.assertEqual(r.lang, "es")
+        self.assertEqual(r.job.directo["lang"], "es")
+        self.assertIsNone(r.job.directo["propuesta"])
+
     def test_en_la_nube_con_el_idioma_que_se_pidio_nada(self):
         r = self.session(LARGO, 165.0, preset="nube", cloud_oye="spanish")
         self.assertIsNone(r.job.directo["propuesta"])
@@ -689,6 +777,7 @@ class ServidorTests(unittest.TestCase):
         self.app.fin_llamada, self.app.parada_auto = da.FinDeLlamada(), None
         self.app.toggle_lock, self.app.rec_lock = server.threading.Lock(), server.threading.Lock()
         self.app.monitor, self.app.meeting = None, None
+        self.app.vigia = types.SimpleNamespace(avisado=None)
         self.app.jobs = types.SimpleNamespace(claimed=set())
         self.app.library = types.SimpleNamespace(at=1)
         self.app._movs = lambda: {}
@@ -699,7 +788,7 @@ class ServidorTests(unittest.TestCase):
         self.notas, self.logs = [], []
         self.reloj = [1000.0]
         self.mic = ["uso"]
-        self.ventana = [False]
+        self.ventana = [set()]
         self.patches = contextlib.ExitStack()
         self.addCleanup(self.patches.close)
         for target, attr, val in ((server, "notify", lambda t, b: self.notas.append((t, b))),
@@ -712,6 +801,7 @@ class ServidorTests(unittest.TestCase):
     def tic(self, mic, dt=8.0):
         self.reloj[0] += dt
         self.mic[0] = mic
+        self.ventana[0] = {"Comité"} if mic == "uso" else set()
         self.app._fin_llamada_tic()
 
     def test_estado_lleva_los_avisos(self):
@@ -730,9 +820,16 @@ class ServidorTests(unittest.TestCase):
         self.assertEqual(self.app.rec_status({})["fin_llamada"]["app"], "Teams")
         self.assertTrue(any("La llamada ha terminado" == t for t, _ in self.notas), self.notas)
         rec = self.app.rec
+        self.app.vigia.avisado = "Teams"
+        visto = []
+        stop = rec.stop
+        rec.stop = lambda timeout=10: (visto.append(self.app.parada_auto), stop(timeout))[1]
         for _ in range(31):
             self.tic("libre", dt=1.0)
         self.assertEqual(rec.stopped, 1)  # rec_stop de siempre: la grabadora se para y se guarda
+        # el porqué ya estaba puesto al parar (el sondeo que ve «ya no se graba» lo ve también)
+        self.assertEqual(visto[0]["motivo"], "llamada")
+        self.assertIsNone(self.app.vigia.avisado)  # la reunión siguiente puede volver a ofrecer «● Grabar»
         self.assertIsNone(self.app.rec)
         s = self.app.rec_status({})
         self.assertFalse(s["recording"])
@@ -770,15 +867,32 @@ class ServidorTests(unittest.TestCase):
             self.tic("libre", dt=1.0)
         self.assertEqual(self.app.rec.stopped, 0)
 
+    def test_nunca_para_otra_grabacion(self):
+        # «Parar» a mano y otra grabación nueva justo entre la decisión de parar y la parada: la nueva no se toca
+        nueva = FakeRec(os.path.join(self.tree, "nueva.wav"))
+
+        def tic(grabacion, now, mic, ventana_fn=None):
+            self.app.rec = nueva
+            return "para"
+        self.app.fin_llamada.tic = tic
+        self.tic("libre", dt=1.0)
+        self.assertIs(self.app.rec, nueva)
+        self.assertEqual(nueva.stopped, 0)
+        self.assertIsNone(self.app.parada_auto)
+
     def test_teams_estado_de_prueba(self):
         self.patches.close()
         tmp = os.path.join(self.tree, "teams.json")
         with mock.patch.dict(os.environ, {"CHULETA_PRUEBAS_TEAMS": tmp}):
             self.assertEqual(server.teams_estado()[0], "duda")  # sin fichero: duda, nunca para
             with open(tmp, "w", encoding="utf-8") as f:
-                f.write('{"mic": "libre", "ventana": false}')
+                f.write('{"mic": "libre", "ventanas": ["Comité"]}')
             mic, v = server.teams_estado()
-            self.assertEqual((mic, v()), ("libre", False))
+            self.assertEqual((mic, v()), ("libre", {"Comité"}))
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write('{"mic": "uso"}')  # sin «ventanas»: no se pueden leer
+            mic, v = server.teams_estado()
+            self.assertEqual((mic, v()), ("uso", None))
 
 
 class PropuestaApiTests(unittest.TestCase):

@@ -10,7 +10,8 @@ los 6 s: FAKESC_MIC_MUDO), el directo en un Groq falso en 127.0.0.1 y la interfa
    aviso se va; en otra grabación, «No» lo quita y no vuelve;
 3. la llamada de Teams termina (CHULETA_PRUEBAS_TEAMS: el registro y la ventana de Teams, de mentira): «La llamada
    ha terminado: paro en N s · No terminar»; «No terminar» la deja seguir; otra llamada que termina, sin
-   tocar nada, para la grabación como «Parar» (el WAV queda cerrado y el directo termina) y lo dice.
+   tocar nada y con la reunión siguiente ya empezada en la cuenta atrás, para la grabación como «Parar» (el WAV queda
+   cerrado y el directo termina) y lo dice.
 
 Pesado (~1,5 min): solo con CHULETA_E2E_CARPETAS=1, que pone ui-smoke.yml (Ubuntu y Windows). Deja capturas y
 server.log en NOTAS_ARTEFACTOS si existe."""
@@ -106,7 +107,7 @@ class AvisosDirectoE2E(unittest.TestCase):
         os.makedirs(os.path.join(cls.root, "Alfa"))
         cls.groq = GroqOye()
         cls.teams = os.path.join(cls.tmp, "teams.json")
-        cls.poner_teams("libre", False)
+        cls.poner_teams("libre")
         cls.datos = os.path.join(cls.tmp, "datos")
         cls.port = puerto_libre()
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONPATH=FAKE, CHULETA_PRUEBAS_URL_GROQ=cls.groq.base,
@@ -177,10 +178,11 @@ class AvisosDirectoE2E(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     @classmethod
-    def poner_teams(cls, mic, ventana):
+    def poner_teams(cls, mic, ventanas=()):
+        """El micro de Teams y los títulos de sus ventanas de reunión, como los leería la app."""
         tmp = cls.teams + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"mic": mic, "ventana": ventana}, f)
+            json.dump({"mic": mic, "ventanas": list(ventanas)}, f)
         os.replace(tmp, cls.teams)
 
     def api(self, path, body=None):
@@ -270,10 +272,10 @@ class AvisosDirectoE2E(unittest.TestCase):
 
     def test_2_fin_de_la_llamada(self):
         pg = self.pg
-        self.poner_teams("uso", True)
+        self.poner_teams("uso", ["Comité"])
         rel = self.grabar("Avisos llamada")
         time.sleep(20)  # la llamada cubre la grabación (y el vigilante, cada 8 s, la ve al menos dos veces)
-        self.poner_teams("libre", False)
+        self.poner_teams("libre")
         t0 = time.time()
         self.esperar(lambda: "La llamada ha terminado: paro en" in self.franja(), 30, "aviso de fin de llamada")
         print(f"\n   «paro en N s» a los {time.time() - t0:.1f} s de colgar: {self.franja()!r}", flush=True)
@@ -283,12 +285,14 @@ class AvisosDirectoE2E(unittest.TestCase):
         self.esperar(lambda: "La llamada ha terminado" not in self.franja(), 5, "«No terminar» quita el aviso")
         time.sleep(12)  # más que los 8 s de la cuenta atrás: sigue grabando
         self.assertTrue(pg.evaluate("S.rec.recording"), "«No terminar» no ha seguido")
-        # otra llamada en la misma grabación; esta vez no se toca nada
-        self.poner_teams("uso", True)
+        # otra llamada en la misma grabación (otra reunión); al colgar no se toca nada y la reunión SIGUIENTE empieza
+        # durante la cuenta atrás (msg 1479: «se me pasa a la siguiente»): no la cancela, para igual
+        self.poner_teams("uso", ["Seguimiento"])
         time.sleep(20)
-        self.poner_teams("libre", False)
+        self.poner_teams("libre")
         self.esperar(lambda: "La llamada ha terminado: paro en" in self.franja(), 30, "aviso de la segunda llamada")
         t1 = time.time()
+        self.poner_teams("uso", ["Reunión siguiente"])
         self.esperar(lambda: not pg.evaluate("!!(S.rec && S.rec.recording)"), 30, "para sola")
         print(f"   parada sola a los {time.time() - t1:.1f} s del aviso", flush=True)
         pg.wait_for_function("() => (window.__toasts || []).some(t => t.includes('grabación parada y guardada'))",
@@ -300,7 +304,7 @@ class AvisosDirectoE2E(unittest.TestCase):
             cab = f.read(44)
         self.assertNotEqual(cab[4:8], b"\xff\xff\xff\xff")  # el WAV quedó cerrado, como con «Parar»
         self.foto("2-parada")
-        self.poner_teams("libre", False)
+        self.poner_teams("libre")
         self.assertEqual(self.errores, [])
 
 

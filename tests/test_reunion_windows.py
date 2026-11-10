@@ -464,25 +464,29 @@ class FinDeLlamadaWindowsTests(unittest.TestCase):
         self.poner(self.ft(300), self.ft(1))
         self.assertEqual(rec.teams_mic_estado(), "libre")
 
-    def test_ventana_de_la_reunion_de_verdad(self):
+    def test_ventanas_de_la_reunion_de_verdad(self):
         exes = ("python.exe", "pythonw.exe")
-        self.assertIs(calendario.teams_reunion_abierta(exe_names=exes), False)
-        p = TeamsVentanaTests.ventana(self, "Comité de seguimiento | Microsoft Teams")
+        self.assertEqual(calendario.teams_reuniones(exe_names=exes), set())
+        titulo = "Comité de seguimiento | Microsoft Teams"
+        p = subprocess.Popen([sys.executable, "-c", TeamsVentanaTests.SCRIPT, titulo])
+        q = subprocess.Popen([sys.executable, "-c", TeamsVentanaTests.SCRIPT, "Chat | Ana | Microsoft Teams"])
         try:
             for _ in range(100):
-                if calendario.teams_reunion_abierta(exe_names=exes):
+                if calendario.teams_reuniones(exe_names=exes):
                     break
                 time.sleep(0.1)
-            self.assertIs(calendario.teams_reunion_abierta(exe_names=exes), True)
-            self.assertIs(calendario.teams_reunion_abierta(), False)  # con los exe de Teams de verdad, nada
+            # la reunión, con su título limpio; la ventana principal (Chat) no cuenta
+            self.assertEqual(calendario.teams_reuniones(exe_names=exes), {"Comité de seguimiento"})
+            self.assertEqual(calendario.teams_reuniones(), set())  # con los exe de Teams de verdad, nada
         finally:
-            p.terminate()
-            p.wait(10)
+            for x in (p, q):
+                x.terminate()
+                x.wait(10)
         for _ in range(50):
-            if calendario.teams_reunion_abierta(exe_names=exes) is False:
+            if calendario.teams_reuniones(exe_names=exes) == set():
                 break
             time.sleep(0.1)
-        self.assertIs(calendario.teams_reunion_abierta(exe_names=exes), False)
+        self.assertEqual(calendario.teams_reuniones(exe_names=exes), set())
 
 
 if __name__ == "__main__":

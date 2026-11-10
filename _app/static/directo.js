@@ -542,7 +542,7 @@ function directoAvisos(rec, d, mine) {
   const out = [], fin = mine && rec && rec.fin_llamada, c = (mine && rec && rec.callada) || {};
   if (fin && fin.quedan_s != null) {
     out.push({ id: 'fin', texto: 'La llamada ha terminado: paro en ', quedan: Math.max(0, Math.round(fin.quedan_s)),
-      botones: [{ act: 'rec-seguir', label: 'No terminar', title: 'La grabación sigue hasta que la pares tú (la llamada siguiente no la para)' }] });
+      botones: [{ act: 'rec-seguir', label: 'No terminar', title: 'Sigue grabando. Si después termina otra llamada, lo vuelve a proponer' }] });
   }
   if (c.mic != null) {
     out.push({ id: 'mic', texto: `El micro no recibe sonido desde hace ${directoMinTxt(c.mic)}`,
@@ -620,7 +620,8 @@ async function directoSeguir() {
   try {
     const r = await api('/api/rec/seguir', {});
     toast(r.grabando === false ? 'La grabación ya se había parado: está guardada y la transcripción termina sola'
-      : 'Se sigue grabando: no se para hasta que lo hagas tú');
+      : r.seguia ? 'Sigue grabando. Si después termina otra llamada, lo volverá a proponer'
+        : 'Sigue grabando: ya no había nada que parar');
     pollRec();
   } catch (err) { toast(esc(err.message), 'err'); }
 }

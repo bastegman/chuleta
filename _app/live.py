@@ -774,7 +774,9 @@ def run(job, path, opts, write, log):
                                                            about=about, timing=tm)
             # con un idioma fijo, el texto sale en ese idioma (se le pide a la API) aunque ella diga que suena a otro:
             # si lang tomara el que dice, «Cambiar» a ese idioma no rehario nada (switch_language: «ya estaba en él»)
-            lang = fixed_lang or engines.LANG_CODES.get(str(detected or "").lower(), lang)
+            # (con una mezcla, el detectado: el filtro de ecos de clean_segments necesita un idioma, no «es-pt»)
+            solo = fixed_lang if fixed_lang and not engines.lang_pair(fixed_lang) else None
+            lang = solo or engines.LANG_CODES.get(str(detected or "").lower(), lang)
             if detected and oir():  # lo que dice la API (sin coste: viene en la respuesta); sin probabilidad
                 st["oido"] = [(engines.LANG_CODES.get(str(detected).lower()), None, voice)]
             out = [(a + offset, b + offset, t) for a, b, t in out]
