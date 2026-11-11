@@ -3178,11 +3178,14 @@ def keepalive_s(st):
 
 def preload_model(st, cached=None):
     """(worker, modelo) que conviene dejar cargado al arrancar: el del directo si es local y ya esta descargado; si
-    no, el de la cola. None si worker_preload esta apagado o no hay modelo en cache (descargar no es precargar)."""
+    no, el de la cola. None si worker_preload esta apagado o no hay modelo en cache (descargar no es precargar).
+    Con «API externa» solo el del directo, si es en el PC: la cola en el PC carga su modelo al llegarle un trabajo
+    (2-6 s en uno de minutos) y, mientras tanto, no ocupa memoria que no hace falta (medium ~1 GB; fix-lento)."""
     if not st.get("worker_preload", True):
         return None
     cached = cached or engines.model_cached
-    for which, key in (("live", "live_preset"), ("batch", "preset")):
+    cuales = (("live", "live_preset"),) if procesado_de(st) == "api" else (("live", "live_preset"), ("batch", "preset"))
+    for which, key in cuales:
         p = engines.PRESETS_BY_ID.get(st.get(key) or "")
         if p and p["engine"] == "local" and cached(p["model"]):
             return which, p["model"]
@@ -3405,8 +3408,11 @@ class Jobs:
         if preset == "nube":
             try:
                 engines.CloudEngine.endpoint(st["cloud"])
-            except engines.EngineError:
+            except engines.EngineError as e:
                 preset = "medium"  # sin API key: en local
+                # y se dice: hasta fix-lento caia en silencio a Whisper en el PC (medium, ~1 GB y la CPU ocupada
+                # durante toda la reunion) y se veia como «la nube va lenta» o «cargando» (fix-groq, 10/11/2026)
+                log(f"   directo: la nube no está lista ({e}); se transcribe en este PC con {preset}")
         abs_path = safe(rel, "file")
         if self.active_for(rel):
             raise ApiError("Ese audio ya se está transcribiendo.")
@@ -4100,7 +4106,9 @@ class Jobs:
         return job.id
 
     def _voices_subprocess(self, job, args, idle_timeout=1800):
-        """python voices.py … con prioridad baja; lee su progreso; cancelar = matar el proceso."""
+        """python voices.py … con prioridad baja; lee su progreso; cancelar = matar el proceso. Sin job (la huella de
+        «Recordar», con el usuario esperando a «Guardar»), por debajo de lo normal y no en reposo: en reposo, con el PC
+        ocupado (una llamada, otra identificacion de voces), Windows lo deja sin turno (fix-lento, 10/11/2026)."""
         log_path = os.path.join(DATA_DIR, "voces.log")
         try:  # rotacion sencilla: el stderr de onnxruntime no debe crecer sin tope
             if os.path.getsize(log_path) > 1_000_000:
@@ -4110,7 +4118,8 @@ class Jobs:
         err = open(log_path, "ab")
         p = subprocess.Popen([sys.executable, "-u", os.path.join(APP_DIR, "voices.py"), *args, "--data", DATA_DIR,
                               "--threads", str(voices.hilos())], stdout=subprocess.PIPE, stderr=err, cwd=APP_DIR,
-                             creationflags=engines.NO_WINDOW | (voices.IDLE_PRIORITY or engines.BELOW_NORMAL))
+                             creationflags=engines.NO_WINDOW | ((voices.IDLE_PRIORITY or engines.BELOW_NORMAL)
+                                                                if job is not None else engines.BELOW_NORMAL))
         err.close()
         q = queue.Queue()
 
@@ -4564,6 +4573,7 @@ DIAG_LINES = (
     "✦ aprendido: {t} en {t} ({n} regla⟦s⟧)",
     "✦ regla olvidada: {t}",
     "✦ diccionario: {t}",
+    "   directo: la nube no está lista ({e}); se transcribe en este PC con {m}",
     "📱 recibiendo del móvil en la wifi ({n}) durante {n} min",
     "📱 un móvil ha abierto el código",
     "📱 ya no se reciben audios del móvil",

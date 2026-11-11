@@ -11,7 +11,10 @@ portátil de Bernardo acabó en «bad allocation»).
 3. Ejecuta `voices.py --diarize` con cada app en un proceso nuevo que, al acabar, mide su propio pico: en Windows,
    PeakPagefileUsage (memoria comprometida, la que se acaba en un «bad allocation») y PeakWorkingSetSize; en macOS,
    ri_lifetime_max_phys_footprint y ru_maxrss.
-4. Escribe DIR/voces_memoria.json y sale con 1 si la de ahora no baja de la de antes o pasa de --tope MB.
+4. La huella de «Recordar» (`voices.py --fingerprint h1`, fix-lento, 10/11/2026) con la reunión en m4a, con cada app:
+   la de ahora solo lee los tramos de la huella y tiene que tardar menos que la de antes, con la misma huella
+   (coseno >= 0,99). La de antes decodificaba la reunión entera (40 s con 3 h en un Mac; minutos en un portátil).
+5. Escribe DIR/voces_memoria.json y sale con 1 si la de ahora no baja de la de antes o pasa de --tope MB.
 Necesita sherpa-onnx, numpy, PyAV y requests (lo que instala INSTALAR.bat para «Quién habla»).
 """
 import argparse
@@ -113,6 +116,37 @@ def sintetizar(dir_, minutos):
     return path
 
 
+def a_m4a(wav, destino):
+    """El WAV sintetizado, en m4a (AAC, como las notas de voz del móvil): decodificarlo entero cuesta de verdad."""
+    import av
+    with av.open(wav) as src, av.open(destino, "w", format="mp4") as dst:
+        s = dst.add_stream("aac", rate=16000)
+        s.layout = "mono"
+        for fr in src.decode(audio=0):
+            fr.pts = None
+            for pk in s.encode(fr):
+                dst.mux(pk)
+        for pk in s.encode(None):
+            dst.mux(pk)
+    return destino
+
+
+def huella(app, audio, datos, side, etiqueta):
+    """voices.py --fingerprint h1 (el subproceso de «Recordar» desde la etiqueta): segundos y la huella."""
+    t0 = time.time()
+    r = subprocess.run([sys.executable, os.path.join(app, "voices.py"), "--diarize", audio, "--out", side,
+                        "--fingerprint", "h1", "--data", datos, "--threads", "2"], capture_output=True, timeout=1800,
+                       cwd=app)
+    proto = [json.loads(line) for line in r.stdout.decode("utf-8", "replace").splitlines() if line.startswith("{")]
+    res = next((m for m in proto if m.get("type") == "result"), {})
+    out = {"segundos": round(time.time() - t0, 2), "vector": (res.get("huellas") or {}).get("h1"),
+           "error": next((m["error"] for m in proto if m.get("type") == "error"), None)}
+    if not out["vector"]:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[-3000:])
+    print(etiqueta, "huella", {k: v for k, v in out.items() if k != "vector"}, flush=True)
+    return out
+
+
 def medir(app, audio, datos, salida, etiqueta):
     res, side = os.path.join(salida, f"{etiqueta}.json"), os.path.join(salida, f"{etiqueta}.hablantes.json")
     t0 = time.time()
@@ -159,6 +193,17 @@ def medir_todo(a, trabajo):
     out = {"minutos": a.minutos, "ahora": medir(os.path.join(REPO, "_app"), audio, datos, a.salida, "ahora")}
     if a.antes:
         out["antes"] = medir(os.path.abspath(a.antes), audio, datos, a.salida, "antes")
+    m4a = a_m4a(audio, os.path.join(trabajo, "reunion.m4a"))
+    side = os.path.join(trabajo, "reunion.hablantes.json")  # junto al m4a: el sidecar de la diarizacion de ahora
+    shutil.copy(os.path.join(a.salida, "ahora.hablantes.json"), side)
+    out["huella_ahora"] = huella(os.path.join(REPO, "_app"), m4a, datos, side, "ahora")
+    if a.antes:
+        out["huella_antes"] = huella(os.path.abspath(a.antes), m4a, datos, side, "antes")
+        v1, v0 = out["huella_ahora"]["vector"], out["huella_antes"]["vector"]
+        if v1 and v0:
+            import numpy as np
+            v1, v0 = np.asarray(v1), np.asarray(v0)
+            out["huella_coseno"] = round(float(v1 @ v0 / np.linalg.norm(v1) / np.linalg.norm(v0)), 5)
     with open(os.path.join(a.salida, "voces_memoria.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
     mal = []
@@ -168,6 +213,16 @@ def medir_todo(a, trabajo):
         mal.append("la de ahora no gasta menos que la de antes")
     if a.tope and out["ahora"]["comprometida_mb"] > a.tope:
         mal.append(f"la de ahora pasa de {a.tope:.0f} MB")
+    h1, h0 = out["huella_ahora"], out.get("huella_antes")
+    if not h1["vector"]:
+        mal.append(f"la huella de ahora ha fallado: {h1['error']}")
+    elif h0 and h0["vector"]:
+        print("huella: ahora", h1["segundos"], "s, antes", h0["segundos"], "s, coseno", out["huella_coseno"],
+              flush=True)
+        if h1["segundos"] >= h0["segundos"]:
+            mal.append("la huella de ahora no tarda menos que la de antes")
+        if out["huella_coseno"] < 0.99:
+            mal.append(f"la huella de ahora no es la de antes (coseno {out['huella_coseno']})")
     for m in mal:
         print("ERROR:", m, flush=True)
     return 1 if mal else 0

@@ -10,6 +10,8 @@ name: ui-smoke
 # test_sin_groq: una instalación nueva no sugiere ni preselecciona Groq (msg 1386), y quien ya lo usa no nota nada.
 # test_fix_groq: unos ajustes con un proveedor que no existe (o el Azure sin endpoint que dejaba 0d5169b) vuelven a
 # Groq al arrancar, Ajustes lo enseña y «Guardar» lo deja así, con la clave cifrada como estaba (msgs 1468-1474).
+# test_fix_lento: la huella de «Recordar» decodifica solo sus tramos (también m4a y flac, con PyAV) y el cuadro del
+# hablante dice «Guardando…» al momento (msg 1479: «tarda minutos y no aparece nada»).
 # test_ui_movil: «Subir audio › Desde el móvil» (QR, msg 1390) con un iPhone emulado y un audio de WhatsApp.
 # test_subir_audio: «Subir audio» (msg 1296, 09/11/2026): los formatos del móvil y de WhatsApp leídos con PyAV (también
 # en Windows), cada uno subido y transcrito de punta a punta contra un Groq falso, y el botón, la tarjeta y soltar.
@@ -51,9 +53,9 @@ jobs:
           NOTAS_ARTEFACTOS: ${{ github.workspace }}/artefactos
         run: |
           mkdir -p "$NOTAS_ARTEFACTOS"
-          python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas test_subir_audio test_e2e_idioma test_ui_aprender test_sin_groq test_fix_groq test_ui_movil 2>&1 | tee salida.txt
+          python -m unittest -v test_ui_smoke test_ui_voces test_e2e_carpetas test_subir_audio test_e2e_idioma test_ui_aprender test_sin_groq test_fix_groq test_fix_lento test_ui_movil 2>&1 | tee salida.txt
           test ${PIPESTATUS[0]} -eq 0
-          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces, test_e2e_carpetas, test_subir_audio, test_e2e_idioma, test_ui_aprender, test_sin_groq, test_fix_groq o test_ui_movil se ha saltado"; exit 1; fi
+          if grep -q "skipped=" salida.txt; then echo "::error::test_ui_smoke, test_ui_voces, test_e2e_carpetas, test_subir_audio, test_e2e_idioma, test_ui_aprender, test_sin_groq, test_fix_groq, test_fix_lento o test_ui_movil se ha saltado"; exit 1; fi
           grep -q "^Ran [1-9][0-9]* tests\?" salida.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()

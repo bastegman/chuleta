@@ -110,7 +110,8 @@ function openSpeakerPop(h, anchor) {
       ${Object.keys(s.hablantes || {}).length > 1 ? `<select id="spJoin" class="sm" title="La app ha partido esta voz en dos hablantes: se juntan en uno"><option value="">Es el mismo que…</option>${spkJoinOptions(s.hablantes, h, spkLabel).map(o => `<option value="${esc(o.h)}">${esc(o.text)}</option>`).join('')}</select>` : ''}
       ${i.persona || i.usuario ? `<button class="btn sm" data-sa="notme">${i.usuario ? 'No soy yo' : 'No es esta persona'}</button>` : ''}
       ${other ? '<button class="btn sm ghost danger" data-sa="forget" title="Borra su nombre y sus huellas de este PC">Olvidar persona</button>' : ''}
-    </div>`;
+    </div>
+    <div class="sp-estado hidden" role="status" aria-live="polite"></div>`;
   document.body.append(pop);
   const r = anchor.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, innerWidth - 440)) + 'px';
@@ -120,7 +121,25 @@ function openSpeakerPop(h, anchor) {
   const refresh = async msg => { closeSpkPop(); S.spk = null; await loadSpeakers(a); if (msg) toast(msg); };
   const remember = () => $('#spRem', pop).checked;
   const consent = () => $('#spConsent', pop).checked;
-  const run = async fn => { try { await fn(); } catch (err) { toast(esc(err.message), 'err'); } };
+  /* «Guardando…» al momento (fix-lento, 10/11/2026, msg 1479: «tarda minutos y no aparece nada»): con «Recordar» la
+     huella de voz tarda unos segundos (más con el PC ocupado) y hasta que acababa no se veía nada. Mientras, nada del
+     cuadro se puede volver a pulsar; si falla, vuelve como estaba y sale el motivo */
+  const estado = $('.sp-estado', pop);
+  const ocupado = (btn, txt) => {
+    pop.dataset.busy = '1';
+    $$('button, select, input', pop).forEach(x => { x.dataset.was = x.disabled ? '1' : ''; x.disabled = true; });
+    if (btn) { btn.dataset.label = btn.innerHTML; btn.textContent = txt; }
+    estado.textContent = txt;
+    estado.classList.remove('hidden');
+  };
+  const libre = () => {
+    if (!pop.dataset.busy) return;
+    delete pop.dataset.busy;
+    $$('button, select, input', pop).forEach(x => { x.disabled = x.dataset.was === '1'; });
+    $$('[data-label]', pop).forEach(b => { b.innerHTML = b.dataset.label; delete b.dataset.label; });
+    estado.classList.add('hidden');
+  };
+  const run = async fn => { if (pop.dataset.busy) return; try { await fn(); } catch (err) { libre(); toast(esc(err.message), 'err'); } };
   const fixRow = $('#spFixRow', pop);
   $('#spName', pop).addEventListener('keydown', e => { if (e.key === 'Enter') $('[data-sa="name"]', pop).click(); });
   $('#spName', pop).addEventListener('input', e => { if (fixRow) fixRow.classList.toggle('hidden', !e.target.value.trim() || e.target.value.trim() === cur.nombre); });
@@ -128,6 +147,7 @@ function openSpeakerPop(h, anchor) {
     const target = $('#spMerge', pop).value;
     if (!target) return;
     const [url, body] = spkPickBody(a, h, i, target, s.creado);
+    ocupado(null, url.endsWith('fusionar') ? 'Fusionando…' : 'Guardando…');
     // si falla (una reunión abierta en otro programa), se repinta igual: parte puede haber cambiado, y así se puede
     // volver a elegir la misma persona
     try { await api(url, body); } catch (err) { await refresh(); throw err; }
@@ -136,6 +156,7 @@ function openSpeakerPop(h, anchor) {
   const join = $('#spJoin', pop);
   if (join) join.onchange = () => run(async () => {
     if (!join.value) return;
+    ocupado(null, 'Guardando…');
     await api('/api/hablantes/unir', spkJoinBody(a, h, join.value, s.creado));
     await refresh('Hablantes unidos');
   });
@@ -149,16 +170,22 @@ function openSpeakerPop(h, anchor) {
         if (!nombre) return toast(i.usuario ? 'Escribe su nombre (o pulsa «Soy yo» si eres tú)' : 'Escribe un nombre');
         if (remember() && !consent()) return toast('Para guardar la huella marca la casilla de consentimiento', 'err');
         const corregir = !!(fixRow && !fixRow.classList.contains('hidden') && $('#spFix', pop).checked);
-        const r = await api('/api/voces/persona', spkNameBody(a, h, cur, nombre, { corregir, recordar: remember(), consentimiento: consent(), creado: s.creado }));
-        await refresh(remember() ? `🗣 ${esc(nombre)}: huella guardada (${r.huellas}). Se reconocerá en las próximas reuniones.` : corregir ? `🗣 Nombre corregido en todas sus reuniones: ${esc(nombre)}` : `🗣 ${esc(nombre)} en esta reunión. Marca «Recordar» si quieres reconocerle otras veces.`);
+        const rec = remember(), con = consent();
+        ocupado(b, rec ? 'Guardando la huella de voz…' : 'Guardando…');
+        const r = await api('/api/voces/persona', spkNameBody(a, h, cur, nombre, { corregir, recordar: rec, consentimiento: con, creado: s.creado }));
+        await refresh(rec ? `🗣 ${esc(nombre)}: huella guardada (${r.huellas}). Se reconocerá en las próximas reuniones.` : corregir ? `🗣 Nombre corregido en todas sus reuniones: ${esc(nombre)}` : `🗣 ${esc(nombre)} en esta reunión. Marca «Recordar» si quieres reconocerle otras veces.`);
       } else if (act === 'me') {
-        await api('/api/voces/persona', spkMeBody(a, h, s, remember()));
-        await refresh(remember() ? 'Marcado como «Tú» y huella guardada: también te reconocerá en reuniones presenciales' : 'Marcado como «Tú» en esta reunión');
+        const rec = remember();
+        ocupado(b, rec ? 'Guardando la huella de voz…' : 'Guardando…');
+        await api('/api/voces/persona', spkMeBody(a, h, s, rec));
+        await refresh(rec ? 'Marcado como «Tú» y huella guardada: también te reconocerá en reuniones presenciales' : 'Marcado como «Tú» en esta reunión');
       } else if (act === 'notme') {
+        ocupado(b, 'Guardando…');
         await api('/api/voces/reasignar', { path: a.path, h, persona: null, creado: s.creado });
         await refresh(i.usuario ? 'Ya no sale como «Tú»: vuelve a ser una persona sin nombre en esta reunión' : 'Desasignado: vuelve a ser una persona sin nombre en esta reunión');
       } else if (act === 'forget') {
         if (!confirm(`¿Olvidar a «${cur.nombre}»? Se borran su nombre y sus huellas de voz de este PC. Las reuniones pasadas lo mostrarán como «Persona N».`)) return;
+        ocupado(b, 'Olvidando…');
         await api('/api/voces/olvidar', { id: cur.id });
         await refresh('Persona olvidada');
       }
@@ -247,7 +274,11 @@ function bindVocesSettings(d) {
   d.addEventListener('change', async e => {
     const n = e.target.closest('[data-vzname]');
     if (!n) return;
+    // con destinos de salida reescribe los documentos de sus reuniones: si tarda, que se vea (fix-lento)
+    n.disabled = true;
+    const lento = setTimeout(() => toast('Guardando el nombre…'), 400);
     try { await api('/api/voces/persona', { id: n.dataset.vzname, nombre: n.value }); toast('Nombre guardado: las reuniones pasadas y futuras lo usan'); } catch (err) { toast(esc(err.message), 'err'); poll(); }
+    finally { clearTimeout(lento); n.disabled = false; }
   });
   d.addEventListener('click', async e => {
     const me = e.target.closest('[data-vzme]'), fg = e.target.closest('[data-vzforget]'), all = e.target.closest('#vzForgetAll'), rt = e.target.closest('#vzRetry');

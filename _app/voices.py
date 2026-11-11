@@ -298,19 +298,46 @@ def embed(ex, samples_f32, ventana_s=HUELLA_VENTANA_S):
     return _unit(acc)
 
 
-def fingerprint(ex, samples16, tramos, max_s=HUELLA_MAX_S):
-    """Huella de un hablante: sus tramos mas largos concatenados (hasta max_s) → embed. (vector|None, segundos)."""
-    tramos = sorted(tramos, key=lambda t: -(t[1] - t[0]))
-    parts, acc = [], 0.0
-    for a, b in tramos:
+def tramos_huella(tramos, max_s=HUELLA_MAX_S):
+    """Lo que entra en la huella de un hablante: sus tramos mas largos, en ese orden, hasta max_s de voz. [(a, b)]."""
+    out, acc = [], 0.0
+    for a, b in sorted(tramos, key=lambda t: -(t[1] - t[0])):
         if acc >= max_s:
             break
         take = min(b - a, max_s - acc)
-        parts.append(samples16[int(a * SR):int((a + take) * SR)])
+        out.append((a, a + take))
         acc += take
+    return out
+
+
+def fingerprint(ex, samples16, tramos, max_s=HUELLA_MAX_S):
+    """Huella de un hablante: sus tramos mas largos concatenados (hasta max_s) → embed. (vector|None, segundos)."""
+    parts = [samples16[int(a * SR):int(b * SR)] for a, b in tramos_huella(tramos, max_s)]
     if not parts:
         return None, 0.0
     return embed(ex, _f32(np.concatenate(parts))), sum(b - a for a, b in tramos)
+
+
+def audio_huella(path, tramos, max_s=HUELLA_MAX_S, en_disco=None):
+    """El audio de la huella de un hablante (tramos_huella, concatenado) sin decodificar la reunion entera: solo esos
+    tramos (engines.decode_rangos_16k). Si el formato no deja saltar (mp3, aac, amr…) o algo no cuadra, entera como
+    antes (load_audio_16k, con en_disco). Devuelve (int16, si ha sido por tramos)."""
+    elegidos = tramos_huella(tramos, max_s)
+    if not elegidos:
+        return np.zeros(0, np.int16), True
+    try:
+        import engines
+        partes = engines.decode_rangos_16k(path, elegidos)
+        return np.concatenate(partes), True
+    except ImportError:  # sin PyAV (desarrollo): entera, por el camino de siempre
+        pass
+    except Exception as e:  # SinSalto u otra cosa: entera
+        log(f"   huella: el audio se lee entero ({e.__class__.__name__}: {e})")
+    samples = load_audio_16k(path, en_disco=en_disco)
+    try:
+        return np.concatenate([np.asarray(samples[int(a * SR):int(b * SR)]) for a, b in elegidos]), False
+    finally:
+        del samples
 
 
 def cosine(a, b):
@@ -1209,19 +1236,23 @@ def main(argv=None):
     try:
         progress(stage="Leyendo audio…", frac=0.01)
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
-        samples = load_audio_16k(a.diarize, en_disco=tmp)
         if a.fingerprint:
+            # «Recordar» desde la etiqueta, con el usuario esperando: solo los tramos de su huella, no la reunion
+            # entera (fix-lento, 10/11/2026: en una de 3 h en m4a eran ~40 s en un Mac rapido y minutos en un portatil)
             data = read_sidecar(a.out) or {}
             tramos = [(float(t["inicio"]), float(t["fin"])) for t in data.get("tramos", [])
                       if t.get("h") == a.fingerprint]
             if not tramos:
                 raise VoicesError(f"El sidecar no tiene tramos de {a.fingerprint}")
+            voz, _ = audio_huella(a.diarize, tramos, en_disco=tmp)
             so = _sherpa()
-            vec, secs = fingerprint(_extractor(so, model_paths(a.data), a.threads), samples, tramos)
+            vec = embed(_extractor(so, model_paths(a.data), a.threads), _f32(voz)) if len(voz) else None
             if vec is None:
                 raise VoicesError("Voz insuficiente para una huella")
-            send({"type": "result", "huellas": {a.fingerprint: [round(float(x), 5) for x in vec]}, "segundos": secs})
+            send({"type": "result", "huellas": {a.fingerprint: [round(float(x), 5) for x in vec]},
+                  "segundos": sum(b - a_ for a_, b in tramos)})
             return 0
+        samples = load_audio_16k(a.diarize, en_disco=tmp)
         res = diarize(samples, a.data, a.threads, progress, participantes=a.participantes or None)
         micro = None
         if a.niveles:
