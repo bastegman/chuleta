@@ -1,6 +1,6 @@
 """soundcard falso para tests/test_grabadora_eco.py (no es un test): una reunion por dos salidas (spk2 = spk1 con
 80 ms: «espejo») y el micro con la voz del usuario mas el eco de los altavoces (0,1 a 30 ms). FAKESC_GAP="a-b": spk1
-pierde lo de esa ventana (un corte)."""
+pierde lo de esa ventana (un corte). FAKESC_MIC_MUDO="s": el micro calla desde ese segundo."""
 import os
 import time
 
@@ -62,7 +62,9 @@ class _Dev:
         return _Rec(self, channels)
 
 
-_MIC = _Dev("mic1", "Micro", lambda w: _at(MINE, w) + 0.1 * _at(MEET, w - 0.03))
+# FAKESC_MIC_MUDO="s": desde ese segundo el micro da ceros (silenciado con la tecla, sin permiso: tests/test_e2e_avisos)
+_MUDO = float(os.environ.get("FAKESC_MIC_MUDO") or 0) or None
+_MIC = _Dev("mic1", "Micro", lambda w: (_at(MINE, w) + 0.1 * _at(MEET, w - 0.03)) * (1 if _MUDO is None else w < _MUDO))
 _S1 = _Dev("spk1", "Altavoces", lambda w: _at(MEET, w), _gaps())
 _S2 = _Dev("spk2", "Espejo del driver", lambda w: _at(MEET, w - 0.08))
 

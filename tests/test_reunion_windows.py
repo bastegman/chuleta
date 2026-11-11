@@ -394,5 +394,100 @@ class OutlookRealTests(unittest.TestCase):
         self.assertNotIn(":09", s)
 
 
+@unittest.skipUnless(WIN, "solo Windows")
+class FinDeLlamadaWindowsTests(unittest.TestCase):
+    """B6, punto 2, contra el Windows de verdad: el registro de privacidad del micro (una entrada NonPackaged como la
+    que deja el Teams clásico, escrita en HKCU) con un proceso «ms-teams.exe» de verdad (ping.exe copiado con ese
+    nombre), y la ventana de la reunión (tkinter con el título de Teams). Lo que no se puede aquí: el Teams real."""
+    BASE = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged"
+
+    def setUp(self):
+        import shutil
+        import winreg
+        self.winreg = winreg
+        self.dir = tempfile.mkdtemp(prefix="tenca-teams-")
+        self.exe = os.path.join(self.dir, "ms-teams.exe")
+        shutil.copy(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "PING.EXE"), self.exe)
+        self.nombre = self.exe.replace("\\", "#")
+        self.key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, self.BASE + "\\" + self.nombre)
+        self.proc = None
+        import recording
+        self.recording = recording
+        recording._IMAGES.update(at=-1e9, set=None)
+
+    def tearDown(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait(10)
+        self.key.Close()
+        try:
+            self.winreg.DeleteKey(self.winreg.HKEY_CURRENT_USER, self.BASE + "\\" + self.nombre)
+        except OSError:
+            pass
+        self.recording._IMAGES.update(at=-1e9, set=None)
+
+    def poner(self, start, stop):
+        self.winreg.SetValueEx(self.key, "LastUsedTimeStart", 0, self.winreg.REG_QWORD, start)
+        self.winreg.SetValueEx(self.key, "LastUsedTimeStop", 0, self.winreg.REG_QWORD, stop)
+        self.recording._IMAGES.update(at=-1e9, set=None)
+
+    def ft(self, hace_s=0.0):
+        return int((time.time() - hace_s + 11644473600) * 10_000_000)
+
+    def test_registro_y_proceso_de_verdad(self):
+        rec = self.recording
+        self.proc = subprocess.Popen([self.exe, "-n", "120", "127.0.0.1"], stdout=subprocess.DEVNULL)
+        time.sleep(1.0)
+        self.poner(self.ft(300), 0)
+        self.assertEqual(rec.teams_mic_estado(), "uso")
+        self.assertEqual(rec.mic_meeting_app(), "Teams")  # lo mismo que ve el vigilante de llamadas
+        # coste de una lectura (lo que hace el vigilante cada 8 s, y cada segundo solo en los ~40 s del final)
+        rec._IMAGES.update(at=-1e9, set=None)
+        t0 = time.perf_counter()
+        rec.teams_mic_estado()
+        primera = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        for _ in range(20):
+            rec.teams_mic_estado()
+        cacheada = (time.perf_counter() - t0) / 20
+        print(f"\n   teams_mic_estado: {primera * 1000:.0f} ms con tasklist, {cacheada * 1000:.1f} ms con la caché",
+              flush=True)
+        with open(os.path.join(ART, "teams_mic_coste.json"), "w", encoding="utf-8") as f:
+            json.dump({"con_tasklist_ms": round(primera * 1000, 1), "con_cache_ms": round(cacheada * 1000, 2)}, f)
+        # se cierra Teams sin que Windows apunte el fin: la entrada sigue «en uso» sin proceso; sin Teams no hay
+        # llamada (msg 1479: «cuando se cierra el Teams o la reunión»)
+        self.proc.kill()
+        self.proc.wait(10)
+        rec._IMAGES.update(at=-1e9, set=None)
+        self.assertEqual(rec.teams_mic_estado(), "libre")
+        # cuelga bien: Windows apunta el fin
+        self.poner(self.ft(300), self.ft(1))
+        self.assertEqual(rec.teams_mic_estado(), "libre")
+
+    def test_ventanas_de_la_reunion_de_verdad(self):
+        exes = ("python.exe", "pythonw.exe")
+        self.assertEqual(calendario.teams_reuniones(exe_names=exes), set())
+        titulo = "Comité de seguimiento | Microsoft Teams"
+        p = subprocess.Popen([sys.executable, "-c", TeamsVentanaTests.SCRIPT, titulo])
+        q = subprocess.Popen([sys.executable, "-c", TeamsVentanaTests.SCRIPT, "Chat | Ana | Microsoft Teams"])
+        try:
+            for _ in range(100):
+                if calendario.teams_reuniones(exe_names=exes):
+                    break
+                time.sleep(0.1)
+            # la reunión, con su título limpio; la ventana principal (Chat) no cuenta
+            self.assertEqual(calendario.teams_reuniones(exe_names=exes), {"Comité de seguimiento"})
+            self.assertEqual(calendario.teams_reuniones(), set())  # con los exe de Teams de verdad, nada
+        finally:
+            for x in (p, q):
+                x.terminate()
+                x.wait(10)
+        for _ in range(50):
+            if calendario.teams_reuniones(exe_names=exes) == set():
+                break
+            time.sleep(0.1)
+        self.assertEqual(calendario.teams_reuniones(exe_names=exes), set())
+
+
 if __name__ == "__main__":
     unittest.main()

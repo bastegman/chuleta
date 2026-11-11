@@ -33,6 +33,31 @@ Bernardo (msg 1479): «cuando intento guardar los nombres de las voces […] tar
 - Desarrollo y CI: `test_fix_lento` (también en ui-smoke, en Ubuntu y Windows) y `voces-memoria` mide además la huella
   de «Recordar» con la reunión en m4a, contra la de `fe29522`: tiene que tardar menos y salir igual.
 
+### Avisos del directo (10/11/2026)
+
+Rediseño B6, puntos 1-3 (msgs 1378 y 1479). Rama `directo-avisos`. En la cabecera del directo, con lo que la app ya lee:
+
+- **Fuente callada**: «El micro no recibe sonido desde hace 1 min» si el micro da silencio digital (silenciado con la
+  tecla del portátil o en Windows, sin permiso, con el nivel a 0) más de un minuto. Escuchar callado no avisa: un
+  micro de verdad da el ruido de la sala. Un micro con puerta de ruido (ceros entre frases) se reconoce y no avisa.
+  «El ordenador no suena desde hace 1 min» solo en una llamada, después de haber oído algo y sin contar el rato en
+  que hablas tú (en una reunión presencial o en la sala de espera no avisa).
+- **«La llamada ha terminado: paro en 30 s · No terminar»** (msg 1479: «que me sugiera cortar automáticamente la
+  reunión cuando se cierra el teams o la reunión»): cuando Teams suelta el micro (el registro de privacidad apunta el
+  fin) o se cierra, y ninguna ventana de esa reunión sigue abierta, durante 5 s. Solo si esa llamada era la de la
+  grabación: empezó como mucho 2 min después de empezar a grabar, cubre el 60 % de lo grabado y dura 2 min o más (una
+  llamada a mitad de una reunión presencial no para nada). Sin pulsar nada, para como «Parar» y el aviso flotante puede
+  ofrecer grabar la reunión siguiente. Si en la cuenta atrás ya empieza la reunión siguiente (otra ventana), sigue
+  contando: no acaba en la misma grabación. Nunca para si vuelves a entrar en la misma reunión, si no se pueden leer
+  las ventanas o la lista de procesos, ni con «Avisarme si estoy en una llamada» apagado; tras «No terminar», hasta
+  que otra llamada termine.
+- **«Lo último suena a portugués · Cambiar»**: con un idioma fijo, cuando dos trozos seguidos (30 s de voz) suenan a
+  otro idioma de los que se pueden elegir. «Cambiar» es el cambio de idioma de siempre (rehace el último minuto); si ya
+  se habían oído 60 s del fijado y hay mezcla de los dos, propone la mezcla. «No» no lo vuelve a proponer en esa
+  grabación. En el PC, Whisper oye el idioma en lo que ya calculó para transcribir (10 s del primer bloque: 60 ms por
+  trozo con small y 195 ms con medium, medido); en la nube, el campo `language` de la respuesta, sin peticiones de más
+  (si la API devuelve el idioma que se le pidió, no se propone nada).
+
 ### Groq vuelve a transcribir con unos ajustes de antes (10/11/2026)
 
 - Con unos ajustes en los que el proveedor de la nube no es ninguno de los que hay (vacío o de una versión anterior),

@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 
+import directo_avisos
 import engines
 import live
 import voices
@@ -140,6 +141,8 @@ class RecorderProcess:
     def __init__(self, path, mic, sys_dev, app_dir, data_dir):
         self.path, self.started, self.status, self.ended = path, time.time(), {}, False
         self.levels = []  # (t, mic dB, sys dB) cada 0,25 s: cuando hablo yo (para etiquetar «Tu», sin biometria)
+        # fuente callada (aviso de la franja del directo): con cada estado; en_llamada lo pone el vigilante de llamadas
+        self.callada, self.en_llamada = directo_avisos.Callada(log=log), False
         args = [path] if path else ["--monitor"]
         err = open(os.path.join(data_dir, "recorder.log"), "ab")
         self.p = subprocess.Popen([sys.executable, "-u", os.path.join(app_dir, "recorder.py"), *args,
@@ -158,6 +161,11 @@ class RecorderProcess:
             except ValueError:
                 continue
             self.note_levels(self.status)
+            if self.path:
+                try:
+                    self.callada.feed(self.status, time.monotonic(), self.en_llamada)
+                except Exception:  # un aviso no puede parar la lectura del estado (ni la grabacion)
+                    pass
         self.ended = True
         if self.path and os.path.isfile(self.path):
             try:
@@ -251,16 +259,24 @@ def entry_exes(name):
     return next((exes for k, exes in PACKAGED_EXES.items() if k in low), ())
 
 
+_IMAGES = {"at": -1e9, "set": None}
+IMAGES_CACHE_S = 3.0  # el vigilante de llamadas y el del fin de la llamada leen en el mismo paso: un tasklist, no dos
+
+
 def running_images():
     """Nombres (en minusculas) de los procesos en marcha, segun tasklist; None si no se sabe (fuera de Windows)."""
     if not WINDOWS:
         return None
+    if time.monotonic() - _IMAGES["at"] < IMAGES_CACHE_S and _IMAGES["set"] is not None:
+        return _IMAGES["set"]
     try:
         r = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
                            creationflags=engines.NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
-    return {line.split('","')[0].strip('"').lower() for line in r.stdout.splitlines() if line.startswith('"')}
+    out = {line.split('","')[0].strip('"').lower() for line in r.stdout.splitlines() if line.startswith('"')}
+    _IMAGES.update(at=time.monotonic(), set=out)
+    return out
 
 
 def _mic_note(name, estado, texto):
@@ -334,3 +350,39 @@ def mic_meeting_app():
         return mic_scan(mic_entries())
     except Exception:
         return None
+
+
+def teams_mic(entries, now=None, images=None):
+    """El micro de Teams segun las entradas del registro (nombre, LastUsedTimeStart, LastUsedTimeStop), para saber si
+    la llamada que se graba ha terminado (directo_avisos.FinDeLlamada):
+      "uso"   alguna entrada de Teams lo tiene abierto (empezo hace menos de MIC_MAX_AGE_S y Teams esta en marcha);
+      "libre" ninguna lo tiene: lo soltaron (con su hora de fin), nunca lo usaron, o figura abierto pero Teams ya no
+              esta en marcha (se cerro Teams: «cuando se cierra el Teams o la reunion», msg 1479; Windows no siempre
+              apunta el fin si el proceso se va de golpe, y sin Teams no hay llamada en este PC);
+      "duda"  figura abierto y no se sabe que procesos hay (tasklist fallo).
+    Una entrada abierta de hace mas de MIC_MAX_AGE_S es rancia y no cuenta (como en mic_scan)."""
+    estado = "libre"
+    for name, start, stop in entries:
+        low = name.lower()
+        if not any(k in low for k in ("msteams", "teams.exe")) or not start or stop:
+            continue
+        if not mic_in_use(start, stop, now):
+            continue
+        if images is None:
+            images = running_images()
+        if images is None:
+            estado = "duda"
+            continue
+        if any(e in images for e in entry_exes(name)):
+            return "uso"
+    return estado
+
+
+def teams_mic_estado():
+    """teams_mic con el registro de este PC; "duda" si no se puede leer (o fuera de Windows: nunca se para nada)."""
+    if not WINDOWS:
+        return "duda"
+    try:
+        return teams_mic(mic_entries())
+    except Exception:
+        return "duda"

@@ -393,6 +393,7 @@ class TresModosE2E(unittest.TestCase):
         print(f"   directo local: {t!r}", flush=True)
         self.assertFalse([p for p in self.groq.peticiones], "en local no puede salir nada hacia Groq")
         self.idioma_en_pleno_directo_local()
+        self.idioma_propuesto_local()
 
     def idioma_en_pleno_directo_local(self):
         """Ítem 12 con el Whisper medium de verdad (msgs 1150-1151): con el directo en marcha y lo dicho ya escrito
@@ -422,6 +423,39 @@ class TresModosE2E(unittest.TestCase):
                   flush=True)  # !a: la consola de la CI de Windows es cp1252
             self.assertIn("rehecho en es lo último", hecho)
             self.assertNotEqual(despues, antes)
+        finally:
+            grab.cerrar()
+
+    def idioma_propuesto_local(self):
+        """B6, punto 3, con el Whisper medium de verdad: la reunión en «Solo español» y la voz en inglés. El worker oye
+        el idioma de cada trozo en la salida del encoder (worker._Escucha) y, con dos trozos seguidos y 30 s de voz,
+        el directo propone «Lo último suena a inglés» (directo.propuesta). Sin nube: nada sale hacia Groq."""
+        rel = "Pruebas/" + time.strftime("%Y-%m-%d %H-%M-%S") + " - Directo propuesta.wav"
+        grab = GrabacionEnCurso(os.path.join(self.root, rel), self.pcm * 6)
+        try:
+            self.abrir(rel)
+            fin, j = time.time() + 60, []
+            while time.time() < fin and not j:
+                j = [x for x in self.api("/api/jobs")["jobs"] if x["path"] == rel and x.get("live")]
+                time.sleep(0.5)
+            self.assertTrue(j, "el directo no ha arrancado solo")
+            self.api("/api/notes", {"path": rel, "props": {"idioma": "es"}})  # fijado antes del primer trozo
+            t0, prop, fin = time.time(), None, time.time() + 420
+            while time.time() < fin and not prop:
+                j = [x for x in self.api("/api/jobs")["jobs"] if x["path"] == rel and x.get("live")][-1]
+                prop = (j.get("directo") or {}).get("propuesta")
+                time.sleep(1)
+            with open(os.path.join(self.datos, "server.log"), encoding="utf-8", errors="replace") as f:
+                linea = next((x for x in f.read().splitlines() if "lo último suena a" in x), "")
+            print(f"   directo local en «Solo español» con voz en inglés: propuesta {prop} a los "
+                  f"{time.time() - t0:.0f} s | {linea.strip()!a}", flush=True)
+            self.assertEqual((prop or {}).get("idioma"), "en", j)
+            self.assertEqual(prop.get("desde"), "es")
+            if j["status"] == "running":  # con la grabación aún en marcha, también en la franja del directo
+                self.pg.wait_for_function("() => /Lo último suena a inglés/.test((document.querySelector("
+                                          "'[data-lh-avisos]') || {}).innerText || '')", timeout=15000)
+                self.foto("1-idioma-propuesto-local")
+            self.assertFalse([p for p in self.groq.peticiones], "en local no puede salir nada hacia Groq")
         finally:
             grab.cerrar()
 

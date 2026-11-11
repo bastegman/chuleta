@@ -317,6 +317,7 @@ function renderLiveHero(a) {
         : `<button class="btn primary" data-act="live" data-path="${esc(a.path)}">${I.spark}Transcribir en directo</button>`}
     </div>
     ${mine ? `<div class="lh-meters">${meterHtml('mic', I.mic + 'Micro')}${meterHtml('sys', I.volume + 'Ordenador')}</div>` : ''}
+    <div class="lh-avisos" data-lh-avisos></div>
     ${typeof destinoHtml === 'function' ? destinoHtml(a) : crumbs(a.folder)}
     <h1>${iconOf(a) ? iconOf(a) + ' ' : ''}${esc(pageTitle(a))}${!titleOf(a) && a.label ? `<span class="sub"> · ${esc(nfc(a.label))}</span>` : ''}</h1>
     <div class="lh-status" data-lh-status>${liveStatus(a, j)}</div>
@@ -338,6 +339,7 @@ function renderLiveHero(a) {
       <button class="btn sm" data-act="reveal" data-path="${esc(a.path)}">${I.ext}Mostrar en carpeta</button>
     </div></div>`;
   if (typeof renderDirectoBar === 'function') renderDirectoBar(a, j);
+  if (typeof renderDirectoAvisos === 'function') renderDirectoAvisos();
 }
 function updateLiveHero(a) {
   const el = $('#lHero');
@@ -396,6 +398,7 @@ async function pollRec() {
   if (S.config && S.config.meeting_detect === false) S.rec.meeting = null;  // «Avisarme si estoy en una llamada» apagado: sin chip
   if (was !== !!S.rec.recording) onRecChange();
   renderRecBtn(); updateMeters(); renderMeetChip();
+  if (typeof renderDirectoAvisos === 'function') renderDirectoAvisos();  // fuente callada y «paro en 30 s» (directo.js)
   recTimer = setTimeout(pollRec, S.rec.recording || recDialog ? 300 : 1500);
 }
 /* empezo o paro la grabacion (tambien con Ctrl+Alt+R desde otro programa) */
@@ -403,7 +406,7 @@ function onRecChange() {
   refreshTree(true); pollJobs(true);
   if (S.recLocal) { S.recLocal = false; return; }  // lo ha pedido esta misma pagina: ya avisa ella
   if (S.rec.recording) toast(`● Grabando${S.rec.resumen ? ` · ${esc(S.rec.resumen)}` : ''} · <b>Ctrl+Alt+R</b> para parar · clic para verla y cambiar el idioma o el contexto`, '', () => go('a', S.rec.path));
-  else toast('■ Grabación guardada · la transcripción termina sola');
+  else toast((typeof directoParadaTexto === 'function' && directoParadaTexto(S.rec)) || '■ Grabación guardada · la transcripción termina sola');
 }
 async function toggleRec() {
   try { S.recLocal = true; await api('/api/rec/toggle', {}); pollRec(); }

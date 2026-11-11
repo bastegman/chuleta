@@ -98,3 +98,62 @@ class DirectoHelpersTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AvisosFranjaTests(unittest.TestCase):
+    """B6, puntos 1-3: los avisos de la franja del directo (directo.js) y sus ganchos en app.js."""
+
+    def test_ganchos_en_app_js(self):
+        app = read("app.js")
+        self.assertEqual(app.count('<div class="lh-avisos" data-lh-avisos></div>'), 1)
+        # tras los medidores (cada 300 ms con la grabación) y al pintar la cabecera; protegidos con typeof
+        self.assertEqual(app.count("if (typeof renderDirectoAvisos === 'function') renderDirectoAvisos();"), 2)
+        self.assertIn("(typeof directoParadaTexto === 'function' && directoParadaTexto(S.rec))", app)
+        poll = app[app.index("async function pollRec()"):app.index("function onRecChange()")]
+        self.assertLess(poll.index("updateMeters()"), poll.index("renderDirectoAvisos()"))
+
+    def test_textos_y_rutas(self):
+        js = read("directo.js")
+        for s in ("La llamada ha terminado: paro en ", "No terminar", "El micro no recibe sonido desde hace ",
+                  "El ordenador no suena desde hace ", "Lo último suena a ", "/api/rec/seguir",
+                  "/api/live/propuesta", "No volver a proponerlo en esta grabación",
+                  "■ La llamada ha terminado: grabación parada y guardada"):
+            self.assertIn(s, js, s)
+        for fn in ("directoAvisos", "directoParadaTexto", "renderDirectoAvisos", "directoCambiarIdioma",
+                   "directoSeguir"):
+            self.assertRegex(js, re.compile(rf"^(async )?function {fn}\(", re.M), fn)
+        # «Cambiar» es el cambio de idioma de siempre: el selector de la cabecera (notas.js / app.js lo guardan)
+        self.assertIn("#lHero select[data-prop='idioma']", js)
+        self.assertIn("dispatchEvent(new Event('change', { bubbles: true }))", js)
+
+    @unittest.skipUnless(shutil.which("node"), "node no instalado")
+    def test_lo_que_se_ensena(self):
+        nombres = ["directoIdiomaNombre", "directoMinTxt", "directoAvisos", "directoParadaTexto"]
+        defs = js_defs(read("directo.js"), nombres)
+        defs = "const DIRECTO_IDIOMAS = { es: 'español', en: 'inglés', pt: 'portugués', fr: 'francés' };\n" + defs
+
+        def run(code):
+            r = subprocess.run(["node", "-e", defs + "\nconsole.log(JSON.stringify(" + code + "))"],
+                               capture_output=True, text=True, encoding="utf-8", timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            import json
+            return json.loads(r.stdout)
+        self.assertEqual(run("directoAvisos({}, null, true)"), [])
+        a = run("directoAvisos({fin_llamada: {quedan_s: 27.4}, callada: {mic: 75, sys: 190}}, null, true)")
+        self.assertEqual([x["id"] for x in a], ["fin", "mic", "sys"])
+        self.assertEqual((a[0]["texto"], a[0]["quedan"], a[0]["botones"][0]["label"]),
+                         ("La llamada ha terminado: paro en ", 27, "No terminar"))
+        self.assertEqual(a[1]["texto"], "El micro no recibe sonido desde hace 1 min")
+        self.assertEqual(a[2]["texto"], "El ordenador no suena desde hace 3 min")
+        # lo de la grabadora solo si esta app graba esta reunión (con OBS, solo el idioma)
+        self.assertEqual(run("directoAvisos({fin_llamada: {quedan_s: 5}, callada: {mic: 75}}, null, false)"), [])
+        p = run("directoAvisos({}, {propuesta: {idioma: 'pt', cambiar_a: 'pt'}}, false)")
+        self.assertEqual(p[0]["texto"], "Lo último suena a portugués")
+        self.assertEqual([(b["label"], b["valor"]) for b in p[0]["botones"]], [("Cambiar", "pt"), ("No", "pt")])
+        m = run("directoAvisos({}, {propuesta: {idioma: 'pt', cambiar_a: 'es-pt'}}, false)")
+        self.assertEqual(m[0]["botones"][0]["label"], "Cambiar a español + portugués")
+        self.assertEqual(m[0]["botones"][0]["valor"], "es-pt")
+        self.assertEqual(m[0]["botones"][1]["valor"], "pt")  # «No» rechaza el idioma oído, no la mezcla
+        self.assertEqual(run("directoParadaTexto({parada: {motivo: 'llamada'}})"),
+                         "■ La llamada ha terminado: grabación parada y guardada · la transcripción termina sola")
+        self.assertEqual(run("directoParadaTexto({recording: false})"), "")
