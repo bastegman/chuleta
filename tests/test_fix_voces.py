@@ -642,7 +642,8 @@ J(spkPickBody(a, 'h3', {persona: null}, 'pa', 'c1'));""")
     def test_textos(self):
         js = read("voces.js")
         for s in ("No soy yo", "Es la misma persona: solo corrijo el nombre", "spkNameBody(a, h, cur, nombre",
-                  "spkMeBody(a, h, s, remember())", "spkPickBody(a, h, i, target, s.creado)", "'Es…'",
+                  "const rec = remember();", "spkMeBody(a, h, s, rec)",
+                  "spkPickBody(a, h, i, target, s.creado)", "'Es…'",
                   "!(merge && p.es_usuario)", "persona: null, creado: s.creado", "x.usuario && !x.provisional"):
             self.assertIn(s, js, s)
         self.assertNotIn("cur && !i.provisional ? cur.id", js)  # la decision que renombraba al usuario

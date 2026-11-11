@@ -476,6 +476,115 @@ def decode_16k(path, start=0.0, cancelled=lambda: False, destino=None):
 NO_ES_AUDIO = "no parece un audio, o está dañado"
 
 
+# decode_rangos_16k (fix-lento, 10/11/2026): formatos en los que saltar a un segundo (av.seek) cae en un punto
+# conocido y cada fotograma trae su tiempo de verdad: PCM, contenedores con índice (MP4/MOV/M4A, Matroska/WebM),
+# FLAC (cada trama lleva su número de muestra) y Ogg (posición por muestra). Los flujos «crudos» (mp3, aac ADTS, amr)
+# saltan por bytes y el tiempo se estima por el bitrate: se podría tomar la voz de otro. Esos se decodifican enteros
+RANGOS_EXT = (".wav", ".m4a", ".mp4", ".mov", ".flac", ".webm", ".mkv", ".ogg", ".oga", ".opus")
+# los tiempos del archivo y las muestras de decode_16k tienen que acabar en el mismo segundo (con la duracion del
+# sidecar, redondeada a 0,1 s): si no, hay un hueco en los tiempos o algo dañado que el demuxer tira sin avisar, y lo
+# de despues saldria de otro momento (revision de fix-lento: un opus dañado a mitad daba la voz de otro). Un desfase
+# por debajo de esto no cambia una huella de 90 s
+RANGOS_TOLERANCIA_S = 0.15
+
+
+class SinSalto(Exception):
+    """decode_rangos_16k no puede leer ese audio por trozos (formato, tiempos o un paquete dañado): el que llama lo
+    decodifica entero, como siempre."""
+
+
+def decode_rangos_16k(path, rangos, duracion, cancelled=lambda: False):
+    """Solo esos tramos [(inicio, fin) en segundos] de un audio, a int16 16 kHz mono: una lista en el orden dado. Salta
+    a cada uno en vez de decodificar el archivo entero (la huella de una voz son <= 90 s; en una reunión de 3 h en m4a,
+    decodificarla entera eran ~40 s en un Mac rápido y minutos en un portátil, con el usuario esperando a «Guardar»).
+    Los segundos son los de decode_16k (desde la primera muestra que se decodifica), y duracion, lo que dura el audio
+    según decode_16k (la del sidecar): antes de nada se comprueba que los tiempos del archivo acaban ahí. SinSalto si
+    no se puede (ver RANGOS_EXT) o si algo no cuadra: la duración (un hueco en los tiempos, algo dañado que se tira sin
+    avisar), un salto que cae después del inicio, fotogramas sin tiempo, un paquete dañado o un tramo que sale corto
+    sin llegar al final del archivo."""
+    import av
+    import numpy as np
+    if os.path.splitext(path)[1].lower() not in RANGOS_EXT:
+        raise SinSalto("formato sin índice")
+    try:
+        duracion = float(duracion)
+    except (TypeError, ValueError):
+        raise SinSalto("sin la duración para comprobar los tiempos")
+    if not duracion > 0:
+        raise SinSalto("sin la duración para comprobar los tiempos")
+    out = [None] * len(rangos)
+    try:
+        with av.open(path) as c:
+            s = next((s for s in c.streams if s.type == "audio"), None)
+            if s is None or not s.time_base:
+                raise SinSalto("sin pista de audio")
+            origen = None  # tiempo del primer fotograma del archivo: el segundo 0 de decode_16k
+            for pk in c.demux(s):
+                fr = next(iter(s.decode(pk)), None)
+                if fr is not None:
+                    origen = fr.time
+                    break
+            if origen is None:
+                raise SinSalto("sin tiempos")
+            # el final por tiempos (desde unos segundos antes de lo que diga la cabecera o la duración, lo que sea más)
+            cab = float(c.duration) / 1e6 if c.duration else 0.0
+            c.seek(max(0, int((origen + max(duracion, cab) - 3.0) / s.time_base)), stream=s, backward=True,
+                   any_frame=False)
+            final = None
+            for pk in c.demux(s):
+                for fr in s.decode(pk):
+                    if fr.time is None or not fr.sample_rate:
+                        raise SinSalto("fotograma sin tiempo")
+                    final = fr.time + fr.samples / fr.sample_rate
+            if final is None or abs((final - origen) - duracion) > RANGOS_TOLERANCIA_S:
+                raise SinSalto("los tiempos del archivo no cuadran con su duración"
+                               + (f" ({final - origen:.2f} s frente a {duracion:.2f} s)" if final is not None else ""))
+            for i in sorted(range(len(rangos)), key=lambda k: rangos[k][0]):
+                a, b = float(rangos[i][0]), float(rangos[i][1])
+                if cancelled():
+                    raise Cancelled()
+                ini, fin = int(round(a * 16000)), int(round(b * 16000))
+                if fin <= ini:
+                    out[i] = np.zeros(0, np.int16)
+                    continue
+                # 1 s antes: un salto «hacia atrás» cae en el fotograma (o la página) anterior a ese punto
+                c.seek(max(0, int((origen + a - 1.0) / s.time_base)), stream=s, backward=True, any_frame=False)
+                rs = av.AudioResampler(format="s16", layout="mono", rate=16000)
+                partes, pos, n, eof = [], None, 0, True
+                for pk in c.demux(s):
+                    for fr in s.decode(pk):
+                        if fr.time is None:
+                            raise SinSalto("fotograma sin tiempo")
+                        if pos is None:
+                            pos = int(round((fr.time - origen) * 16000))
+                            if pos > ini + 160:  # 10 ms de margen: el salto ha caído después del inicio
+                                raise SinSalto("el salto cae tarde")
+                        for o in rs.resample(fr):
+                            x = o.to_ndarray().reshape(-1)
+                            partes.append(x.copy())
+                            n += len(x)
+                    if pos is not None and pos + n >= fin:
+                        eof = False
+                        break
+                if eof:  # el final del archivo: lo que quede en el resampler
+                    for o in rs.resample(None):
+                        x = o.to_ndarray().reshape(-1)
+                        partes.append(x.copy())
+                        n += len(x)
+                if pos is None:
+                    raise SinSalto("nada después del salto")
+                y = np.concatenate(partes) if partes else np.zeros(0, np.int16)
+                tramo = y[max(0, ini - pos):max(0, fin - pos)]
+                if len(tramo) < (fin - ini) - 160 and not eof:
+                    raise SinSalto("tramo corto")
+                out[i] = tramo
+    except (SinSalto, Cancelled):
+        raise
+    except Exception as e:  # un paquete dañado, un salto que FFmpeg no sabe hacer…: entero, como siempre
+        raise SinSalto(f"{e.__class__.__name__}: {e}")
+    return out
+
+
 def probar_audio(path, segundos=3.0):
     """Comprueba, al subirlo, que un archivo se podrá transcribir: tiene pista de audio y sus primeros segundos se
     decodifican con la misma cadena que la cola (PyAV). Devuelve la duración en segundos (None si la cabecera no la da)

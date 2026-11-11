@@ -10,6 +10,29 @@ nada de ningún proyecto concreto.
 empresa. Entre paréntesis va el número de cada hallazgo, el mismo que citan los commits; el informe de la auditoría no
 está en este repositorio. «Desarrollo y CI» es para quien mantiene el repositorio: no cambia nada en la app instalada.
 
+### Poner nombre a una voz ya no tarda minutos (11/11/2026)
+
+Bernardo (msg 1479): «cuando intento guardar los nombres de las voces […] tarda minutos y no aparece nada». Rama
+`fix-lento`.
+
+- **Arreglado**: «Guardar» con «Recordar» (y «Confirmar», que lo trae marcado) calculaba la huella de voz decodificando
+  la reunión entera, en un proceso en prioridad «en reposo» y sin enseñar nada mientras: 6 s con una reunión de 1 h y
+  40 s con una de 3 h en m4a en un Mac rápido; minutos en un portátil ocupado. Ahora lee solo los tramos de voz de la
+  huella (como mucho 90 s): unos 2 s sea cual sea la reunión, con la misma huella (coseno ≥ 0,9998). En mp3, aac
+  sueltos, amr y otros formatos sin índice, donde saltar a un segundo no es exacto, se sigue leyendo entera; también
+  si los tiempos del archivo no acaban donde su duración (un hueco en los tiempos o un trozo dañado que se pierde sin
+  avisar): ahí, por tramos, la huella habría salido de otro momento de la reunión, con la voz de otro.
+- Ese proceso va ahora por debajo de lo normal (el usuario está esperando); identificar las voces sigue en reposo.
+- **Arreglado**: el cuadro del hablante dice «Guardando…» (o «Guardando la huella de voz…») en cuanto se pulsa y no
+  deja volver a pulsar hasta que acaba; si falla, vuelve como estaba y dice por qué. En Ajustes › Voces, «Guardando el
+  nombre…» si tarda.
+- Con «API externa», la app ya no deja cargado al arrancar el Whisper de la cola en el PC (hasta 1 GB de memoria): se
+  carga cuando haga falta. El del directo, si es en el PC, sí.
+- Si el directo no puede ir por la nube (sin clave, proveedor sin configurar) y pasa a Whisper en el PC, lo dice el
+  registro (y «Copiar diagnóstico»). Hasta ahora pasaba sin decirlo.
+- Desarrollo y CI: `test_fix_lento` (también en ui-smoke, en Ubuntu y Windows) y `voces-memoria` mide además la huella
+  de «Recordar» con la reunión en m4a, contra la de `fe29522`: tiene que tardar menos y salir igual.
+
 ### Groq vuelve a transcribir con unos ajustes de antes (10/11/2026)
 
 - Con unos ajustes en los que el proveedor de la nube no es ninguno de los que hay (vacío o de una versión anterior),
