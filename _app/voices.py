@@ -318,16 +318,17 @@ def fingerprint(ex, samples16, tramos, max_s=HUELLA_MAX_S):
     return embed(ex, _f32(np.concatenate(parts))), sum(b - a for a, b in tramos)
 
 
-def audio_huella(path, tramos, max_s=HUELLA_MAX_S, en_disco=None):
+def audio_huella(path, tramos, duracion, max_s=HUELLA_MAX_S, en_disco=None):
     """El audio de la huella de un hablante (tramos_huella, concatenado) sin decodificar la reunion entera: solo esos
-    tramos (engines.decode_rangos_16k). Si el formato no deja saltar (mp3, aac, amr…) o algo no cuadra, entera como
-    antes (load_audio_16k, con en_disco). Devuelve (int16, si ha sido por tramos)."""
+    tramos (engines.decode_rangos_16k, que comprueba con `duracion`, la del sidecar, que los tiempos del archivo son
+    los de la diarizacion). Si el formato no deja saltar (mp3, aac, amr…) o algo no cuadra, entera como antes
+    (load_audio_16k, con en_disco). Devuelve (int16, si ha sido por tramos)."""
     elegidos = tramos_huella(tramos, max_s)
     if not elegidos:
         return np.zeros(0, np.int16), True
     try:
         import engines
-        partes = engines.decode_rangos_16k(path, elegidos)
+        partes = engines.decode_rangos_16k(path, elegidos, duracion)
         return np.concatenate(partes), True
     except ImportError:  # sin PyAV (desarrollo): entera, por el camino de siempre
         pass
@@ -1244,7 +1245,7 @@ def main(argv=None):
                       if t.get("h") == a.fingerprint]
             if not tramos:
                 raise VoicesError(f"El sidecar no tiene tramos de {a.fingerprint}")
-            voz, _ = audio_huella(a.diarize, tramos, en_disco=tmp)
+            voz, _ = audio_huella(a.diarize, tramos, data.get("duracion_s"), en_disco=tmp)
             so = _sherpa()
             vec = embed(_extractor(so, model_paths(a.data), a.threads), _f32(voz)) if len(voz) else None
             if vec is None:

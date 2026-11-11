@@ -63,21 +63,50 @@ def escribir_wav(path, segundos, rate=16000, canales=1):
         w.writeframes((y * 32767).astype("<i2").tobytes())
 
 
-def escribir_av(path, segundos, codec, rate=16000, fmt=None):
-    """Un audio comprimido con PyAV (flac, aac en m4a…)."""
+def escribir_av(path, segundos, codec, rate=16000, fmt=None, hueco=None):
+    """Un audio comprimido con PyAV (flac, aac en m4a…). hueco=(segundo, s): los tiempos saltan esos segundos ahí
+    (una grabación pausada o un remux con un corte), sin audio en medio."""
+    import fractions
     y = senal(segundos, rate)
     with av.open(path, "w", format=fmt) as c:
         s = c.add_stream(codec, rate=rate)
         s.layout = "mono"
-        paso = 1024
+        paso, pts = 1024, 0
         for i in range(0, len(y), paso):
             trozo = y[i:i + paso]
             fr = av.AudioFrame.from_ndarray(trozo[None, :], format="flt", layout="mono")
             fr.sample_rate = rate
+            if hueco and i >= hueco[0] * rate and pts < (hueco[0] + hueco[1]) * rate:
+                pts += int(hueco[1] * rate)
+            fr.pts, fr.time_base = pts, fractions.Fraction(1, rate)
+            pts += len(trozo)
             for pk in s.encode(fr):
                 c.mux(pk)
         for pk in s.encode(None):
             c.mux(pk)
+
+
+def danar(path, donde=0.4, n=8000):
+    """n bytes de basura en ese punto del archivo (un trozo dañado a mitad: el demuxer lo tira, a veces sin avisar)."""
+    with open(path, "rb") as f:
+        b = bytearray(f.read())
+    k = int(len(b) * donde)
+    b[k:k + n] = np.random.default_rng(5).integers(0, 256, n, dtype=np.uint8).tobytes()
+    with open(path, "wb") as f:
+        f.write(bytes(b))
+
+
+def duracion(path):
+    """La del sidecar: la de decode_16k, redondeada a 0,1 s (voices.diarize)."""
+    return round(len(engines.decode_16k(path)) / 16000, 1)
+
+
+def tiene_codificador(nombre):
+    try:
+        av.codec.Codec(nombre, "w")
+        return True
+    except Exception:
+        return False
 
 
 def desfase(ref, q, maximo=800):
@@ -88,6 +117,16 @@ def desfase(ref, q, maximo=800):
     cc = np.fft.irfft(np.fft.rfft(r_, m) * np.conj(np.fft.rfft(q_, m)), m)
     cc = np.concatenate([cc[-maximo:], cc[:maximo + 1]])
     return int(np.argmax(cc)) - maximo
+
+
+def parecido(a, b, lag):
+    """Correlación de dos trozos tras quitarles un desfase de `lag` muestras (en el sentido que sea)."""
+    mejor = -1.0
+    for k in (lag, -lag):
+        x, y = (a[k:], b) if k >= 0 else (a, b[-k:])
+        n = min(len(x), len(y))
+        mejor = max(mejor, float(np.corrcoef(x[:n].astype(float), y[:n].astype(float))[0, 1]))
+    return mejor
 
 
 RANGOS = [(40.3, 52.9), (3.0, 4.5), (119.0, 120.0), (77.77, 80.0), (0.0, 1.2)]  # desordenados, uno al final
@@ -103,7 +142,7 @@ class DecodeRangosTests(unittest.TestCase):
 
     def comparar(self, path, exacto=False):
         y = engines.decode_16k(path)
-        partes = engines.decode_rangos_16k(path, RANGOS)
+        partes = engines.decode_rangos_16k(path, RANGOS, round(len(y) / 16000, 1))
         self.assertEqual(len(partes), len(RANGOS))
         for (a, b), p in zip(RANGOS, partes):
             ref = y[int(round(a * 16000)):int(round(b * 16000))]
@@ -143,14 +182,45 @@ class DecodeRangosTests(unittest.TestCase):
             p = os.path.join(self.tmp, "r" + ext)
             escribir_wav(p, 3)  # el contenido da igual: no se llega a abrir
             with self.subTest(ext=ext), self.assertRaises(engines.SinSalto):
-                engines.decode_rangos_16k(p, [(0.5, 1.0)])
+                engines.decode_rangos_16k(p, [(0.5, 1.0)], 3.0)
 
     def test_un_archivo_que_no_se_lee_no_revienta(self):
         p = os.path.join(self.tmp, "roto.m4a")
         with open(p, "wb") as f:
             f.write(b"\0" * 5000)
         with self.assertRaises(engines.SinSalto):
-            engines.decode_rangos_16k(p, [(0.5, 1.0)])
+            engines.decode_rangos_16k(p, [(0.5, 1.0)], 3.0)
+
+    def test_sin_duracion_no_se_salta(self):
+        """Un sidecar sin duracion_s (o rara): sin con qué comprobar los tiempos, entera."""
+        p = os.path.join(self.tmp, "r.wav")
+        escribir_wav(p, 5)
+        for d in (None, 0, "x", -1):
+            with self.subTest(d=d), self.assertRaises(engines.SinSalto):
+                engines.decode_rangos_16k(p, [(0.5, 1.0)], d)
+
+    def test_hueco_en_los_tiempos(self):
+        """Revisión de fix-lento (P0): con un hueco de 7 s en los tiempos (m4a, opus), decode_16k no lo rellena y lo de
+        después no está donde dicen sus tiempos: por tramos, la huella salía de otro momento de la reunión."""
+        casos = [("aac", "mp4", ".m4a", 44100)] + ([("libopus", "ogg", ".opus", 48000)]
+                                                   if tiene_codificador("libopus") else [])
+        for codec, fmt, ext, rate in casos:
+            p = os.path.join(self.tmp, "hueco" + ext)
+            escribir_av(p, 120, codec, rate=rate, fmt=fmt, hueco=(60.0, 7.0))
+            with self.subTest(ext=ext), self.assertRaises(engines.SinSalto) as cm:
+                engines.decode_rangos_16k(p, [(80.0, 82.0)], duracion(p))
+            self.assertIn("no cuadran", str(cm.exception))
+
+    def test_danado_a_mitad(self):
+        """Un trozo dañado que el demuxer tira sin avisar (flac, opus): lo de después sale antes de tiempo."""
+        casos = [("flac", "flac", ".flac", 16000)] + ([("libopus", "ogg", ".opus", 48000)]
+                                                      if tiene_codificador("libopus") else [])
+        for codec, fmt, ext, rate in casos:
+            p = os.path.join(self.tmp, "roto" + ext)
+            escribir_av(p, 120, codec, rate=rate, fmt=fmt)
+            danar(p)
+            with self.subTest(ext=ext), self.assertRaises(engines.SinSalto):
+                engines.decode_rangos_16k(p, [(80.0, 82.0)], duracion(p))
 
 
 @unittest.skipUnless(np is not None and av is not None, "numpy y PyAV")
@@ -174,7 +244,7 @@ class AudioHuellaTests(unittest.TestCase):
         y = engines.decode_16k(p)
         esperado = np.concatenate([y[int(a * 16000):int(b * 16000)] for a, b in voices.tramos_huella(self.TRAMOS)])
         with mock.patch.object(voices, "load_audio_16k", side_effect=AssertionError("ha decodificado la reunión")):
-            voz, por_tramos = voices.audio_huella(p, self.TRAMOS)
+            voz, por_tramos = voices.audio_huella(p, self.TRAMOS, duracion(p))
         self.assertTrue(por_tramos)
         self.assertLessEqual(abs(len(voz) - len(esperado)), 2)
         n = min(len(voz), len(esperado))
@@ -191,7 +261,7 @@ class AudioHuellaTests(unittest.TestCase):
             llamado.append(path)
             return real(path, cancelled, en_disco)
         with mock.patch.object(voices, "load_audio_16k", side_effect=entera), mock.patch.object(voices, "log"):
-            voz, por_tramos = voices.audio_huella(p, self.TRAMOS)
+            voz, por_tramos = voices.audio_huella(p, self.TRAMOS, duracion(p))
         self.assertFalse(por_tramos)
         self.assertEqual(llamado, [p])
         esperado = np.concatenate([y[int(a * 16000):int(b * 16000)] for a, b in voices.tramos_huella(self.TRAMOS)])
@@ -205,8 +275,39 @@ class AudioHuellaTests(unittest.TestCase):
         hasta = main[main.index('progress(stage="Leyendo audio…"'):]
         rama = hasta[hasta.index("        if a.fingerprint:"):]
         rama = rama[:rama.index("            return 0")]
-        self.assertIn("audio_huella(a.diarize, tramos, en_disco=tmp)", rama)
+        self.assertIn('audio_huella(a.diarize, tramos, data.get("duracion_s"), en_disco=tmp)', rama)
         self.assertNotIn("load_audio_16k", hasta[:hasta.index("        if a.fingerprint:")] + rama)
+
+    def test_la_huella_sale_siempre_de_sus_segundos(self):
+        """Lo que importa (es un dato biométrico de una persona concreta): por tramos o entera, la voz de la huella es
+        la de esos segundos de decode_16k, la línea de tiempo con la que se diarizó. Con archivos limpios, con un hueco
+        en los tiempos y dañados a mitad (m4a dañado: se lee por tramos y sigue en su sitio)."""
+        casos = [("limpio.m4a", "aac", "mp4", 44100, None, False),
+                 ("hueco.m4a", "aac", "mp4", 44100, (55.0, 7.0), False),
+                 ("roto.flac", "flac", "flac", 16000, None, True), ("roto.m4a", "aac", "mp4", 44100, None, True)]
+        if tiene_codificador("libopus"):
+            casos += [("hueco.opus", "libopus", "ogg", 48000, (55.0, 7.0), False),
+                      ("roto.opus", "libopus", "ogg", 48000, None, True)]
+        for nombre, codec, fmt, rate, hueco, roto in casos:
+            p = os.path.join(self.tmp, nombre)
+            escribir_av(p, 120, codec, rate=rate, fmt=fmt, hueco=hueco)
+            if roto:
+                danar(p)
+            y = engines.decode_16k(p)
+            esperado = np.concatenate([y[int(a * 16000):int(b * 16000)] for a, b in voices.tramos_huella(self.TRAMOS)])
+            with mock.patch.object(voices, "log"):
+                voz, por_tramos = voices.audio_huella(p, self.TRAMOS, round(len(y) / 16000, 1))
+            # tramo a tramo: como mucho 2 ms de desfase (tras un trozo dañado, decode_16k rellena con el silencio que
+            # dicen sus paquetes y puede quedar ~1 ms: nada para una huella; la duración los separa de un desfase real)
+            k = 0
+            for a, b in voices.tramos_huella(self.TRAMOS):
+                n = int(b * 16000) - int(a * 16000)
+                ref, got = esperado[k:k + n], voz[k:k + n]
+                k += n
+                with self.subTest(nombre=nombre, por_tramos=por_tramos, tramo=(a, b)):
+                    lag = desfase(ref, got, 4000)
+                    self.assertLessEqual(abs(lag), 32)
+                    self.assertGreater(parecido(ref, got, lag), 0.95)
 
 
 class PrioridadTests(unittest.TestCase):
@@ -355,6 +456,9 @@ class GuardandoAlMomentoTests(unittest.TestCase):
         estado = pg.text_content(".spk-pop .sp-estado")
         desactivado = pg.evaluate("() => document.querySelector('.spk-pop [data-sa=me]').disabled")
         self.assertEqual((boton, estado, desactivado), ("Guardando…", "Guardando…", True))
+        # un clic fuera no lo cierra mientras guarda (se perdería el aviso y se podría volver a enviar desde otro)
+        pg.mouse.click(1200, 880)
+        self.assertEqual(pg.locator(".spk-pop[data-busy]").count(), 1)
         pg.wait_for_function("() => window.__t.length > 0", timeout=15000)
         self.assertGreater(time.time() - t0, 2.0)  # de verdad estaba retenido
         self.assertIn("Javier", pg.evaluate("() => window.__t[0]"))

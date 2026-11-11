@@ -85,6 +85,8 @@ function spkJoinOptions(hablantes, h, label) {
 
 function closeSpkPop() { $$('.spk-pop').forEach(p => p.remove()); }
 function openSpeakerPop(h, anchor) {
+  // uno guardándose (fix-lento) no se cierra ni se cambia por otro: el aviso de cómo ha ido sale en él
+  if ($('.spk-pop[data-busy]')) return toast('Espera a que termine de guardar');
   closePop(); closeSpkPop();
   const a = curAudio(), s = S.spk;
   if (!a || !s || h === 'varios') return;
@@ -117,7 +119,8 @@ function openSpeakerPop(h, anchor) {
   pop.style.left = Math.max(8, Math.min(r.left, innerWidth - 440)) + 'px';
   pop.style.top = Math.min(r.bottom + 6, innerHeight - 320) + 'px';
   pop.addEventListener('mousedown', e => e.stopPropagation());
-  setTimeout(() => document.addEventListener('mousedown', closeSpkPop, { once: true }), 0);
+  const fuera = () => { if (pop.dataset.busy) document.addEventListener('mousedown', fuera, { once: true }); else closeSpkPop(); };
+  setTimeout(() => document.addEventListener('mousedown', fuera, { once: true }), 0);
   const refresh = async msg => { closeSpkPop(); S.spk = null; await loadSpeakers(a); if (msg) toast(msg); };
   const remember = () => $('#spRem', pop).checked;
   const consent = () => $('#spConsent', pop).checked;

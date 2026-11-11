@@ -19,7 +19,9 @@ Bernardo (msg 1479): «cuando intento guardar los nombres de las voces […] tar
   la reunión entera, en un proceso en prioridad «en reposo» y sin enseñar nada mientras: 6 s con una reunión de 1 h y
   40 s con una de 3 h en m4a en un Mac rápido; minutos en un portátil ocupado. Ahora lee solo los tramos de voz de la
   huella (como mucho 90 s): unos 2 s sea cual sea la reunión, con la misma huella (coseno ≥ 0,9998). En mp3, aac
-  sueltos, amr y otros formatos sin índice, donde saltar a un segundo no es exacto, se sigue leyendo entera.
+  sueltos, amr y otros formatos sin índice, donde saltar a un segundo no es exacto, se sigue leyendo entera; también
+  si los tiempos del archivo no acaban donde su duración (un hueco en los tiempos o un trozo dañado que se pierde sin
+  avisar): ahí, por tramos, la huella habría salido de otro momento de la reunión, con la voz de otro.
 - Ese proceso va ahora por debajo de lo normal (el usuario está esperando); identificar las voces sigue en reposo.
 - **Arreglado**: el cuadro del hablante dice «Guardando…» (o «Guardando la huella de voz…») en cuanto se pulsa y no
   deja volver a pulsar hasta que acaba; si falla, vuelve como estaba y dice por qué. En Ajustes › Voces, «Guardando el
